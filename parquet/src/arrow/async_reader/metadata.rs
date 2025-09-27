@@ -17,8 +17,8 @@
 
 use crate::arrow::async_reader::AsyncFileReader;
 use crate::errors::Result;
+use crate::future::BoxedFuture;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use std::ops::Range;
 
 /// A data source that can be used with [`ParquetMetaDataReader`] to load [`ParquetMetaData`]
@@ -30,10 +30,10 @@ use std::ops::Range;
 /// ```rust
 /// # use parquet::errors::Result;
 /// # use parquet::arrow::async_reader::MetadataFetch;
+/// # use parquet::future::BoxedFuture;
 /// # use bytes::Bytes;
 /// # use std::ops::Range;
 /// # use std::io::SeekFrom;
-/// # use futures::future::BoxFuture;
 /// # use futures::FutureExt;
 /// # use tokio::io::{AsyncReadExt, AsyncSeekExt};
 /// // Adapter that implements the API for reading bytes from an async source (in
@@ -42,17 +42,16 @@ use std::ops::Range;
 ///     file: tokio::fs::File,
 /// }
 /// impl MetadataFetch for TokioFileMetadata {
-///     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+///     fn fetch(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
 ///         // return a future that fetches data in range
-///         async move {
+///         Box::pin(async move {
 ///             let len = (range.end - range.start).try_into().unwrap();
 ///             let mut buf = vec![0; len]; // target buffer
 ///             // seek to the start of the range and read the data
 ///             self.file.seek(SeekFrom::Start(range.start)).await?;
 ///             self.file.read_exact(&mut buf).await?;
 ///             Ok(Bytes::from(buf)) // convert to Bytes
-///         }
-///             .boxed() // turn into BoxedFuture, using FutureExt::boxed
+///         }) // turn into BoxedFuture
 ///     }
 /// }
 ///```
@@ -66,11 +65,11 @@ pub trait MetadataFetch {
     /// [`FutureExt::boxed`]. See the trait documentation for an example
     ///
     /// [`FutureExt::boxed`]: futures::FutureExt::boxed
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
+    fn fetch(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>>;
 }
 
 impl<T: AsyncFileReader> MetadataFetch for &mut T {
-    fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+    fn fetch(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
         self.get_bytes(range)
     }
 }
@@ -87,5 +86,5 @@ pub trait MetadataSuffixFetch: MetadataFetch {
     /// [`FutureExt::boxed`]. See the trait documentation for an example
     ///
     /// [`FutureExt::boxed`]: futures::FutureExt::boxed
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>>;
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxedFuture<'_, Result<Bytes>>;
 }

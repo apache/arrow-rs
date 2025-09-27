@@ -921,8 +921,6 @@ mod async_tests {
     use arrow_array::RecordBatch;
     use arrow_schema::{Field, Schema};
     use bytes::Bytes;
-    use futures::future::BoxFuture;
-    use futures::FutureExt;
     use std::fs::File;
     use std::future::Future;
     use std::io::{Read, Seek, SeekFrom};
@@ -934,6 +932,7 @@ mod async_tests {
     use crate::arrow::ArrowWriter;
     use crate::file::properties::WriterProperties;
     use crate::file::reader::Length;
+    use crate::future::BoxedFuture;
     use crate::util::test_common::file_util::get_test_file;
 
     struct MetadataFetchFn<F>(F);
@@ -943,8 +942,8 @@ mod async_tests {
         F: FnMut(Range<u64>) -> Fut + Send,
         Fut: Future<Output = Result<Bytes>> + Send,
     {
-        fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-            async move { self.0(range).await }.boxed()
+        fn fetch(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
+            Box::pin(async move { self.0(range).await })
         }
     }
 
@@ -956,8 +955,8 @@ mod async_tests {
         Fut: Future<Output = Result<Bytes>> + Send,
         F2: Send,
     {
-        fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-            async move { self.0(range).await }.boxed()
+        fn fetch(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
+            Box::pin(async move { self.0(range).await })
         }
     }
 
@@ -967,8 +966,8 @@ mod async_tests {
         F2: FnMut(usize) -> Fut + Send,
         Fut: Future<Output = Result<Bytes>> + Send,
     {
-        fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
-            async move { self.1(suffix).await }.boxed()
+        fn fetch_suffix(&mut self, suffix: usize) -> BoxedFuture<'_, Result<Bytes>> {
+            Box::pin(async move { self.1(suffix).await })
         }
     }
 

@@ -25,8 +25,7 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
 use arrow_array::{RecordBatch, StringViewArray};
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use parquet::arrow::arrow_reader::{ArrowPredicateFn, ArrowReaderOptions, RowFilter};
 use parquet::arrow::arrow_reader::{ArrowReaderBuilder, ParquetRecordBatchReaderBuilder};
@@ -34,6 +33,7 @@ use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
+use parquet::future::BoxedFuture;
 use std::ops::Range;
 use std::sync::Arc;
 use std::sync::LazyLock;
@@ -257,24 +257,27 @@ impl TestReader {
 }
 
 impl AsyncFileReader for TestReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, parquet::errors::Result<Bytes>> {
         let range = range.clone();
-        futures::future::ready(Ok(self
+        Box::pin(futures::future::ready(Ok(self
             .data
-            .slice(range.start as usize..range.end as usize)))
-        .boxed()
+            .slice(range.start as usize..range.end as usize))))
     }
 
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    ) -> BoxedFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
             PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
         );
         self.metadata = Some(Arc::new(
             metadata_reader.parse_and_finish(&self.data).unwrap(),
         ));
-        futures::future::ready(Ok(self.metadata.clone().unwrap().clone())).boxed()
+        Box::pin(futures::future::ready(Ok(self
+            .metadata
+            .clone()
+            .unwrap()
+            .clone())))
     }
 }

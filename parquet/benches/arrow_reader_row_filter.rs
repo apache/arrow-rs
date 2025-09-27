@@ -62,7 +62,6 @@ use arrow_array::StringViewArray;
 use arrow_cast::pretty::pretty_format_batches;
 use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
     ArrowPredicateFn, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowFilter,
@@ -72,6 +71,7 @@ use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMas
 use parquet::basic::Compression;
 use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
+use parquet::future::BoxedFuture;
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::ops::Range;
 use std::sync::Arc;
@@ -572,17 +572,17 @@ impl InMemoryReader {
 }
 
 impl AsyncFileReader for InMemoryReader {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, parquet::errors::Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, parquet::errors::Result<Bytes>> {
         let data = self.inner.slice(range.start as usize..range.end as usize);
-        async move { Ok(data) }.boxed()
+        Box::pin(async move { Ok(data) })
     }
 
     fn get_metadata<'a>(
         &'a mut self,
         _options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+    ) -> BoxedFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
         let metadata = Arc::clone(&self.metadata);
-        async move { Ok(metadata) }.boxed()
+        Box::pin(async move { Ok(metadata) })
     }
 }
 
