@@ -19,7 +19,7 @@
 //! [schema](arrow_schema::Schema).
 
 use crate::cast::AsArray;
-use crate::{new_empty_array, Array, ArrayRef, StructArray};
+use crate::{Array, ArrayRef, StructArray, new_empty_array};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Schema, SchemaBuilder, SchemaRef};
 use std::ops::Index;
 use std::sync::Arc;
@@ -360,7 +360,8 @@ impl RecordBatch {
 
         if let Some((i, (col_type, field_type))) = not_match {
             return Err(ArrowError::InvalidArgumentError(format!(
-                "column types must match schema types, expected {field_type} but found {col_type} at column index {i}")));
+                "column types must match schema types, expected {field_type} but found {col_type} at column index {i}"
+            )));
         }
 
         Ok(RecordBatch {
@@ -932,7 +933,7 @@ where
 mod tests {
     use super::*;
     use crate::{
-        BooleanArray, Int32Array, Int64Array, Int8Array, ListArray, StringArray, StringViewArray,
+        BooleanArray, Int8Array, Int32Array, Int64Array, ListArray, StringArray, StringViewArray,
     };
     use arrow_buffer::{Buffer, ToByteSlice};
     use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -1100,7 +1101,10 @@ mod tests {
         let a = Int64Array::from(vec![1, 2, 3, 4, 5]);
 
         let err = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(a)]).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: column types must match schema types, expected Int32 but found Int64 at column index 0");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: column types must match schema types, expected Int32 but found Int64 at column index 0"
+        );
     }
 
     #[test]
@@ -1574,9 +1578,10 @@ mod tests {
         let schema = Arc::new(Schema::empty());
 
         let err = RecordBatch::try_new(schema.clone(), vec![]).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("must either specify a row count or at least one column"));
+        assert!(
+            err.to_string()
+                .contains("must either specify a row count or at least one column")
+        );
 
         let options = RecordBatchOptions::new().with_row_count(Some(10));
 
@@ -1600,7 +1605,10 @@ mod tests {
             schema,
             vec![Arc::new(Int32Array::from(vec![Some(1), None]))],
         );
-        assert_eq!("Invalid argument error: Column 'a' is declared as non-nullable but contains null values", format!("{}", maybe_batch.err().unwrap()));
+        assert_eq!(
+            "Invalid argument error: Column 'a' is declared as non-nullable but contains null values",
+            format!("{}", maybe_batch.err().unwrap())
+        );
     }
     #[test]
     fn test_record_batch_options() {

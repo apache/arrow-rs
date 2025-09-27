@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
@@ -184,7 +184,7 @@ impl BooleanArray {
     /// # Safety
     /// This doesn't check bounds, the caller must ensure that index < self.len()
     pub unsafe fn value_unchecked(&self, i: usize) -> bool {
-        self.values.value_unchecked(i)
+        unsafe { self.values.value_unchecked(i) }
     }
 
     /// Returns the boolean value at index `i`.
@@ -222,7 +222,7 @@ impl BooleanArray {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<bool>> + 'a {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+        indexes.map(|opt_index| opt_index.map(|index| unsafe { self.value_unchecked(index) }))
     }
 
     /// Create a [`BooleanArray`] by evaluating the operation for
@@ -355,7 +355,7 @@ impl ArrayAccessor for &BooleanArray {
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        BooleanArray::value_unchecked(self, index)
+        unsafe { BooleanArray::value_unchecked(self, index) }
     }
 }
 
@@ -486,7 +486,7 @@ impl From<BooleanBuffer> for BooleanArray {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
