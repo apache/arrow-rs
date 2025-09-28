@@ -145,7 +145,7 @@ impl GeometryBounder {
     /// by this bounder. These identifiers are ISO WKB identifiers (e.g., 1001
     /// for PointZ). The output is always returned sorted.
     pub fn geometry_types(&self) -> Vec<i32> {
-        let mut out = self.geometry_types.iter().cloned().collect::<Vec<_>>();
+        let mut out = self.geometry_types.iter().copied().collect();
         out.sort();
         out
     }
