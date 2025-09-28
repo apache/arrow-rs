@@ -26,6 +26,8 @@ use parquet_variant::{Variant, VariantPath};
 use crate::type_conversion::PrimitiveFromVariant;
 use crate::{VariantArray, VariantValueArrayBuilder};
 
+use arrow_schema::DataType::Date32;
+use arrow_schema::TimeUnit;
 use std::sync::Arc;
 
 /// Builder for converting variant values to primitive Arrow arrays. It is used by both
@@ -44,7 +46,9 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
     Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
-    Boolean(VariantToBooleanArrowRowBuilder<'a>),
+    TimestampMicro(VariantToPrimitiveArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>),
+    TimestampNano(VariantToPrimitiveArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
+    Date(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date32Type>),
 }
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -77,6 +81,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float64(b) => b.append_null(),
             TimestampMicro(b) => b.append_null(),
             TimestampNano(b) => b.append_null(),
+            Date(b) => b.append_null(),
         }
     }
 
@@ -95,6 +100,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
             Boolean(b) => b.append_value(value),
+            TimestampMicro(b) => b.append_value(value),
+            TimestampNano(b) => b.append_value(value),
+            Date(b) => b.append_value(value),
         }
     }
 
@@ -113,7 +121,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.finish(),
             Float32(b) => b.finish(),
             Float64(b) => b.finish(),
-            Boolean(b) => b.finish(),
+            TimestampMicro(b) => b.finish(),
+            TimestampNano(b) => b.finish(),
+            Date(b) => b.finish(),
         }
     }
 }
@@ -201,7 +211,29 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             cast_options,
             capacity,
         )),
-        DataType::Boolean => Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity)),
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
+            let target_type = DataType::Timestamp(TimeUnit::Microsecond, tz.clone());
+
+            TimestampMicro(VariantToPrimitiveArrowRowBuilder::new_with_target_type(
+                cast_options,
+                capacity,
+                Some(target_type),
+            ))
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
+            let target_type = DataType::Timestamp(TimeUnit::Nanosecond, tz.clone());
+
+            TimestampNano(VariantToPrimitiveArrowRowBuilder::new_with_target_type(
+                cast_options,
+                capacity,
+                Some(target_type),
+            ))
+        }
+        DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new_with_target_type(
+            cast_options,
+            capacity,
+            Some(Date32),
+        )),
         _ if data_type.is_primitive() => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Primitive data_type {data_type:?} not yet implemented"
@@ -305,6 +337,8 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
         "arrow_array::types::Float32Type" => "Float32",
         "arrow_array::types::Float64Type" => "Float64",
         "arrow_array::types::Float16Type" => "Float16",
+        "arrow_array::types::TimestampMicrosecondType" => "Timestamp(Microsecond)",
+        "arrow_array::types::TimestampNanosecondType" => "Timestamp(Nanosecond)",
         _ => "Unknown",
     }
 }
@@ -356,13 +390,24 @@ impl<'a> VariantToBooleanArrowRowBuilder<'a> {
 pub(crate) struct VariantToPrimitiveArrowRowBuilder<'a, T: PrimitiveFromVariant> {
     builder: arrow::array::PrimitiveBuilder<T>,
     cast_options: &'a CastOptions<'a>,
+    // this used to change the data type of the resulting array, e.g. to add timezone info
+    target_data_type: Option<DataType>,
 }
 
 impl<'a, T: PrimitiveFromVariant> VariantToPrimitiveArrowRowBuilder<'a, T> {
     fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
+        Self::new_with_target_type(cast_options, capacity, None)
+    }
+
+    fn new_with_target_type(
+        cast_options: &'a CastOptions<'a>,
+        capacity: usize,
+        target_data_type: Option<DataType>,
+    ) -> Self {
         Self {
             builder: PrimitiveBuilder::<T>::with_capacity(capacity),
             cast_options,
+            target_data_type,
         }
     }
 }
@@ -393,7 +438,16 @@ impl<'a, T: PrimitiveFromVariant> VariantToPrimitiveArrowRowBuilder<'a, T> {
     }
 
     fn finish(mut self) -> Result<ArrayRef> {
-        Ok(Arc::new(self.builder.finish()))
+        let array: PrimitiveArray<T> = self.builder.finish();
+
+        if let Some(target_type) = self.target_data_type {
+            let data = array.into_data();
+            let new_data = data.into_builder().data_type(target_type).build()?;
+            let array_with_new_type = PrimitiveArray::<T>::from(new_data);
+            return Ok(Arc::new(array_with_new_type));
+        }
+
+        Ok(Arc::new(array))
     }
 }
 
