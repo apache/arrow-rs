@@ -172,6 +172,12 @@ impl Hash for Field {
     }
 }
 
+impl AsRef<Field> for Field {
+    fn as_ref(&self) -> &Field {
+        self
+    }
+}
+
 impl Field {
     /// Default list member field name
     pub const LIST_FIELD_DEFAULT_NAME: &'static str = "item";
@@ -1257,6 +1263,36 @@ mod test {
         assert!(f1.cmp(&f2).is_lt());
         assert!(f2.cmp(&f3).is_lt());
         assert!(f1.cmp(&f3).is_lt());
+    }
+
+    #[test]
+    #[expect(clippy::needless_borrows_for_generic_args)] // intentional to exercise various references
+    fn test_field_as_ref() {
+        let field = || Field::new("x", DataType::Binary, false);
+
+        // AsRef can be used in a function accepting a field.
+        // However, this case actually works a bit better when function takes `&Field`
+        fn accept_ref(_: impl AsRef<Field>) {}
+
+        accept_ref(field());
+        accept_ref(&field());
+        accept_ref(&&field());
+        accept_ref(Arc::new(field()));
+        accept_ref(&Arc::new(field()));
+        accept_ref(&&Arc::new(field()));
+
+        // AsRef can be used in a function accepting a collection of fields in any form,
+        // such as &[Field], or &[Arc<Field>]
+        fn accept_refs(_: impl IntoIterator<Item: AsRef<Field>>) {}
+
+        accept_refs(vec![field()]);
+        accept_refs(vec![&field()]);
+        accept_refs(vec![Arc::new(field())]);
+        accept_refs(vec![&Arc::new(field())]);
+        accept_refs(&vec![field()]);
+        accept_refs(&vec![&field()]);
+        accept_refs(&vec![Arc::new(field())]);
+        accept_refs(&vec![&Arc::new(field())]);
     }
 
     #[test]
