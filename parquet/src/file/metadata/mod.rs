@@ -1848,7 +1848,7 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2706;
+        let bigger_expected_size = 2738;
         #[cfg(feature = "encryption")]
         let bigger_expected_size = 3170;
 
