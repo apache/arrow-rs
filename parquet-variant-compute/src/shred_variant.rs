@@ -267,7 +267,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         };
 
         // Route the object's fields by name as either shredded or unshredded
-        let mut builder = self.value_builder.as_builder_ext(value.metadata().clone());
+        let mut builder = self.value_builder.builder_ext(value.metadata().clone());
         let mut object_builder = builder.try_new_object()?;
         let mut seen = std::collections::HashSet::new();
         let mut partially_shredded = false;
