@@ -20,9 +20,9 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::BufferBuilder;
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
 #[cfg(feature = "pool")]
@@ -172,7 +172,7 @@ impl Buffer {
         len: usize,
         owner: Arc<dyn Allocation>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len))
+        unsafe { Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len)) }
     }
 
     /// Auxiliary method to create a new Buffer
@@ -181,7 +181,7 @@ impl Buffer {
         len: usize,
         deallocation: Deallocation,
     ) -> Self {
-        let bytes = Bytes::new(ptr, len, deallocation);
+        let bytes = unsafe { Bytes::new(ptr, len, deallocation) };
         let ptr = bytes.as_ptr();
         Buffer {
             ptr,
@@ -561,7 +561,7 @@ impl Buffer {
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
-        MutableBuffer::from_trusted_len_iter(iterator).into()
+        unsafe { MutableBuffer::from_trusted_len_iter(iterator).into() }
     }
 
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length or errors
@@ -578,7 +578,7 @@ impl Buffer {
     >(
         iterator: I,
     ) -> Result<Self, E> {
-        Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into())
+        unsafe { Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into()) }
     }
 }
 

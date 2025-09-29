@@ -90,7 +90,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericBinaryArray<OffsetSize> {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<&'a [u8]>> {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+        unsafe { indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index))) }
     }
 }
 

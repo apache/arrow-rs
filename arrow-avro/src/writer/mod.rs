@@ -394,8 +394,9 @@ mod tests {
     use crate::reader::ReaderBuilder;
     use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
     use crate::test_util::arrow_test_data;
-    use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatch};
-    use arrow_schema::{DataType, Field, IntervalUnit, Schema};
+    use arrow_array::{ArrayRef, BinaryArray, DurationSecondArray, Int32Array, RecordBatch};
+    use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use std::collections::HashSet;
     use std::fs::File;
     use std::io::{BufReader, Cursor};
     use std::path::PathBuf;
@@ -887,6 +888,71 @@ mod tests {
         let roundtrip =
             arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
         assert_eq!(roundtrip, original, "Avro enum round-trip mismatch");
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_roundtrip_duration_logical_types_ocf() -> Result<(), ArrowError> {
+        let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test/data/duration_logical_types.avro")
+            .to_string_lossy()
+            .into_owned();
+
+        let in_file = File::open(&file_path)
+            .unwrap_or_else(|_| panic!("Failed to open test file: {}", file_path));
+
+        let mut reader = ReaderBuilder::new()
+            .build(BufReader::new(in_file))
+            .expect("build reader for duration_logical_types.avro");
+        let in_schema = reader.schema();
+
+        let expected_units: HashSet<TimeUnit> = [
+            TimeUnit::Nanosecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Millisecond,
+            TimeUnit::Second,
+        ]
+        .into_iter()
+        .collect();
+
+        let found_units: HashSet<TimeUnit> = in_schema
+            .fields()
+            .iter()
+            .filter_map(|f| match f.data_type() {
+                DataType::Duration(unit) => Some(*unit),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            found_units, expected_units,
+            "Expected to find all four Duration TimeUnits in the schema from the initial read"
+        );
+
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let input =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+
+        let tmp = NamedTempFile::new().expect("create temp file");
+        {
+            let out_file = File::create(tmp.path()).expect("create temp avro");
+            let mut writer = AvroWriter::new(out_file, in_schema.as_ref().clone())?;
+            writer.write(&input)?;
+            writer.finish()?;
+        }
+
+        let rt_file = File::open(tmp.path()).expect("open round_trip avro");
+        let mut rt_reader = ReaderBuilder::new()
+            .build(BufReader::new(rt_file))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+
+        assert_eq!(round_trip, input);
+
         Ok(())
     }
 }
