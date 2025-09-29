@@ -664,7 +664,7 @@ mod tests {
                 ))),
                 false,
             )
-            .with_metadata(schema_fields[0].metadata().clone()),
+              .with_metadata(schema_fields[0].metadata().clone()),
         )]));
 
         assert_eq!(converted.arrow_type, expected_schema);
@@ -679,7 +679,7 @@ mod tests {
                 ))),
                 false,
             )
-            .with_metadata(schema_fields[0].metadata().clone()),
+              .with_metadata(schema_fields[0].metadata().clone()),
         )]);
 
         // Should be able to convert the same thing
@@ -688,7 +688,73 @@ mod tests {
             ProjectionMask::all(),
             Some(&utf8_instead_of_binary),
         )?
-        .unwrap();
+          .unwrap();
+
+        // Assert that we changed to Utf8
+        assert_eq!(
+            converted_again.arrow_type,
+            DataType::Struct(utf8_instead_of_binary)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn convert_schema_with_repeated_primitive_should_use_inferred_schema_for_list_as_well(
+    ) -> crate::errors::Result<()> {
+        let message_type = "
+    message schema {
+      repeated BYTE_ARRAY col_1 = 1;
+    }
+    ";
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        assert_eq!(schema_fields.len(), 1);
+
+        let expected_schema = DataType::Struct(Fields::from(vec![Arc::new(
+            arrow_schema::Field::new(
+                "col_1",
+                DataType::List(Arc::new(arrow_schema::Field::new(
+                    "col_1",
+                    DataType::Binary,
+                    false,
+                ))),
+                false,
+            )
+              .with_metadata(schema_fields[0].metadata().clone()),
+        )]));
+
+        assert_eq!(converted.arrow_type, expected_schema);
+
+        let utf8_instead_of_binary = Fields::from(vec![Arc::new(
+            arrow_schema::Field::new(
+                "col_1",
+                // Inferring as LargeList instead of List
+                DataType::LargeList(Arc::new(arrow_schema::Field::new(
+                    "col_1",
+                    DataType::Utf8,
+                    false,
+                ))),
+                false,
+            )
+              .with_metadata(schema_fields[0].metadata().clone()),
+        )]);
+
+        // Should be able to convert the same thing
+        let converted_again = convert_schema(
+            &schema,
+            ProjectionMask::all(),
+            Some(&utf8_instead_of_binary),
+        )?
+          .unwrap();
 
         // Assert that we changed to Utf8
         assert_eq!(
@@ -727,7 +793,7 @@ mod tests {
 
         // Should be able to convert the same thing
         let converted_again =
-            convert_schema(&schema, ProjectionMask::all(), Some(&schema_fields))?.unwrap();
+          convert_schema(&schema, ProjectionMask::all(), Some(&schema_fields))?.unwrap();
 
         // Assert that we changed to Utf8
         assert_eq!(converted_again.arrow_type, converted.arrow_type);
@@ -818,26 +884,27 @@ message schema {
 
         assert_eq!(converted_again.arrow_type, converted.arrow_type);
 
-        // Test conversion with modified schema (change col_6 from Binary to Utf8)
+        // Test conversion with modified schema (change lists to either LargeList or FixedSizeList)
+        // as well as changing Binary to Utf8 or BinaryView
         let modified_schema_fields = Fields::from(vec![Arc::new(
             arrow_schema::Field::new(
                 "col_1",
-                DataType::List(Arc::new(arrow_schema::Field::new(
+                DataType::LargeList(Arc::new(arrow_schema::Field::new(
                     "col_1",
                     DataType::Struct(Fields::from(vec![
-                        Arc::new(arrow_schema::Field::new("col_2", DataType::Binary, true)),
+                        Arc::new(arrow_schema::Field::new("col_2", DataType::LargeBinary, true)),
                         Arc::new(arrow_schema::Field::new(
                             "col_3",
-                            DataType::List(Arc::new(arrow_schema::Field::new(
+                            DataType::LargeList(Arc::new(arrow_schema::Field::new(
                                 "col_3",
-                                DataType::Binary,
+                                DataType::Utf8,
                                 false,
                             ))),
                             false,
                         )),
                         Arc::new(arrow_schema::Field::new(
                             "col_4",
-                            DataType::List(Arc::new(arrow_schema::Field::new(
+                            DataType::FixedSizeList(Arc::new(arrow_schema::Field::new(
                                 "col_4",
                                 DataType::Struct(Fields::from(vec![
                                     Arc::new(arrow_schema::Field::new(
@@ -847,17 +914,16 @@ message schema {
                                     )),
                                     Arc::new(arrow_schema::Field::new(
                                         "col_6",
-                                        DataType::List(Arc::new(arrow_schema::Field::new(
+                                        DataType::LargeList(Arc::new(arrow_schema::Field::new(
                                             "col_6",
-                                            // Change to Utf8
-                                            DataType::Utf8,
+                                            DataType::BinaryView,
                                             false,
                                         ))),
                                         false,
                                     )),
                                 ])),
                                 false,
-                            ))),
+                            )), 3),
                             false,
                         )),
                     ])),
