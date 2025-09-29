@@ -31,8 +31,9 @@ Thrift macros, as well as how to implement custom encoders and decoders.
 The Parquet specification utilizes Thrift enums, unions, and structs, defined by an Interface
 Description Language (IDL). This IDL is usually parsed by a Thrift code generator to produce
 language specific structures and serialization/deserialization code. This crate, however, uses
-Rust macros to perform the same function. This allows for customizations that produce more
-performant code, as well as the ability to pick and choose which fields to process.
+Rust macros to perform the same function. In addition to skipping creation of additional duplicate
+structures, doing so allows for customizations that produce more performant code, as well as the
+ability to pick and choose which fields to process.
 
 ### Enums
 

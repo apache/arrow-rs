@@ -48,6 +48,9 @@ thrift_struct!(
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 ///
+/// See [`ParquetOffsetIndex`] for more information.
+///
+/// [`ParquetOffsetIndex`]: crate::file::metadata::ParquetOffsetIndex
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexMetaData {
   /// Vector of [`PageLocation`] objects, one per page in the chunk.

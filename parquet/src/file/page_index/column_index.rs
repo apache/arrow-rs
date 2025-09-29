@@ -499,7 +499,12 @@ macro_rules! colidx_enum_func {
     }};
 }
 
-/// index
+/// Parsed [`ColumnIndex`] information for a Parquet file.
+///
+/// See [`ParquetColumnIndex`] for more information.
+///
+/// [`ParquetColumnIndex`]: crate::file::metadata::ParquetColumnIndex
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 #[derive(Debug, Clone, PartialEq)]
 #[allow(non_camel_case_types)]
 pub enum ColumnIndexMetaData {
