@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::arrow::schema::extension::add_extension_type;
+use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
 use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
 use crate::basic::{ConvertedType, Repetition};
@@ -80,7 +80,7 @@ impl ParquetField {
         self,
         parquet_field_type: &Type,
         list_data_type: Option<DataType>,
-    ) -> Self {
+    ) -> Result<Self, ParquetError> {
         let arrow_field = match &list_data_type {
             Some(DataType::List(field_hint))
             | Some(DataType::LargeList(field_hint))
@@ -97,10 +97,10 @@ impl ParquetField {
             arrow_field,
             // Only add the field id to the list and not to the element
             false,
-        )
+        )?
         .with_nullable(false);
 
-        ParquetField {
+        Ok(ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
@@ -115,7 +115,7 @@ impl ParquetField {
             field_type: ParquetFieldType::Group {
                 children: vec![self],
             },
-        }
+        })
     }
 
     /// Returns a list of [`ParquetField`] children if this is a group type
@@ -229,7 +229,7 @@ impl Visitor {
 
         Ok(Some(match repetition {
             Repetition::REPEATED if context.treat_repeated_as_list_arrow_hint => {
-                primitive_field.into_list_with_arrow_list_hint(primitive_type, context.data_type)
+                primitive_field.into_list_with_arrow_list_hint(primitive_type, context.data_type)?
             }
             Repetition::REPEATED => primitive_field.into_list(primitive_type.name()),
             _ => primitive_field,
@@ -319,7 +319,7 @@ impl Visitor {
             if let Some(child) = self.dispatch(parquet_field, child_ctx)? {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
-                child_fields.push(convert_field(parquet_field, &child, arrow_field, true));
+                child_fields.push(convert_field(parquet_field, &child, arrow_field, true)?);
                 children.push(child);
             }
         }
@@ -338,7 +338,7 @@ impl Visitor {
 
         Ok(Some(match repetition {
             Repetition::REPEATED if context.treat_repeated_as_list_arrow_hint => {
-                struct_field.into_list_with_arrow_list_hint(struct_type, context.data_type)
+                struct_field.into_list_with_arrow_list_hint(struct_type, context.data_type)?
             }
             Repetition::REPEATED => struct_field.into_list(struct_type.name()),
             _ => struct_field,
@@ -455,11 +455,11 @@ impl Visitor {
         match (maybe_key, maybe_value) {
             (Some(key), Some(value)) => {
                 let key_field = Arc::new(
-                    convert_field(map_key, &key, arrow_key, true)
+                    convert_field(map_key, &key, arrow_key, true)?
                         // The key is always non-nullable (#5630)
                         .with_nullable(false),
                 );
-                let value_field = Arc::new(convert_field(map_value, &value, arrow_value, true));
+                let value_field = Arc::new(convert_field(map_value, &value, arrow_value, true)?);
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
                     _ => HashMap::default(),
@@ -600,7 +600,7 @@ impl Visitor {
 
         match self.dispatch(item_type, new_context) {
             Ok(Some(item)) => {
-                let item_field = Arc::new(convert_field(item_type, &item, arrow_field, true));
+                let item_field = Arc::new(convert_field(item_type, &item, arrow_field, true)?);
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {
@@ -653,7 +653,7 @@ fn convert_field(
     field: &ParquetField,
     arrow_hint: Option<&Field>,
     add_field_id: bool,
-) -> Field {
+) -> Result<Field, ParquetError> {
     let name = parquet_type.name();
     let data_type = field.arrow_type.clone();
     let nullable = field.nullable;
@@ -671,7 +671,7 @@ fn convert_field(
                 _ => Field::new(name, data_type, nullable),
             };
 
-            field.with_metadata(hint.metadata().clone())
+            Ok(field.with_metadata(hint.metadata().clone()))
         }
         None => {
             let mut ret = Field::new(name, data_type, nullable);
@@ -684,7 +684,7 @@ fn convert_field(
                 );
                 ret.set_metadata(meta);
             }
-            add_extension_type(ret, parquet_type)
+            try_add_extension_type(ret, parquet_type)
         }
     }
 }
