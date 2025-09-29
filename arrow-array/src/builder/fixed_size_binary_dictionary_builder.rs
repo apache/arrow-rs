@@ -471,8 +471,8 @@ mod tests {
         );
         let err = b.append_n("a", 3).unwrap_err().to_string();
         assert_eq!(
-          err,
-          "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 1"
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 1"
         );
     }
 
