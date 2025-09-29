@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{
-    Extend, _MutableArrayData,
+    _MutableArrayData, Extend,
     utils::{extend_offsets, get_last_offset},
 };
 use crate::ArrayData;

@@ -22,8 +22,8 @@ use std::sync::Arc;
 use arrow_buffer::{Buffer, NullBufferBuilder, ScalarBuffer};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
-use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 
 use crate::builder::ArrayBuilder;
 use crate::types::bytes::ByteArrayNativeType;
@@ -121,7 +121,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// growing buffer size exponentially from 8KB up to 2MB. The
     /// first buffer allocated is 8KB, then 16KB, then 32KB, etc up to 2MB.
     ///
-    /// If this method is used, any new buffers allocated are  
+    /// If this method is used, any new buffers allocated are
     /// exactly this size. This can be useful for advanced users
     /// that want to control the memory usage and buffer count.
     ///
@@ -188,10 +188,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// (2) The range `offset..offset+length` must be within the bounds of the block
     /// (3) The data in the block must be valid of type `T`
     pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
-        let b = self.completed.get_unchecked(block as usize);
+        let b = unsafe { self.completed.get_unchecked(block as usize) };
         let start = offset as usize;
         let end = start.saturating_add(len as usize);
-        let b = b.get_unchecked(start..end);
+        let b = unsafe { b.get_unchecked(start..end) };
 
         let view = make_view(b, block, offset);
         self.views_buffer.push(view);
@@ -390,7 +390,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         self.flush_in_progress();
         let completed = std::mem::take(&mut self.completed);
         let nulls = self.null_buffer_builder.finish();
-        if let Some((ref mut ht, _)) = self.string_tracker.as_mut() {
+        if let Some((ht, _)) = self.string_tracker.as_mut() {
             ht.clear();
         }
         let views = std::mem::take(&mut self.views_buffer);
@@ -688,7 +688,10 @@ mod tests {
         );
 
         let err = v.try_append_view(0, u32::MAX, 1).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Range 4294967295..4294967296 out of bounds for block of length 17");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Range 4294967295..4294967296 out of bounds for block of length 17"
+        );
 
         let err = v.try_append_view(0, 1, u32::MAX).unwrap_err();
         assert_eq!(
@@ -739,10 +742,12 @@ mod tests {
             assert_eq!(fixed_builder.completed.len(), 2_usize.pow(i + 1) - 1);
 
             // Every buffer is fixed size
-            assert!(fixed_builder
-                .completed
-                .iter()
-                .all(|b| b.len() == STARTING_BLOCK_SIZE as usize));
+            assert!(
+                fixed_builder
+                    .completed
+                    .iter()
+                    .all(|b| b.len() == STARTING_BLOCK_SIZE as usize)
+            );
         }
 
         // Add one more value, and the buffer stop growing.
