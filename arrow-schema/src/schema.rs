@@ -1397,14 +1397,16 @@ mod tests {
         );
 
         // incompatible field should throw error
-        assert!(Schema::try_merge(vec![
-            Schema::new(vec![
-                Field::new("first_name", DataType::Utf8, false),
-                Field::new("last_name", DataType::Utf8, false),
-            ]),
-            Schema::new(vec![Field::new("last_name", DataType::Int64, false),])
-        ])
-        .is_err());
+        assert!(
+            Schema::try_merge(vec![
+                Schema::new(vec![
+                    Field::new("first_name", DataType::Utf8, false),
+                    Field::new("last_name", DataType::Utf8, false),
+                ]),
+                Schema::new(vec![Field::new("last_name", DataType::Int64, false),])
+            ])
+            .is_err()
+        );
 
         // incompatible metadata should throw error
         let res = Schema::try_merge(vec![
