@@ -23,8 +23,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
-use arrow_data::transform::MutableArrayData;
 use arrow_data::ByteView;
+use arrow_data::transform::MutableArrayData;
 use arrow_schema::{ArrowError, DataType, Fields};
 use std::sync::Arc;
 
@@ -402,8 +402,8 @@ pub fn interleave_record_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{Int32Builder, ListBuilder, PrimitiveRunBuilder};
     use arrow_array::Int32RunArray;
+    use arrow_array::builder::{Int32Builder, ListBuilder, PrimitiveRunBuilder};
     use arrow_schema::Field;
 
     #[test]

@@ -17,7 +17,7 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{make_comparator, DynComparator};
+use crate::ord::{DynComparator, make_comparator};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -1072,7 +1072,7 @@ mod tests {
         BooleanBuilder, FixedSizeListBuilder, GenericListBuilder, Int64Builder, ListBuilder,
         PrimitiveRunBuilder,
     };
-    use arrow_buffer::{i256, NullBuffer};
+    use arrow_buffer::{NullBuffer, i256};
     use arrow_schema::Field;
     use half::f16;
     use rand::rngs::StdRng;
@@ -4802,11 +4802,13 @@ mod tests {
         ]);
 
         assert!(!can_sort_to_indices(struct_array.data_type()));
-        assert!(sort_to_indices(&struct_array, None, None)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Sort not supported for data type"));
+        assert!(
+            sort_to_indices(&struct_array, None, None)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Sort not supported for data type")
+        );
 
         let sort_columns = vec![SortColumn {
             values: Arc::new(struct_array.clone()) as ArrayRef,
