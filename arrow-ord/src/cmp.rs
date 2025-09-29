@@ -26,8 +26,8 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
-    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
-    FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray,
+    AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray,
+    GenericByteArray, GenericByteViewArray, downcast_primitive_array,
 };
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
@@ -508,9 +508,9 @@ impl ArrayOrd for &BooleanArray {
         Array::len(self)
     }
 
-    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item { unsafe {
-        BooleanArray::value_unchecked(self, idx)
-    }}
+    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
+        unsafe { BooleanArray::value_unchecked(self, idx) }
+    }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         l == r
@@ -528,9 +528,9 @@ impl<T: ArrowNativeTypeOp> ArrayOrd for &[T] {
         (*self).len()
     }
 
-    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item { unsafe {
-        *self.get_unchecked(idx)
-    }}
+    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
+        unsafe { *self.get_unchecked(idx) }
+    }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         l.is_eq(r)
@@ -548,9 +548,9 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
         Array::len(self)
     }
 
-    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item { unsafe {
-        GenericByteArray::value_unchecked(self, idx).as_ref()
-    }}
+    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
+        unsafe { GenericByteArray::value_unchecked(self, idx).as_ref() }
+    }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         l == r
@@ -623,9 +623,9 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
         Array::len(self)
     }
 
-    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item { unsafe {
-        FixedSizeBinaryArray::value_unchecked(self, idx)
-    }}
+    unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
+        unsafe { FixedSizeBinaryArray::value_unchecked(self, idx) }
+    }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
         l == r
