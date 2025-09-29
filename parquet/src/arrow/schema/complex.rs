@@ -734,78 +734,78 @@ mod tests {
     #[test]
     fn basic_backward_compatible_list() -> crate::errors::Result<()> {
         test_roundtrip("
-    message schema {
-      optional group my_list (LIST) {
-          repeated int32 element;
-        }
-    }
-    ")
+            message schema {
+              optional group my_list (LIST) {
+                  repeated int32 element;
+                }
+            }
+        ")
     }
 
     #[test]
     fn basic_backward_compatible_list_2() -> crate::errors::Result<()> {
         test_roundtrip("
-    message schema {
-      optional group my_list (LIST) {
-          repeated group element {
-            required binary str (STRING);
-            required int32 num;
-          };
-      }
-    }
-    ")
+            message schema {
+              optional group my_list (LIST) {
+                  repeated group element {
+                    required binary str (STRING);
+                    required int32 num;
+                  };
+              }
+            }
+        ")
     }
 
     #[test]
     fn basic_backward_compatible_list_3() -> crate::errors::Result<()> {
         test_roundtrip("
-    message schema {
-      optional group my_list (LIST) {
-  repeated group array (LIST) {
-    repeated int32 array;
-  };
-}
-    }
-    ")
+            message schema {
+              optional group my_list (LIST) {
+                  repeated group array (LIST) {
+                    repeated int32 array;
+                  };
+              }
+            }
+        ")
     }
 
     #[test]
     fn basic_backward_compatible_list_4_1() -> crate::errors::Result<()> {
         test_roundtrip("
-    message schema {
-      optional group my_list (LIST) {
-  repeated group array {
-    required binary str (STRING);
-  };
-}
-    }
-    ")
+            message schema {
+              optional group my_list (LIST) {
+                  repeated group array {
+                    required binary str (STRING);
+                  };
+              }
+            }
+        ")
     }
 
     #[test]
     fn basic_backward_compatible_list_4_2() -> crate::errors::Result<()> {
         test_roundtrip("
-    message schema {
-      optional group my_list (LIST) {
-  repeated group my_list_tuple {
-    required binary str (STRING);
-  };
-}
-    }
-    ")
+            message schema {
+                optional group my_list (LIST) {
+                    repeated group my_list_tuple {
+                        required binary str (STRING);
+                    };
+                }
+            }
+        ")
     }
 
     #[test]
     fn basic_backward_compatible_list_5() -> crate::errors::Result<()> {
         test_roundtrip("
-    message schema {
-      optional group my_list (LIST) {
-  repeated group element {
-    optional binary str (STRING);
-  };
-}
-    }
-    ")
+            message schema {
+                optional group my_list (LIST) {
+                    repeated group element {
+                        optional binary str (STRING);
+                    };
+                }
+            }
+        ")
     }
 
     #[test]
