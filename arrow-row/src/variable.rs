@@ -18,8 +18,8 @@
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::*;
-use arrow_buffer::bit_util::ceil;
 use arrow_buffer::MutableBuffer;
+use arrow_buffer::bit_util::ceil;
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
@@ -358,7 +358,7 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
 
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
-    GenericStringArray::from(builder.build_unchecked())
+    GenericStringArray::from(unsafe { builder.build_unchecked() })
 }
 
 /// Decodes a string view array from `rows` with the provided `options`
@@ -372,5 +372,5 @@ pub unsafe fn decode_string_view(
     validate_utf8: bool,
 ) -> StringViewArray {
     let view = decode_binary_view_inner(rows, options, validate_utf8);
-    view.to_string_view_unchecked()
+    unsafe { view.to_string_view_unchecked() }
 }
