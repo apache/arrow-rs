@@ -336,7 +336,7 @@ impl VariantValueArrayBuilder {
     }
 
     /// Creates a thin [`VariantBuilderExt`] wrapper for this builder, which hides the `metadata`
-    /// parameter (similar to how the [`ObjectFieldBuilder`] wrapper hides field names).
+    /// parameter (similar to the way [`parquet_variant::ObjectFieldBuilder`] hides field names).
     pub fn as_builder_ext<'a>(
         &'a mut self,
         metadata: VariantMetadata<'a>,
