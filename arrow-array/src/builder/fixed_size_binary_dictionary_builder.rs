@@ -253,7 +253,7 @@ where
     }
 
     /// Append a value multiple times to the array.
-    /// This is the same as `append` but allows ot append the same value multiple times without doing multiple lookups.
+    /// This is the same as `append` but allows to append the same value multiple times without doing multiple lookups.
     ///
     /// Returns an error if the new index would overflow the key type.
     pub fn append_n(
