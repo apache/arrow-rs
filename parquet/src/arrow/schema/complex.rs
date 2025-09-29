@@ -58,14 +58,41 @@ pub struct ParquetField {
 
 impl ParquetField {
     /// Converts `self` into an arrow list, with its current type as the field type
+    /// accept an optional `list_data_type` to specify the type of list to create
     ///
     /// This is used to convert repeated columns, into their arrow representation
-    fn into_list(self, name: &str) -> Self {
+    fn into_list(self, parquet_field_type: &Type, list_data_type: Option<DataType>) -> Self {
+        let arrow_field = match &list_data_type {
+            Some(DataType::List(field_hint))
+            | Some(DataType::LargeList(field_hint))
+            | Some(DataType::FixedSizeList(field_hint, _)) => Some(field_hint.as_ref()),
+            Some(_) => unreachable!(
+                "should be validated earlier that list_data_type is only a type of list"
+            ),
+            None => None,
+        };
+
+        let arrow_field = convert_field(
+            parquet_field_type,
+            &self,
+            arrow_field,
+            // Only add the field id to the list and not to the element
+            false,
+        )
+        .with_nullable(false);
+
         ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
-            arrow_type: DataType::List(Arc::new(Field::new(name, self.arrow_type.clone(), false))),
+            arrow_type: match list_data_type {
+                Some(DataType::List(_)) => DataType::List(Arc::new(arrow_field)),
+                Some(DataType::LargeList(_)) => DataType::LargeList(Arc::new(arrow_field)),
+                Some(DataType::FixedSizeList(_, len)) => {
+                    DataType::FixedSizeList(Arc::new(arrow_field), len)
+                }
+                _ => DataType::List(Arc::new(arrow_field)),
+            },
             field_type: ParquetFieldType::Group {
                 children: vec![self],
             },
@@ -143,7 +170,25 @@ impl Visitor {
         let repetition = get_repetition(primitive_type);
         let (def_level, rep_level, nullable) = context.levels(repetition);
 
-        let arrow_type = convert_primitive(primitive_type, context.data_type)?;
+        let primitive_arrow_data_type = match repetition {
+            Repetition::REPEATED => {
+                let arrow_field = match &context.data_type {
+                    Some(DataType::List(f)) => Some(f.as_ref()),
+                    Some(DataType::LargeList(f)) => Some(f.as_ref()),
+                    Some(DataType::FixedSizeList(f, _)) => Some(f.as_ref()),
+                    Some(d) => return Err(arrow_err!(
+                        "incompatible arrow schema, expected list got {} for repeated primitive field",
+                        d
+                    )),
+                    None => None,
+                };
+
+                arrow_field.map(|f| f.data_type().clone())
+            }
+            _ => context.data_type.clone(),
+        };
+
+        let arrow_type = convert_primitive(primitive_type, primitive_arrow_data_type)?;
 
         let primitive_field = ParquetField {
             rep_level,
@@ -157,7 +202,7 @@ impl Visitor {
         };
 
         Ok(Some(match repetition {
-            Repetition::REPEATED => primitive_field.into_list(primitive_type.name()),
+            Repetition::REPEATED => primitive_field.into_list(primitive_type, context.data_type),
             _ => primitive_field,
         }))
     }
@@ -174,7 +219,25 @@ impl Visitor {
         let parquet_fields = struct_type.get_fields();
 
         // Extract any arrow fields from the hints
-        let arrow_fields = match &context.data_type {
+        let arrow_struct = match repetition {
+            Repetition::REPEATED => {
+                let arrow_field = match &context.data_type {
+                    Some(DataType::List(f)) => Some(f.as_ref()),
+                    Some(DataType::LargeList(f)) => Some(f.as_ref()),
+                    Some(DataType::FixedSizeList(f, _)) => Some(f.as_ref()),
+                    Some(d) => return Err(arrow_err!(
+                        "incompatible arrow schema, expected list got {} for repeated struct field",
+                        d
+                    )),
+                    None => None,
+                };
+
+                arrow_field.map(|f| f.data_type())
+            }
+            _ => context.data_type.as_ref(),
+        };
+
+        let arrow_fields = match &arrow_struct {
             Some(DataType::Struct(fields)) => {
                 if fields.len() != parquet_fields.len() {
                     return Err(arrow_err!(
@@ -221,10 +284,10 @@ impl Visitor {
                 data_type,
             };
 
-            if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
+            if let Some(child) = self.dispatch(parquet_field, child_ctx)? {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
-                child_fields.push(convert_field(parquet_field, &mut child, arrow_field));
+                child_fields.push(convert_field(parquet_field, &child, arrow_field, true));
                 children.push(child);
             }
         }
@@ -242,7 +305,7 @@ impl Visitor {
         };
 
         Ok(Some(match repetition {
-            Repetition::REPEATED => struct_field.into_list(struct_type.name()),
+            Repetition::REPEATED => struct_field.into_list(struct_type, context.data_type),
             _ => struct_field,
         }))
     }
@@ -353,13 +416,13 @@ impl Visitor {
 
         // Need both columns to be projected
         match (maybe_key, maybe_value) {
-            (Some(mut key), Some(mut value)) => {
+            (Some(key), Some(value)) => {
                 let key_field = Arc::new(
-                    convert_field(map_key, &mut key, arrow_key)
+                    convert_field(map_key, &key, arrow_key, true)
                         // The key is always non-nullable (#5630)
                         .with_nullable(false),
                 );
-                let value_field = Arc::new(convert_field(map_value, &mut value, arrow_value));
+                let value_field = Arc::new(convert_field(map_value, &value, arrow_value, true));
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
                     _ => HashMap::default(),
@@ -496,8 +559,8 @@ impl Visitor {
         };
 
         match self.dispatch(item_type, new_context) {
-            Ok(Some(mut item)) => {
-                let item_field = Arc::new(convert_field(item_type, &mut item, arrow_field));
+            Ok(Some(item)) => {
+                let item_field = Arc::new(convert_field(item_type, &item, arrow_field, true));
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {
@@ -547,8 +610,9 @@ impl Visitor {
 /// dictated by the `parquet_type`, and any metadata from `arrow_hint`
 fn convert_field(
     parquet_type: &Type,
-    field: &mut ParquetField,
+    field: &ParquetField,
     arrow_hint: Option<&Field>,
+    add_field_id: bool,
 ) -> Field {
     let name = parquet_type.name();
     let data_type = field.arrow_type.clone();
@@ -572,7 +636,7 @@ fn convert_field(
         None => {
             let mut ret = Field::new(name, data_type, nullable);
             let basic_info = parquet_type.get_basic_info();
-            if basic_info.has_id() {
+            if add_field_id && basic_info.has_id() {
                 let mut meta = HashMap::with_capacity(1);
                 meta.insert(
                     PARQUET_FIELD_ID_META_KEY.to_string(),
@@ -628,11 +692,59 @@ pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
 #[cfg(test)]
 mod tests {
     use crate::arrow::schema::complex::convert_schema;
-    use crate::arrow::ProjectionMask;
+    use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
     use arrow_schema::{DataType, Fields};
     use std::sync::Arc;
+
+    trait WithFieldId {
+        fn with_field_id(self, id: i32) -> Self;
+    }
+    impl WithFieldId for arrow_schema::Field {
+        fn with_field_id(self, id: i32) -> Self {
+            let mut metadata = self.metadata().clone();
+            metadata.insert(PARQUET_FIELD_ID_META_KEY.to_string(), id.to_string());
+            self.with_metadata(metadata)
+        }
+    }
+
+    #[test]
+    fn convert_schema_with_repeated_primitive() -> crate::errors::Result<()> {
+        let message_type = "
+    message schema {
+      repeated BYTE_ARRAY col_1 = 1;
+    }
+    ";
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        assert_eq!(schema_fields.len(), 1);
+
+        let expected_schema = DataType::Struct(Fields::from(vec![Arc::new(
+            arrow_schema::Field::new(
+                "col_1",
+                DataType::List(Arc::new(
+                    // No metadata on inner field
+                    arrow_schema::Field::new("col_1", DataType::Binary, false),
+                )),
+                false,
+            )
+            // add the field id to the outer list
+            .with_field_id(1),
+        )]));
+
+        assert_eq!(converted.arrow_type, expected_schema);
+
+        Ok(())
+    }
 
     #[test]
     fn convert_schema_with_repeated_primitive_should_use_inferred_schema(
@@ -664,7 +776,7 @@ mod tests {
                 ))),
                 false,
             )
-              .with_metadata(schema_fields[0].metadata().clone()),
+            .with_metadata(schema_fields[0].metadata().clone()),
         )]));
 
         assert_eq!(converted.arrow_type, expected_schema);
@@ -679,7 +791,7 @@ mod tests {
                 ))),
                 false,
             )
-              .with_metadata(schema_fields[0].metadata().clone()),
+            .with_metadata(schema_fields[0].metadata().clone()),
         )]);
 
         // Should be able to convert the same thing
@@ -688,7 +800,7 @@ mod tests {
             ProjectionMask::all(),
             Some(&utf8_instead_of_binary),
         )?
-          .unwrap();
+        .unwrap();
 
         // Assert that we changed to Utf8
         assert_eq!(
@@ -729,7 +841,7 @@ mod tests {
                 ))),
                 false,
             )
-              .with_metadata(schema_fields[0].metadata().clone()),
+            .with_metadata(schema_fields[0].metadata().clone()),
         )]));
 
         assert_eq!(converted.arrow_type, expected_schema);
@@ -745,7 +857,7 @@ mod tests {
                 ))),
                 false,
             )
-              .with_metadata(schema_fields[0].metadata().clone()),
+            .with_metadata(schema_fields[0].metadata().clone()),
         )]);
 
         // Should be able to convert the same thing
@@ -754,7 +866,7 @@ mod tests {
             ProjectionMask::all(),
             Some(&utf8_instead_of_binary),
         )?
-          .unwrap();
+        .unwrap();
 
         // Assert that we changed to Utf8
         assert_eq!(
@@ -769,12 +881,12 @@ mod tests {
     fn convert_schema_with_repeated_struct_and_inferred_schema() -> crate::errors::Result<()> {
         let message_type = "
     message schema {
-        repeated group col_1 {
-          optional binary col_2;
-          optional binary col_3;
-          optional group col_4 {
-            optional int64 col_5;
-            optional int32 col_6;
+        repeated group my_col_1 = 1 {
+          optional binary my_col_2 = 2;
+          optional binary my_col_3 = 3;
+          optional group my_col_4 = 4 {
+            optional int64 my_col_5 = 5;
+            optional int32 my_col_6 = 6;
           }
         }
     }
@@ -793,7 +905,44 @@ mod tests {
 
         // Should be able to convert the same thing
         let converted_again =
-          convert_schema(&schema, ProjectionMask::all(), Some(&schema_fields))?.unwrap();
+            convert_schema(&schema, ProjectionMask::all(), Some(schema_fields))?.unwrap();
+
+        // Assert that we changed to Utf8
+        assert_eq!(converted_again.arrow_type, converted.arrow_type);
+
+        Ok(())
+    }
+
+    #[test]
+    fn convert_schema_with_repeated_struct_and_inferred_schema_and_field_id(
+    ) -> crate::errors::Result<()> {
+        let message_type = "
+    message schema {
+        repeated group my_col_1 = 1 {
+          optional binary my_col_2 = 2;
+          optional binary my_col_3 = 3;
+          optional group my_col_4 = 4 {
+            optional int64 my_col_5 = 5;
+            optional int32 my_col_6 = 6;
+          }
+        }
+    }
+    ";
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        assert_eq!(schema_fields.len(), 1);
+
+        // Should be able to convert the same thing
+        let converted_again =
+            convert_schema(&schema, ProjectionMask::all(), Some(schema_fields))?.unwrap();
 
         // Assert that we changed to Utf8
         assert_eq!(converted_again.arrow_type, converted.arrow_type);
@@ -805,12 +954,12 @@ mod tests {
     fn convert_schema_with_nested_repeated_struct_and_primitives() -> crate::errors::Result<()> {
         let message_type = "
 message schema {
-    repeated group col_1 {
-        optional binary col_2;
-        repeated BYTE_ARRAY col_3;
-        repeated group col_4 {
-            optional int64 col_5;
-            repeated binary col_6;
+    repeated group my_col_1 = 1 {
+        optional binary my_col_2 = 2;
+        repeated BYTE_ARRAY my_col_3 = 3;
+        repeated group my_col_4 = 4 {
+            optional int64 my_col_5 = 5;
+            repeated binary my_col_6 = 6;
         }
     }
 }
@@ -830,57 +979,77 @@ message schema {
         // Build expected schema
         let expected_schema = DataType::Struct(Fields::from(vec![Arc::new(
             arrow_schema::Field::new(
-                "col_1",
+                "my_col_1",
                 DataType::List(Arc::new(arrow_schema::Field::new(
-                    "col_1",
+                    "my_col_1",
                     DataType::Struct(Fields::from(vec![
-                        Arc::new(arrow_schema::Field::new("col_2", DataType::Binary, true)),
-                        Arc::new(arrow_schema::Field::new(
-                            "col_3",
-                            DataType::List(Arc::new(arrow_schema::Field::new(
-                                "col_3",
-                                DataType::Binary,
+                        Arc::new(
+                            arrow_schema::Field::new("my_col_2", DataType::Binary, true)
+                                .with_field_id(2),
+                        ),
+                        Arc::new(
+                            arrow_schema::Field::new(
+                                "my_col_3",
+                                DataType::List(Arc::new(arrow_schema::Field::new(
+                                    "my_col_3",
+                                    DataType::Binary,
+                                    false,
+                                ))),
                                 false,
-                            ))),
-                            false,
-                        )),
-                        Arc::new(arrow_schema::Field::new(
-                            "col_4",
-                            DataType::List(Arc::new(arrow_schema::Field::new(
-                                "col_4",
-                                DataType::Struct(Fields::from(vec![
-                                    Arc::new(arrow_schema::Field::new(
-                                        "col_5",
-                                        DataType::Int64,
-                                        true,
-                                    )),
-                                    Arc::new(arrow_schema::Field::new(
-                                        "col_6",
-                                        DataType::List(Arc::new(arrow_schema::Field::new(
-                                            "col_6",
-                                            DataType::Binary,
-                                            false,
-                                        ))),
-                                        false,
-                                    )),
-                                ])),
+                            )
+                            // add the field id to the outer list
+                            .with_field_id(3),
+                        ),
+                        Arc::new(
+                            arrow_schema::Field::new(
+                                "my_col_4",
+                                DataType::List(Arc::new(arrow_schema::Field::new(
+                                    "my_col_4",
+                                    DataType::Struct(Fields::from(vec![
+                                        Arc::new(
+                                            arrow_schema::Field::new(
+                                                "my_col_5",
+                                                DataType::Int64,
+                                                true,
+                                            )
+                                            // add the field id to the outer list
+                                            .with_field_id(5),
+                                        ),
+                                        Arc::new(
+                                            arrow_schema::Field::new(
+                                                "my_col_6",
+                                                DataType::List(Arc::new(arrow_schema::Field::new(
+                                                    "my_col_6",
+                                                    DataType::Binary,
+                                                    false,
+                                                ))),
+                                                false,
+                                            )
+                                            // add the field id to the outer list
+                                            .with_field_id(6),
+                                        ),
+                                    ])),
+                                    false,
+                                ))),
                                 false,
-                            ))),
-                            false,
-                        )),
+                            )
+                            // add the field id to the outer list
+                            .with_field_id(4),
+                        ),
                     ])),
                     false,
                 ))),
                 false,
             )
-            .with_metadata(schema_fields[0].metadata().clone()),
+              // add the field id to the outer list
+              .with_field_id(1),
         )]));
 
         assert_eq!(converted.arrow_type, expected_schema);
 
         // Test conversion with inferred schema
         let converted_again =
-            convert_schema(&schema, ProjectionMask::all(), Some(&schema_fields))?.unwrap();
+            convert_schema(&schema, ProjectionMask::all(), Some(schema_fields))?.unwrap();
 
         assert_eq!(converted_again.arrow_type, converted.arrow_type);
 
@@ -888,50 +1057,68 @@ message schema {
         // as well as changing Binary to Utf8 or BinaryView
         let modified_schema_fields = Fields::from(vec![Arc::new(
             arrow_schema::Field::new(
-                "col_1",
+                "my_col_1",
                 DataType::LargeList(Arc::new(arrow_schema::Field::new(
-                    "col_1",
+                    "my_col_1",
                     DataType::Struct(Fields::from(vec![
-                        Arc::new(arrow_schema::Field::new("col_2", DataType::LargeBinary, true)),
                         Arc::new(arrow_schema::Field::new(
-                            "col_3",
+                            "my_col_2",
+                            DataType::LargeBinary,
+                            true,
+                        )
+                          .with_field_id(2)),
+                        Arc::new(arrow_schema::Field::new(
+                            "my_col_3",
                             DataType::LargeList(Arc::new(arrow_schema::Field::new(
-                                "col_3",
+                                "my_col_3",
                                 DataType::Utf8,
                                 false,
                             ))),
                             false,
-                        )),
+                        )
+                          // add the field id to the outer list
+                          .with_field_id(3)),
                         Arc::new(arrow_schema::Field::new(
-                            "col_4",
-                            DataType::FixedSizeList(Arc::new(arrow_schema::Field::new(
-                                "col_4",
-                                DataType::Struct(Fields::from(vec![
-                                    Arc::new(arrow_schema::Field::new(
-                                        "col_5",
-                                        DataType::Int64,
-                                        true,
-                                    )),
-                                    Arc::new(arrow_schema::Field::new(
-                                        "col_6",
-                                        DataType::LargeList(Arc::new(arrow_schema::Field::new(
-                                            "col_6",
-                                            DataType::BinaryView,
+                            "my_col_4",
+                            DataType::FixedSizeList(
+                                Arc::new(arrow_schema::Field::new(
+                                    "my_col_4",
+                                    DataType::Struct(Fields::from(vec![
+                                        Arc::new(arrow_schema::Field::new(
+                                            "my_col_5",
+                                            DataType::Int64,
+                                            true,
+                                        )
+                                          .with_field_id(5)),
+                                        Arc::new(arrow_schema::Field::new(
+                                            "my_col_6",
+                                            DataType::LargeList(Arc::new(
+                                                arrow_schema::Field::new(
+                                                    "my_col_6",
+                                                    DataType::BinaryView,
+                                                    false,
+                                                ),
+                                            )),
                                             false,
-                                        ))),
-                                        false,
-                                    )),
-                                ])),
-                                false,
-                            )), 3),
+                                        )
+                                          // add the field id to the outer list
+                                          .with_field_id(6)),
+                                    ])),
+                                    false,
+                                )),
+                                3,
+                            ),
                             false,
-                        )),
+                        )
+                          // add the field id to the outer list
+                          .with_field_id(4)),
                     ])),
                     false,
                 ))),
                 false,
             )
-            .with_metadata(schema_fields[0].metadata().clone()),
+              // add the field id to the outer list
+              .with_field_id(1)
         )]);
 
         let converted_with_modified = convert_schema(
