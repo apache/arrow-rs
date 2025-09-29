@@ -1401,10 +1401,7 @@ mod tests {
             create_single_row_list_of_dict(vec![Some("b")]),
         ];
 
-        let arrays = scalars
-            .iter()
-            .map(|a| a as &(dyn Array))
-            .collect::<Vec<_>>();
+        let arrays = scalars.iter().map(|a| a as &dyn Array).collect::<Vec<_>>();
         let concat_res = concat(arrays.as_slice()).unwrap();
 
         let expected_list = create_list_of_dict(vec![
@@ -1437,10 +1434,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let arrays = scalars
-            .iter()
-            .map(|a| a as &(dyn Array))
-            .collect::<Vec<_>>();
+        let arrays = scalars.iter().map(|a| a as &dyn Array).collect::<Vec<_>>();
         let concat_res = concat(arrays.as_slice()).unwrap();
 
         let expected_list = create_list_of_dict(
