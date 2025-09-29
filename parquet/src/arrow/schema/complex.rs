@@ -711,6 +711,103 @@ mod tests {
         }
     }
 
+    fn test_roundtrip(message_type: &str) -> crate::errors::Result<()> {
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        // Should be able to convert the same thing
+        let converted_again =
+          convert_schema(&schema, ProjectionMask::all(), Some(schema_fields))?.unwrap();
+
+        // Assert that we changed to Utf8
+        assert_eq!(converted_again.arrow_type, converted.arrow_type);
+
+        Ok(())
+    }
+
+    #[test]
+    fn basic_backward_compatible_list() -> crate::errors::Result<()> {
+        test_roundtrip("
+    message schema {
+      optional group my_list (LIST) {
+          repeated int32 element;
+        }
+    }
+    ")
+    }
+
+    #[test]
+    fn basic_backward_compatible_list_2() -> crate::errors::Result<()> {
+        test_roundtrip("
+    message schema {
+      optional group my_list (LIST) {
+          repeated group element {
+            required binary str (STRING);
+            required int32 num;
+          };
+      }
+    }
+    ")
+    }
+
+    #[test]
+    fn basic_backward_compatible_list_3() -> crate::errors::Result<()> {
+        test_roundtrip("
+    message schema {
+      optional group my_list (LIST) {
+  repeated group array (LIST) {
+    repeated int32 array;
+  };
+}
+    }
+    ")
+    }
+
+    #[test]
+    fn basic_backward_compatible_list_4_1() -> crate::errors::Result<()> {
+        test_roundtrip("
+    message schema {
+      optional group my_list (LIST) {
+  repeated group array {
+    required binary str (STRING);
+  };
+}
+    }
+    ")
+    }
+
+    #[test]
+    fn basic_backward_compatible_list_4_2() -> crate::errors::Result<()> {
+        test_roundtrip("
+    message schema {
+      optional group my_list (LIST) {
+  repeated group my_list_tuple {
+    required binary str (STRING);
+  };
+}
+    }
+    ")
+    }
+
+    #[test]
+    fn basic_backward_compatible_list_5() -> crate::errors::Result<()> {
+        test_roundtrip("
+    message schema {
+      optional group my_list (LIST) {
+  repeated group element {
+    optional binary str (STRING);
+  };
+}
+    }
+    ")
+    }
+
     #[test]
     fn convert_schema_with_repeated_primitive() -> crate::errors::Result<()> {
         let message_type = "
@@ -739,8 +836,8 @@ mod tests {
                 )),
                 false,
             )
-            // add the field id to the outer list
-            .with_field_id(1),
+              // add the field id to the outer list
+              .with_field_id(1),
         )]));
 
         assert_eq!(converted.arrow_type, expected_schema);
@@ -881,7 +978,7 @@ mod tests {
 
     #[test]
     fn convert_schema_with_repeated_struct_and_inferred_schema() -> crate::errors::Result<()> {
-        let message_type = "
+        test_roundtrip("
     message schema {
         repeated group my_col_1 = 1 {
           optional binary my_col_2 = 2;
@@ -892,27 +989,7 @@ mod tests {
           }
         }
     }
-    ";
-
-        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
-        let schema = SchemaDescriptor::new(parsed_input_schema);
-
-        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
-
-        let DataType::Struct(schema_fields) = &converted.arrow_type else {
-            panic!("Expected struct from convert_schema");
-        };
-
-        assert_eq!(schema_fields.len(), 1);
-
-        // Should be able to convert the same thing
-        let converted_again =
-            convert_schema(&schema, ProjectionMask::all(), Some(schema_fields))?.unwrap();
-
-        // Assert that we changed to Utf8
-        assert_eq!(converted_again.arrow_type, converted.arrow_type);
-
-        Ok(())
+    ")
     }
 
     #[test]
