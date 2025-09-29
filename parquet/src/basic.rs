@@ -1566,6 +1566,11 @@ impl str::FromStr for LogicalType {
                 "Interval parquet logical type not yet supported"
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
+            "GEOMETRY" => Ok(LogicalType::Geometry { crs: None }),
+            "GEOGRAPHY" => Ok(LogicalType::Geography {
+                crs: None,
+                algorithm: None,
+            }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }

@@ -119,13 +119,6 @@ pub(crate) struct FileCryptoMetaData {
 }
 );
 
-// expose for benchmarking
-pub(crate) fn bench_file_metadata(bytes: &bytes::Bytes) {
-    use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
-    let mut prot = ThriftSliceInputProtocol::new(bytes);
-    crate::file::metadata::thrift_gen::FileMetaData::read_thrift(&mut prot).unwrap();
-}
-
 // the following are only used internally so are private
 thrift_struct!(
 struct FileMetaData<'a> {
@@ -336,6 +329,8 @@ fn convert_column(
             (None, None, None)
         };
 
+    let geo_statistics = convert_geo_stats(col_metadata.geospatial_statistics);
+
     let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
     let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
 
@@ -352,6 +347,7 @@ fn convert_column(
         index_page_offset,
         dictionary_page_offset,
         statistics,
+        geo_statistics,
         encoding_stats,
         bloom_filter_offset,
         bloom_filter_length,
@@ -368,6 +364,46 @@ fn convert_column(
         encrypted_column_metadata: None,
     };
     Ok(result)
+}
+
+fn convert_geo_stats(
+    stats: Option<GeospatialStatistics>,
+) -> Option<Box<crate::geospatial::statistics::GeospatialStatistics>> {
+    stats.map(|st| {
+        let bbox = convert_bounding_box(st.bbox);
+        let geospatial_types: Option<Vec<i32>> = st.geospatial_types.filter(|v| !v.is_empty());
+        Box::new(crate::geospatial::statistics::GeospatialStatistics::new(
+            bbox,
+            geospatial_types,
+        ))
+    })
+}
+
+fn convert_bounding_box(
+    bbox: Option<BoundingBox>,
+) -> Option<crate::geospatial::bounding_box::BoundingBox> {
+    bbox.map(|bb| {
+        let mut newbb = crate::geospatial::bounding_box::BoundingBox::new(
+            bb.xmin.into(),
+            bb.xmax.into(),
+            bb.ymin.into(),
+            bb.ymax.into(),
+        );
+
+        newbb = match (bb.zmin, bb.zmax) {
+            (Some(zmin), Some(zmax)) => newbb.with_zrange(zmin.into(), zmax.into()),
+            // If either None or mismatch, leave it as None and don't error
+            _ => newbb,
+        };
+
+        newbb = match (bb.mmin, bb.mmax) {
+            (Some(mmin), Some(mmax)) => newbb.with_mrange(mmin.into(), mmax.into()),
+            // If either None or mismatch, leave it as None and don't error
+            _ => newbb,
+        };
+
+        newbb
+    })
 }
 
 pub(crate) fn convert_stats(
@@ -1247,10 +1283,13 @@ pub(crate) fn serialize_column_meta_data<W: Write>(
         None
     };
     if let Some(size_stats) = size_stats {
-        size_stats.write_thrift_field(w, 16, last_field_id)?;
+        last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
     }
 
-    // TODO: field 17 geo spatial stats here
+    if let Some(geo_stats) = column_chunk.geo_statistics() {
+        geo_stats.write_thrift_field(w, 17, last_field_id)?;
+    }
+
     w.write_struct_end()
 }
 
@@ -1486,6 +1525,88 @@ impl WriteThrift for ColumnChunkMetaData {
         }
 
         writer.write_struct_end()
+    }
+}
+
+// struct GeospatialStatistics {
+//   1: optional BoundingBox bbox;
+//   2: optional list<i32> geospatial_types;
+// }
+impl WriteThrift for crate::geospatial::statistics::GeospatialStatistics {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let mut last_field_id = 0i16;
+        if let Some(bbox) = self.bbox() {
+            last_field_id = bbox.write_thrift_field(writer, 1, last_field_id)?;
+        }
+        if let Some(geo_types) = self.geospatial_types() {
+            geo_types.write_thrift_field(writer, 2, last_field_id)?;
+        }
+
+        writer.write_struct_end()
+    }
+}
+
+impl WriteThriftField for crate::geospatial::statistics::GeospatialStatistics {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
+// struct BoundingBox {
+//   1: required double xmin;
+//   2: required double xmax;
+//   3: required double ymin;
+//   4: required double ymax;
+//   5: optional double zmin;
+//   6: optional double zmax;
+//   7: optional double mmin;
+//   8: optional double mmax;
+// }
+impl WriteThrift for crate::geospatial::bounding_box::BoundingBox {
+    const ELEMENT_TYPE: ElementType = ElementType::Struct;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        self.get_xmin().write_thrift_field(writer, 1, 0)?;
+        self.get_xmax().write_thrift_field(writer, 2, 1)?;
+        self.get_ymin().write_thrift_field(writer, 3, 2)?;
+        let mut last_field_id = self.get_ymax().write_thrift_field(writer, 4, 3)?;
+
+        if let Some(zmin) = self.get_zmin() {
+            last_field_id = zmin.write_thrift_field(writer, 5, last_field_id)?;
+        }
+        if let Some(zmax) = self.get_zmax() {
+            last_field_id = zmax.write_thrift_field(writer, 6, last_field_id)?;
+        }
+        if let Some(mmin) = self.get_mmin() {
+            last_field_id = mmin.write_thrift_field(writer, 7, last_field_id)?;
+        }
+        if let Some(mmax) = self.get_mmax() {
+            mmax.write_thrift_field(writer, 8, last_field_id)?;
+        }
+
+        writer.write_struct_end()
+    }
+}
+
+impl WriteThriftField for crate::geospatial::bounding_box::BoundingBox {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
     }
 }
 

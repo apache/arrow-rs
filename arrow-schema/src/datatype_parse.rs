@@ -26,7 +26,9 @@ pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
 type ArrowResult<T> = Result<T, ArrowError>;
 
 fn make_error(val: &str, msg: &str) -> ArrowError {
-    let msg = format!("Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error {msg}" );
+    let msg = format!(
+        "Unsupported type '{val}'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error {msg}"
+    );
     ArrowError::ParseError(msg)
 }
 
@@ -246,7 +248,7 @@ impl<'a> Parser<'a> {
                 return Err(make_error(
                     self.val,
                     &format!("finding IntervalUnit for Interval, got {tok}"),
-                ))
+                ));
             }
         };
         self.expect_token(Token::RParen)?;
@@ -328,7 +330,7 @@ impl<'a> Parser<'a> {
                     return Err(make_error(
                         self.val,
                         &format!("Expected a quoted string for a field name; got {tok:?}"),
-                    ))
+                    ));
                 }
             };
             self.expect_token(Token::Colon)?;
@@ -345,8 +347,10 @@ impl<'a> Parser<'a> {
                 tok => {
                     return Err(make_error(
                         self.val,
-                        &format!("Unexpected token while parsing Struct fields. Expected ',' or ')', but got '{tok}'"),
-                    ))
+                        &format!(
+                            "Unexpected token while parsing Struct fields. Expected ',' or ')', but got '{tok}'"
+                        ),
+                    ));
                 }
             }
         }
@@ -841,18 +845,12 @@ mod test {
             ("", "Error finding next token"),
             ("null", "Unsupported type 'null'"),
             ("Nu", "Unsupported type 'Nu'"),
-            (
-                r#"Timestamp(ns, +00:00)"#,
-                "Error unknown token: +00",
-            ),
+            (r#"Timestamp(ns, +00:00)"#, "Error unknown token: +00"),
             (
                 r#"Timestamp(ns, "+00:00)"#,
                 r#"Unterminated string at: "+00:00)"#,
             ),
-            (
-                r#"Timestamp(ns, "")"#,
-                r#"empty strings aren't allowed"#,
-            ),
+            (r#"Timestamp(ns, "")"#, r#"empty strings aren't allowed"#),
             (
                 r#"Timestamp(ns, "+00:00"")"#,
                 r#"Parser error: Unterminated string at: ")"#,
@@ -864,22 +862,58 @@ mod test {
             ),
             ("Int32, ", "trailing content after parsing 'Int32'"),
             ("Int32(3), ", "trailing content after parsing 'Int32'"),
-            ("FixedSizeBinary(Int32), ", "Error finding i64 for FixedSizeBinary, got 'Int32'"),
-            ("FixedSizeBinary(3.0), ", "Error parsing 3.0 as integer: invalid digit found in string"),
+            (
+                "FixedSizeBinary(Int32), ",
+                "Error finding i64 for FixedSizeBinary, got 'Int32'",
+            ),
+            (
+                "FixedSizeBinary(3.0), ",
+                "Error parsing 3.0 as integer: invalid digit found in string",
+            ),
             // too large for i32
-            ("FixedSizeBinary(4000000000), ", "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted"),
+            (
+                "FixedSizeBinary(4000000000), ",
+                "Error converting 4000000000 into i32 for FixedSizeBinary: out of range integral type conversion attempted",
+            ),
             // can't have negative precision
-            ("Decimal32(-3, 5)", "Error converting -3 into u8 for Decimal32: out of range integral type conversion attempted"),
-            ("Decimal64(-3, 5)", "Error converting -3 into u8 for Decimal64: out of range integral type conversion attempted"),
-            ("Decimal128(-3, 5)", "Error converting -3 into u8 for Decimal128: out of range integral type conversion attempted"),
-            ("Decimal256(-3, 5)", "Error converting -3 into u8 for Decimal256: out of range integral type conversion attempted"),
-            ("Decimal32(3, 500)", "Error converting 500 into i8 for Decimal32: out of range integral type conversion attempted"),
-            ("Decimal64(3, 500)", "Error converting 500 into i8 for Decimal64: out of range integral type conversion attempted"),
-            ("Decimal128(3, 500)", "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted"),
-            ("Decimal256(3, 500)", "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted"),
+            (
+                "Decimal32(-3, 5)",
+                "Error converting -3 into u8 for Decimal32: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal64(-3, 5)",
+                "Error converting -3 into u8 for Decimal64: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal128(-3, 5)",
+                "Error converting -3 into u8 for Decimal128: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal256(-3, 5)",
+                "Error converting -3 into u8 for Decimal256: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal32(3, 500)",
+                "Error converting 500 into i8 for Decimal32: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal64(3, 500)",
+                "Error converting 500 into i8 for Decimal64: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal128(3, 500)",
+                "Error converting 500 into i8 for Decimal128: out of range integral type conversion attempted",
+            ),
+            (
+                "Decimal256(3, 500)",
+                "Error converting 500 into i8 for Decimal256: out of range integral type conversion attempted",
+            ),
             ("Struct(f1 Int64)", "Error unknown token: f1"),
             ("Struct(\"f1\" Int64)", "Expected ':'"),
-            ("Struct(\"f1\": )", "Error finding next type, got unexpected ')'"),
+            (
+                "Struct(\"f1\": )",
+                "Error finding next type, got unexpected ')'",
+            ),
         ];
 
         for (data_type_string, expected_message) in cases {
@@ -906,6 +940,9 @@ mod test {
     fn parse_error_type() {
         let err = parse_data_type("foobar").unwrap_err();
         assert!(matches!(err, ArrowError::ParseError(_)));
-        assert_eq!(err.to_string(), "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error unknown token: foobar");
+        assert_eq!(
+            err.to_string(),
+            "Parser error: Unsupported type 'foobar'. Must be a supported arrow type name such as 'Int32' or 'Timestamp(ns)'. Error unknown token: foobar"
+        );
     }
 }

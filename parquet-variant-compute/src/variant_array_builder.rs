@@ -22,6 +22,7 @@ use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuild
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{
     BuilderSpecificState, ListBuilder, MetadataBuilder, ObjectBuilder, Variant, VariantBuilderExt,
+    VariantMetadata,
 };
 use parquet_variant::{
     ParentState, ReadOnlyMetadataBuilder, ValueBuilder, WritableMetadataBuilder,
@@ -294,8 +295,8 @@ impl VariantValueArrayBuilder {
     /// builder.append_value(Variant::from(42));
     /// ```
     pub fn append_value(&mut self, value: Variant<'_, '_>) {
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
-        ValueBuilder::append_variant_bytes(self.parent_state(&mut metadata_builder), value);
+        self.builder_ext(value.metadata().clone())
+            .append_value(value);
     }
 
     /// Creates a builder-specific parent state.
@@ -333,6 +334,18 @@ impl VariantValueArrayBuilder {
 
         ParentState::new(&mut self.value_builder, metadata_builder, state)
     }
+
+    /// Creates a thin [`VariantBuilderExt`] wrapper for this builder, which hides the `metadata`
+    /// parameter (similar to the way [`parquet_variant::ObjectFieldBuilder`] hides field names).
+    pub fn builder_ext<'a>(
+        &'a mut self,
+        metadata: VariantMetadata<'a>,
+    ) -> VariantValueArrayBuilderExt<'a> {
+        VariantValueArrayBuilderExt {
+            metadata_builder: ReadOnlyMetadataBuilder::new(metadata),
+            value_builder: self,
+        }
+    }
 }
 
 /// Builder-specific state for array building that manages array-level offsets and nulls. See
@@ -352,6 +365,52 @@ impl BuilderSpecificState for ValueArrayBuilderState<'_> {
     ) {
         self.value_offsets.push(value_builder.offset());
         self.nulls.append_non_null();
+    }
+}
+
+/// A thin [`VariantBuilderExt`] wrapper that hides the short-lived (per-row)
+/// [`ReadOnlyMetadataBuilder`] instances that [`VariantValueArrayBuilder`] requires.
+pub struct VariantValueArrayBuilderExt<'a> {
+    metadata_builder: ReadOnlyMetadataBuilder<'a>,
+    value_builder: &'a mut VariantValueArrayBuilder,
+}
+
+impl<'a> VariantValueArrayBuilderExt<'a> {
+    /// Creates a new instance from a metadata builder and a reference to a variant value builder.
+    pub fn new(
+        metadata_builder: ReadOnlyMetadataBuilder<'a>,
+        value_builder: &'a mut VariantValueArrayBuilder,
+    ) -> Self {
+        Self {
+            metadata_builder,
+            value_builder,
+        }
+    }
+}
+
+impl<'a> VariantBuilderExt for VariantValueArrayBuilderExt<'a> {
+    type State<'b>
+        = ValueArrayBuilderState<'b>
+    where
+        Self: 'b;
+
+    fn append_null(&mut self) {
+        self.value_builder.append_null()
+    }
+
+    fn append_value<'m, 'v>(&mut self, value: impl Into<Variant<'m, 'v>>) {
+        let state = self.value_builder.parent_state(&mut self.metadata_builder);
+        ValueBuilder::append_variant_bytes(state, value.into());
+    }
+
+    fn try_new_list(&mut self) -> Result<ListBuilder<'_, Self::State<'_>>, ArrowError> {
+        let state = self.value_builder.parent_state(&mut self.metadata_builder);
+        Ok(ListBuilder::new(state, false))
+    }
+
+    fn try_new_object(&mut self) -> Result<ObjectBuilder<'_, Self::State<'_>>, ArrowError> {
+        let state = self.value_builder.parent_state(&mut self.metadata_builder);
+        Ok(ObjectBuilder::new(state, false))
     }
 }
 
@@ -482,32 +541,32 @@ mod test {
         //
         // NOTE: Because we will reuse the metadata column, we cannot reorder rows. We can only
         // filter or manipulate values within a row.
-        let mut builder = VariantValueArrayBuilder::new(3);
+        let mut value_builder = VariantValueArrayBuilder::new(3);
 
         // straight copy
-        builder.append_value(array.value(0));
+        value_builder.append_value(array.value(0));
 
         // filtering fields takes more work because we need to manually create an object builder
         let value = array.value(1);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
-        let state = builder.parent_state(&mut metadata_builder);
-        ObjectBuilder::new(state, false)
+        let mut builder = value_builder.builder_ext(value.metadata().clone());
+        builder
+            .new_object()
             .with_field("name", value.get_object_field("name").unwrap())
             .with_field("age", value.get_object_field("age").unwrap())
             .finish();
 
         // same bytes, but now nested and duplicated inside a list
         let value = array.value(2);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
-        let state = builder.parent_state(&mut metadata_builder);
-        ListBuilder::new(state, false)
+        let mut builder = value_builder.builder_ext(value.metadata().clone());
+        builder
+            .new_list()
             .with_value(value.clone())
             .with_value(value.clone())
             .finish();
 
         let array2 = VariantArray::from_parts(
             array.metadata_field().clone(),
-            Some(builder.build().unwrap()),
+            Some(value_builder.build().unwrap()),
             None,
             None,
         );

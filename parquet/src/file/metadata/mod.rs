@@ -110,6 +110,7 @@ use crate::file::{
     page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation},
 };
 use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
+use crate::geospatial::statistics as geo_statistics;
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
@@ -836,6 +837,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
@@ -1063,6 +1065,12 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns geospatial statistics that are set for this column chunk,
+    /// or `None` if no geospatial statistics are available.
+    pub fn geo_statistics(&self) -> Option<&geo_statistics::GeospatialStatistics> {
+        self.geo_statistics.as_deref()
+    }
+
     /// Returns the offset for the page encoding stats,
     /// or `None` if no page encoding stats are available.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
@@ -1170,6 +1178,8 @@ impl ColumnChunkMetaData {
         let index_page_offset = col_metadata.index_page_offset;
         let dictionary_page_offset = col_metadata.dictionary_page_offset;
         let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
+        //let geo_statistics =
+        //    geo_statistics::from_thrift(col_metadata.geospatial_statistics).map(Box::new);
         let encoding_stats = col_metadata
             .encoding_stats
             .as_ref()
@@ -1232,6 +1242,7 @@ impl ColumnChunkMetaData {
             unencoded_byte_array_data_bytes,
             repetition_level_histogram,
             definition_level_histogram,
+            geo_statistics: None,
             #[cfg(feature = "encryption")]
             column_crypto_metadata,
             #[cfg(feature = "encryption")]
@@ -1302,7 +1313,9 @@ impl ColumnChunkMetaData {
             bloom_filter_offset: self.bloom_filter_offset,
             bloom_filter_length: self.bloom_filter_length,
             size_statistics,
-            geospatial_statistics: None,
+            geospatial_statistics: geo_statistics::to_thrift(
+                self.geo_statistics.as_ref().map(|boxed| boxed.as_ref()),
+            ),
         }
     }
 
@@ -1362,6 +1375,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            geo_statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
             bloom_filter_length: None,
@@ -1436,6 +1450,12 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets statistics for this column chunk.
     pub fn set_statistics(mut self, value: Statistics) -> Self {
         self.0.statistics = Some(value);
+        self
+    }
+
+    /// Sets geospatial statistics for this column chunk.
+    pub fn set_geo_statistics(mut self, value: Box<geo_statistics::GeospatialStatistics>) -> Self {
+        self.0.geo_statistics = Some(value);
         self
     }
 
@@ -2071,9 +2091,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2280;
+        let base_expected_size = 2312;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2712;
+        let base_expected_size = 2744;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -2111,9 +2131,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2704;
+        let bigger_expected_size = 2736;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3136;
+        let bigger_expected_size = 3168;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

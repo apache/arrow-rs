@@ -15,11 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::alloc::{handle_alloc_error, Layout};
+use std::alloc::{Layout, handle_alloc_error};
 use std::mem;
 use std::ptr::NonNull;
 
-use crate::alloc::{Deallocation, ALIGNMENT};
+use crate::alloc::{ALIGNMENT, Deallocation};
 use crate::{
     bytes::Bytes,
     native::{ArrowNativeType, ToByteSlice},
@@ -460,8 +460,8 @@ impl MutableBuffer {
     pub unsafe fn push_unchecked<T: ToByteSlice>(&mut self, item: T) {
         let additional = std::mem::size_of::<T>();
         let src = item.to_byte_slice().as_ptr();
-        let dst = self.data.as_ptr().add(self.len);
-        std::ptr::copy_nonoverlapping(src, dst, additional);
+        let dst = unsafe { self.data.as_ptr().add(self.len) };
+        unsafe { std::ptr::copy_nonoverlapping(src, dst, additional) };
         self.len += additional;
     }
 
@@ -640,11 +640,11 @@ impl MutableBuffer {
         for item in iterator {
             // note how there is no reserve here (compared with `extend_from_iter`)
             let src = item.to_byte_slice().as_ptr();
-            std::ptr::copy_nonoverlapping(src, dst, item_size);
-            dst = dst.add(item_size);
+            unsafe { std::ptr::copy_nonoverlapping(src, dst, item_size) };
+            dst = unsafe { dst.add(item_size) };
         }
         assert_eq!(
-            dst.offset_from(buffer.data.as_ptr()) as usize,
+            unsafe { dst.offset_from(buffer.data.as_ptr()) } as usize,
             len,
             "Trusted iterator length was not accurately reported"
         );
@@ -703,20 +703,22 @@ impl MutableBuffer {
             let item = item?;
             // note how there is no reserve here (compared with `extend_from_iter`)
             let src = item.to_byte_slice().as_ptr();
-            std::ptr::copy_nonoverlapping(src, dst, item_size);
-            dst = dst.add(item_size);
+            unsafe { std::ptr::copy_nonoverlapping(src, dst, item_size) };
+            dst = unsafe { dst.add(item_size) };
         }
         // try_from_trusted_len_iter is instantiated a lot, so we extract part of it into a less
         // generic method to reduce compile time
         unsafe fn finalize_buffer(dst: *mut u8, buffer: &mut MutableBuffer, len: usize) {
-            assert_eq!(
-                dst.offset_from(buffer.data.as_ptr()) as usize,
-                len,
-                "Trusted iterator length was not accurately reported"
-            );
-            buffer.len = len;
+            unsafe {
+                assert_eq!(
+                    dst.offset_from(buffer.data.as_ptr()) as usize,
+                    len,
+                    "Trusted iterator length was not accurately reported"
+                );
+                buffer.len = len;
+            }
         }
-        finalize_buffer(dst, &mut buffer, len);
+        unsafe { finalize_buffer(dst, &mut buffer, len) };
         Ok(buffer)
     }
 }
