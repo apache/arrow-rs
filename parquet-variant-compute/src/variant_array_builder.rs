@@ -295,7 +295,7 @@ impl VariantValueArrayBuilder {
     /// builder.append_value(Variant::from(42));
     /// ```
     pub fn append_value(&mut self, value: Variant<'_, '_>) {
-        self.as_builder_ext(value.metadata().clone())
+        self.builder_ext(value.metadata().clone())
             .append_value(value);
     }
 
@@ -337,7 +337,7 @@ impl VariantValueArrayBuilder {
 
     /// Creates a thin [`VariantBuilderExt`] wrapper for this builder, which hides the `metadata`
     /// parameter (similar to the way [`parquet_variant::ObjectFieldBuilder`] hides field names).
-    pub fn as_builder_ext<'a>(
+    pub fn builder_ext<'a>(
         &'a mut self,
         metadata: VariantMetadata<'a>,
     ) -> VariantValueArrayBuilderExt<'a> {
@@ -548,7 +548,7 @@ mod test {
 
         // filtering fields takes more work because we need to manually create an object builder
         let value = array.value(1);
-        let mut builder = value_builder.as_builder_ext(value.metadata().clone());
+        let mut builder = value_builder.builder_ext(value.metadata().clone());
         builder
             .new_object()
             .with_field("name", value.get_object_field("name").unwrap())
@@ -557,7 +557,7 @@ mod test {
 
         // same bytes, but now nested and duplicated inside a list
         let value = array.value(2);
-        let mut builder = value_builder.as_builder_ext(value.metadata().clone());
+        let mut builder = value_builder.builder_ext(value.metadata().clone());
         builder
             .new_list()
             .with_value(value.clone())
