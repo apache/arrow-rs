@@ -936,7 +936,7 @@ impl RowConverter {
         self.fields
             .iter()
             .zip(&self.codecs)
-            .map(|(field, codec)| decode_column(field, rows, codec, validate_utf8))
+            .map(|(field, codec)| unsafe { decode_column(field, rows, codec, validate_utf8) })
             .collect()
     }
 
@@ -1685,20 +1685,20 @@ unsafe fn decode_column(
                 DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, options)),
                 DataType::BinaryView => Arc::new(decode_binary_view(rows, options)),
                 DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, options)),
-                DataType::Utf8 => Arc::new(decode_string::<i32>(rows, options, validate_utf8)),
-                DataType::LargeUtf8 => Arc::new(decode_string::<i64>(rows, options, validate_utf8)),
-                DataType::Utf8View => Arc::new(decode_string_view(rows, options, validate_utf8)),
+                DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, options, validate_utf8) }),
+                DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, options, validate_utf8) }),
+                DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, options, validate_utf8) }),
                 _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
         }
         Codec::Dictionary(converter, _) => {
-            let cols = converter.convert_raw(rows, validate_utf8)?;
+            let cols = unsafe { converter.convert_raw(rows, validate_utf8) }?;
             cols.into_iter().next().unwrap()
         }
         Codec::Struct(converter, _) => {
             let (null_count, nulls) = fixed::decode_nulls(rows);
             rows.iter_mut().for_each(|row| *row = &row[1..]);
-            let children = converter.convert_raw(rows, validate_utf8)?;
+            let children = unsafe { converter.convert_raw(rows, validate_utf8) }?;
 
             let child_data: Vec<ArrayData> = children.iter().map(|c| c.to_data()).collect();
             // Since RowConverter flattens certain data types (i.e. Dictionary),
@@ -1723,44 +1723,37 @@ unsafe fn decode_column(
                 .null_bit_buffer(Some(nulls))
                 .child_data(child_data);
 
-            Arc::new(StructArray::from(builder.build_unchecked()))
+            Arc::new(StructArray::from(unsafe { builder.build_unchecked() }))
         }
         Codec::List(converter) => match &field.data_type {
             DataType::List(_) => {
-                Arc::new(list::decode::<i32>(converter, rows, field, validate_utf8)?)
+                Arc::new(unsafe { list::decode::<i32>(converter, rows, field, validate_utf8) }?)
             }
             DataType::LargeList(_) => {
-                Arc::new(list::decode::<i64>(converter, rows, field, validate_utf8)?)
+                Arc::new(unsafe { list::decode::<i64>(converter, rows, field, validate_utf8) }?)
             }
-            DataType::FixedSizeList(_, value_length) => Arc::new(list::decode_fixed_size_list(
-                converter,
-                rows,
-                field,
-                validate_utf8,
-                value_length.as_usize(),
-            )?),
+            DataType::FixedSizeList(_, value_length) => Arc::new(unsafe {
+                list::decode_fixed_size_list(
+                    converter,
+                    rows,
+                    field,
+                    validate_utf8,
+                    value_length.as_usize(),
+                )
+            }?),
             _ => unreachable!(),
         },
         Codec::RunEndEncoded(converter) => match &field.data_type {
             DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-                DataType::Int16 => Arc::new(run::decode::<Int16Type>(
-                    converter,
-                    rows,
-                    field,
-                    validate_utf8,
-                )?),
-                DataType::Int32 => Arc::new(run::decode::<Int32Type>(
-                    converter,
-                    rows,
-                    field,
-                    validate_utf8,
-                )?),
-                DataType::Int64 => Arc::new(run::decode::<Int64Type>(
-                    converter,
-                    rows,
-                    field,
-                    validate_utf8,
-                )?),
+                DataType::Int16 => Arc::new(unsafe {
+                    run::decode::<Int16Type>(converter, rows, field, validate_utf8)
+                }?),
+                DataType::Int32 => Arc::new(unsafe {
+                    run::decode::<Int32Type>(converter, rows, field, validate_utf8)
+                }?),
+                DataType::Int64 => Arc::new(unsafe {
+                    run::decode::<Int64Type>(converter, rows, field, validate_utf8)
+                }?),
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -1773,13 +1766,13 @@ unsafe fn decode_column(
 mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
-    use arrow_buffer::{i256, NullBuffer};
     use arrow_buffer::{Buffer, OffsetBuffer};
+    use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
 

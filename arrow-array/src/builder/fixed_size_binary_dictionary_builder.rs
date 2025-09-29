@@ -381,7 +381,7 @@ fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[
 mod tests {
     use super::*;
 
-    use crate::types::{Int16Type, Int32Type, Int8Type, UInt16Type, UInt8Type};
+    use crate::types::{Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type};
     use crate::{ArrowPrimitiveType, FixedSizeBinaryArray, Int8Array};
 
     #[test]
@@ -460,11 +460,20 @@ mod tests {
     fn test_fixed_size_dictionary_builder_wrong_size() {
         let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
         let err = b.append(b"too long").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8"
+        );
         let err = b.append("").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0"
+        );
         let err = b.append_n("a", 3).unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 1");
+        assert_eq!(
+          err,
+          "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 1"
+        );
     }
 
     #[test]
