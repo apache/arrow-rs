@@ -24,6 +24,7 @@
 //! with the key "ARROW:extension:name".
 
 use crate::basic::LogicalType;
+use crate::errors::ParquetError;
 use crate::schema::types::Type;
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::Field;
@@ -34,23 +35,51 @@ use arrow_schema::Field;
 /// Some Parquet logical types, such as Variant, do not map directly to an
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
-pub(crate) fn add_extension_type(mut arrow_field: Field, parquet_type: &Type) -> Field {
-    match parquet_type.get_basic_info().logical_type() {
+pub(crate) fn try_add_extension_type(
+    mut arrow_field: Field,
+    parquet_type: &Type,
+) -> Result<Field, ParquetError> {
+    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type() else {
+        return Ok(arrow_field);
+    };
+    match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
-        Some(LogicalType::Variant { .. }) => {
-            // try to add the Variant extension type, but if that fails (e.g. because the
-            // storage type is not supported), just return the field as is
-            arrow_field
-                .try_with_extension_type(parquet_variant_compute::VariantType)
-                .ok();
-            arrow_field
+        LogicalType::Variant { .. } => {
+            arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
         }
-        // TODO add other LogicalTypes here
-        _ => arrow_field,
+        #[cfg(feature = "arrow_canonical_extension_types")]
+        LogicalType::Uuid => {
+            arrow_field.try_with_extension_type(arrow_schema::extension::Uuid)?;
+        }
+        #[cfg(feature = "arrow_canonical_extension_types")]
+        LogicalType::Json => {
+            arrow_field.try_with_extension_type(arrow_schema::extension::Json::default())?;
+        }
+        _ => {}
+    };
+    Ok(arrow_field)
+}
+
+/// Returns true if [`try_add_extension_type`] would add an extension type
+/// to the specified Parquet field.
+///
+/// This is used to preallocate the metadata hashmap size
+pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
+    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type() else {
+        return false;
+    };
+    match parquet_logical_type {
+        #[cfg(feature = "variant_experimental")]
+        LogicalType::Variant { .. } => true,
+        #[cfg(feature = "arrow_canonical_extension_types")]
+        LogicalType::Uuid => true,
+        #[cfg(feature = "arrow_canonical_extension_types")]
+        LogicalType::Json => true,
+        _ => false,
     }
 }
 
-/// Return the Parquet logical type to use for the specified Arrow field, if any.
+/// Return the Parquet logical type to use for the specified Arrow Struct field, if any.
 #[cfg(feature = "variant_experimental")]
 pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
     use parquet_variant_compute::VariantType;
@@ -69,6 +98,38 @@ pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
 }
 
 #[cfg(not(feature = "variant_experimental"))]
-pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_struct(_field: &Field) -> Option<LogicalType> {
     None
+}
+
+/// Return the Parquet logical type to use for the specified Arrow fixed size binary field, if any.
+#[cfg(feature = "arrow_canonical_extension_types")]
+pub(crate) fn logical_type_for_fixed_size_binary(field: &Field) -> Option<LogicalType> {
+    use arrow_schema::extension::Uuid;
+    // If set, map arrow uuid extension type to parquet uuid logical type.
+    field
+        .try_extension_type::<Uuid>()
+        .ok()
+        .map(|_| LogicalType::Uuid)
+}
+
+#[cfg(not(feature = "arrow_canonical_extension_types"))]
+pub(crate) fn logical_type_for_fixed_size_binary(_field: &Field) -> Option<LogicalType> {
+    None
+}
+
+/// Return the Parquet logical type to use for the specified Arrow string field (Utf8, LargeUtf8) if any
+#[cfg(feature = "arrow_canonical_extension_types")]
+pub(crate) fn logical_type_for_string(field: &Field) -> Option<LogicalType> {
+    use arrow_schema::extension::Json;
+    // Use the Json logical type if the canonical Json
+    // extension type is set on this field.
+    field
+        .try_extension_type::<Json>()
+        .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
+}
+
+#[cfg(not(feature = "arrow_canonical_extension_types"))]
+pub(crate) fn logical_type_for_string(_field: &Field) -> Option<LogicalType> {
+    Some(LogicalType::String)
 }

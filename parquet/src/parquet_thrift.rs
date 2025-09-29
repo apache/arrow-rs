@@ -828,6 +828,14 @@ impl WriteThrift for OrderedF64 {
     }
 }
 
+impl WriteThrift for f64 {
+    const ELEMENT_TYPE: ElementType = ElementType::Double;
+
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        writer.write_double(*self)
+    }
+}
+
 impl WriteThrift for &[u8] {
     const ELEMENT_TYPE: ElementType = ElementType::Binary;
 
@@ -986,6 +994,19 @@ impl WriteThriftField for OrderedF64 {
     ) -> Result<i16> {
         writer.write_field_begin(FieldType::Double, field_id, last_field_id)?;
         writer.write_double(self.0)?;
+        Ok(field_id)
+    }
+}
+
+impl WriteThriftField for f64 {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Double, field_id, last_field_id)?;
+        writer.write_double(*self)?;
         Ok(field_id)
     }
 }

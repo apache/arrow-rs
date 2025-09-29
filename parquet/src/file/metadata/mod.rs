@@ -104,6 +104,7 @@ pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
+use crate::geospatial::statistics as geo_statistics;
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
     Type as SchemaType,
@@ -764,6 +765,7 @@ pub struct ColumnChunkMetaData {
     index_page_offset: Option<i64>,
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
+    geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
@@ -991,6 +993,12 @@ impl ColumnChunkMetaData {
         self.statistics.as_ref()
     }
 
+    /// Returns geospatial statistics that are set for this column chunk,
+    /// or `None` if no geospatial statistics are available.
+    pub fn geo_statistics(&self) -> Option<&geo_statistics::GeospatialStatistics> {
+        self.geo_statistics.as_deref()
+    }
+
     /// Returns the offset for the page encoding stats,
     /// or `None` if no page encoding stats are available.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
@@ -1117,6 +1125,7 @@ impl ColumnChunkMetaDataBuilder {
             index_page_offset: None,
             dictionary_page_offset: None,
             statistics: None,
+            geo_statistics: None,
             encoding_stats: None,
             bloom_filter_offset: None,
             bloom_filter_length: None,
@@ -1191,6 +1200,12 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets statistics for this column chunk.
     pub fn set_statistics(mut self, value: Statistics) -> Self {
         self.0.statistics = Some(value);
+        self
+    }
+
+    /// Sets geospatial statistics for this column chunk.
+    pub fn set_geo_statistics(mut self, value: Box<geo_statistics::GeospatialStatistics>) -> Self {
+        self.0.geo_statistics = Some(value);
         self
     }
 
@@ -1802,9 +1817,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2280;
+        let base_expected_size = 2312;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2712;
+        let base_expected_size = 2744;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 

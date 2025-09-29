@@ -191,7 +191,6 @@ pub mod schema;
 mod parquet_macros;
 mod parquet_thrift;
 pub mod thrift;
-
 /// What data is needed to read the next item from a decoder.
 ///
 /// This is used to communicate between the decoder and the caller
@@ -209,3 +208,4 @@ pub enum DecodeResult<T: Debug> {
 
 #[cfg(feature = "variant_experimental")]
 pub mod variant;
+experimental!(pub mod geospatial);

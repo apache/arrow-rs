@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{variable, RowConverter, Rows, SortField};
+use crate::{RowConverter, Rows, SortField, variable};
 use arrow_array::types::RunEndIndexType;
 use arrow_array::{PrimitiveArray, RunArray};
 use arrow_buffer::{ArrowNativeType, ScalarBuffer};
@@ -97,7 +97,7 @@ pub unsafe fn decode<R: RunEndIndexType>(
     validate_utf8: bool,
 ) -> Result<RunArray<R>, ArrowError> {
     if rows.is_empty() {
-        let values = converter.convert_raw(&mut [], validate_utf8)?;
+        let values = unsafe { converter.convert_raw(&mut [], validate_utf8) }?;
         let run_ends_array = PrimitiveArray::<R>::try_new(ScalarBuffer::from(vec![]), None)?;
         return RunArray::<R>::try_new(&run_ends_array, &values[0]);
     }
@@ -143,9 +143,9 @@ pub unsafe fn decode<R: RunEndIndexType>(
     // Convert the unique decoded values using the row converter
     let mut unique_rows: Vec<&[u8]> = decoded_values.iter().map(|v| v.as_slice()).collect();
     let values = if unique_rows.is_empty() {
-        converter.convert_raw(&mut [], validate_utf8)?
+        unsafe { converter.convert_raw(&mut [], validate_utf8) }?
     } else {
-        converter.convert_raw(&mut unique_rows, validate_utf8)?
+        unsafe { converter.convert_raw(&mut unique_rows, validate_utf8) }?
     };
 
     // Create run ends array
