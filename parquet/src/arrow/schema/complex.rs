@@ -624,3 +624,262 @@ pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
 
     Ok(visitor.dispatch(parquet_type, context)?.unwrap())
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::arrow::schema::complex::convert_schema;
+    use crate::arrow::ProjectionMask;
+    use crate::schema::parser::parse_message_type;
+    use crate::schema::types::SchemaDescriptor;
+    use arrow_schema::{DataType, Fields};
+    use std::sync::Arc;
+
+    #[test]
+    fn convert_schema_with_repeated_primitive_should_use_inferred_schema(
+    ) -> crate::errors::Result<()> {
+        let message_type = "
+    message schema {
+      repeated BYTE_ARRAY col_1 = 1;
+    }
+    ";
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        assert_eq!(schema_fields.len(), 1);
+
+        let expected_schema = DataType::Struct(Fields::from(vec![Arc::new(
+            arrow_schema::Field::new(
+                "col_1",
+                DataType::List(Arc::new(arrow_schema::Field::new(
+                    "col_1",
+                    DataType::Binary,
+                    false,
+                ))),
+                false,
+            )
+            .with_metadata(schema_fields[0].metadata().clone()),
+        )]));
+
+        assert_eq!(converted.arrow_type, expected_schema);
+
+        let utf8_instead_of_binary = Fields::from(vec![Arc::new(
+            arrow_schema::Field::new(
+                "col_1",
+                DataType::List(Arc::new(arrow_schema::Field::new(
+                    "col_1",
+                    DataType::Utf8,
+                    false,
+                ))),
+                false,
+            )
+            .with_metadata(schema_fields[0].metadata().clone()),
+        )]);
+
+        // Should be able to convert the same thing
+        let converted_again = convert_schema(
+            &schema,
+            ProjectionMask::all(),
+            Some(&utf8_instead_of_binary),
+        )?
+        .unwrap();
+
+        // Assert that we changed to Utf8
+        assert_eq!(
+            converted_again.arrow_type,
+            DataType::Struct(utf8_instead_of_binary)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn convert_schema_with_repeated_struct_and_inferred_schema() -> crate::errors::Result<()> {
+        let message_type = "
+    message schema {
+        repeated group col_1 {
+          optional binary col_2;
+          optional binary col_3;
+          optional group col_4 {
+            optional int64 col_5;
+            optional int32 col_6;
+          }
+        }
+    }
+    ";
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        assert_eq!(schema_fields.len(), 1);
+
+        // Should be able to convert the same thing
+        let converted_again =
+            convert_schema(&schema, ProjectionMask::all(), Some(&schema_fields))?.unwrap();
+
+        // Assert that we changed to Utf8
+        assert_eq!(converted_again.arrow_type, converted.arrow_type);
+
+        Ok(())
+    }
+
+    #[test]
+    fn convert_schema_with_nested_repeated_struct_and_primitives() -> crate::errors::Result<()> {
+        let message_type = "
+message schema {
+    repeated group col_1 {
+        optional binary col_2;
+        repeated BYTE_ARRAY col_3;
+        repeated group col_4 {
+            optional int64 col_5;
+            repeated binary col_6;
+        }
+    }
+}
+";
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        assert_eq!(schema_fields.len(), 1);
+
+        // Build expected schema
+        let expected_schema = DataType::Struct(Fields::from(vec![Arc::new(
+            arrow_schema::Field::new(
+                "col_1",
+                DataType::List(Arc::new(arrow_schema::Field::new(
+                    "col_1",
+                    DataType::Struct(Fields::from(vec![
+                        Arc::new(arrow_schema::Field::new("col_2", DataType::Binary, true)),
+                        Arc::new(arrow_schema::Field::new(
+                            "col_3",
+                            DataType::List(Arc::new(arrow_schema::Field::new(
+                                "col_3",
+                                DataType::Binary,
+                                false,
+                            ))),
+                            false,
+                        )),
+                        Arc::new(arrow_schema::Field::new(
+                            "col_4",
+                            DataType::List(Arc::new(arrow_schema::Field::new(
+                                "col_4",
+                                DataType::Struct(Fields::from(vec![
+                                    Arc::new(arrow_schema::Field::new(
+                                        "col_5",
+                                        DataType::Int64,
+                                        true,
+                                    )),
+                                    Arc::new(arrow_schema::Field::new(
+                                        "col_6",
+                                        DataType::List(Arc::new(arrow_schema::Field::new(
+                                            "col_6",
+                                            DataType::Binary,
+                                            false,
+                                        ))),
+                                        false,
+                                    )),
+                                ])),
+                                false,
+                            ))),
+                            false,
+                        )),
+                    ])),
+                    false,
+                ))),
+                false,
+            )
+            .with_metadata(schema_fields[0].metadata().clone()),
+        )]));
+
+        assert_eq!(converted.arrow_type, expected_schema);
+
+        // Test conversion with inferred schema
+        let converted_again =
+            convert_schema(&schema, ProjectionMask::all(), Some(&schema_fields))?.unwrap();
+
+        assert_eq!(converted_again.arrow_type, converted.arrow_type);
+
+        // Test conversion with modified schema (change col_6 from Binary to Utf8)
+        let modified_schema_fields = Fields::from(vec![Arc::new(
+            arrow_schema::Field::new(
+                "col_1",
+                DataType::List(Arc::new(arrow_schema::Field::new(
+                    "col_1",
+                    DataType::Struct(Fields::from(vec![
+                        Arc::new(arrow_schema::Field::new("col_2", DataType::Binary, true)),
+                        Arc::new(arrow_schema::Field::new(
+                            "col_3",
+                            DataType::List(Arc::new(arrow_schema::Field::new(
+                                "col_3",
+                                DataType::Binary,
+                                false,
+                            ))),
+                            false,
+                        )),
+                        Arc::new(arrow_schema::Field::new(
+                            "col_4",
+                            DataType::List(Arc::new(arrow_schema::Field::new(
+                                "col_4",
+                                DataType::Struct(Fields::from(vec![
+                                    Arc::new(arrow_schema::Field::new(
+                                        "col_5",
+                                        DataType::Int64,
+                                        true,
+                                    )),
+                                    Arc::new(arrow_schema::Field::new(
+                                        "col_6",
+                                        DataType::List(Arc::new(arrow_schema::Field::new(
+                                            "col_6",
+                                            // Change to Utf8
+                                            DataType::Utf8,
+                                            false,
+                                        ))),
+                                        false,
+                                    )),
+                                ])),
+                                false,
+                            ))),
+                            false,
+                        )),
+                    ])),
+                    false,
+                ))),
+                false,
+            )
+            .with_metadata(schema_fields[0].metadata().clone()),
+        )]);
+
+        let converted_with_modified = convert_schema(
+            &schema,
+            ProjectionMask::all(),
+            Some(&modified_schema_fields),
+        )?
+        .unwrap();
+
+        assert_eq!(
+            converted_with_modified.arrow_type,
+            DataType::Struct(modified_schema_fields)
+        );
+
+        Ok(())
+    }
+}
