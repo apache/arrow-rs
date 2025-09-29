@@ -184,7 +184,7 @@ This is defined in this crate as
 ```rust
 thrift_struct!(
 pub(crate) struct SchemaElement<'a> {
-  1: optional Type type_;
+  1: optional Type r#type;
   2: optional i32 type_length;
   3: optional Repetition repetition_type;
   4: required string<'a> name;
@@ -205,7 +205,7 @@ resultant Rust struct will be
 
 ```rust
 pub(crate) struct SchemaElement<'a> {
-    pub(crate) type_: Type, // here we've changed the name `type` to `type_` to avoid reserved words
+    pub(crate) r#type: Type, // here we've changed the name `type` to `r#type` to avoid reserved words
     pub(crate) type_length: i32,
     pub(crate) repetition_type: Repetition,
     pub(crate) name: &'a str,
@@ -266,7 +266,7 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ConvertedType 
             2 => Self::MAP_KEY_VALUE,
             ...
             21 => Self::INTERVAL,
-            _ => return Err(general_err!("Unexpected ConvertedType {val}")),
+            _ => return Err(general_err!("Unexpected ConvertedType {}", val)),
         })
     }
 }

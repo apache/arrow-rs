@@ -1299,8 +1299,7 @@ fn schema_from_array_helper<'a>(
                 ));
             }
             let repetition = element.repetition_type.unwrap();
-            if let Some(type_) = element.type_ {
-                let physical_type = type_;
+            if let Some(physical_type) = element.r#type {
                 let length = element.type_length.unwrap_or(-1);
                 let scale = element.scale.unwrap_or(-1);
                 let precision = element.precision.unwrap_or(-1);

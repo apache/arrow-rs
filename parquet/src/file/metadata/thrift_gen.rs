@@ -55,7 +55,7 @@ use crate::{
 thrift_struct!(
 pub(crate) struct SchemaElement<'a> {
   /** Data type for this field. Not set if the current element is a non-leaf node */
-  1: optional Type type_;
+  1: optional Type r#type;
   2: optional i32 type_length;
   3: optional Repetition repetition_type;
   4: required string<'a> name;
@@ -1330,7 +1330,7 @@ fn write_schema_helper<W: Write>(
             precision,
         } => {
             let element = SchemaElement {
-                type_: Some(*physical_type),
+                r#type: Some(*physical_type),
                 type_length: if *type_length >= 0 {
                     Some(*type_length)
                 } else {
@@ -1366,7 +1366,7 @@ fn write_schema_helper<W: Write>(
             };
 
             let element = SchemaElement {
-                type_: None,
+                r#type: None,
                 type_length: None,
                 repetition_type: repetition,
                 name: basic_info.name(),
