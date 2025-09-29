@@ -170,7 +170,7 @@ impl std::fmt::Debug for NullArray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{make_array, Int64Array, StructArray};
+    use crate::{Int64Array, StructArray, make_array};
     use arrow_data::transform::MutableArrayData;
     use arrow_schema::Field;
 

@@ -23,8 +23,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
-#[cfg(feature = "arrow_canonical_extension_types")]
-use arrow_schema::extension::{Json, Uuid};
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
 use crate::basic::{
@@ -39,7 +37,10 @@ mod extension;
 mod primitive;
 
 use super::PARQUET_FIELD_ID_META_KEY;
-use crate::arrow::schema::extension::logical_type_for_struct;
+use crate::arrow::schema::extension::{
+    has_extension_type, logical_type_for_fixed_size_binary, logical_type_for_string,
+    logical_type_for_struct, try_add_extension_type,
+};
 use crate::arrow::ProjectionMask;
 pub(crate) use complex::{ParquetField, ParquetFieldType};
 
@@ -390,31 +391,27 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
     let field = complex::convert_type(&parquet_column.self_type_ptr())?;
     let mut ret = Field::new(parquet_column.name(), field.arrow_type, field.nullable);
 
-    let basic_info = parquet_column.self_type().get_basic_info();
-    let mut meta = HashMap::with_capacity(if cfg!(feature = "arrow_canonical_extension_types") {
-        2
-    } else {
-        1
-    });
+    let parquet_type = parquet_column.self_type();
+    let basic_info = parquet_type.get_basic_info();
+
+    let mut hash_map_size = 0;
     if basic_info.has_id() {
-        meta.insert(
+        hash_map_size += 1;
+    }
+    if has_extension_type(parquet_type) {
+        hash_map_size += 1;
+    }
+    if hash_map_size == 0 {
+        return Ok(ret);
+    }
+    ret.set_metadata(HashMap::with_capacity(hash_map_size));
+    if basic_info.has_id() {
+        ret.metadata_mut().insert(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             basic_info.id().to_string(),
         );
     }
-    #[cfg(feature = "arrow_canonical_extension_types")]
-    if let Some(logical_type) = basic_info.logical_type() {
-        match logical_type {
-            LogicalType::Uuid => ret.try_with_extension_type(Uuid)?,
-            LogicalType::Json => ret.try_with_extension_type(Json::default())?,
-            _ => {}
-        }
-    }
-    if !meta.is_empty() {
-        ret.set_metadata(meta);
-    }
-
-    Ok(ret)
+    try_add_extension_type(ret, parquet_column.self_type())
 }
 
 pub fn decimal_length_from_precision(precision: u8) -> usize {
@@ -618,16 +615,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .with_repetition(repetition)
                 .with_id(id)
                 .with_length(*length)
-                .with_logical_type(
-                    #[cfg(feature = "arrow_canonical_extension_types")]
-                    // If set, map arrow uuid extension type to parquet uuid logical type.
-                    field
-                        .try_extension_type::<Uuid>()
-                        .ok()
-                        .map(|_| LogicalType::Uuid),
-                    #[cfg(not(feature = "arrow_canonical_extension_types"))]
-                    None,
-                )
+                .with_logical_type(logical_type_for_fixed_size_binary(field))
                 .build()
         }
         DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
@@ -664,35 +652,13 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-                .with_logical_type({
-                    #[cfg(feature = "arrow_canonical_extension_types")]
-                    {
-                        // Use the Json logical type if the canonical Json
-                        // extension type is set on this field.
-                        field
-                            .try_extension_type::<Json>()
-                            .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
-                    }
-                    #[cfg(not(feature = "arrow_canonical_extension_types"))]
-                    Some(LogicalType::String)
-                })
+                .with_logical_type(logical_type_for_string(field))
                 .with_repetition(repetition)
                 .with_id(id)
                 .build()
         }
         DataType::Utf8View => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-            .with_logical_type({
-                #[cfg(feature = "arrow_canonical_extension_types")]
-                {
-                    // Use the Json logical type if the canonical Json
-                    // extension type is set on this field.
-                    field
-                        .try_extension_type::<Json>()
-                        .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
-                }
-                #[cfg(not(feature = "arrow_canonical_extension_types"))]
-                Some(LogicalType::String)
-            })
+            .with_logical_type(logical_type_for_string(field))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
@@ -797,8 +763,6 @@ mod tests {
 
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
-
     use crate::arrow::PARQUET_FIELD_ID_META_KEY;
     use crate::file::metadata::KeyValue;
     use crate::file::reader::FileReader;
@@ -806,6 +770,7 @@ mod tests {
         arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
     };
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 
     #[test]
     fn test_flat_primitives() {
@@ -844,10 +809,24 @@ mod tests {
             Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new("string_2", DataType::Utf8, true),
-            Field::new("json", DataType::Utf8, true),
+            json_field(),
         ]);
 
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
+    }
+
+    /// Return the expected Field for a Parquet column annotated with
+    /// the JSON logical type.
+    fn json_field() -> Field {
+        #[cfg(feature = "arrow_canonical_extension_types")]
+        {
+            Field::new("json", DataType::Utf8, true)
+                .with_extension_type(arrow_schema::extension::Json::default())
+        }
+        #[cfg(not(feature = "arrow_canonical_extension_types"))]
+        {
+            Field::new("json", DataType::Utf8, true)
+        }
     }
 
     #[test]
@@ -2233,6 +2212,7 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_uuid_to_parquet_uuid() -> Result<()> {
+        use arrow_schema::extension::Uuid;
         let arrow_schema = Schema::new(vec![Field::new(
             "uuid",
             DataType::FixedSizeBinary(16),
@@ -2247,9 +2227,8 @@ mod tests {
             Some(LogicalType::Uuid)
         );
 
-        // TODO: roundtrip
-        // let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
-        // assert_eq!(arrow_schema.field(0).try_extension_type::<Uuid>()?, Uuid);
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert_eq!(arrow_schema.field(0).try_extension_type::<Uuid>()?, Uuid);
 
         Ok(())
     }
@@ -2257,6 +2236,7 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_json_to_parquet_json() -> Result<()> {
+        use arrow_schema::extension::Json;
         let arrow_schema = Schema::new(vec![
             Field::new("json", DataType::Utf8, false).with_extension_type(Json::default())
         ]);
@@ -2268,13 +2248,11 @@ mod tests {
             Some(LogicalType::Json)
         );
 
-        // TODO: roundtrip
-        // https://github.com/apache/arrow-rs/issues/7063
-        // let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
-        // assert_eq!(
-        //     arrow_schema.field(0).try_extension_type::<Json>()?,
-        //     Json::default()
-        // );
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert_eq!(
+            arrow_schema.field(0).try_extension_type::<Json>()?,
+            Json::default()
+        );
 
         Ok(())
     }

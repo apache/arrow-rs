@@ -229,6 +229,14 @@ enum Decoder {
     Boolean(BooleanBufferBuilder),
     Int32(Vec<i32>),
     Int64(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationSecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationMillisecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationMicrosecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationNanosecond(Vec<i64>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
     Date32(Vec<i32>),
@@ -351,6 +359,22 @@ impl Decoder {
             }
             (Codec::TimestampMicros(is_utc), _) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationNanos, _) => {
+                Self::DurationNanosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMicros, _) => {
+                Self::DurationMicrosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMillis, _) => {
+                Self::DurationMillisecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationSeconds, _) => {
+                Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY))
             }
             (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Decimal(precision, scale, size), _) => {
@@ -526,6 +550,11 @@ impl Decoder {
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => v.push(0),
             Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
             Self::Float64(v)
             | Self::Int32ToFloat64(v)
@@ -609,6 +638,19 @@ impl Decoder {
                 }
                 _ => Err(ArrowError::InvalidArgumentError(
                     "Default for int32/date32/time-millis must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for duration long must be long".to_string(),
                 )),
             },
             Self::Int64(v)
@@ -822,6 +864,11 @@ impl Decoder {
             | Self::TimeMicros(values)
             | Self::TimestampMillis(_, values)
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(values)
+            | Self::DurationMillisecond(values)
+            | Self::DurationMicrosecond(values)
+            | Self::DurationNanosecond(values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
@@ -1021,6 +1068,22 @@ impl Decoder {
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
                     .with_timezone_opt(is_utc.then(|| "+00:00")),
             ),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(values) => {
+                Arc::new(flush_primitive::<DurationSecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMillisecond(values) => {
+                Arc::new(flush_primitive::<DurationMillisecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMicrosecond(values) => {
+                Arc::new(flush_primitive::<DurationMicrosecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationNanosecond(values) => {
+                Arc::new(flush_primitive::<DurationNanosecondType>(values, nulls))
+            }
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
             Self::Int32ToInt64(values) => Arc::new(flush_primitive::<Int64Type>(values, nulls)),
@@ -2923,6 +2986,91 @@ mod tests {
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let array = decoder.flush(None).unwrap();
         assert_eq!(array.len(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_seconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationSeconds, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        // Three values: 0, -1, 2
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_long(-1));
+        data.extend_from_slice(&encode_avro_long(2));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationSecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[0, -1, 2]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_milliseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationMillis, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [1i64, 0, -2] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMillisecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[1, 0, -2]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_microseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationMicros, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [5i64, -6, 7] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[5, -6, 7]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_nanoseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationNanos, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [8i64, 9, -10] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationNanosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[8, 9, -10]);
     }
 
     #[test]

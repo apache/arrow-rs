@@ -26,8 +26,8 @@ use crate::datatype::DataType;
 use crate::extension::CanonicalExtensionType;
 use crate::schema::SchemaBuilder;
 use crate::{
-    extension::{ExtensionType, EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
     Fields, UnionFields, UnionMode,
+    extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY, ExtensionType},
 };
 
 /// A reference counted [`Field`]
@@ -169,6 +169,12 @@ impl Hash for Field {
             k.hash(state);
             self.metadata.get(k).expect("key valid").hash(state);
         }
+    }
+}
+
+impl AsRef<Field> for Field {
+    fn as_ref(&self) -> &Field {
+        self
     }
 }
 
@@ -824,24 +830,28 @@ impl Field {
             DataType::Struct(nested_fields) => match &from.data_type {
                 DataType::Struct(from_nested_fields) => {
                     let mut builder = SchemaBuilder::new();
-                    nested_fields.iter().chain(from_nested_fields).try_for_each(|f| builder.try_merge(f))?;
+                    nested_fields
+                        .iter()
+                        .chain(from_nested_fields)
+                        .try_for_each(|f| builder.try_merge(f))?;
                     *nested_fields = builder.finish().fields;
                 }
                 _ => {
-                    return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::Struct",
-                            self.name, from.data_type)
-                ))}
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema field '{}' because the from data_type = {} is not DataType::Struct",
+                        self.name, from.data_type
+                    )));
+                }
             },
             DataType::Union(nested_fields, _) => match &from.data_type {
                 DataType::Union(from_nested_fields, _) => {
                     nested_fields.try_merge(from_nested_fields)?
                 }
                 _ => {
-                    return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::Union",
-                            self.name, from.data_type)
-                    ));
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema field '{}' because the from data_type = {} is not DataType::Union",
+                        self.name, from.data_type
+                    )));
                 }
             },
             DataType::List(field) => match &from.data_type {
@@ -849,30 +859,32 @@ impl Field {
                     let mut f = (**field).clone();
                     f.try_merge(from_field)?;
                     (*field) = Arc::new(f);
-                },
+                }
                 _ => {
-                    return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::List",
-                            self.name, from.data_type)
-                ))}
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema field '{}' because the from data_type = {} is not DataType::List",
+                        self.name, from.data_type
+                    )));
+                }
             },
             DataType::LargeList(field) => match &from.data_type {
                 DataType::LargeList(from_field) => {
                     let mut f = (**field).clone();
                     f.try_merge(from_field)?;
                     (*field) = Arc::new(f);
-                },
+                }
                 _ => {
-                    return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field '{}' because the from data_type = {} is not DataType::LargeList",
-                            self.name, from.data_type)
-                ))}
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema field '{}' because the from data_type = {} is not DataType::LargeList",
+                        self.name, from.data_type
+                    )));
+                }
             },
             DataType::Null => {
                 self.nullable = true;
                 self.data_type = from.data_type.clone();
             }
-            | DataType::Boolean
+            DataType::Boolean
             | DataType::Int8
             | DataType::Int16
             | DataType::Int32
@@ -911,10 +923,10 @@ impl Field {
                 if from.data_type == DataType::Null {
                     self.nullable = true;
                 } else if self.data_type != from.data_type {
-                    return Err(ArrowError::SchemaError(
-                        format!("Fail to merge schema field '{}' because the from data_type = {} does not equal {}",
-                            self.name, from.data_type, self.data_type)
-                    ));
+                    return Err(ArrowError::SchemaError(format!(
+                        "Fail to merge schema field '{}' because the from data_type = {} does not equal {}",
+                        self.name, from.data_type, self.data_type
+                    )));
                 }
             }
         }
@@ -1035,7 +1047,10 @@ mod test {
             .try_merge(&Field::new("c1", DataType::Float32, true))
             .expect_err("should fail")
             .to_string();
-        assert_eq!("Schema error: Fail to merge schema field 'c1' because the from data_type = Float32 does not equal Int64", result);
+        assert_eq!(
+            "Schema error: Fail to merge schema field 'c1' because the from data_type = Float32 does not equal Int64",
+            result
+        );
     }
 
     #[test]
@@ -1257,6 +1272,36 @@ mod test {
         assert!(f1.cmp(&f2).is_lt());
         assert!(f2.cmp(&f3).is_lt());
         assert!(f1.cmp(&f3).is_lt());
+    }
+
+    #[test]
+    #[expect(clippy::needless_borrows_for_generic_args)] // intentional to exercise various references
+    fn test_field_as_ref() {
+        let field = || Field::new("x", DataType::Binary, false);
+
+        // AsRef can be used in a function accepting a field.
+        // However, this case actually works a bit better when function takes `&Field`
+        fn accept_ref(_: impl AsRef<Field>) {}
+
+        accept_ref(field());
+        accept_ref(&field());
+        accept_ref(&&field());
+        accept_ref(Arc::new(field()));
+        accept_ref(&Arc::new(field()));
+        accept_ref(&&Arc::new(field()));
+
+        // AsRef can be used in a function accepting a collection of fields in any form,
+        // such as &[Field], or &[Arc<Field>]
+        fn accept_refs(_: impl IntoIterator<Item: AsRef<Field>>) {}
+
+        accept_refs(vec![field()]);
+        accept_refs(vec![&field()]);
+        accept_refs(vec![Arc::new(field())]);
+        accept_refs(vec![&Arc::new(field())]);
+        accept_refs(&vec![field()]);
+        accept_refs(&vec![&field()]);
+        accept_refs(&vec![Arc::new(field())]);
+        accept_refs(&vec![&Arc::new(field())]);
     }
 
     #[test]

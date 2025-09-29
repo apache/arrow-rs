@@ -1291,11 +1291,22 @@ fn datatype_to_avro(
             json!({ "type": "long", "logicalType": logical_type })
         }
         DataType::Duration(unit) => {
-            extras.insert(
-                "arrowDurationUnit".into(),
-                Value::String(format!("{unit:?}").to_lowercase()),
-            );
-            Value::String("long".into())
+            #[cfg(feature = "avro_custom_types")]
+            {
+                // When the feature is enabled, create an Avro schema object
+                // with the correct `logicalType` annotation.
+                let logical_type = match unit {
+                    TimeUnit::Second => "arrow.duration-seconds",
+                    TimeUnit::Millisecond => "arrow.duration-millis",
+                    TimeUnit::Microsecond => "arrow.duration-micros",
+                    TimeUnit::Nanosecond => "arrow.duration-nanos",
+                };
+                json!({ "type": "long", "logicalType": logical_type })
+            }
+            #[cfg(not(feature = "avro_custom_types"))]
+            {
+                Value::String("long".into())
+            }
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => json!({
             "type": "fixed",
@@ -2309,7 +2320,11 @@ mod tests {
         let dur_field = ArrowField::new("latency", DataType::Duration(TimeUnit::Nanosecond), false);
         let s2 = single_field_schema(dur_field);
         let avro2 = AvroSchema::try_from(&s2).unwrap();
-        assert_json_contains(&avro2.json_string, "\"arrowDurationUnit\"");
+        #[cfg(feature = "avro_custom_types")]
+        assert_json_contains(
+            &avro2.json_string,
+            "\"logicalType\":\"arrow.duration-nanos\"",
+        );
     }
 
     #[test]
@@ -2450,7 +2465,11 @@ mod tests {
         let list_dt = DataType::List(Arc::new(child));
         let arrow_schema = single_field_schema(ArrowField::new("durations", list_dt, false));
         let avro = AvroSchema::try_from(&arrow_schema).unwrap();
-        assert_json_contains(&avro.json_string, "\"arrowDurationUnit\":\"microsecond\"");
+        #[cfg(feature = "avro_custom_types")]
+        assert_json_contains(
+            &avro.json_string,
+            "\"logicalType\":\"arrow.duration-micros\"",
+        );
     }
 
     #[test]
@@ -2492,7 +2511,11 @@ mod tests {
         let map_dt = DataType::Map(Arc::new(entries_struct), false);
         let schema = single_field_schema(ArrowField::new("metrics", map_dt, false));
         let avro = AvroSchema::try_from(&schema).unwrap();
-        assert_json_contains(&avro.json_string, "\"arrowDurationUnit\":\"second\"");
+        #[cfg(feature = "avro_custom_types")]
+        assert_json_contains(
+            &avro.json_string,
+            "\"logicalType\":\"arrow.duration-seconds\"",
+        );
     }
 
     #[test]
