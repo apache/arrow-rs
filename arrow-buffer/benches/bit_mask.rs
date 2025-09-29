@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_buffer::bit_mask::set_bits;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use std::hint;
 
 fn criterion_benchmark(c: &mut Criterion) {

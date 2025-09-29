@@ -23,18 +23,18 @@ use crate::delta::{
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
-use arrow_buffer::{i256, Buffer, OffsetBuffer};
+use arrow_buffer::{Buffer, OffsetBuffer, i256};
 use arrow_data::decimal::{
-    format_decimal_str, is_validate_decimal256_precision, is_validate_decimal32_precision,
-    is_validate_decimal64_precision, is_validate_decimal_precision, validate_decimal256_precision,
-    validate_decimal32_precision, validate_decimal64_precision, validate_decimal_precision,
+    format_decimal_str, is_validate_decimal_precision, is_validate_decimal32_precision,
+    is_validate_decimal64_precision, is_validate_decimal256_precision, validate_decimal_precision,
+    validate_decimal32_precision, validate_decimal64_precision, validate_decimal256_precision,
 };
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
-    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL32_DEFAULT_SCALE,
-    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION,
-    DECIMAL64_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    ArrowError, DECIMAL_DEFAULT_SCALE, DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION,
+    DECIMAL32_MAX_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DataType, IntervalUnit, TimeUnit,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
@@ -1560,7 +1560,7 @@ pub(crate) mod bytes {
 
         #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
-            std::str::from_utf8_unchecked(b)
+            unsafe { std::str::from_utf8_unchecked(b) }
         }
     }
 }
@@ -1735,7 +1735,7 @@ impl ByteViewType for BinaryViewType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_data::{layout, BufferSpec};
+    use arrow_data::{BufferSpec, layout};
 
     #[test]
     fn month_day_nano_should_roundtrip() {
