@@ -225,10 +225,12 @@ impl Visitor {
                     Some(DataType::List(f)) => Some(f.as_ref()),
                     Some(DataType::LargeList(f)) => Some(f.as_ref()),
                     Some(DataType::FixedSizeList(f, _)) => Some(f.as_ref()),
-                    Some(d) => return Err(arrow_err!(
+                    Some(d) => {
+                        return Err(arrow_err!(
                         "incompatible arrow schema, expected list got {} for repeated struct field",
                         d
-                    )),
+                    ))
+                    }
                     None => None,
                 };
 
@@ -1041,8 +1043,8 @@ message schema {
                 ))),
                 false,
             )
-              // add the field id to the outer list
-              .with_field_id(1),
+            // add the field id to the outer list
+            .with_field_id(1),
         )]));
 
         assert_eq!(converted.arrow_type, expected_schema);
@@ -1061,64 +1063,70 @@ message schema {
                 DataType::LargeList(Arc::new(arrow_schema::Field::new(
                     "my_col_1",
                     DataType::Struct(Fields::from(vec![
-                        Arc::new(arrow_schema::Field::new(
-                            "my_col_2",
-                            DataType::LargeBinary,
-                            true,
-                        )
-                          .with_field_id(2)),
-                        Arc::new(arrow_schema::Field::new(
-                            "my_col_3",
-                            DataType::LargeList(Arc::new(arrow_schema::Field::new(
+                        Arc::new(
+                            arrow_schema::Field::new("my_col_2", DataType::LargeBinary, true)
+                                .with_field_id(2),
+                        ),
+                        Arc::new(
+                            arrow_schema::Field::new(
                                 "my_col_3",
-                                DataType::Utf8,
+                                DataType::LargeList(Arc::new(arrow_schema::Field::new(
+                                    "my_col_3",
+                                    DataType::Utf8,
+                                    false,
+                                ))),
                                 false,
-                            ))),
-                            false,
-                        )
-                          // add the field id to the outer list
-                          .with_field_id(3)),
-                        Arc::new(arrow_schema::Field::new(
-                            "my_col_4",
-                            DataType::FixedSizeList(
-                                Arc::new(arrow_schema::Field::new(
-                                    "my_col_4",
-                                    DataType::Struct(Fields::from(vec![
-                                        Arc::new(arrow_schema::Field::new(
-                                            "my_col_5",
-                                            DataType::Int64,
-                                            true,
-                                        )
-                                          .with_field_id(5)),
-                                        Arc::new(arrow_schema::Field::new(
-                                            "my_col_6",
-                                            DataType::LargeList(Arc::new(
+                            )
+                            // add the field id to the outer list
+                            .with_field_id(3),
+                        ),
+                        Arc::new(
+                            arrow_schema::Field::new(
+                                "my_col_4",
+                                DataType::FixedSizeList(
+                                    Arc::new(arrow_schema::Field::new(
+                                        "my_col_4",
+                                        DataType::Struct(Fields::from(vec![
+                                            Arc::new(
+                                                arrow_schema::Field::new(
+                                                    "my_col_5",
+                                                    DataType::Int64,
+                                                    true,
+                                                )
+                                                .with_field_id(5),
+                                            ),
+                                            Arc::new(
                                                 arrow_schema::Field::new(
                                                     "my_col_6",
-                                                    DataType::BinaryView,
+                                                    DataType::LargeList(Arc::new(
+                                                        arrow_schema::Field::new(
+                                                            "my_col_6",
+                                                            DataType::BinaryView,
+                                                            false,
+                                                        ),
+                                                    )),
                                                     false,
-                                                ),
-                                            )),
-                                            false,
-                                        )
-                                          // add the field id to the outer list
-                                          .with_field_id(6)),
-                                    ])),
-                                    false,
-                                )),
-                                3,
-                            ),
-                            false,
-                        )
-                          // add the field id to the outer list
-                          .with_field_id(4)),
+                                                )
+                                                // add the field id to the outer list
+                                                .with_field_id(6),
+                                            ),
+                                        ])),
+                                        false,
+                                    )),
+                                    3,
+                                ),
+                                false,
+                            )
+                            // add the field id to the outer list
+                            .with_field_id(4),
+                        ),
                     ])),
                     false,
                 ))),
                 false,
             )
-              // add the field id to the outer list
-              .with_field_id(1)
+            // add the field id to the outer list
+            .with_field_id(1),
         )]);
 
         let converted_with_modified = convert_schema(
