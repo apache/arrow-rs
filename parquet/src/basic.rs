@@ -1365,7 +1365,7 @@ impl str::FromStr for LogicalType {
 #[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
-    use crate::parquet_thrift::tests::test_roundtrip;
+    use crate::parquet_thrift::{tests::test_roundtrip, ThriftSliceInputProtocol};
 
     #[test]
     fn test_display_type() {
@@ -1446,6 +1446,17 @@ mod tests {
         test_roundtrip(ConvertedType::JSON);
         test_roundtrip(ConvertedType::BSON);
         test_roundtrip(ConvertedType::INTERVAL);
+    }
+
+    #[test]
+    fn test_read_invalid_converted_type() {
+        let mut prot = ThriftSliceInputProtocol::new(&[0x7eu8]);
+        let res = ConvertedType::read_thrift(&mut prot);
+        assert!(res.is_err());
+        assert_eq!(
+            res.unwrap_err().to_string(),
+            "Parquet error: Unexpected ConvertedType 63"
+        );
     }
 
     #[test]
