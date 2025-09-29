@@ -697,7 +697,7 @@ mod tests {
     use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use arrow_schema::{DataType, Fields};
+    use arrow_schema::{DataType, Field, Fields};
     use std::sync::Arc;
 
     trait WithFieldId {
@@ -731,20 +731,43 @@ mod tests {
         Ok(())
     }
 
+    fn test_expected_type(message_type: &str, expected_fields: Fields) -> crate::errors::Result<()> {
+        test_roundtrip(message_type)?;
+
+
+        let parsed_input_schema = Arc::new(parse_message_type(message_type)?);
+        let schema = SchemaDescriptor::new(parsed_input_schema);
+
+        let converted = convert_schema(&schema, ProjectionMask::all(), None)?.unwrap();
+
+        let DataType::Struct(schema_fields) = &converted.arrow_type else {
+            panic!("Expected struct from convert_schema");
+        };
+
+        assert_eq!(schema_fields, &expected_fields);
+
+        Ok(())
+    }
+
     #[test]
     fn basic_backward_compatible_list() -> crate::errors::Result<()> {
-        test_roundtrip("
+        test_expected_type("
             message schema {
-              optional group my_list (LIST) {
+                optional group my_list (LIST) {
                   repeated int32 element;
                 }
             }
-        ")
+        ", Fields::from(vec![
+            // Rule 1: List<Integer> (nullable list, non-null elements)
+            Field::new("my_list", DataType::List(Arc::new(
+                Field::new("element", DataType::Int32, false)
+            )), true)
+        ]))
     }
 
     #[test]
     fn basic_backward_compatible_list_2() -> crate::errors::Result<()> {
-        test_roundtrip("
+        test_expected_type("
             message schema {
               optional group my_list (LIST) {
                   repeated group element {
@@ -753,12 +776,22 @@ mod tests {
                   };
               }
             }
-        ")
+        ", Fields::from(vec![
+            // Rule 2: List<Tuple<String, Integer>> (nullable list, non-null elements)
+            Field::new("my_list", DataType::List(Arc::new(
+                Field::new("element", DataType::Struct(
+                    Fields::from(vec![
+                        Field::new("str", DataType::Binary, false),
+                        Field::new("num", DataType::Int32, false),
+                    ])
+                ), false)
+            )), true)
+        ]))
     }
 
     #[test]
     fn basic_backward_compatible_list_3() -> crate::errors::Result<()> {
-        test_roundtrip("
+        test_expected_type("
             message schema {
               optional group my_list (LIST) {
                   repeated group array (LIST) {
@@ -766,7 +799,14 @@ mod tests {
                   };
               }
             }
-        ")
+        ", Fields::from(vec![
+            // Rule 3: List<List<Integer>> (nullable outer list, non-null elements)
+            Field::new("my_list", DataType::List(Arc::new(
+                Field::new("array", DataType::List(Arc::new(
+                    Field::new("array", DataType::Int32, false)
+                )), false)
+            )), true)
+        ]))
     }
 
     #[test]
@@ -797,7 +837,7 @@ mod tests {
 
     #[test]
     fn basic_backward_compatible_list_5() -> crate::errors::Result<()> {
-        test_roundtrip("
+        test_expected_type("
             message schema {
                 optional group my_list (LIST) {
                     repeated group element {
@@ -805,7 +845,12 @@ mod tests {
                     };
                 }
             }
-        ")
+        ", Fields::from(vec![
+            // Rule 5: List<String>  (nullable list, nullable elements)
+            Field::new("my_list", DataType::List(Arc::new(
+                Field::new("element", DataType::Binary, true)
+            )), true)
+        ]))
     }
 
     #[test]
