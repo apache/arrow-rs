@@ -474,18 +474,18 @@
 //!   descriptive error. Populate the store up front to avoid this.
 //!
 //! ---
-use crate::codec::{AvroField, AvroFieldBuilder};
+use crate::codec::AvroFieldBuilder;
+use crate::reader::header::read_header;
 use crate::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore, CONFLUENT_MAGIC,
     SINGLE_OBJECT_MAGIC,
 };
-use arrow_array::{Array, RecordBatch, RecordBatchReader};
+use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
 use block::BlockDecoder;
-use header::{Header, HeaderDecoder};
+use header::Header;
 use indexmap::IndexMap;
 use record::RecordDecoder;
-use std::collections::HashMap;
 use std::io::BufRead;
 
 mod block;
@@ -493,26 +493,6 @@ mod cursor;
 mod header;
 mod record;
 mod vlq;
-
-/// Read the Avro file header (magic, metadata, sync marker) from `reader`.
-fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
-    let mut decoder = HeaderDecoder::default();
-    loop {
-        let buf = reader.fill_buf()?;
-        if buf.is_empty() {
-            break;
-        }
-        let read = buf.len();
-        let decoded = decoder.decode(buf)?;
-        reader.consume(decoded);
-        if decoded != read {
-            break;
-        }
-    }
-    decoder.flush().ok_or_else(|| {
-        ArrowError::ParseError("Unexpected EOF while reading Avro header".to_string())
-    })
-}
 
 fn is_incomplete_data(err: &ArrowError) -> bool {
     matches!(
@@ -652,8 +632,6 @@ pub struct Decoder {
     remaining_capacity: usize,
     cache: IndexMap<Fingerprint, RecordDecoder>,
     fingerprint_algorithm: FingerprintAlgorithm,
-    utf8_view: bool,
-    strict_mode: bool,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
     awaiting_body: bool,
 }
@@ -988,7 +966,7 @@ impl ReaderBuilder {
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
             .build()?;
-        RecordDecoder::try_new_with_options(root.data_type(), self.utf8_view)
+        RecordDecoder::try_new_with_options(root.data_type())
     }
 
     fn make_record_decoder_from_schemas(
@@ -1013,9 +991,7 @@ impl ReaderBuilder {
             active_fingerprint,
             active_decoder,
             cache,
-            utf8_view: self.utf8_view,
             fingerprint_algorithm,
-            strict_mode: self.strict_mode,
             pending_schema: None,
             awaiting_body: false,
         }
@@ -1287,14 +1263,12 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 
 #[cfg(test)]
 mod test {
-    use crate::codec::{AvroDataType, AvroField, AvroFieldBuilder, Codec};
-    use crate::compression::CompressionCodec;
+    use crate::codec::AvroFieldBuilder;
     use crate::reader::record::RecordDecoder;
-    use crate::reader::vlq::VLQDecoder;
-    use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
+    use crate::reader::{Decoder, Reader, ReaderBuilder};
     use crate::schema::{
-        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
-        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, SchemaStore,
+        AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
     use crate::writer::AvroWriter;
@@ -1312,16 +1286,14 @@ mod test {
     use arrow_schema::{
         ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, UnionFields, UnionMode,
     };
-    use bytes::{Buf, BufMut, Bytes};
+    use bytes::Bytes;
     use futures::executor::block_on;
     use futures::{stream, Stream, StreamExt, TryStreamExt};
     use serde_json::{json, Value};
     use std::collections::HashMap;
-    use std::fs;
     use std::fs::File;
-    use std::io::{BufReader, Cursor, Read};
+    use std::io::{BufReader, Cursor};
     use std::sync::Arc;
-    use std::task::{ready, Poll};
 
     fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
         let file = File::open(path).unwrap();
@@ -2180,8 +2152,7 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let writer_schema_long = schema_long.schema().unwrap();
         let root_long = AvroFieldBuilder::new(&writer_schema_long).build().unwrap();
-        let long_decoder =
-            RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view).unwrap();
+        let long_decoder = RecordDecoder::try_new_with_options(root_long.data_type()).unwrap();
         let _ = decoder.cache.insert(fp_long, long_decoder);
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         match fp_long {
@@ -2230,7 +2201,6 @@ mod test {
     fn test_two_messages_schema_switch() {
         let w_int = make_value_schema(PrimitiveType::Int);
         let w_long = make_value_schema(PrimitiveType::Long);
-        let r_long = w_long.clone();
         let mut store = SchemaStore::new();
         let fp_int = store.register(w_int).unwrap();
         let fp_long = store.register(w_long).unwrap();
@@ -2340,69 +2310,10 @@ mod test {
             .with_active_fingerprint(Fingerprint::Id(id))
             .build_decoder()
             .unwrap();
-        let buf = &crate::schema::CONFLUENT_MAGIC[..0]; // empty incomplete magic
+        let buf = &CONFLUENT_MAGIC[..0]; // empty incomplete magic
         let res = decoder.handle_prefix(buf).unwrap();
         assert_eq!(res, Some(0));
         assert!(decoder.pending_schema.is_none());
-    }
-
-    fn test_split_message_across_chunks() {
-        let writer_schema = make_value_schema(PrimitiveType::Int);
-        let reader_schema = writer_schema.clone();
-        let mut store = SchemaStore::new();
-        let fp = store.register(writer_schema).unwrap();
-        let msg1 = make_message(fp, 7);
-        let msg2 = make_message(fp, 8);
-        let msg3 = make_message(fp, 9);
-        let (pref2, body2) = msg2.split_at(10);
-        let (pref3, body3) = msg3.split_at(10);
-        let mut decoder = ReaderBuilder::new()
-            .with_batch_size(8)
-            .with_reader_schema(reader_schema)
-            .with_writer_schema_store(store)
-            .with_active_fingerprint(fp)
-            .build_decoder()
-            .unwrap();
-        let _ = decoder.decode(&msg1).unwrap();
-        let batch1 = decoder.flush().unwrap().expect("batch1");
-        assert_eq!(batch1.num_rows(), 1);
-        assert_eq!(
-            batch1
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            7
-        );
-        let _ = decoder.decode(pref2).unwrap();
-        assert!(decoder.flush().unwrap().is_none());
-        let mut chunk3 = Vec::from(body2);
-        chunk3.extend_from_slice(pref3);
-        let _ = decoder.decode(&chunk3).unwrap();
-        let batch2 = decoder.flush().unwrap().expect("batch2");
-        assert_eq!(batch2.num_rows(), 1);
-        assert_eq!(
-            batch2
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            8
-        );
-        let _ = decoder.decode(body3).unwrap();
-        let batch3 = decoder.flush().unwrap().expect("batch3");
-        assert_eq!(batch3.num_rows(), 1);
-        assert_eq!(
-            batch3
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            9
-        );
     }
 
     #[test]
@@ -2490,20 +2401,6 @@ mod test {
 
     #[test]
     fn test_utf8view_support() {
-        let schema_json = r#"{
-            "type": "record",
-            "name": "test",
-            "fields": [{
-                "name": "str_field",
-                "type": "string"
-            }]
-        }"#;
-
-        let schema: crate::schema::Schema = serde_json::from_str(schema_json).unwrap();
-        let avro_field = AvroField::try_from(&schema).unwrap();
-
-        let data_type = avro_field.data_type();
-
         struct TestHelper;
         impl TestHelper {
             fn with_utf8view(field: &Field) -> Field {
@@ -3004,7 +2901,6 @@ mod test {
         let mut tid_rec_a: Option<i8> = None;
         let mut tid_rec_b: Option<i8> = None;
         let mut tid_array: Option<i8> = None;
-        let mut tid_map: Option<i8> = None;
         for (tid, f) in fields.iter() {
             match f.data_type() {
                 DataType::Dictionary(_, _) => tid_enum = Some(tid),
@@ -3019,7 +2915,6 @@ mod test {
                     }
                 }
                 DataType::List(_) => tid_array = Some(tid),
-                DataType::Map(_, _) => tid_map = Some(tid),
                 _ => {}
             }
         }
@@ -7054,6 +6949,7 @@ mod test {
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
     }
+
     #[test]
     fn comprehensive_e2e_resolution_test() {
         use serde_json::Value;
@@ -7606,73 +7502,7 @@ mod test {
                 Field::new("map", DataType::Map(map_int_entries.clone(), false), false),
             ],
         );
-        let mut fields: Vec<FieldRef> = Vec::new();
-        fields.push(Arc::new(Field::new(
-            "person",
-            DataType::Struct(Fields::from(vec![
-                Field::new("name", DataType::Utf8, false),
-                Field::new("age", DataType::Int32, false),
-            ])),
-            false,
-        )));
-        fields.push(Arc::new(Field::new("old_count", DataType::Int32, false)));
-        fields.push(Arc::new(Field::new(
-            "union_map_or_array_int",
-            DataType::Union(uf_map_or_array.clone(), UnionMode::Dense),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "array_records_with_union",
-            DataType::List(kv_item_field.clone()),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "union_uuid_or_fixed10",
-            DataType::Union(uf_uuid_or_fx10.clone(), UnionMode::Dense),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "union_interval_or_string",
-            DataType::Union(uf_dur_or_str.clone(), UnionMode::Dense),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "union_date_or_fixed4",
-            DataType::Union(uf_date_fixed4.clone(), UnionMode::Dense),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "union_enum_record_array_map",
-            DataType::Union(uf_union_big.clone(), UnionMode::Dense),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "maybe_auth",
-            DataType::Struct(Fields::from(vec![
-                Field::new("user", DataType::Utf8, false),
-                Field::new("token", DataType::Binary, true), // [bytes,null] -> nullable bytes
-            ])),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "address",
-            DataType::Struct(Fields::from(vec![
-                Field::new("street_name", DataType::Utf8, false),
-                Field::new("zip", DataType::Int32, false),
-                Field::new("country", DataType::Utf8, false),
-            ])),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "map_union",
-            DataType::Map(map_entries_field.clone(), false),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "arr_union",
-            DataType::List(arr_items_field.clone()),
-            false,
-        )));
+        // Metadata & decimal types used within the fields vector
         let enum_md_status = {
             let mut m = HashMap::<String, String>::new();
             m.insert(
@@ -7681,55 +7511,6 @@ mod test {
             );
             m
         };
-        fields.push(Arc::new(
-            Field::new(
-                "status",
-                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
-                false,
-            )
-            .with_metadata(enum_md_status.clone()),
-        ));
-        fields.push(Arc::new(Field::new(
-            "interval_mdn",
-            DataType::Interval(IntervalUnit::MonthDayNano),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "ts_micros_local",
-            DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "ts_millis_local",
-            DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "ts_micros_utc",
-            DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("+00:00".into())),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "ts_millis_utc",
-            DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, Some("+00:00".into())),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "t_micros",
-            DataType::Time64(arrow_schema::TimeUnit::Microsecond),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "t_millis",
-            DataType::Time32(arrow_schema::TimeUnit::Millisecond),
-            false,
-        )));
-        fields.push(Arc::new(Field::new("d_date", DataType::Date32, false)));
-        fields.push(Arc::new(add_uuid_ext_top(Field::new(
-            "uuid_str",
-            DataType::FixedSizeBinary(16),
-            false,
-        ))));
         let mut dec20_md = HashMap::<String, String>::new();
         dec20_md.insert("precision".to_string(), "20".to_string());
         dec20_md.insert("scale".to_string(), "4".to_string());
@@ -7740,62 +7521,170 @@ mod test {
         let dec20_dt = DataType::Decimal128(20, 4);
         #[cfg(not(feature = "small_decimals"))]
         let dec20_dt = DataType::Decimal128(20, 4);
-        fields.push(Arc::new(
-            Field::new("dec_fix_s20_4", dec20_dt, false).with_metadata(dec20_md.clone()),
-        ));
         #[cfg(feature = "small_decimals")]
         let dec10_dt = DataType::Decimal64(10, 2);
         #[cfg(not(feature = "small_decimals"))]
         let dec10_dt = DataType::Decimal128(10, 2);
-        fields.push(Arc::new(
-            Field::new("dec_bytes_s10_2", dec10_dt, false).with_metadata(dec10_md.clone()),
-        ));
-        fields.push(Arc::new(Field::new(
-            "fx16_plain",
-            DataType::FixedSizeBinary(16),
-            false,
-        )));
-        fields.push(Arc::new(Field::new("raw_bytes", DataType::Binary, false)));
-        fields.push(Arc::new(Field::new("str_utf8", DataType::Utf8, false)));
-        fields.push(Arc::new(Field::new(
-            "tri_union_prim",
-            DataType::Union(uf_tri.clone(), UnionMode::Dense),
-            false,
-        )));
-        fields.push(Arc::new(Field::new(
-            "opt_str_nullsecond",
-            DataType::Utf8,
-            true,
-        )));
-        fields.push(Arc::new(Field::new(
-            "opt_i32_nullfirst",
-            DataType::Int32,
-            true,
-        )));
-        fields.push(Arc::new(Field::new("count_i64", DataType::Int64, false)));
-        fields.push(Arc::new(Field::new("count_i32", DataType::Int64, false)));
-        fields.push(Arc::new(Field::new("ratio_f64", DataType::Float64, false)));
-        fields.push(Arc::new(Field::new("ratio_f32", DataType::Float64, false)));
-        fields.push(Arc::new(Field::new("flag", DataType::Boolean, false)));
-        fields.push(Arc::new(Field::new("identifier", DataType::Int64, false)));
+        let fields: Vec<FieldRef> = vec![
+            Arc::new(Field::new(
+                "person",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("name", DataType::Utf8, false),
+                    Field::new("age", DataType::Int32, false),
+                ])),
+                false,
+            )),
+            Arc::new(Field::new("old_count", DataType::Int32, false)),
+            Arc::new(Field::new(
+                "union_map_or_array_int",
+                DataType::Union(uf_map_or_array.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "array_records_with_union",
+                DataType::List(kv_item_field.clone()),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_uuid_or_fixed10",
+                DataType::Union(uf_uuid_or_fx10.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_interval_or_string",
+                DataType::Union(uf_dur_or_str.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_date_or_fixed4",
+                DataType::Union(uf_date_fixed4.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "union_enum_record_array_map",
+                DataType::Union(uf_union_big.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new(
+                "maybe_auth",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("user", DataType::Utf8, false),
+                    Field::new("token", DataType::Binary, true), // [bytes,null] -> nullable bytes
+                ])),
+                false,
+            )),
+            Arc::new(Field::new(
+                "address",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("street_name", DataType::Utf8, false),
+                    Field::new("zip", DataType::Int32, false),
+                    Field::new("country", DataType::Utf8, false),
+                ])),
+                false,
+            )),
+            Arc::new(Field::new(
+                "map_union",
+                DataType::Map(map_entries_field.clone(), false),
+                false,
+            )),
+            Arc::new(Field::new(
+                "arr_union",
+                DataType::List(arr_items_field.clone()),
+                false,
+            )),
+            Arc::new(
+                Field::new(
+                    "status",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    false,
+                )
+                .with_metadata(enum_md_status.clone()),
+            ),
+            Arc::new(Field::new(
+                "interval_mdn",
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                false,
+            )),
+            Arc::new(Field::new(
+                "ts_micros_local",
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
+                false,
+            )),
+            Arc::new(Field::new(
+                "ts_millis_local",
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, None),
+                false,
+            )),
+            Arc::new(Field::new(
+                "ts_micros_utc",
+                DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, Some("+00:00".into())),
+                false,
+            )),
+            Arc::new(Field::new(
+                "ts_millis_utc",
+                DataType::Timestamp(arrow_schema::TimeUnit::Millisecond, Some("+00:00".into())),
+                false,
+            )),
+            Arc::new(Field::new(
+                "t_micros",
+                DataType::Time64(arrow_schema::TimeUnit::Microsecond),
+                false,
+            )),
+            Arc::new(Field::new(
+                "t_millis",
+                DataType::Time32(arrow_schema::TimeUnit::Millisecond),
+                false,
+            )),
+            Arc::new(Field::new("d_date", DataType::Date32, false)),
+            Arc::new(add_uuid_ext_top(Field::new(
+                "uuid_str",
+                DataType::FixedSizeBinary(16),
+                false,
+            ))),
+            Arc::new(Field::new("dec_fix_s20_4", dec20_dt, false).with_metadata(dec20_md.clone())),
+            Arc::new(
+                Field::new("dec_bytes_s10_2", dec10_dt, false).with_metadata(dec10_md.clone()),
+            ),
+            Arc::new(Field::new(
+                "fx16_plain",
+                DataType::FixedSizeBinary(16),
+                false,
+            )),
+            Arc::new(Field::new("raw_bytes", DataType::Binary, false)),
+            Arc::new(Field::new("str_utf8", DataType::Utf8, false)),
+            Arc::new(Field::new(
+                "tri_union_prim",
+                DataType::Union(uf_tri.clone(), UnionMode::Dense),
+                false,
+            )),
+            Arc::new(Field::new("opt_str_nullsecond", DataType::Utf8, true)),
+            Arc::new(Field::new("opt_i32_nullfirst", DataType::Int32, true)),
+            Arc::new(Field::new("count_i64", DataType::Int64, false)),
+            Arc::new(Field::new("count_i32", DataType::Int64, false)),
+            Arc::new(Field::new("ratio_f64", DataType::Float64, false)),
+            Arc::new(Field::new("ratio_f32", DataType::Float64, false)),
+            Arc::new(Field::new("flag", DataType::Boolean, false)),
+            Arc::new(Field::new("identifier", DataType::Int64, false)),
+        ];
         let expected_schema = Arc::new(arrow_schema::Schema::new(Fields::from(fields)));
-        let mut cols: Vec<ArrayRef> = Vec::new();
-        cols.push(Arc::new(StructArray::new(
-            match expected_schema
-                .field_with_name("person")
-                .unwrap()
-                .data_type()
-            {
-                DataType::Struct(fs) => fs.clone(),
-                _ => unreachable!(),
-            },
-            vec![
-                Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol", "Dave"])) as ArrayRef,
-                Arc::new(Int32Array::from(vec![30, 0, 25, 41])) as ArrayRef,
-            ],
-            None,
-        )) as ArrayRef);
-        cols.push(Arc::new(Int32Array::from(vec![100, 42, 7, 42])) as ArrayRef);
+        let mut cols: Vec<ArrayRef> = vec![
+            Arc::new(StructArray::new(
+                match expected_schema
+                    .field_with_name("person")
+                    .unwrap()
+                    .data_type()
+                {
+                    DataType::Struct(fs) => fs.clone(),
+                    _ => unreachable!(),
+                },
+                vec![
+                    Arc::new(StringArray::from(vec!["Alice", "Bob", "Carol", "Dave"])) as ArrayRef,
+                    Arc::new(Int32Array::from(vec![30, 0, 25, 41])) as ArrayRef,
+                ],
+                None,
+            )) as ArrayRef,
+            Arc::new(Int32Array::from(vec![100, 42, 7, 42])) as ArrayRef,
+        ];
         {
             let map_child: ArrayRef = {
                 let keys = StringArray::from(vec!["x", "y", "only"]);
