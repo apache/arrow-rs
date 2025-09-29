@@ -696,19 +696,19 @@ pub struct BorrowedShreddingState<'a> {
 }
 
 impl<'a> BorrowedShreddingState<'a> {
-    /// Create a new `ShreddingState` from the given `value` and `typed_value` fields
+    /// Create a new `BorrowedShreddingState` from the given `value` and `typed_value` fields
     ///
-    /// Note you can create a `ShreddingState` from a &[`StructArray`] using
-    /// `ShreddingState::try_from(&struct_array)`, for example:
+    /// Note you can create a `BorrowedShreddingState` from a &[`StructArray`] using
+    /// `BorrowedShreddingState::try_from(&struct_array)`, for example:
     ///
     /// ```no_run
     /// # use arrow::array::StructArray;
-    /// # use parquet_variant_compute::ShreddingState;
+    /// # use parquet_variant_compute::BorrowedShreddingState;
     /// # fn get_struct_array() -> StructArray {
     /// #   unimplemented!()
     /// # }
     /// let struct_array: StructArray = get_struct_array();
-    /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
+    /// let shredding_state = BorrowedShreddingState::try_from(&struct_array).unwrap();
     /// ```
     pub fn new(value: Option<&'a BinaryViewArray>, typed_value: Option<&'a ArrayRef>) -> Self {
         Self { value, typed_value }
@@ -731,14 +731,13 @@ impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
     fn try_from(inner_struct: &'a StructArray) -> Result<Self, ArrowError> {
         // The `value` column need not exist, but if it does it must be a binary view.
         let value = if let Some(value_col) = inner_struct.column_by_name("value") {
-            let binary_view = value_col.as_binary_view_opt();
-            if binary_view.is_none() {
+            let Some(binary_view) = value_col.as_binary_view_opt() else {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "VariantArray 'value' field must be BinaryView, got {}",
                     value_col.data_type()
                 )));
-            }
-            binary_view
+            };
+            Some(binary_view)
         } else {
             None
         };
