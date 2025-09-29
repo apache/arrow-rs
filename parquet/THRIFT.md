@@ -22,7 +22,7 @@
 For both performance and flexibility reasons, this crate uses custom Thrift parsers and
 serialization mechanisms. For many of the objects defined by the Parquet specification macros
 are used to generate the objects as well as the code to serialize them. But in certain instances
-(performance bottlenecks, additions to the spec, etc.),it becomes necessary to implement the
+(performance bottlenecks, additions to the spec, etc.), it becomes necessary to implement the
 serialization code manually. This document serves to document both the standard usage of the
 Thrift macros, as well as how to implement custom encoders and decoders.
 
@@ -31,7 +31,7 @@ Thrift macros, as well as how to implement custom encoders and decoders.
 The Parquet specification utilizes Thrift enums, unions, and structs, defined by an Interface
 Description Language (IDL). This IDL is usually parsed by a Thrift code generator to produce
 language specific structures and serialization/deserialization code. This crate, however, uses
-Rust macros do perform the same function. This allows for customizations that produce more
+Rust macros to perform the same function. This allows for customizations that produce more
 performant code, as well as the ability to pick and choose which fields to process.
 
 ### Enums
@@ -149,7 +149,7 @@ union ColumnCryptoMetaData {
 }
 ```
 
-The `ENCRYPTION_WITH_FOOTER_KEY` variant is types with an empty struct, while
+The `ENCRYPTION_WITH_FOOTER_KEY` variant is typed with an empty struct, while
 `ENCRYPTION_WITH_COLUMN_KEY` has the type of a struct with fields. In this case, the `thrift_union`
 macro is used.
 
@@ -266,21 +266,21 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ConvertedType 
             2 => Self::MAP_KEY_VALUE,
             ...
             21 => Self::INTERVAL,
-            _ => return Err(general_err!("Unexpected ConvertedType {}", val)),
+            _ => return Err(general_err!("Unexpected ConvertedType {val}")),
         })
     }
 }
 ```
 
 The default behavior is to return an error when an unexpected field is encountered. One could,
-however, provide an `Unknown` variant if forwards compatibility is neeeded in the case of an
+however, provide an `Unknown` variant if forward compatibility is neeeded in the case of an
 evolving enum.
 
 Deserializing structs is more involved, but still fairly easy. A thrift struct is serialized as
 repeated `(field_id,field_type,field)` tuples. The `field_id` and `field_type` usually occupy a
 single byte, followed by the Thrift encoded field. Because only 4 bits are available for the id,
 encoders usually will instead use deltas from the preceding field. If the delta will exceed 15,
-then the `field_id` nybble will be set to `0`, and the `field_id` will instead be encoded as a
+then the `field_id` nibble will be set to `0`, and the `field_id` will instead be encoded as a
 varint, following the `field_type`. Fields will generally be read in a loop, with the `field_id`
 and `field_type` read first, and then the `field_id` used to determine which field to read.
 When a `field_id` of `0` is encountered, this marks the end of the struct and processing ceases.
@@ -341,7 +341,7 @@ the decoding of the `LogicalType` union:
         }
         ...
         _ => {
-            // LogicalType needs to be forward compatible, so we have defined a `_Unknown`
+            // LogicalType needs to be forward compatible, so we have defined an `_Unknown`
             // variant for it. This can return an error if forward compatibility is not desired.
             prot.skip(field_ident.field_type)?;
             Self::_Unknown {
@@ -364,7 +364,7 @@ On the serialization side, there are two traits to implement. The first, `WriteT
 for actually serializing the object. The other, `WriteThriftField`, handles serializing objects
 as struct fields.
 
-Serializing enums is a simple as writing the discriminant as an `i32`. For example, here is the
+Serializing enums is as simple as writing the discriminant as an `i32`. For example, here is the
 custom serialization code for `ConvertedType`:
 
 ```rust
@@ -425,7 +425,7 @@ that have been encoded, and then read elements one at a time.
     }
 ```
 
-Writing is simply the reverse...write the list header, and then serialize the elements:
+Writing is simply the reverse: write the list header, and then serialize the elements:
 
 ```rust
     // write the list header
