@@ -21,7 +21,6 @@
 //! Derived from the parquet format spec: <https://github.com/apache/parquet-format/blob/master/Geospatial.md>
 //!
 //!
-use crate::format as parquet;
 
 /// A geospatial instance has at least two coordinate dimensions: X and Y for 2D coordinates of each point.
 /// X represents longitude/easting and Y represents latitude/northing. A geospatial instance can optionally
@@ -168,22 +167,6 @@ impl BoundingBox {
     /// Returns `true` if both mmin and mmax are present.
     pub fn is_m_valid(&self) -> bool {
         self.m_range.is_some()
-    }
-}
-
-impl From<BoundingBox> for parquet::BoundingBox {
-    /// Converts our internal `BoundingBox` to the Thrift-generated format.
-    fn from(b: BoundingBox) -> parquet::BoundingBox {
-        parquet::BoundingBox {
-            xmin: b.x_range.0.into(),
-            xmax: b.x_range.1.into(),
-            ymin: b.y_range.0.into(),
-            ymax: b.y_range.1.into(),
-            zmin: b.z_range.map(|z| z.0.into()),
-            zmax: b.z_range.map(|z| z.1.into()),
-            mmin: b.m_range.map(|m| m.0.into()),
-            mmax: b.m_range.map(|m| m.1.into()),
-        }
     }
 }
 

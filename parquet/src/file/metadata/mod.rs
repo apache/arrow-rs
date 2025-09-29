@@ -1850,7 +1850,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2706;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3138;
+        let bigger_expected_size = 3170;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

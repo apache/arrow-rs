@@ -20,7 +20,6 @@
 //! This module provides functionality for working with geospatial statistics in Parquet files.
 //! It includes support for bounding boxes and geospatial statistics in column chunk metadata.
 
-use crate::format::GeospatialStatistics as TGeospatialStatistics;
 use crate::geospatial::bounding_box::BoundingBox;
 
 // ----------------------------------------------------------------------
@@ -70,44 +69,11 @@ impl GeospatialStatistics {
     }
 }
 
-/// Converts our internal geospatial statistics to the Thrift-generated format.
-pub fn to_thrift(geo_statistics: Option<&GeospatialStatistics>) -> Option<TGeospatialStatistics> {
-    let geo_stats = geo_statistics?;
-    let bbox = geo_stats.bbox.clone().map(|bbox| bbox.into());
-    let geospatial_types = geo_stats.geospatial_types.clone();
-    Some(TGeospatialStatistics::new(bbox, geospatial_types))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_bbox_to_thrift() {
-        use crate::format as parquet;
-        use thrift::OrderedFloat;
-
-        let bbox = BoundingBox::new(0.0, 0.0, 100.0, 100.0);
-        let thrift_bbox: parquet::BoundingBox = bbox.into();
-        assert_eq!(thrift_bbox.xmin, 0.0);
-        assert_eq!(thrift_bbox.xmax, 0.0);
-        assert_eq!(thrift_bbox.ymin, 100.0);
-        assert_eq!(thrift_bbox.ymax, 100.0);
-        assert_eq!(thrift_bbox.zmin, None);
-        assert_eq!(thrift_bbox.zmax, None);
-        assert_eq!(thrift_bbox.mmin, None);
-        assert_eq!(thrift_bbox.mmax, None);
-
-        let bbox_z = BoundingBox::new(0.0, 0.0, 100.0, 100.0).with_zrange(5.0, 15.0);
-        let thrift_bbox_z: parquet::BoundingBox = bbox_z.into();
-        assert_eq!(thrift_bbox_z.zmin, Some(OrderedFloat(5.0)));
-        assert_eq!(thrift_bbox_z.zmax, Some(OrderedFloat(15.0)));
-
-        let bbox_m = BoundingBox::new(0.0, 0.0, 100.0, 100.0).with_mrange(10.0, 20.0);
-        let thrift_bbox_m: parquet::BoundingBox = bbox_m.into();
-        assert_eq!(thrift_bbox_m.mmin, Some(OrderedFloat(10.0)));
-        assert_eq!(thrift_bbox_m.mmax, Some(OrderedFloat(20.0)));
-    }
+    // TODO(ets): add round trip to/from parquet tests
 
     #[test]
     fn test_read_geospatial_statistics_from_file() {
