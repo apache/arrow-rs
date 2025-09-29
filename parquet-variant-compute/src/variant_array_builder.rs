@@ -294,7 +294,8 @@ impl VariantValueArrayBuilder {
     /// builder.append_value(Variant::from(42));
     /// ```
     pub fn append_value(&mut self, value: Variant<'_, '_>) {
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
+        let metadata = value.metadata().clone(); // have to clone because the builder consumes `value`
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
         ValueBuilder::append_variant_bytes(self.parent_state(&mut metadata_builder), value);
     }
 
@@ -312,7 +313,7 @@ impl VariantValueArrayBuilder {
     /// let Variant::Object(obj) = value else {
     ///     panic!("Not a variant object");
     /// };
-    /// let mut metadata_builder = ReadOnlyMetadataBuilder::new(obj.metadata.clone());
+    /// let mut metadata_builder = ReadOnlyMetadataBuilder::new(&obj.metadata);
     /// let state = value_array_builder.parent_state(&mut metadata_builder);
     /// let mut object_builder = ObjectBuilder::new(state, false);
     /// for (field_name, field_value) in obj.iter() {
@@ -489,7 +490,7 @@ mod test {
 
         // filtering fields takes more work because we need to manually create an object builder
         let value = array.value(1);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata());
         let state = builder.parent_state(&mut metadata_builder);
         ObjectBuilder::new(state, false)
             .with_field("name", value.get_object_field("name").unwrap())
@@ -498,7 +499,7 @@ mod test {
 
         // same bytes, but now nested and duplicated inside a list
         let value = array.value(2);
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata());
         let state = builder.parent_state(&mut metadata_builder);
         ListBuilder::new(state, false)
             .with_value(value.clone())
