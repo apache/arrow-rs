@@ -406,9 +406,7 @@ define_row_builder!(
         scale: i8,
     },
     |array| -> arrow::array::Decimal32Array { array.as_primitive() },
-    |value| -> Option<_> {
-        decimal_to_variant_decimal!(value, scale, i32, VariantDecimal4).map(Variant::from)
-    }
+    |value| -> Option<_> { decimal_to_variant_decimal!(value, scale, i32, VariantDecimal4) }
 );
 
 define_row_builder!(
@@ -417,9 +415,7 @@ define_row_builder!(
         scale: i8,
     },
     |array| -> arrow::array::Decimal64Array { array.as_primitive() },
-    |value| -> Option<_> {
-        decimal_to_variant_decimal!(value, scale, i64, VariantDecimal8).map(Variant::from)
-    }
+    |value| -> Option<_> { decimal_to_variant_decimal!(value, scale, i64, VariantDecimal8) }
 );
 
 define_row_builder!(
@@ -428,9 +424,7 @@ define_row_builder!(
         scale: i8,
     },
     |array| -> arrow::array::Decimal128Array { array.as_primitive() },
-    |value| -> Option<_> {
-        decimal_to_variant_decimal!(value, scale, i128, VariantDecimal16).map(Variant::from)
-    }
+    |value| -> Option<_> { decimal_to_variant_decimal!(value, scale, i128, VariantDecimal16) }
 );
 
 define_row_builder!(
@@ -441,12 +435,9 @@ define_row_builder!(
     |array| -> arrow::array::Decimal256Array { array.as_primitive() },
     |value| -> Option<_> {
         // Decimal256 needs special handling - convert to i128 if possible
-        value
-            .to_i128()
-            .and_then(|i128_val| {
-                decimal_to_variant_decimal!(i128_val, scale, i128, VariantDecimal16)
-            })
-            .map(Variant::from)
+        value.to_i128().and_then(|i128_val| {
+            decimal_to_variant_decimal!(i128_val, scale, i128, VariantDecimal16)
+        })
     }
 );
 
