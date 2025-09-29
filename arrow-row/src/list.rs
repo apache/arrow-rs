@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{fixed, null_sentinel, LengthTracker, RowConverter, Rows, SortField};
-use arrow_array::{new_null_array, Array, FixedSizeListArray, GenericListArray, OffsetSizeTrait};
+use crate::{LengthTracker, RowConverter, Rows, SortField, fixed, null_sentinel};
+use arrow_array::{Array, FixedSizeListArray, GenericListArray, OffsetSizeTrait, new_null_array};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, SortOptions};
@@ -174,7 +174,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         })
         .collect();
 
-    let child = converter.convert_raw(&mut child_rows, validate_utf8)?;
+    let child = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     assert_eq!(child.len(), 1);
 
     let child_data = child[0].to_data();
@@ -279,7 +279,7 @@ pub unsafe fn decode_fixed_size_list(
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Expected FixedSizeListArray, found: {list_type}",
-            )))
+            )));
         }
     };
 
@@ -301,7 +301,7 @@ pub unsafe fn decode_fixed_size_list(
         } else {
             for _ in 0..value_length {
                 let mut temp_child_rows = vec![&row[row_offset..]];
-                converter.convert_raw(&mut temp_child_rows, validate_utf8)?;
+                unsafe { converter.convert_raw(&mut temp_child_rows, validate_utf8) }?;
                 let decoded_bytes = row.len() - row_offset - temp_child_rows[0].len();
                 let next_offset = row_offset + decoded_bytes;
                 child_rows.push(&row[row_offset..next_offset]);
@@ -311,7 +311,7 @@ pub unsafe fn decode_fixed_size_list(
         *row = &row[row_offset..]; // Update row for the next decoder
     }
 
-    let children = converter.convert_raw(&mut child_rows, validate_utf8)?;
+    let children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     let child_data = children.iter().map(|c| c.to_data()).collect();
     let builder = ArrayDataBuilder::new(list_type.clone())
         .len(len)
@@ -319,5 +319,7 @@ pub unsafe fn decode_fixed_size_list(
         .null_bit_buffer(Some(nulls))
         .child_data(child_data);
 
-    Ok(FixedSizeListArray::from(builder.build_unchecked()))
+    Ok(FixedSizeListArray::from(unsafe {
+        builder.build_unchecked()
+    }))
 }

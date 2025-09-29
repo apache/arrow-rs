@@ -627,11 +627,7 @@ mod tests {
         let data: Vec<Option<&str>> = (0..TOTAL)
             .map(|n| {
                 let i = n % 5;
-                if i == 3 {
-                    None
-                } else {
-                    Some(v[i as usize])
-                }
+                if i == 3 { None } else { Some(v[i as usize]) }
             })
             .collect();
 
@@ -674,11 +670,7 @@ mod tests {
         let data: Vec<Option<&str>> = (0..TOTAL)
             .map(|n| {
                 let i = n % 5;
-                if i == 3 {
-                    None
-                } else {
-                    Some(v[i as usize])
-                }
+                if i == 3 { None } else { Some(v[i as usize]) }
             })
             .collect();
 

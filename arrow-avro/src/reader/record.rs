@@ -187,6 +187,14 @@ enum Decoder {
     Boolean(BooleanBufferBuilder),
     Int32(Vec<i32>),
     Int64(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationSecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationMillisecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationMicrosecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationNanosecond(Vec<i64>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
     Date32(Vec<i32>),
@@ -309,6 +317,22 @@ impl Decoder {
             }
             (Codec::TimestampMicros(is_utc), _) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationNanos, _) => {
+                Self::DurationNanosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMicros, _) => {
+                Self::DurationMicrosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMillis, _) => {
+                Self::DurationMillisecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationSeconds, _) => {
+                Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY))
             }
             (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Decimal(precision, scale, size), _) => {
@@ -484,6 +508,11 @@ impl Decoder {
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => v.push(0),
             Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
             Self::Float64(v)
             | Self::Int32ToFloat64(v)
@@ -567,6 +596,19 @@ impl Decoder {
                 }
                 _ => Err(ArrowError::InvalidArgumentError(
                     "Default for int32/date32/time-millis must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for duration long must be long".to_string(),
                 )),
             },
             Self::Int64(v)
@@ -780,6 +822,11 @@ impl Decoder {
             | Self::TimeMicros(values)
             | Self::TimestampMillis(_, values)
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(values)
+            | Self::DurationMillisecond(values)
+            | Self::DurationMicrosecond(values)
+            | Self::DurationNanosecond(values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
@@ -979,6 +1026,22 @@ impl Decoder {
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
                     .with_timezone_opt(is_utc.then(|| "+00:00")),
             ),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(values) => {
+                Arc::new(flush_primitive::<DurationSecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMillisecond(values) => {
+                Arc::new(flush_primitive::<DurationMillisecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMicrosecond(values) => {
+                Arc::new(flush_primitive::<DurationMicrosecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationNanosecond(values) => {
+                Arc::new(flush_primitive::<DurationNanosecondType>(values, nulls))
+            }
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
             Self::Int32ToInt64(values) => Arc::new(flush_primitive::<Int64Type>(values, nulls)),
@@ -1795,6 +1858,11 @@ impl Skipper {
             Codec::TimeMicros => Self::TimeMicros,
             Codec::TimestampMillis(_) => Self::TimestampMillis,
             Codec::TimestampMicros(_) => Self::TimestampMicros,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::DurationNanos
+            | Codec::DurationMicros
+            | Codec::DurationMillis
+            | Codec::DurationSeconds => Self::Int64,
             Codec::Float32 => Self::Float32,
             Codec::Float64 => Self::Float64,
             Codec::Binary => Self::Bytes,
@@ -1944,6 +2012,7 @@ mod tests {
     use crate::schema::{Attributes, ComplexType, Field, PrimitiveType, Record, Schema, TypeName};
     use arrow_array::cast::AsArray;
     use indexmap::IndexMap;
+    use std::collections::HashMap;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -2038,6 +2107,21 @@ mod tests {
         let rs = Schema::TypeName(TypeName::Primitive(reader));
         let dt = resolved_root_datatype(ws, rs, use_utf8view, false);
         Decoder::try_new(&dt).unwrap()
+    }
+
+    fn make_avro_dt(codec: Codec, nullability: Option<Nullability>) -> AvroDataType {
+        AvroDataType::new(codec, HashMap::new(), nullability)
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    fn encode_vlq_u64(mut x: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(10);
+        while x >= 0x80 {
+            out.push((x as u8) | 0x80);
+            x >>= 7;
+        }
+        out.push(x as u8);
+        out
     }
 
     #[test]
@@ -3012,6 +3096,91 @@ mod tests {
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let array = decoder.flush(None).unwrap();
         assert_eq!(array.len(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_seconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationSeconds, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        // Three values: 0, -1, 2
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_long(-1));
+        data.extend_from_slice(&encode_avro_long(2));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationSecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[0, -1, 2]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_milliseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationMillis, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [1i64, 0, -2] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMillisecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[1, 0, -2]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_microseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationMicros, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [5i64, -6, 7] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[5, -6, 7]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_nanoseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationNanos, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [8i64, 9, -10] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationNanosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[8, 9, -10]);
     }
 
     #[test]
@@ -4004,5 +4173,128 @@ mod tests {
         assert_eq!(int_child.value(0), 5);
         let type_ids: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
         assert_eq!(type_ids, vec![42_i8, 7_i8]);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_from_avro_maps_custom_duration_variants_to_int64() -> Result<(), ArrowError> {
+        for codec in [
+            Codec::DurationNanos,
+            Codec::DurationMicros,
+            Codec::DurationMillis,
+            Codec::DurationSeconds,
+        ] {
+            let dt = make_avro_dt(codec.clone(), None);
+            let s = Skipper::from_avro(&dt)?;
+            match s {
+                Skipper::Int64 => {}
+                other => panic!("expected Int64 skipper for {:?}, got {:?}", codec, other),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_skip_consumes_one_long_for_custom_durations() -> Result<(), ArrowError> {
+        let values: [i64; 7] = [0, 1, -1, 150, -150, i64::MAX / 3, i64::MIN / 3];
+        for codec in [
+            Codec::DurationNanos,
+            Codec::DurationMicros,
+            Codec::DurationMillis,
+            Codec::DurationSeconds,
+        ] {
+            let dt = make_avro_dt(codec.clone(), None);
+            let mut s = Skipper::from_avro(&dt)?;
+            for &v in &values {
+                let bytes = encode_avro_long(v);
+                let mut cursor = AvroCursor::new(&bytes);
+                s.skip(&mut cursor)?;
+                assert_eq!(
+                    cursor.position(),
+                    bytes.len(),
+                    "did not consume all bytes for {:?} value {}",
+                    codec,
+                    v
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_nullable_custom_duration_respects_null_first() -> Result<(), ArrowError> {
+        let dt = make_avro_dt(Codec::DurationNanos, Some(Nullability::NullFirst));
+        let mut s = Skipper::from_avro(&dt)?;
+        match &s {
+            Skipper::Nullable(Nullability::NullFirst, inner) => match **inner {
+                Skipper::Int64 => {}
+                ref other => panic!("expected inner Int64, got {:?}", other),
+            },
+            other => panic!("expected Nullable(NullFirst, Int64), got {:?}", other),
+        }
+        {
+            let buf = encode_vlq_u64(0);
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(cursor.position(), 1, "expected to consume only tag=0");
+        }
+        {
+            let mut buf = encode_vlq_u64(1);
+            buf.extend(encode_avro_long(0));
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(cursor.position(), 2, "expected to consume tag=1 + long(0)");
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_nullable_custom_duration_respects_null_second() -> Result<(), ArrowError> {
+        let dt = make_avro_dt(Codec::DurationMicros, Some(Nullability::NullSecond));
+        let mut s = Skipper::from_avro(&dt)?;
+        match &s {
+            Skipper::Nullable(Nullability::NullSecond, inner) => match **inner {
+                Skipper::Int64 => {}
+                ref other => panic!("expected inner Int64, got {:?}", other),
+            },
+            other => panic!("expected Nullable(NullSecond, Int64), got {:?}", other),
+        }
+        {
+            let buf = encode_vlq_u64(1);
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(cursor.position(), 1, "expected to consume only tag=1");
+        }
+        {
+            let mut buf = encode_vlq_u64(0);
+            buf.extend(encode_avro_long(-1));
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(
+                cursor.position(),
+                1 + encode_avro_long(-1).len(),
+                "expected to consume tag=0 + long(-1)"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn skipper_interval_is_fixed12_and_skips_12_bytes() -> Result<(), ArrowError> {
+        let dt = make_avro_dt(Codec::Interval, None);
+        let mut s = Skipper::from_avro(&dt)?;
+        match s {
+            Skipper::DurationFixed12 => {}
+            other => panic!("expected DurationFixed12, got {:?}", other),
+        }
+        let payload = vec![0u8; 12];
+        let mut cursor = AvroCursor::new(&payload);
+        s.skip(&mut cursor)?;
+        assert_eq!(cursor.position(), 12, "expected to consume 12 fixed bytes");
+        Ok(())
     }
 }
