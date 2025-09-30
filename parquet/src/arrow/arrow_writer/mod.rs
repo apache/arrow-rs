@@ -32,13 +32,13 @@ use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, S
 
 use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_precision};
 
-use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
 use crate::arrow::ArrowSchemaConverter;
+use crate::arrow::arrow_writer::byte_array::ByteArrayEncoder;
 use crate::column::page::{CompressedPage, PageWriteSpec, PageWriter};
 use crate::column::page_encryption::PageEncryptor;
 use crate::column::writer::encoder::ColumnValueEncoder;
 use crate::column::writer::{
-    get_column_writer, ColumnCloseResult, ColumnWriter, GenericColumnWriter,
+    ColumnCloseResult, ColumnWriter, GenericColumnWriter, get_column_writer,
 };
 use crate::data_type::{ByteArray, FixedLenByteArray};
 #[cfg(feature = "encryption")]
@@ -50,7 +50,7 @@ use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
 use crate::thrift::TSerializable;
-use levels::{calculate_array_levels, ArrayLevels};
+use levels::{ArrayLevels, calculate_array_levels};
 
 mod byte_array;
 mod levels;
@@ -1062,15 +1062,15 @@ impl ArrowColumnWriterFactory {
 
         match data_type {
             _ if data_type.is_primitive() => out.push(col(leaves.next().unwrap())?),
-            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => out.push(col(leaves.next().unwrap())?),
+            ArrowDataType::FixedSizeBinary(_) | ArrowDataType::Boolean | ArrowDataType::Null => {
+                out.push(col(leaves.next().unwrap())?)
+            }
             ArrowDataType::LargeBinary
             | ArrowDataType::Binary
             | ArrowDataType::Utf8
             | ArrowDataType::LargeUtf8
             | ArrowDataType::BinaryView
-            | ArrowDataType::Utf8View => {
-                out.push(bytes(leaves.next().unwrap())?)
-            }
+            | ArrowDataType::Utf8View => out.push(bytes(leaves.next().unwrap())?),
             ArrowDataType::List(f)
             | ArrowDataType::LargeList(f)
             | ArrowDataType::FixedSizeList(f, _) => {
@@ -1087,26 +1087,23 @@ impl ArrowColumnWriterFactory {
                     self.get_arrow_column_writer(f[1].data_type(), props, leaves, out)?
                 }
                 _ => unreachable!("invalid map type"),
-            }
+            },
             ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                ArrowDataType::Utf8 | ArrowDataType::LargeUtf8 | ArrowDataType::Binary | ArrowDataType::LargeBinary => {
-                    out.push(bytes(leaves.next().unwrap())?)
-                }
+                ArrowDataType::Utf8
+                | ArrowDataType::LargeUtf8
+                | ArrowDataType::Binary
+                | ArrowDataType::LargeBinary => out.push(bytes(leaves.next().unwrap())?),
                 ArrowDataType::Utf8View | ArrowDataType::BinaryView => {
                     out.push(bytes(leaves.next().unwrap())?)
                 }
-                ArrowDataType::FixedSizeBinary(_) => {
-                    out.push(bytes(leaves.next().unwrap())?)
-                }
-                _ => {
-                    out.push(col(leaves.next().unwrap())?)
-                }
-            }
-            _ => return Err(ParquetError::NYI(
-                format!(
+                ArrowDataType::FixedSizeBinary(_) => out.push(bytes(leaves.next().unwrap())?),
+                _ => out.push(col(leaves.next().unwrap())?),
+            },
+            _ => {
+                return Err(ParquetError::NYI(format!(
                     "Attempting to write an Arrow type {data_type} to parquet that is not yet implemented"
-                )
-            ))
+                )));
+            }
         }
         Ok(())
     }
@@ -1316,11 +1313,9 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         get_interval_dt_array_slice(array, indices)
                     }
                     _ => {
-                        return Err(ParquetError::NYI(
-                            format!(
-                                "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
-                            )
-                        ));
+                        return Err(ParquetError::NYI(format!(
+                            "Attempting to write an Arrow interval type {interval_unit:?} to parquet that is not yet implemented"
+                        )));
                     }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
@@ -1507,8 +1502,8 @@ mod tests {
 
     use std::fs::File;
 
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::arrow::ARROW_SCHEMA_META_KEY;
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::column::page::{Page, PageReader};
     use crate::file::page_encoding_stats::PageEncodingStats;
     use crate::file::reader::SerializedPageReader;
@@ -1521,7 +1516,7 @@ mod tests {
     use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::{i256, IntervalDayTime, IntervalMonthDayNano, NullBuffer};
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, i256};
     use arrow_schema::Fields;
     use half::f16;
     use num_traits::{FromPrimitive, ToPrimitive};
@@ -4124,9 +4119,11 @@ mod tests {
             .file_metadata()
             .key_value_metadata()
         {
-            assert!(!key_value_metadata
-                .iter()
-                .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY));
+            assert!(
+                !key_value_metadata
+                    .iter()
+                    .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY)
+            );
         }
     }
 

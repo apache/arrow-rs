@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::DecodeResult;
 use crate::errors::ParquetError;
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
-use crate::DecodeResult;
 
 /// A push decoder for [`ParquetMetaData`].
 ///

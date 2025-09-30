@@ -309,9 +309,9 @@ pub(crate) fn decode_metadata_with_encryption(
             .unwrap_or(false);
             if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
                 return Err(general_err!(
-                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+                    "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
                         but no AAD prefix was provided in the file decryption properties"
-                    ));
+                ));
             }
             let decryptor = get_file_decryptor(
                 t_file_crypto_metadata.encryption_algorithm,

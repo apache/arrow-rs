@@ -101,7 +101,7 @@ use crate::basic::{ColumnOrder, Compression, Encoding, Type};
 #[cfg(feature = "encryption")]
 use crate::encryption::{
     decrypt::FileDecryptor,
-    modules::{create_module_aad, ModuleType},
+    modules::{ModuleType, create_module_aad},
 };
 use crate::errors::{ParquetError, Result};
 #[cfg(feature = "encryption")]
@@ -2017,7 +2017,7 @@ mod tests {
             .set_row_groups(row_group_meta)
             .set_column_index(Some(vec![vec![Index::BOOLEAN(native_index)]]))
             .set_offset_index(Some(vec![vec![
-                OffsetIndexMetaData::try_new(offset_index).unwrap()
+                OffsetIndexMetaData::try_new(offset_index).unwrap(),
             ]]))
             .build();
 

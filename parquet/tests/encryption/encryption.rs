@@ -18,18 +18,18 @@
 //! This module contains tests for reading encrypted Parquet files with the Arrow API
 
 use crate::encryption_util::{
-    read_and_roundtrip_to_encrypted_file, verify_column_indexes, verify_encryption_test_file_read,
-    TestKeyRetriever,
+    TestKeyRetriever, read_and_roundtrip_to_encrypted_file, verify_column_indexes,
+    verify_encryption_test_file_read,
 };
 use arrow::array::*;
 use arrow::error::Result as ArrowResult;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, DataType, Field, Schema};
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
     RowSelector,
 };
-use parquet::arrow::ArrowWriter;
 use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
@@ -93,10 +93,12 @@ fn test_plaintext_footer_signature_verification() {
         .with_file_decryption_properties(decryption_properties.clone());
     let result = ArrowReaderMetadata::load(&file, options.clone());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
 }
 
 #[test]
@@ -336,10 +338,12 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
         .with_file_decryption_properties(decryption_properties.clone());
     let result = ArrowReaderMetadata::load(&temp_file, options.clone());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
 }
 
 #[test]
@@ -707,10 +711,12 @@ fn test_write_uniform_encryption_plaintext_footer() {
         ArrowReaderOptions::default().with_file_decryption_properties(wrong_decryption_properties);
     let result = ArrowReaderMetadata::load(&temp_file, options.clone());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
 }
 
 #[test]

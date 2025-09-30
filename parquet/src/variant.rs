@@ -145,8 +145,8 @@ pub use parquet_variant_compute::*;
 
 #[cfg(test)]
 mod tests {
-    use crate::arrow::arrow_reader::ArrowReaderBuilder;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ArrowReaderBuilder;
     use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
     use crate::file::reader::ChunkReader;
     use arrow::util::test_util::parquet_test_data;

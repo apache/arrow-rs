@@ -27,22 +27,22 @@ use std::{io::Write, sync::Arc};
 use thrift::protocol::TCompactOutputProtocol;
 
 use crate::column::page_encryption::PageEncryptor;
-use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
+use crate::column::writer::{ColumnCloseResult, ColumnWriterImpl, get_typed_column_writer_mut};
 use crate::column::{
     page::{CompressedPage, PageWriteSpec, PageWriter},
-    writer::{get_column_writer, ColumnWriter},
+    writer::{ColumnWriter, get_column_writer},
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::{
-    get_column_crypto_metadata, FileEncryptionProperties, FileEncryptor,
+    FileEncryptionProperties, FileEncryptor, get_column_crypto_metadata,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
-use crate::file::reader::ChunkReader;
 #[cfg(feature = "encryption")]
 use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
-use crate::file::{metadata::*, PARQUET_MAGIC};
+use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
+use crate::file::reader::ChunkReader;
+use crate::file::{PARQUET_MAGIC, metadata::*};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -1031,15 +1031,15 @@ mod tests {
     use std::fs::File;
 
     #[cfg(feature = "arrow")]
-    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    #[cfg(feature = "arrow")]
     use crate::arrow::ArrowWriter;
+    #[cfg(feature = "arrow")]
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
     };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
-    use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
+    use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type};
     use crate::file::page_index::index::Index;
     use crate::file::properties::EnabledStatistics;
@@ -1047,7 +1047,7 @@ mod tests {
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
-        statistics::{from_thrift, to_thrift, Statistics},
+        statistics::{Statistics, from_thrift, to_thrift},
     };
     use crate::format::SortingColumn;
     use crate::record::{Row, RowAccessor};
@@ -2388,11 +2388,13 @@ mod tests {
 
         // Make sure byte_stream_split encoding was used
         let check_encoding = |x: usize, filemeta: &ParquetMetaData| {
-            assert!(filemeta
-                .row_group(0)
-                .column(x)
-                .encodings()
-                .contains(&Encoding::BYTE_STREAM_SPLIT));
+            assert!(
+                filemeta
+                    .row_group(0)
+                    .column(x)
+                    .encodings()
+                    .contains(&Encoding::BYTE_STREAM_SPLIT)
+            );
         };
 
         check_encoding(1, filemeta);
