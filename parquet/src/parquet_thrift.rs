@@ -15,10 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! experimental replacement for thrift decoder
-// this is a copy of TCompactSliceInputProtocol, but modified
-// to not allocate byte arrays or strings.
-#![allow(dead_code)]
+//! Structs used for encoding and decoding Parquet Thrift objects.
+//!
+//! These include:
+//! * [`ThriftCompactInputProtocol`]: Trait implemented by Thrift decoders.
+//!     * [`ThriftSliceInputProtocol`]: Thrift decoder that takes a slice of bytes as input.
+//!     * [`ThriftReadInputProtocol`]: Thrift decoder that takes a [`Read`] as input.
+//! * [`ReadThrift`]: Trait implemented by serializable objects.
+//! * [`ThriftCompactOutputProtocol`]: Thrift encoder.
+//! * [`WriteThrift`]: Trait implemented by serializable objects.
+//! * [`WriteThriftField`]: Trait implemented by serializable objects that are fields in Thrift structs.
 
 use std::{
     cmp::Ordering,
@@ -438,11 +444,6 @@ impl<'a> ThriftSliceInputProtocol<'a> {
         Self { buf }
     }
 
-    /// Re-initialize this reader with a new slice.
-    pub fn reset_buffer(&mut self, buf: &'a [u8]) {
-        self.buf = buf;
-    }
-
     /// Return the current buffer as a slice.
     pub fn as_slice(&self) -> &'a [u8] {
         self.buf
@@ -636,11 +637,6 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
     pub(crate) fn new(writer: W) -> Self {
         Self { writer }
-    }
-
-    /// Return a reference to the underlying `Write`.
-    pub(crate) fn inner(&self) -> &W {
-        &self.writer
     }
 
     /// Write a single byte to the output stream.
@@ -1077,13 +1073,13 @@ pub(crate) mod tests {
     where
         T: for<'a> ReadThrift<'a, ThriftSliceInputProtocol<'a>> + WriteThrift + PartialEq + Debug,
     {
-        let buf = Vec::<u8>::new();
-        let mut writer = ThriftCompactOutputProtocol::new(buf);
-        val.write_thrift(&mut writer).unwrap();
+        let mut buf = Vec::<u8>::new();
+        {
+            let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+            val.write_thrift(&mut writer).unwrap();
+        }
 
-        //println!("serialized: {:x?}", writer.inner());
-
-        let mut prot = ThriftSliceInputProtocol::new(writer.inner());
+        let mut prot = ThriftSliceInputProtocol::new(&buf);
         let read_val = T::read_thrift(&mut prot).unwrap();
         assert_eq!(val, read_val);
     }
