@@ -40,6 +40,7 @@ fn read_metadata(geospatial_test_file: &str) -> ParquetMetaData {
 
 #[test]
 fn test_read_logical_type() {
+    // Some crs values are short strings
     let expected_logical_type = [
         ("crs-default.parquet", LogicalType::Geometry { crs: None }),
         (
@@ -75,6 +76,8 @@ fn test_read_logical_type() {
         assert_eq!(logical_type, expected_type);
     }
 
+    // The crs value may also contain arbitrary values (in this case some JSON
+    // a bit too lengthy to type out)
     let metadata = read_metadata("crs-arbitrary-value.parquet");
     let logical_type = metadata
         .file_metadata()
