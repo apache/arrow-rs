@@ -33,70 +33,33 @@ impl Default for CastOptions {
     }
 }
 
-/// Helper trait for converting `Variant` values to arrow primitive values.
-pub(crate) trait VariantAsPrimitive<T: ArrowPrimitiveType> {
-    fn as_primitive(&self) -> Option<T::Native>;
+/// Extension trait for Arrow primitive types that can extract their native value from a Variant
+pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
+    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
 
-impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i32> {
-        self.as_int32()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i16> {
-        self.as_int16()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int8Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i8> {
-        self.as_int8()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i64> {
-        self.as_int64()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<half::f16> {
-        self.as_f16()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<f32> {
-        self.as_f32()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<f64> {
-        self.as_f64()
-    }
+/// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
+macro_rules! impl_primitive_from_variant {
+    ($arrow_type:ty, $variant_method:ident) => {
+        impl PrimitiveFromVariant for $arrow_type {
+            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
+                variant.$variant_method()
+            }
+        }
+    };
 }
 
-impl VariantAsPrimitive<datatypes::UInt8Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u8> {
-        self.as_u8()
-    }
-}
-
-impl VariantAsPrimitive<datatypes::UInt16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u16> {
-        self.as_u16()
-    }
-}
-
-impl VariantAsPrimitive<datatypes::UInt32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u32> {
-        self.as_u32()
-    }
-}
-
-impl VariantAsPrimitive<datatypes::UInt64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u64> {
-        self.as_u64()
-    }
-}
+impl_primitive_from_variant!(datatypes::Int32Type, as_int32);
+impl_primitive_from_variant!(datatypes::Int16Type, as_int16);
+impl_primitive_from_variant!(datatypes::Int8Type, as_int8);
+impl_primitive_from_variant!(datatypes::Int64Type, as_int64);
+impl_primitive_from_variant!(datatypes::UInt8Type, as_u8);
+impl_primitive_from_variant!(datatypes::UInt16Type, as_u16);
+impl_primitive_from_variant!(datatypes::UInt32Type, as_u32);
+impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
+impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
+impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
+impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
