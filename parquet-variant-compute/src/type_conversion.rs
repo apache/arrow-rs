@@ -152,8 +152,9 @@ macro_rules! decimal_to_variant_decimal {
             (Some($v), *$scale as u8)
         };
 
+        // Return an Option to allow callers to decide whether to error (strict)
+        // or append null (non-strict) on conversion failure
         v.and_then(|v| <$variant_type>::try_new(v, scale).ok())
-            .map_or(Variant::Null, Variant::from)
     }};
 }
 pub(crate) use decimal_to_variant_decimal;
