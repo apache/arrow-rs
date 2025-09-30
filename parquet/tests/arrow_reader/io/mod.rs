@@ -46,7 +46,7 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader, ParquetOffsetIndex};
+use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
 use parquet::file::FOOTER_SIZE;
@@ -210,7 +210,7 @@ impl TestParquetFile {
             .unwrap();
 
         // figure out the metadata location
-        let footer = ParquetMetaDataReader::decode_footer_tail(footer).unwrap();
+        let footer = FooterTail::try_new(footer).unwrap();
         let metadata_len = footer.metadata_length();
         let metadata_location = footer_location.start - metadata_len..footer_location.start;
 
