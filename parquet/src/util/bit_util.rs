@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
+use crate::util::bit_pack::{unpack8, unpack16, unpack32, unpack64};
 
 #[inline]
 fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {

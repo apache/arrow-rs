@@ -22,8 +22,8 @@ use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use arrow_array::FixedSizeListArray;
-use arrow_array::{builder::BooleanBufferBuilder, new_empty_array, Array, ArrayRef};
-use arrow_data::{transform::MutableArrayData, ArrayData};
+use arrow_array::{Array, ArrayRef, builder::BooleanBufferBuilder, new_empty_array};
+use arrow_data::{ArrayData, transform::MutableArrayData};
 use arrow_schema::DataType as ArrowType;
 
 /// Implementation of fixed-size list array reader.
@@ -225,15 +225,15 @@ impl ArrayReader for FixedSizeListArrayReader {
 mod tests {
     use super::*;
     use crate::arrow::{
-        array_reader::{test_util::InMemoryArrayReader, ListArrayReader},
-        arrow_reader::{ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader},
         ArrowWriter,
+        array_reader::{ListArrayReader, test_util::InMemoryArrayReader},
+        arrow_reader::{ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader},
     };
     use arrow::datatypes::{Field, Int32Type};
     use arrow_array::{
+        FixedSizeListArray, ListArray, PrimitiveArray, RecordBatch,
         builder::{FixedSizeListBuilder, Int32Builder, ListBuilder},
         cast::AsArray,
-        FixedSizeListArray, ListArray, PrimitiveArray, RecordBatch,
     };
     use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;

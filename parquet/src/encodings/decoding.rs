@@ -1830,10 +1830,10 @@ mod tests {
     fn test_byte_stream_split_flba(type_width: usize) {
         let data = vec![
             vec![
-                FixedLenByteArrayType::gen(type_width as i32),
-                FixedLenByteArrayType::gen(type_width as i32),
+                FixedLenByteArrayType::r#gen(type_width as i32),
+                FixedLenByteArrayType::r#gen(type_width as i32),
             ],
-            vec![FixedLenByteArrayType::gen(type_width as i32)],
+            vec![FixedLenByteArrayType::r#gen(type_width as i32)],
         ];
         test_byte_stream_split_decode::<FixedLenByteArrayType>(data, type_width as i32);
     }

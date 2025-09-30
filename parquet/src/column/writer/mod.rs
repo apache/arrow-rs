@@ -28,7 +28,7 @@ use std::str;
 use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
-use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
+use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
@@ -1609,7 +1609,7 @@ mod tests {
 
     use crate::column::{
         page::PageReader,
-        reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
+        reader::{ColumnReaderImpl, get_column_reader, get_typed_column_reader},
     };
     use crate::file::writer::TrackedWrite;
     use crate::file::{

@@ -61,8 +61,8 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
+    arrow::arrow_writer::ArrowWriterOptions,
     errors::{ParquetError, Result},
     file::{metadata::RowGroupMetaData, properties::WriterProperties},
     format::{FileMetaData, KeyValue},
@@ -70,8 +70,8 @@ use crate::{
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use std::mem;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 

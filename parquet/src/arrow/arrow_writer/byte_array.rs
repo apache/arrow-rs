@@ -149,7 +149,7 @@ impl FallbackEncoder {
                 return Err(general_err!(
                     "unsupported encoding {} for byte array",
                     encoding
-                ))
+                ));
             }
         };
 

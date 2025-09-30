@@ -20,10 +20,10 @@ use std::{io::Read, ops::Range};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
+use crate::file::FOOTER_SIZE;
 use crate::file::metadata::{FooterTail, ParquetMetaData};
 use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
-use crate::file::FOOTER_SIZE;
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
@@ -393,7 +393,7 @@ impl ParquetMetaDataReader {
             let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
             if range.end > metadata_range.start {
                 return Err(eof_err!(
-                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}" ,
+                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}",
                 ));
             }
         }
@@ -921,14 +921,14 @@ mod async_tests {
     use arrow_array::RecordBatch;
     use arrow_schema::{Field, Schema};
     use bytes::Bytes;
-    use futures::future::BoxFuture;
     use futures::FutureExt;
+    use futures::future::BoxFuture;
     use std::fs::File;
     use std::future::Future;
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::NamedTempFile;
 
     use crate::arrow::ArrowWriter;

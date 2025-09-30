@@ -306,7 +306,11 @@ impl VariantTestCase {
             let expected = expected.as_variant();
 
             // compare the variants (is this the right way to compare?)
-            assert_eq!(actual, expected, "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}", i);
+            assert_eq!(
+                actual, expected,
+                "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}",
+                i
+            );
         }
     }
 
