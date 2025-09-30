@@ -267,7 +267,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         };
 
         // Route the object's fields by name as either shredded or unshredded
-        let mut builder = self.value_builder.builder_ext(value.metadata().clone());
+        let mut builder = self.value_builder.builder_ext(value.metadata());
         let mut object_builder = builder.try_new_object()?;
         let mut seen = std::collections::HashSet::new();
         let mut partially_shredded = false;
@@ -794,7 +794,7 @@ mod tests {
         let object_with_foo_field = |i| {
             use parquet_variant::{ParentState, ValueBuilder, VariantMetadata};
             let metadata = VariantMetadata::new(metadata.value(i));
-            let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata.clone());
+            let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
             let mut value_builder = ValueBuilder::new();
             let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
             ObjectBuilder::new(state, false)
