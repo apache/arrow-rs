@@ -401,8 +401,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                 (LogicalType::String, PhysicalType::BYTE_ARRAY) => {}
                 (LogicalType::Json, PhysicalType::BYTE_ARRAY) => {}
                 (LogicalType::Bson, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Geometry, PhysicalType::BYTE_ARRAY) => {}
-                (LogicalType::Geography, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Geometry { .. }, PhysicalType::BYTE_ARRAY) => {}
+                (LogicalType::Geography { .. }, PhysicalType::BYTE_ARRAY) => {}
                 (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 16 => {}
                 (LogicalType::Uuid, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
                     return Err(general_err!(

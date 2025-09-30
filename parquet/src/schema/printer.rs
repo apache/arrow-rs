@@ -327,8 +327,19 @@ fn print_logical_and_converted(
             LogicalType::Map => "MAP".to_string(),
             LogicalType::Float16 => "FLOAT16".to_string(),
             LogicalType::Variant => "VARIANT".to_string(),
-            LogicalType::Geometry => "GEOMETRY".to_string(),
-            LogicalType::Geography => "GEOGRAPHY".to_string(),
+            LogicalType::Geometry { crs } => {
+                if let Some(crs) = crs {
+                    format!("GEOMETRY({crs})")
+                } else {
+                    "GEOMETRY".to_string()
+                }
+            }
+            LogicalType::Geography { crs, algorithm } => match (crs, algorithm) {
+                (None, None) => "GEOGRAPHY".to_string(),
+                (None, Some(algorithm)) => format!("GEOGRAPHY(<None>, {algorithm:?})"),
+                (Some(crs), None) => format!("GEOGRAPHY({crs})"),
+                (Some(crs), Some(algorithm)) => format!("GEOGRAPHY({crs}, {algorithm:?})"),
+            },
             LogicalType::Unknown => "UNKNOWN".to_string(),
         },
         None => {

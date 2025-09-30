@@ -28,8 +28,8 @@ use crate::errors::{ParquetError, Result};
 
 // Re-export crate::format types used in this module
 pub use crate::format::{
-    BsonType, DateType, DecimalType, EnumType, IntType, JsonType, ListType, MapType, NullType,
-    StringType, TimeType, TimeUnit, TimestampType, UUIDType,
+    BsonType, DateType, DecimalType, EnumType, GeographyType, GeometryType, IntType, JsonType,
+    ListType, MapType, NullType, StringType, TimeType, TimeUnit, TimestampType, UUIDType,
 };
 
 // ----------------------------------------------------------------------
@@ -231,9 +231,18 @@ pub enum LogicalType {
     /// A Variant value.
     Variant,
     /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
-    Geometry,
+    Geometry {
+        /// A custom CRS. If unset, it defaults to "OGC:CRS84", which means that the geometries
+        /// must be stored in longitude, latitude based on the WGS84 datum.
+        crs: Option<String>,
+    },
     /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
-    Geography,
+    Geography {
+        /// A custom CRS. If unset, the CRS defaults to "OGC:CRS84".
+        crs: Option<String>,
+        /// Edge interpolation method.
+        algorithm: Option<EdgeInterpolationAlgorithm>,
+    },
 }
 
 // ----------------------------------------------------------------------
@@ -343,6 +352,31 @@ pub enum Encoding {
     /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
     /// perform poorly for large values of N.
     BYTE_STREAM_SPLIT,
+}
+
+// ----------------------------------------------------------------------
+// Mirrors `parquet::EdgeInterpolationAlgorithm`
+
+/// Edge interpolation algorithm for Geography logical type
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EdgeInterpolationAlgorithm {
+    /// Edges are interpolated as geodesics on a sphere.
+    SPHERICAL,
+
+    /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
+    VINCENTY,
+
+    /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
+    THOMAS,
+
+    /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
+    ANDOYER,
+
+    /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
+    KARNEY,
+
+    /// An unknown/unrecognized algorithm
+    UNKNOWN(i32),
 }
 
 impl FromStr for Encoding {
@@ -584,9 +618,9 @@ impl ColumnOrder {
                 LogicalType::Unknown => SortOrder::UNDEFINED,
                 LogicalType::Uuid => SortOrder::UNSIGNED,
                 LogicalType::Float16 => SortOrder::SIGNED,
-                LogicalType::Variant | LogicalType::Geometry | LogicalType::Geography => {
-                    SortOrder::UNDEFINED
-                }
+                LogicalType::Variant
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. } => SortOrder::UNDEFINED,
             },
             // Fall back to converted type
             None => Self::get_converted_sort_order(converted_type, physical_type),
@@ -850,8 +884,28 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::UUID(_) => LogicalType::Uuid,
             parquet::LogicalType::FLOAT16(_) => LogicalType::Float16,
             parquet::LogicalType::VARIANT(_) => LogicalType::Variant,
-            parquet::LogicalType::GEOMETRY(_) => LogicalType::Geometry,
-            parquet::LogicalType::GEOGRAPHY(_) => LogicalType::Geography,
+            parquet::LogicalType::GEOMETRY(t) => LogicalType::Geometry { crs: t.crs },
+            parquet::LogicalType::GEOGRAPHY(t) => LogicalType::Geography {
+                crs: t.crs,
+                algorithm: t.algorithm.map(|algorithm| match algorithm {
+                    parquet::EdgeInterpolationAlgorithm::SPHERICAL => {
+                        EdgeInterpolationAlgorithm::ANDOYER
+                    }
+                    parquet::EdgeInterpolationAlgorithm::VINCENTY => {
+                        EdgeInterpolationAlgorithm::VINCENTY
+                    }
+                    parquet::EdgeInterpolationAlgorithm::ANDOYER => {
+                        EdgeInterpolationAlgorithm::ANDOYER
+                    }
+                    parquet::EdgeInterpolationAlgorithm::THOMAS => {
+                        EdgeInterpolationAlgorithm::THOMAS
+                    }
+                    parquet::EdgeInterpolationAlgorithm::KARNEY => {
+                        EdgeInterpolationAlgorithm::KARNEY
+                    }
+                    _ => EdgeInterpolationAlgorithm::UNKNOWN(algorithm.0),
+                }),
+            },
         }
     }
 }
@@ -894,8 +948,32 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Uuid => parquet::LogicalType::UUID(Default::default()),
             LogicalType::Float16 => parquet::LogicalType::FLOAT16(Default::default()),
             LogicalType::Variant => parquet::LogicalType::VARIANT(Default::default()),
-            LogicalType::Geometry => parquet::LogicalType::GEOMETRY(Default::default()),
-            LogicalType::Geography => parquet::LogicalType::GEOGRAPHY(Default::default()),
+            LogicalType::Geometry { crs } => parquet::LogicalType::GEOMETRY(GeometryType { crs }),
+            LogicalType::Geography { crs, algorithm } => {
+                parquet::LogicalType::GEOGRAPHY(GeographyType {
+                    crs,
+                    algorithm: algorithm.map(|algorithm| match algorithm {
+                        EdgeInterpolationAlgorithm::SPHERICAL => {
+                            parquet::EdgeInterpolationAlgorithm::SPHERICAL
+                        }
+                        EdgeInterpolationAlgorithm::VINCENTY => {
+                            parquet::EdgeInterpolationAlgorithm::VINCENTY
+                        }
+                        EdgeInterpolationAlgorithm::THOMAS => {
+                            parquet::EdgeInterpolationAlgorithm::THOMAS
+                        }
+                        EdgeInterpolationAlgorithm::ANDOYER => {
+                            parquet::EdgeInterpolationAlgorithm::ANDOYER
+                        }
+                        EdgeInterpolationAlgorithm::KARNEY => {
+                            parquet::EdgeInterpolationAlgorithm::KARNEY
+                        }
+                        EdgeInterpolationAlgorithm::UNKNOWN(code) => {
+                            parquet::EdgeInterpolationAlgorithm(code)
+                        }
+                    }),
+                })
+            }
         }
     }
 }
@@ -950,8 +1028,8 @@ impl From<Option<LogicalType>> for ConvertedType {
                 LogicalType::Uuid
                 | LogicalType::Float16
                 | LogicalType::Variant
-                | LogicalType::Geometry
-                | LogicalType::Geography
+                | LogicalType::Geometry { .. }
+                | LogicalType::Geography { .. }
                 | LogicalType::Unknown => ConvertedType::NONE,
             },
             None => ConvertedType::NONE,
@@ -1201,8 +1279,11 @@ impl str::FromStr for LogicalType {
                 "Interval parquet logical type not yet supported"
             )),
             "FLOAT16" => Ok(LogicalType::Float16),
-            "GEOMETRY" => Ok(LogicalType::Geometry),
-            "GEOGRAPHY" => Ok(LogicalType::Geography),
+            "GEOMETRY" => Ok(LogicalType::Geometry { crs: None }),
+            "GEOGRAPHY" => Ok(LogicalType::Geography {
+                crs: None,
+                algorithm: None,
+            }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
     }
