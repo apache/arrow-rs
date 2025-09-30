@@ -19,8 +19,8 @@
 
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
-    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, NullBufferBuilder,
-    PrimitiveArray, StringArray, StructArray,
+    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, PrimitiveArray,
+    StringArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -58,21 +58,19 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
 
     // NOTE: None/None at top-level is technically invalid, but the shredding spec requires us to
     // emit `Variant::Null` when a required value is missing.
-    let mut row_builder = make_unshred_variant_row_builder(array.shredding_state().borrow())?
-        .unwrap_or_else(|| UnshredVariantRowBuilder::null(array.nulls()));
+    let nulls = array.nulls();
+    let mut row_builder = UnshredVariantRowBuilder::try_new_opt(array.shredding_state().borrow())?
+        .unwrap_or_else(|| UnshredVariantRowBuilder::null(nulls));
 
     let metadata = array.metadata_field();
     let mut value_builder = VariantValueArrayBuilder::new(array.len());
-    let mut null_builder = NullBufferBuilder::new(array.len());
     for i in 0..array.len() {
         if array.is_null(i) {
             value_builder.append_null();
-            null_builder.append_null();
         } else {
             let metadata = VariantMetadata::new(metadata.value(i));
             let mut value_builder = value_builder.builder_ext(&metadata);
             row_builder.append_row(&mut value_builder, &metadata, i)?;
-            null_builder.append_non_null();
         }
     }
 
@@ -81,7 +79,7 @@ pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
         metadata.clone(),
         Some(value),
         None,
-        null_builder.finish(),
+        nulls.cloned(),
     ))
 }
 
@@ -139,86 +137,86 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::Null(b) => b.append_row(builder, metadata, index),
         }
     }
-}
 
-/// Factory function to create the appropriate row builder for given field components
-/// Returns None for None/None case - caller decides how to handle based on context
-fn make_unshred_variant_row_builder<'a>(
-    shredding_state: BorrowedShreddingState<'a>,
-) -> Result<Option<UnshredVariantRowBuilder<'a>>> {
-    let value = shredding_state.value_field();
-    let typed_value = shredding_state.typed_value_field();
-    let Some(typed_value) = typed_value else {
-        // Copy the value across directly, if present. Else caller decides what to do.
-        return Ok(value
-            .map(|v| UnshredVariantRowBuilder::ValueOnly(ValueOnlyUnshredVariantBuilder::new(v))));
-    };
-
-    // Has typed_value -> determine type and create appropriate builder
-    macro_rules! primitive_builder {
-        ($enum_variant:ident, $cast_fn:ident) => {
-            UnshredVariantRowBuilder::$enum_variant(UnshredPrimitiveRowBuilder::new(
-                value,
-                typed_value.$cast_fn(),
-            ))
+    /// Creates a new UnshredVariantRowBuilder from shredding state
+    /// Returns None for None/None case - caller decides how to handle based on context
+    fn try_new_opt(shredding_state: BorrowedShreddingState<'a>) -> Result<Option<Self>> {
+        let value = shredding_state.value_field();
+        let typed_value = shredding_state.typed_value_field();
+        let Some(typed_value) = typed_value else {
+            // Copy the value across directly, if present. Else caller decides what to do.
+            return Ok(value.map(|v| Self::ValueOnly(ValueOnlyUnshredVariantBuilder::new(v))));
         };
-    }
 
-    let builder = match typed_value.data_type() {
-        DataType::Int8 => primitive_builder!(PrimitiveInt8, as_primitive),
-        DataType::Int16 => primitive_builder!(PrimitiveInt16, as_primitive),
-        DataType::Int32 => primitive_builder!(PrimitiveInt32, as_primitive),
-        DataType::Int64 => primitive_builder!(PrimitiveInt64, as_primitive),
-        DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
-        DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
-        DataType::Date32 => primitive_builder!(PrimitiveDate32, as_primitive),
-        DataType::Time64(TimeUnit::Microsecond) => {
-            primitive_builder!(PrimitiveTime64, as_primitive)
+        // Has typed_value -> determine type and create appropriate builder
+        macro_rules! primitive_builder {
+            ($enum_variant:ident, $cast_fn:ident) => {
+                Self::$enum_variant(UnshredPrimitiveRowBuilder::new(
+                    value,
+                    typed_value.$cast_fn(),
+                ))
+            };
         }
-        DataType::Time64(time_unit) => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Time64({time_unit}) is not a valid variant shredding type",
-            )));
-        }
-        DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
-            UnshredVariantRowBuilder::TimestampMicrosecond(TimestampUnshredRowBuilder::new(
+
+        let builder = match typed_value.data_type() {
+            DataType::Int8 => primitive_builder!(PrimitiveInt8, as_primitive),
+            DataType::Int16 => primitive_builder!(PrimitiveInt16, as_primitive),
+            DataType::Int32 => primitive_builder!(PrimitiveInt32, as_primitive),
+            DataType::Int64 => primitive_builder!(PrimitiveInt64, as_primitive),
+            DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
+            DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
+            DataType::Date32 => primitive_builder!(PrimitiveDate32, as_primitive),
+            DataType::Time64(TimeUnit::Microsecond) => {
+                primitive_builder!(PrimitiveTime64, as_primitive)
+            }
+            DataType::Time64(time_unit) => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Time64({time_unit}) is not a valid variant shredding type",
+                )));
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
+                Self::TimestampMicrosecond(TimestampUnshredRowBuilder::new(
+                    value,
+                    typed_value.as_primitive(),
+                    timezone.is_some(),
+                ))
+            }
+            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
+                Self::TimestampNanosecond(TimestampUnshredRowBuilder::new(
+                    value,
+                    typed_value.as_primitive(),
+                    timezone.is_some(),
+                ))
+            }
+            DataType::Timestamp(time_unit, _) => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Timestamp({time_unit}) is not a valid variant shredding type",
+                )));
+            }
+            DataType::Boolean => primitive_builder!(PrimitiveBoolean, as_boolean),
+            DataType::Utf8 => primitive_builder!(PrimitiveString, as_string),
+            DataType::BinaryView => primitive_builder!(PrimitiveBinaryView, as_binary_view),
+            DataType::FixedSizeBinary(16) => {
+                primitive_builder!(PrimitiveUuid, as_fixed_size_binary)
+            }
+            DataType::FixedSizeBinary(size) => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "FixedSizeBinary({size}) is not a valid variant shredding type",
+                )));
+            }
+            DataType::Struct(_) => Self::Struct(StructUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_primitive(),
-                timezone.is_some(),
-            ))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
-            UnshredVariantRowBuilder::TimestampNanosecond(TimestampUnshredRowBuilder::new(
-                value,
-                typed_value.as_primitive(),
-                timezone.is_some(),
-            ))
-        }
-        DataType::Timestamp(time_unit, _) => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Timestamp({time_unit}) is not a valid variant shredding type",
-            )));
-        }
-        DataType::Boolean => primitive_builder!(PrimitiveBoolean, as_boolean),
-        DataType::Utf8 => primitive_builder!(PrimitiveString, as_string),
-        DataType::BinaryView => primitive_builder!(PrimitiveBinaryView, as_binary_view),
-        DataType::FixedSizeBinary(16) => primitive_builder!(PrimitiveUuid, as_fixed_size_binary),
-        DataType::FixedSizeBinary(size) => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinary({size}) is not a valid variant shredding type",
-            )));
-        }
-        DataType::Struct(_) => UnshredVariantRowBuilder::Struct(
-            StructUnshredVariantBuilder::try_new(value, typed_value.as_struct())?,
-        ),
-        _ => {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "Unshredding not yet supported for type: {}",
-                typed_value.data_type()
-            )));
-        }
-    };
-    Ok(Some(builder))
+                typed_value.as_struct(),
+            )?),
+            _ => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "Unshredding not yet supported for type: {}",
+                    typed_value.data_type()
+                )));
+            }
+        };
+        Ok(Some(builder))
+    }
 }
 
 /// Builder for arrays with neither typed_value nor value (all NULL/Variant::Null)
@@ -466,7 +464,7 @@ impl<'a> StructUnshredVariantBuilder<'a> {
                     field_array.data_type()
                 )));
             };
-            let field_unshredder = make_unshred_variant_row_builder(field_array.try_into()?)?;
+            let field_unshredder = UnshredVariantRowBuilder::try_new_opt(field_array.try_into()?)?;
             field_unshredders.insert(field.name().as_ref(), field_unshredder);
         }
 
@@ -518,3 +516,6 @@ impl<'a> StructUnshredVariantBuilder<'a> {
         Ok(())
     }
 }
+
+// TODO: This code is covered by tests in `parquet/tests/variant_integration.rs`. Does that suffice?
+// Or do we also need targeted stand-alone unit tests for full coverage?

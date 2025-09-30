@@ -291,6 +291,9 @@ impl VariantTestCase {
 
         let variant_data = self.load_variants();
         let variant_array = self.load_parquet();
+
+        // `load_parquet` returns shredded variant values, but the test expectations are provided as
+        // unshredded variant values. Unshred (failing for invalid input) so we can compare them.
         let variant_array = unshred_variant(&variant_array).unwrap();
 
         // if this is an error case, the expected error message should be set
