@@ -794,6 +794,7 @@ mod tests {
         Ok(())
     }
 
+    /// Taken from the example in [Parquet Format - Nested Types - Lists - Backward-compatibility rules](https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/LogicalTypes.md?plain=1#L766-L769)
     #[test]
     fn basic_backward_compatible_list_1() -> crate::errors::Result<()> {
         test_expected_type(
@@ -815,8 +816,8 @@ mod tests {
         )
     }
 
+    /// Taken from the example in [Parquet Format - Nested Types - Lists - Backward-compatibility rules](https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/LogicalTypes.md?plain=1#L771-L777)
     #[test]
-    #[ignore = "not working yet"]
     fn basic_backward_compatible_list_2() -> crate::errors::Result<()> {
         test_expected_type(
             "
@@ -825,7 +826,7 @@ mod tests {
                   repeated group element {
                     required binary str (STRING);
                     required int32 num;
-                  };
+                  }
               }
             }
         ",
@@ -836,7 +837,7 @@ mod tests {
                     DataType::List(Arc::new(Field::new(
                         "element",
                         DataType::Struct(Fields::from(vec![
-                            Field::new("str", DataType::Binary, false),
+                            Field::new("str", DataType::Utf8, false),
                             Field::new("num", DataType::Int32, false),
                         ])),
                         false,
@@ -847,8 +848,8 @@ mod tests {
         )
     }
 
+    /// Taken from the example in [Parquet Format - Nested Types - Lists - Backward-compatibility rules](https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/LogicalTypes.md?plain=1#L779-L784)
     #[test]
-    #[ignore = "not working yet"]
     fn basic_backward_compatible_list_3() -> crate::errors::Result<()> {
         test_expected_type(
             "
@@ -856,7 +857,7 @@ mod tests {
               optional group my_list (LIST) {
                   repeated group array (LIST) {
                     repeated int32 array;
-                  };
+                  }
               }
             }
         ",
@@ -875,40 +876,72 @@ mod tests {
         )
     }
 
+    /// Taken from the example in [Parquet Format - Nested Types - Lists - Backward-compatibility rules](https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/LogicalTypes.md?plain=1#L786-L791)
     #[test]
-    #[ignore = "not working yet"]
     fn basic_backward_compatible_list_4_1() -> crate::errors::Result<()> {
-        test_roundtrip(
+        test_expected_type(
             "
             message schema {
               optional group my_list (LIST) {
                   repeated group array {
                     required binary str (STRING);
-                  };
+                  }
               }
             }
         ",
+            Fields::from(vec![
+                // Rule 4: List<OneTuple<String>> (nullable list, non-null elements)
+                Field::new(
+                    "my_list",
+                    DataType::List(Arc::new(Field::new(
+                        "array",
+                        DataType::Struct(Fields::from(vec![Field::new(
+                            "str",
+                            DataType::Utf8,
+                            false,
+                        )])),
+                        false,
+                    ))),
+                    true,
+                ),
+            ]),
         )
     }
 
+    /// Taken from the example in [Parquet Format - Nested Types - Lists - Backward-compatibility rules](https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/LogicalTypes.md?plain=1#L793-L798)
     #[test]
-    #[ignore = "not working yet"]
     fn basic_backward_compatible_list_4_2() -> crate::errors::Result<()> {
-        test_roundtrip(
+        test_expected_type(
             "
             message schema {
                 optional group my_list (LIST) {
                     repeated group my_list_tuple {
                         required binary str (STRING);
-                    };
+                    }
                 }
             }
         ",
+            Fields::from(vec![
+                // Rule 4: List<OneTuple<String>> (nullable list, non-null elements)
+                Field::new(
+                    "my_list",
+                    DataType::List(Arc::new(Field::new(
+                        "my_list_tuple",
+                        DataType::Struct(Fields::from(vec![Field::new(
+                            "str",
+                            DataType::Utf8,
+                            false,
+                        )])),
+                        false,
+                    ))),
+                    true,
+                ),
+            ]),
         )
     }
 
+    /// Taken from the example in [Parquet Format - Nested Types - Lists - Backward-compatibility rules](https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/LogicalTypes.md?plain=1#L800-L805)
     #[test]
-    #[ignore = "not working yet"]
     fn basic_backward_compatible_list_5() -> crate::errors::Result<()> {
         test_expected_type(
             "
@@ -916,7 +949,7 @@ mod tests {
                 optional group my_list (LIST) {
                     repeated group element {
                         optional binary str (STRING);
-                    };
+                    }
                 }
             }
         ",
@@ -924,7 +957,7 @@ mod tests {
                 // Rule 5: List<String>  (nullable list, nullable elements)
                 Field::new(
                     "my_list",
-                    DataType::List(Arc::new(Field::new("element", DataType::Binary, true))),
+                    DataType::List(Arc::new(Field::new("str", DataType::Utf8, true))),
                     true,
                 ),
             ]),
