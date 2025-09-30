@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::type_conversion::{decimal_to_variant_decimal, CastOptions};
+use crate::type_conversion::{CastOptions, decimal_to_variant_decimal};
 use arrow::array::{
     Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
     GenericStringArray, OffsetSizeTrait, PrimitiveArray,
@@ -23,17 +23,17 @@ use arrow::array::{
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
     ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType, Date32Type,
-    Date64Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Date64Type, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     RunEndIndexType, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
     Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+    TimestampNanosecondType, TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::temporal_conversions::{as_date, as_datetime, as_time};
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, TimeZone, Utc};
 use parquet_variant::{
-    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16, VariantDecimal4,
-    VariantDecimal8,
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16,
 };
 use std::collections::HashMap;
 use std::ops::Range;
@@ -213,7 +213,7 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
                 _ => {
                     return Err(ArrowError::CastError(format!(
                         "Unsupported Time32 unit: {time_unit:?}"
-                    )))
+                    )));
                 }
             },
             DataType::Time64(time_unit) => match time_unit {
@@ -226,7 +226,7 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
                 _ => {
                     return Err(ArrowError::CastError(format!(
                         "Unsupported Time64 unit: {time_unit:?}"
-                    )))
+                    )));
                 }
             },
             DataType::Duration(_) | DataType::Interval(_) => {
@@ -234,7 +234,7 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
                     "Casting duration/interval types to Variant is not supported. \
                  The Variant format does not define duration/interval types."
                         .to_string(),
-                ))
+                ));
             }
             DataType::Binary => Binary(BinaryArrowToVariantBuilder::new(array)),
             DataType::LargeBinary => LargeBinary(BinaryArrowToVariantBuilder::new(array)),

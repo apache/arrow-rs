@@ -88,32 +88,33 @@ pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
 mod tests {
     use super::*;
     use arrow::array::{
-        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal128Array,
-        Decimal256Array, Decimal32Array, Decimal64Array, DictionaryArray, DurationMicrosecondArray,
-        DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray,
-        FixedSizeBinaryBuilder, FixedSizeListBuilder, Float16Array, Float32Array, Float64Array,
-        GenericByteBuilder, GenericByteViewBuilder, Int16Array, Int32Array, Int64Array, Int8Array,
-        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray, LargeListArray,
-        LargeListViewBuilder, LargeStringArray, ListArray, ListViewBuilder, MapArray, NullArray,
-        StringArray, StringRunBuilder, StringViewArray, StructArray, Time32MillisecondArray,
-        Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-        TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-        TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array, UnionArray,
+        ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal32Array,
+        Decimal64Array, Decimal128Array, Decimal256Array, DictionaryArray,
+        DurationMicrosecondArray, DurationMillisecondArray, DurationNanosecondArray,
+        DurationSecondArray, FixedSizeBinaryBuilder, FixedSizeListBuilder, Float16Array,
+        Float32Array, Float64Array, GenericByteBuilder, GenericByteViewBuilder, Int8Array,
+        Int16Array, Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+        IntervalYearMonthArray, LargeListArray, LargeListViewBuilder, LargeStringArray, ListArray,
+        ListViewBuilder, MapArray, NullArray, StringArray, StringRunBuilder, StringViewArray,
+        StructArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
+        Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        TimestampNanosecondArray, TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array,
+        UInt64Array, UnionArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
-        i256, BinaryType, BinaryViewType, Date32Type, Date64Type, Int32Type, Int64Type, Int8Type,
-        IntervalDayTime, IntervalMonthDayNano, LargeBinaryType,
+        BinaryType, BinaryViewType, Date32Type, Date64Type, Int8Type, Int32Type, Int64Type,
+        IntervalDayTime, IntervalMonthDayNano, LargeBinaryType, i256,
+    };
+    use arrow_schema::{
+        DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
     };
     use arrow_schema::{DataType, Field, Fields, UnionFields};
-    use arrow_schema::{
-        DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
-    };
     use chrono::{DateTime, NaiveDate, NaiveTime};
     use half::f16;
     use parquet_variant::{
-        Variant, VariantBuilder, VariantBuilderExt, VariantDecimal16, VariantDecimal4,
-        VariantDecimal8,
+        Variant, VariantBuilder, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+        VariantDecimal16,
     };
     use std::{sync::Arc, vec};
 

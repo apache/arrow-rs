@@ -19,7 +19,7 @@
 
 use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
 use crate::variant_to_arrow::{
-    make_primitive_variant_to_arrow_row_builder, PrimitiveVariantToArrowRowBuilder,
+    PrimitiveVariantToArrowRowBuilder, make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
