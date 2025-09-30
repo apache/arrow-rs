@@ -1125,7 +1125,7 @@ impl ParquetRecordBatchReader {
     /// all rows will be returned
     pub(crate) fn new(array_reader: Box<dyn ArrayReader>, read_plan: ReadPlan) -> Self {
         let schema = match array_reader.get_data_type() {
-            ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
+            ArrowType::Struct(fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
         };
 
@@ -1630,7 +1630,7 @@ mod tests {
     struct RandFixedLenGen {}
 
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
-        fn gen(len: i32) -> FixedLenByteArray {
+        fn r#gen(len: i32) -> FixedLenByteArray {
             let mut v = vec![0u8; len as usize];
             rng().fill_bytes(&mut v);
             ByteArray::from(v).into()
@@ -1859,8 +1859,8 @@ mod tests {
     struct RandUtf8Gen {}
 
     impl RandGen<ByteArrayType> for RandUtf8Gen {
-        fn gen(len: i32) -> ByteArray {
-            Int32Type::gen(len).to_string().as_str().into()
+        fn r#gen(len: i32) -> ByteArray {
+            Int32Type::r#gen(len).to_string().as_str().into()
         }
     }
 

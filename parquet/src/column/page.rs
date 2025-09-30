@@ -103,9 +103,9 @@ impl Page {
     /// Returns internal byte buffer reference for this page.
     pub fn buffer(&self) -> &Bytes {
         match self {
-            Page::DataPage { ref buf, .. } => buf,
-            Page::DataPageV2 { ref buf, .. } => buf,
-            Page::DictionaryPage { ref buf, .. } => buf,
+            Page::DataPage { buf, .. } => buf,
+            Page::DataPageV2 { buf, .. } => buf,
+            Page::DictionaryPage { buf, .. } => buf,
         }
     }
 
@@ -130,8 +130,8 @@ impl Page {
     /// Returns optional [`Statistics`].
     pub fn statistics(&self) -> Option<&Statistics> {
         match self {
-            Page::DataPage { ref statistics, .. } => statistics.as_ref(),
-            Page::DataPageV2 { ref statistics, .. } => statistics.as_ref(),
+            Page::DataPage { statistics, .. } => statistics.as_ref(),
+            Page::DataPageV2 { statistics, .. } => statistics.as_ref(),
             Page::DictionaryPage { .. } => None,
         }
     }

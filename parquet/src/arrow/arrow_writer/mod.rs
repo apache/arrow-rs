@@ -1116,7 +1116,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
     let column = levels.array().as_ref();
     let indices = levels.non_null_indices();
     match writer {
-        ColumnWriter::Int32ColumnWriter(ref mut typed) => {
+        ColumnWriter::Int32ColumnWriter(typed) => {
             match column.data_type() {
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
@@ -1202,7 +1202,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 }
             }
         }
-        ColumnWriter::BoolColumnWriter(ref mut typed) => {
+        ColumnWriter::BoolColumnWriter(typed) => {
             let array = column.as_boolean();
             typed.write_batch(
                 get_bool_array_slice(array, indices).as_slice(),
@@ -1210,7 +1210,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 levels.rep_levels(),
             )
         }
-        ColumnWriter::Int64ColumnWriter(ref mut typed) => {
+        ColumnWriter::Int64ColumnWriter(typed) => {
             match column.data_type() {
                 ArrowDataType::Date64 => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
@@ -1284,21 +1284,21 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 }
             }
         }
-        ColumnWriter::Int96ColumnWriter(ref mut _typed) => {
+        ColumnWriter::Int96ColumnWriter(_typed) => {
             unreachable!("Currently unreachable because data type not supported")
         }
-        ColumnWriter::FloatColumnWriter(ref mut typed) => {
+        ColumnWriter::FloatColumnWriter(typed) => {
             let array = column.as_primitive::<Float32Type>();
             write_primitive(typed, array.values(), levels)
         }
-        ColumnWriter::DoubleColumnWriter(ref mut typed) => {
+        ColumnWriter::DoubleColumnWriter(typed) => {
             let array = column.as_primitive::<Float64Type>();
             write_primitive(typed, array.values(), levels)
         }
         ColumnWriter::ByteArrayColumnWriter(_) => {
             unreachable!("should use ByteArrayWriter")
         }
-        ColumnWriter::FixedLenByteArrayColumnWriter(ref mut typed) => {
+        ColumnWriter::FixedLenByteArrayColumnWriter(typed) => {
             let bytes = match column.data_type() {
                 ArrowDataType::Interval(interval_unit) => match interval_unit {
                     IntervalUnit::YearMonth => {

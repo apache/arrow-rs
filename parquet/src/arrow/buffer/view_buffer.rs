@@ -49,9 +49,9 @@ impl ViewBuffer {
     /// - `offset` and `offset + len` are valid indices into the buffer
     /// - The `(offset, offset + len)` is valid value for the native type.
     pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
-        let b = self.buffers.get_unchecked(block as usize);
+        let b = unsafe { self.buffers.get_unchecked(block as usize) };
         let end = offset.saturating_add(len);
-        let b = b.get_unchecked(offset as usize..end as usize);
+        let b = unsafe { b.get_unchecked(offset as usize..end as usize) };
 
         let view = make_view(b, block, offset);
 
