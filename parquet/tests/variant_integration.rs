@@ -74,7 +74,6 @@ variant_test_case!(2, "Unshredding not yet supported for type: List(");
 // },
 // ```
 variant_test_case!(3, "parquet_file must be set");
-// https://github.com/apache/arrow-rs/issues/8329
 variant_test_case!(4);
 variant_test_case!(5);
 variant_test_case!(6);
