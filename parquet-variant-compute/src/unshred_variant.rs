@@ -17,10 +17,12 @@
 
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
+use crate::arrow_to_variant::ListLikeArray;
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
-    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, NullBufferBuilder,
-    PrimitiveArray, StringArray, StructArray,
+    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
+    GenericListArray, GenericListViewArray, NullBufferBuilder, PrimitiveArray, StringArray,
+    StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
@@ -101,6 +103,11 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveString(UnshredPrimitiveRowBuilder<'a, StringArray>),
     PrimitiveBinaryView(UnshredPrimitiveRowBuilder<'a, BinaryViewArray>),
     PrimitiveUuid(UnshredPrimitiveRowBuilder<'a, FixedSizeBinaryArray>),
+    List(ListUnshredVariantBuilder<'a, GenericListArray<i32>>),
+    LargeList(ListUnshredVariantBuilder<'a, GenericListArray<i64>>),
+    ListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i32>>),
+    LargeListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i64>>),
+    FixedSizeList(ListUnshredVariantBuilder<'a, FixedSizeListArray>),
     Struct(StructUnshredVariantBuilder<'a>),
     ValueOnly(ValueOnlyUnshredVariantBuilder<'a>),
     Null(NullUnshredVariantBuilder<'a>),
@@ -134,6 +141,11 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::PrimitiveString(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveBinaryView(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveUuid(b) => b.append_row(builder, metadata, index),
+            Self::List(b) => b.append_row(builder, metadata, index),
+            Self::LargeList(b) => b.append_row(builder, metadata, index),
+            Self::ListView(b) => b.append_row(builder, metadata, index),
+            Self::LargeListView(b) => b.append_row(builder, metadata, index),
+            Self::FixedSizeList(b) => b.append_row(builder, metadata, index),
             Self::Struct(b) => b.append_row(builder, metadata, index),
             Self::ValueOnly(b) => b.append_row(builder, metadata, index),
             Self::Null(b) => b.append_row(builder, metadata, index),
@@ -210,6 +222,22 @@ fn make_unshred_variant_row_builder<'a>(
         }
         DataType::Struct(_) => UnshredVariantRowBuilder::Struct(
             StructUnshredVariantBuilder::try_new(value, typed_value.as_struct())?,
+        ),
+        DataType::List(_) => UnshredVariantRowBuilder::List(ListUnshredVariantBuilder::try_new(
+            value,
+            typed_value.as_list(),
+        )?),
+        DataType::LargeList(_) => UnshredVariantRowBuilder::LargeList(
+            ListUnshredVariantBuilder::try_new(value, typed_value.as_list())?,
+        ),
+        DataType::ListView(_) => UnshredVariantRowBuilder::ListView(
+            ListUnshredVariantBuilder::try_new(value, typed_value.as_list_view())?,
+        ),
+        DataType::LargeListView(_) => UnshredVariantRowBuilder::LargeListView(
+            ListUnshredVariantBuilder::try_new(value, typed_value.as_list_view())?,
+        ),
+        DataType::FixedSizeList(_, _) => UnshredVariantRowBuilder::FixedSizeList(
+            ListUnshredVariantBuilder::try_new(value, typed_value.as_fixed_size_list())?,
         ),
         _ => {
             return Err(ArrowError::NotYetImplemented(format!(
@@ -515,6 +543,62 @@ impl<'a> StructUnshredVariantBuilder<'a> {
         }
 
         object_builder.finish();
+        Ok(())
+    }
+}
+
+/// Builder for unshredding list/array types with recursive element processing
+struct ListUnshredVariantBuilder<'a, L: ListLikeArray> {
+    value: Option<&'a BinaryViewArray>,
+    typed_value: &'a L,
+    element_unshredder: Box<UnshredVariantRowBuilder<'a>>,
+}
+
+impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
+    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a L) -> Result<Self> {
+        // Create a recursive unshredder for the list elements
+        // The element type comes from the values array of the list
+        let element_values = typed_value.values();
+
+        // For shredded lists, each element would be a ShreddedVariantFieldArray (struct)
+        // Extract value/typed_value from the element struct
+        let Some(element_values) = element_values.as_struct_opt() else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid shredded variant array element: expected Struct, got {}",
+                element_values.data_type()
+            )));
+        };
+
+        // Create recursive unshredder for elements
+        //
+        // NOTE: A None/None array element is technically invalid, but the shredding spec
+        // requires us to emit `Variant::Null` when a required value is missing.
+        let element_unshredder = make_unshred_variant_row_builder(element_values.try_into()?)?
+            .unwrap_or_else(|| UnshredVariantRowBuilder::null(None));
+
+        Ok(Self {
+            value,
+            typed_value,
+            element_unshredder: Box::new(element_unshredder),
+        })
+    }
+
+    fn append_row(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        metadata: &VariantMetadata,
+        index: usize,
+    ) -> Result<()> {
+        handle_unshredded_case!(self, builder, metadata, index, false);
+
+        // If we get here, typed_value is valid and value is NULL -- process the list elements
+        let mut list_builder = builder.try_new_list()?;
+        for element_index in self.typed_value.element_range(index) {
+            self.element_unshredder
+                .append_row(&mut list_builder, metadata, element_index)?;
+        }
+
+        list_builder.finish();
         Ok(())
     }
 }
