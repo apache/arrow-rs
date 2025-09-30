@@ -18,21 +18,82 @@
 //! Tests for Geometry and Geography logical types
 
 use parquet::{
-    basic::LogicalType,
-    file::reader::{FileReader, SerializedFileReader},
+    basic::{EdgeInterpolationAlgorithm, LogicalType},
+    file::{
+        metadata::ParquetMetaData,
+        reader::{FileReader, SerializedFileReader},
+    },
     geospatial::bounding_box::BoundingBox,
 };
+use serde_json::Value;
 use std::fs::File;
 
-#[test]
-fn test_read_geospatial_statistics_from_file() {
+fn read_metadata(geospatial_test_file: &str) -> ParquetMetaData {
     let path = format!(
-        "{}/geospatial/geospatial.parquet",
+        "{}/geospatial/{geospatial_test_file}",
         arrow::util::test_util::parquet_test_data(),
     );
     let file = File::open(path).unwrap();
     let reader = SerializedFileReader::try_from(file).unwrap();
-    let metadata = reader.metadata();
+    reader.metadata().clone()
+}
+
+#[test]
+fn test_read_logical_type() {
+    let expected_logical_type = [
+        ("crs-default.parquet", LogicalType::Geometry { crs: None }),
+        (
+            "crs-srid.parquet",
+            LogicalType::Geometry {
+                crs: Some("srid:5070".to_string()),
+            },
+        ),
+        (
+            "crs-projjson.parquet",
+            LogicalType::Geometry {
+                crs: Some("projjson:projjson_epsg_5070".to_string()),
+            },
+        ),
+        (
+            "crs-geography.parquet",
+            LogicalType::Geography {
+                crs: None,
+                algorithm: EdgeInterpolationAlgorithm::SPHERICAL,
+            },
+        ),
+    ];
+
+    for (geospatial_file, expected_type) in expected_logical_type {
+        let metadata = read_metadata(geospatial_file);
+        let logical_type = metadata
+            .file_metadata()
+            .schema_descr()
+            .column(1)
+            .logical_type()
+            .unwrap();
+
+        assert_eq!(logical_type, expected_type);
+    }
+
+    let metadata = read_metadata("crs-arbitrary-value.parquet");
+    let logical_type = metadata
+        .file_metadata()
+        .schema_descr()
+        .column(1)
+        .logical_type()
+        .unwrap();
+
+    if let LogicalType::Geometry { crs } = logical_type {
+        let crs_parsed: Value = serde_json::from_str(&crs.unwrap()).unwrap();
+        assert_eq!(crs_parsed.get("id").unwrap().get("code").unwrap(), 5070);
+    } else {
+        panic!("Expected geometry type but got {logical_type:?}");
+    }
+}
+
+#[test]
+fn test_read_geospatial_statistics() {
+    let metadata = read_metadata("geospatial.parquet");
 
     // geospatial.parquet schema:
     //    optional binary field_id=-1 group (String);
