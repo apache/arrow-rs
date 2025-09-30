@@ -354,31 +354,6 @@ pub enum Encoding {
     BYTE_STREAM_SPLIT,
 }
 
-// ----------------------------------------------------------------------
-// Mirrors `parquet::EdgeInterpolationAlgorithm`
-
-/// Edge interpolation algorithm for Geography logical type
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum EdgeInterpolationAlgorithm {
-    /// Edges are interpolated as geodesics on a sphere.
-    SPHERICAL,
-
-    /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
-    VINCENTY,
-
-    /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
-    THOMAS,
-
-    /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
-    ANDOYER,
-
-    /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
-    KARNEY,
-
-    /// An unknown/unrecognized algorithm
-    UNKNOWN(i32),
-}
-
 impl FromStr for Encoding {
     type Err = ParquetError;
 
@@ -694,6 +669,31 @@ impl ColumnOrder {
     }
 }
 
+// ----------------------------------------------------------------------
+// Mirrors `parquet::EdgeInterpolationAlgorithm`
+
+/// Edge interpolation algorithm for Geography logical type
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EdgeInterpolationAlgorithm {
+    /// Edges are interpolated as geodesics on a sphere.
+    SPHERICAL,
+
+    /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
+    VINCENTY,
+
+    /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
+    THOMAS,
+
+    /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
+    ANDOYER,
+
+    /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
+    KARNEY,
+
+    /// An unknown/unrecognized algorithm
+    UNKNOWN(i32),
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
@@ -737,6 +737,12 @@ impl fmt::Display for SortOrder {
 }
 
 impl fmt::Display for ColumnOrder {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
+}
+
+impl fmt::Display for EdgeInterpolationAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
     }
@@ -1934,6 +1940,17 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geometry { crs: None })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geography {
+                crs: None,
+                algorithm: None
+            })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
             ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
         );
@@ -2507,6 +2524,22 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "Parquet error: unknown encoding: gzip(-10)"
+        );
+    }
+
+    #[test]
+    fn test_display_edge_algorithm() {
+        assert_eq!(
+            EdgeInterpolationAlgorithm::SPHERICAL.to_string(),
+            "SPHERICAL"
+        );
+        assert_eq!(EdgeInterpolationAlgorithm::VINCENTY.to_string(), "VINCENTY");
+        assert_eq!(EdgeInterpolationAlgorithm::THOMAS.to_string(), "THOMAS");
+        assert_eq!(EdgeInterpolationAlgorithm::ANDOYER.to_string(), "ANDOYER");
+        assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
+        assert_eq!(
+            EdgeInterpolationAlgorithm::UNKNOWN(99).to_string(),
+            "UNKNOWN(99)"
         );
     }
 }
