@@ -34,7 +34,7 @@ extern crate quote;
 
 extern crate parquet;
 
-use ::syn::{parse_macro_input, Data, DataStruct, DeriveInput};
+use ::syn::{Data, DataStruct, DeriveInput, parse_macro_input};
 
 mod parquet_field;
 
