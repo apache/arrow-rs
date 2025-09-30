@@ -17,6 +17,7 @@
 
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
+use crate::arrow_to_variant::{shared_timestamp_to_variant, ArrowToVariant};
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, PrimitiveArray,
@@ -24,13 +25,11 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Float32Type, Float64Type, Int16Type, Int32Type,
+    ArrowTimestampType, DataType, Date32Type, Float32Type, Float64Type, Int16Type, Int32Type,
     Int64Type, Int8Type, Time64MicrosecondType, TimeUnit, TimestampMicrosecondType,
     TimestampNanosecondType,
 };
 use arrow::error::{ArrowError, Result};
-use arrow::temporal_conversions::time64us_to_time;
-use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantMetadata};
 use uuid::Uuid;
@@ -98,7 +97,7 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveBoolean(UnshredPrimitiveRowBuilder<'a, BooleanArray>),
     PrimitiveString(UnshredPrimitiveRowBuilder<'a, StringArray>),
     PrimitiveBinaryView(UnshredPrimitiveRowBuilder<'a, BinaryViewArray>),
-    PrimitiveUuid(UnshredPrimitiveRowBuilder<'a, FixedSizeBinaryArray>),
+    PrimitiveUuid(UnshredUuidRowBuilder<'a>),
     Struct(StructUnshredVariantBuilder<'a>),
     ValueOnly(ValueOnlyUnshredVariantBuilder<'a>),
     Null(NullUnshredVariantBuilder<'a>),
@@ -196,9 +195,10 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Boolean => primitive_builder!(PrimitiveBoolean, as_boolean),
             DataType::Utf8 => primitive_builder!(PrimitiveString, as_string),
             DataType::BinaryView => primitive_builder!(PrimitiveBinaryView, as_binary_view),
-            DataType::FixedSizeBinary(16) => {
-                primitive_builder!(PrimitiveUuid, as_fixed_size_binary)
-            }
+            DataType::FixedSizeBinary(16) => Self::PrimitiveUuid(UnshredUuidRowBuilder::new(
+                value,
+                typed_value.as_fixed_size_binary(),
+            )),
             DataType::FixedSizeBinary(size) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "FixedSizeBinary({size}) is not a valid variant shredding type",
@@ -270,16 +270,6 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
     }
 }
 
-/// Extension trait that directly adds row builder support for arrays that correspond to primitive
-/// variant types.
-trait PrimitiveVariantUnshredExt {
-    fn append_to_variant_builder(
-        &self,
-        builder: &mut impl VariantBuilderExt,
-        index: usize,
-    ) -> Result<()>;
-}
-
 /// Macro that handles the common unshredded case and returns early if handled.
 /// If not handled (shredded case), validates and returns the extracted value.
 macro_rules! handle_unshredded_case {
@@ -314,7 +304,7 @@ struct UnshredPrimitiveRowBuilder<'a, T> {
     typed_value: &'a T,
 }
 
-impl<'a, T: Array + PrimitiveVariantUnshredExt> UnshredPrimitiveRowBuilder<'a, T> {
+impl<'a, T: ArrowToVariant> UnshredPrimitiveRowBuilder<'a, T> {
     fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a T) -> Self {
         Self { value, typed_value }
     }
@@ -332,87 +322,48 @@ impl<'a, T: Array + PrimitiveVariantUnshredExt> UnshredPrimitiveRowBuilder<'a, T
     }
 }
 
-// Macro to generate VariantUnshredExt implementations with optional value transformation
-macro_rules! impl_variant_unshred {
-    ($array_type:ty $(, |$v:ident| $transform:expr)? ) => {
-        impl PrimitiveVariantUnshredExt for $array_type {
-            fn append_to_variant_builder(
-                &self,
-                builder: &mut impl VariantBuilderExt,
-                index: usize,
-            ) -> Result<()> {
-                let value = self.value(index);
-                $(
-                    let $v = value;
-                    let value = $transform;
-                )?
-                builder.append_value(value);
-                Ok(())
-            }
-        }
-    };
+/// Specialized unshred builder for FixedSizeBinaryArray with UUID semantics
+///
+/// Most array types use shared `ArrowToVariant` trait from arrow_to_variant.rs, but
+/// `FixedSizeBinaryArray` does not implement the trait because of conflicting semantics:
+/// - Unshred: `FixedSizeBinary(16) => Variant::Uuid` (reject other sizes)
+/// - Cast: `FixedSizeBinary(_) => Variant::Binary`
+struct UnshredUuidRowBuilder<'a> {
+    value: Option<&'a BinaryViewArray>,
+    typed_value: &'a FixedSizeBinaryArray,
 }
 
-impl_variant_unshred!(BooleanArray);
-impl_variant_unshred!(StringArray);
-impl_variant_unshred!(BinaryViewArray);
-impl_variant_unshred!(PrimitiveArray<Int8Type>);
-impl_variant_unshred!(PrimitiveArray<Int16Type>);
-impl_variant_unshred!(PrimitiveArray<Int32Type>);
-impl_variant_unshred!(PrimitiveArray<Int64Type>);
-impl_variant_unshred!(PrimitiveArray<Float32Type>);
-impl_variant_unshred!(PrimitiveArray<Float64Type>);
-
-impl_variant_unshred!(PrimitiveArray<Date32Type>, |days_since_epoch| {
-    Date32Type::to_naive_date(days_since_epoch)
-});
-
-impl_variant_unshred!(
-    PrimitiveArray<Time64MicrosecondType>,
-    |micros_since_midnight| {
-        time64us_to_time(micros_since_midnight).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Invalid Time64 microsecond value: {micros_since_midnight}"
-            ))
-        })?
+impl<'a> UnshredUuidRowBuilder<'a> {
+    fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a FixedSizeBinaryArray) -> Self {
+        Self { value, typed_value }
     }
-);
 
-// UUID from FixedSizeBinary(16)
-// NOTE: FixedSizeBinaryArray guarantees the byte length, so we can safely unwrap
-impl_variant_unshred!(FixedSizeBinaryArray, |bytes| {
-    Uuid::from_slice(bytes).unwrap()
-});
+    fn append_row(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        metadata: &VariantMetadata,
+        index: usize,
+    ) -> Result<()> {
+        handle_unshredded_case!(self, builder, metadata, index, false);
 
-/// Trait for timestamp types to handle conversion to `DateTime<Utc>`
-trait TimestampType: ArrowPrimitiveType<Native = i64> {
-    fn to_datetime_utc(value: i64) -> Result<DateTime<Utc>>;
-}
-
-impl TimestampType for TimestampMicrosecondType {
-    fn to_datetime_utc(micros: i64) -> Result<DateTime<Utc>> {
-        DateTime::from_timestamp_micros(micros).ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Invalid timestamp microsecond value: {micros}"
-            ))
-        })
-    }
-}
-
-impl TimestampType for TimestampNanosecondType {
-    fn to_datetime_utc(nanos: i64) -> Result<DateTime<Utc>> {
-        Ok(DateTime::from_timestamp_nanos(nanos))
+        // If we get here, typed_value is valid and value is NULL
+        let bytes = self.typed_value.value(index);
+        // Unshred semantics: FixedSizeBinaryArray is always 16 bytes (UUID)
+        // The size constraint is validated during UnshredVariantRowBuilder creation
+        let uuid = Uuid::from_slice(bytes).unwrap();
+        builder.append_value(uuid);
+        Ok(())
     }
 }
 
 /// Generic builder for timestamp types that handles timezone-aware conversion
-struct TimestampUnshredRowBuilder<'a, T: TimestampType> {
+struct TimestampUnshredRowBuilder<'a, T: ArrowTimestampType> {
     value: Option<&'a BinaryViewArray>,
     typed_value: &'a PrimitiveArray<T>,
     has_timezone: bool,
 }
 
-impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
+impl<'a, T: ArrowTimestampType> TimestampUnshredRowBuilder<'a, T> {
     fn new(
         value: Option<&'a BinaryViewArray>,
         typed_value: &'a PrimitiveArray<T>,
@@ -434,13 +385,13 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         // If we get here, typed_value is valid and value is NULL
-        let timestamp_value = self.typed_value.value(index);
-        let dt = T::to_datetime_utc(timestamp_value)?;
-        if self.has_timezone {
-            builder.append_value(dt);
-        } else {
-            builder.append_value(dt.naive_utc());
-        }
+        let timestamp = self.typed_value.value(index);
+        let Some(variant) = shared_timestamp_to_variant::<T>(timestamp, self.has_timezone) else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid timestamp value: {timestamp}"
+            )));
+        };
+        builder.append_value(variant);
         Ok(())
     }
 }

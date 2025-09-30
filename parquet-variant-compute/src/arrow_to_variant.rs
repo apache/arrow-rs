@@ -28,7 +28,7 @@ use arrow::datatypes::{
     Time64NanosecondType, TimestampMicrosecondType, TimestampMillisecondType,
     TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
 };
-use arrow::temporal_conversions::{as_date, as_datetime, as_time};
+use arrow::temporal_conversions::as_datetime;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, TimeZone, Utc};
 use parquet_variant::{
@@ -37,6 +37,98 @@ use parquet_variant::{
 };
 use std::collections::HashMap;
 use std::ops::Range;
+
+// ============================================================================
+// Shared traits and helpers for Arrow-to-Variant conversion
+// ============================================================================
+
+/// Zero-cost trait for converting Arrow array values to Variant
+pub(crate) trait ArrowToVariant: Array {
+    fn append_to_variant_builder(
+        &self,
+        builder: &mut impl VariantBuilderExt,
+        index: usize,
+    ) -> Result<(), ArrowError>;
+}
+
+/// Macro to define ArrowToVariant implementations with optional value transformation
+macro_rules! define_arrow_to_variant {
+    ($array_type:ty $(, |$value:ident| $(-> Result<$result_ty:ty>)? $transform:expr)?) => {
+        impl ArrowToVariant for $array_type {
+            #[inline]
+            fn append_to_variant_builder(
+                &self,
+                builder: &mut impl VariantBuilderExt,
+                index: usize,
+            ) -> Result<(), ArrowError> {
+                let value = self.value(index);
+                $(
+                    let $value = value;
+                    let value = $transform;
+                    $(
+                        let value: $result_ty = value?;
+                    )?
+                )?
+                builder.append_value(value);
+                Ok(())
+            }
+        }
+    };
+}
+
+// Primitive type implementations using macro
+define_arrow_to_variant!(PrimitiveArray<Int8Type>);
+define_arrow_to_variant!(PrimitiveArray<Int16Type>);
+define_arrow_to_variant!(PrimitiveArray<Int32Type>);
+define_arrow_to_variant!(PrimitiveArray<Int64Type>);
+define_arrow_to_variant!(PrimitiveArray<UInt8Type>);
+define_arrow_to_variant!(PrimitiveArray<UInt16Type>);
+define_arrow_to_variant!(PrimitiveArray<UInt32Type>);
+define_arrow_to_variant!(PrimitiveArray<UInt64Type>);
+define_arrow_to_variant!(PrimitiveArray<Float16Type>);
+define_arrow_to_variant!(PrimitiveArray<Float32Type>);
+define_arrow_to_variant!(PrimitiveArray<Float64Type>);
+
+// Simple type implementations using macro
+define_arrow_to_variant!(arrow::array::BooleanArray);
+define_arrow_to_variant!(arrow::array::StringArray);
+define_arrow_to_variant!(arrow::array::BinaryViewArray);
+
+// Transformation implementations using macro
+define_arrow_to_variant!(
+    PrimitiveArray<Date32Type>,
+    |days| Date32Type::to_naive_date(days)
+);
+
+define_arrow_to_variant!(
+    PrimitiveArray<Time64MicrosecondType>,
+    |micros| -> Result<_> {
+        arrow::temporal_conversions::time64us_to_time(micros).ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!("Invalid Time64 microsecond value: {micros}"))
+        })
+    }
+);
+
+// Note: FixedSizeBinaryArray is NOT implemented here because:
+// - Unshred semantics: Only FixedSizeBinary(16) → Variant::Uuid is valid, all other sizes are rejected
+// - Cast semantics: All FixedSizeBinary sizes should be accepted as Variant::Binary
+// These conflicting requirements mean we should not share this implementation
+
+/// Shared timestamp conversion using Arrow's robust temporal functions
+/// Returns Option for compatibility with define_row_builder macro patterns
+pub(crate) fn shared_timestamp_to_variant<T: ArrowTimestampType>(
+    value: i64,
+    has_timezone: bool,
+) -> Option<Variant<'static, 'static>> {
+    as_datetime::<T>(value).map(|naive_datetime| {
+        if has_timezone {
+            let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
+            Variant::from(utc_dt)
+        } else {
+            Variant::from(naive_datetime)
+        }
+    })
+}
 
 // ============================================================================
 // Row-oriented builders for efficient Arrow-to-Variant conversion
@@ -447,19 +539,7 @@ define_row_builder!(
         has_time_zone: bool,
     },
     |array| -> PrimitiveArray<T> { array.as_primitive() },
-    |value| -> Option<_> {
-        // Convert using Arrow's temporal conversion functions
-        as_datetime::<T>(value).map(|naive_datetime| {
-            if *has_time_zone {
-                // Has timezone -> DateTime<Utc> -> TimestampMicros/TimestampNanos
-                let utc_dt: DateTime<Utc> = Utc.from_utc_datetime(&naive_datetime);
-                Variant::from(utc_dt) // Uses From<DateTime<Utc>> for Variant
-            } else {
-                // No timezone -> NaiveDateTime -> TimestampNtzMicros/TimestampNtzNanos
-                Variant::from(naive_datetime) // Uses From<NaiveDateTime> for Variant
-            }
-        })
-    }
+    |value| -> Option<_> { shared_timestamp_to_variant::<T>(value, *has_time_zone) }
 );
 
 define_row_builder!(
@@ -472,7 +552,7 @@ define_row_builder!(
     |array| -> PrimitiveArray<T> { array.as_primitive() },
     |value| -> Option<_> {
         let date_value = i64::from(value);
-        as_date::<T>(date_value)
+        arrow::temporal_conversions::as_date::<T>(date_value)
     }
 );
 
@@ -486,7 +566,7 @@ define_row_builder!(
     |array| -> PrimitiveArray<T> { array.as_primitive() },
     |value| -> Option<_> {
         let time_value = i64::from(value);
-        as_time::<T>(time_value)
+        arrow::temporal_conversions::as_time::<T>(time_value)
     }
 );
 
