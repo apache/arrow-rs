@@ -1431,7 +1431,7 @@ message schema {
     /// Backwards-compatibility: LIST with nullable element type - 1 - standard
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L452-L466)
     #[test]
-    fn a1() -> crate::errors::Result<()> {
+    fn list_nullable_element_standard() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1452,7 +1452,7 @@ message schema {
     /// Backwards-compatibility: LIST with nullable element type - 2
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L468-L482)
     #[test]
-    fn a2() -> crate::errors::Result<()> {
+    fn list_nullable_element_nested() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1477,7 +1477,7 @@ message schema {
     /// Backwards-compatibility: LIST with non-nullable element type - 1 - standard
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L484-L495)
     #[test]
-    fn a3() -> crate::errors::Result<()> {
+    fn list_required_element_standard() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1498,7 +1498,7 @@ message schema {
     /// Backwards-compatibility: LIST with non-nullable element type - 2
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L497-L508)
     #[test]
-    fn a4() -> crate::errors::Result<()> {
+    fn list_required_element_nested() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1519,7 +1519,7 @@ message schema {
     /// Backwards-compatibility: LIST with non-nullable element type - 3
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L510-L519)
     #[test]
-    fn a5() -> crate::errors::Result<()> {
+    fn list_required_element_primitive() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1538,7 +1538,7 @@ message schema {
     /// Backwards-compatibility: LIST with non-nullable element type - 4
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L521-L540)
     #[test]
-    fn a6() -> crate::errors::Result<()> {
+    fn list_required_element_struct() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1566,7 +1566,7 @@ message schema {
     /// Backwards-compatibility: LIST with non-nullable element type - 5 - parquet-avro style
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L542-L559)
     #[test]
-    fn a7() -> crate::errors::Result<()> {
+    fn list_required_element_avro_style() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1593,7 +1593,7 @@ message schema {
     /// Backwards-compatibility: LIST with non-nullable element type - 6 - parquet-thrift style
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L561-L578)
     #[test]
-    fn a8() -> crate::errors::Result<()> {
+    fn list_required_element_thrift_style() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1620,7 +1620,7 @@ message schema {
     /// Backwards-compatibility: MAP with non-nullable value type - 1 - standard
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L652-L667)
     #[test]
-    fn a9() -> crate::errors::Result<()> {
+    fn map_required_value_standard() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1645,7 +1645,7 @@ message schema {
     /// Backwards-compatibility: MAP with non-nullable value type - 2
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L669-L684)
     #[test]
-    fn a10() -> crate::errors::Result<()> {
+    fn map_required_value_map_key_value() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1670,7 +1670,7 @@ message schema {
     /// Backwards-compatibility: MAP with non-nullable value type - 3 - prior to 1.4.x
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L686-L701)
     #[test]
-    fn a11() -> crate::errors::Result<()> {
+    fn map_required_value_legacy() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1695,7 +1695,7 @@ message schema {
     /// Backwards-compatibility: MAP with nullable value type - 1 - standard
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L703-L718)
     #[test]
-    fn a12() -> crate::errors::Result<()> {
+    fn map_optional_value_standard() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1720,7 +1720,7 @@ message schema {
     /// Backwards-compatibility: MAP with nullable value type - 2
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L720-L735)
     #[test]
-    fn a13() -> crate::errors::Result<()> {
+    fn map_optional_value_map_key_value() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
@@ -1745,7 +1745,7 @@ message schema {
     /// Backwards-compatibility: MAP with nullable value type - 3 - parquet-avro style
     /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L737-L752)
     #[test]
-    fn a14() -> crate::errors::Result<()> {
+    fn map_optional_value_avro_style() -> crate::errors::Result<()> {
         test_expected_type(
             "
             message root {
