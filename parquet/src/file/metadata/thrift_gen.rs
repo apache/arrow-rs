@@ -54,16 +54,41 @@ use crate::{
 // this needs to be visible to the schema conversion code
 thrift_struct!(
 pub(crate) struct SchemaElement<'a> {
-  /** Data type for this field. Not set if the current element is a non-leaf node */
+  /// Data type for this field. Not set if the current element is a non-leaf node
   1: optional Type r#type;
+  /// If type is FIXED_LEN_BYTE_ARRAY, this is the byte length of the values.
+  /// Otherwise, if specified, this is the maximum bit length to store any of the values.
+  /// (e.g. a low cardinality INT col could have this set to 3).  Note that this is
+  /// in the schema, and therefore fixed for the entire file.
   2: optional i32 type_length;
+  /// Repetition of the field. The root of the schema does not have a repetition_type.
+  /// All other nodes must have one.
   3: optional Repetition repetition_type;
+  /// Name of the field in the schema
   4: required string<'a> name;
+  /// Nested fields. Since thrift does not support nested fields,
+  /// the nesting is flattened to a single list by a depth-first traversal.
+  /// The children count is used to construct the nested relationship.
+  /// This field is not set when the element is a primitive type.
   5: optional i32 num_children;
+  /// DEPRECATED: When the schema is the result of a conversion from another model.
+  /// Used to record the original type to help with cross conversion.
+  ///
+  /// This is superseded by logical_type.
   6: optional ConvertedType converted_type;
+  /// DEPRECATED: Used when this column contains decimal data.
+  /// See the DECIMAL converted type for more details.
+  ///
+  /// This is superseded by using the DecimalType annotation in logical_type.
   7: optional i32 scale
   8: optional i32 precision
+  /// When the original schema supports field ids, this will save the
+  /// original field id in the parquet schema
   9: optional i32 field_id;
+  /// The logical type of this SchemaElement
+  ///
+  /// LogicalType replaces ConvertedType, but ConvertedType is still required
+  /// for some logical types to ensure forward-compatibility in format v1.
   10: optional LogicalType logical_type
 }
 );
@@ -112,8 +137,8 @@ pub(crate) struct FileCryptoMetaData {
   /// inside footer (FileMetaData structure).
   1: required EncryptionAlgorithm encryption_algorithm
 
-  /** Retrieval metadata of key used for encryption of footer,
-   *  and (possibly) columns **/
+  /// Retrieval metadata of key used for encryption of footer,
+  /// and (possibly) columns.
   2: optional binary key_metadata
 }
 );
@@ -121,7 +146,6 @@ pub(crate) struct FileCryptoMetaData {
 // the following are only used internally so are private
 thrift_struct!(
 struct FileMetaData<'a> {
-  /** Version of this file **/
   1: required i32 version
   2: required list<'a><SchemaElement> schema;
   3: required i64 num_rows
@@ -214,9 +238,7 @@ struct BoundingBox {
 
 thrift_struct!(
 struct GeospatialStatistics {
-  /** A bounding box of geospatial instances */
   1: optional BoundingBox bbox;
-  /** Geospatial type codes of all instances, or an empty list if not known */
   2: optional list<i32> geospatial_types;
 }
 );
