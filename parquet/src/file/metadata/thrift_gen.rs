@@ -164,7 +164,7 @@ struct ColumnChunk<'a> {
 #[cfg(not(feature = "encryption"))]
 thrift_struct!(
 struct ColumnChunk<'a> {
-  1: optional string file_path
+  1: optional string<'a> file_path
   2: required i64 file_offset = 0
   3: optional ColumnMetaData<'a> meta_data
   4: optional i64 offset_index_offset
