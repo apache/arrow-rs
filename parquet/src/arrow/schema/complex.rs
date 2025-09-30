@@ -1010,7 +1010,8 @@ mod tests {
                     }
                 }
             }
-        ")
+        ",
+        )
     }
 
     #[test]
@@ -1464,11 +1465,7 @@ message schema {
             }",
             Fields::from(vec![Field::new(
                 "f1",
-                DataType::List(Arc::new(Field::new(
-                    "num",
-                    DataType::Int32,
-                    true,
-                ))),
+                DataType::List(Arc::new(Field::new("num", DataType::Int32, true))),
                 true,
             )]),
         )
@@ -1558,7 +1555,8 @@ message schema {
                         Field::new("num", DataType::Int32, false),
                     ])),
                     false,
-                ))),                true,
+                ))),
+                true,
             )]),
         )
     }
@@ -1580,9 +1578,7 @@ message schema {
                 "f1",
                 DataType::List(Arc::new(Field::new(
                     "array",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("str", DataType::Utf8, false),
-                    ])),
+                    DataType::Struct(Fields::from(vec![Field::new("str", DataType::Utf8, false)])),
                     false,
                 ))),
                 true,
@@ -1607,9 +1603,7 @@ message schema {
                 "f1",
                 DataType::List(Arc::new(Field::new(
                     "f1_tuple",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("str", DataType::Utf8, false),
-                    ])),
+                    DataType::Struct(Fields::from(vec![Field::new("str", DataType::Utf8, false)])),
                     false,
                 ))),
                 true,
