@@ -2344,7 +2344,15 @@ mod tests {
         check_sort_order(signed, SortOrder::SIGNED);
 
         // Undefined comparison
-        let undefined = vec![LogicalType::List, LogicalType::Map];
+        let undefined = vec![
+            LogicalType::List,
+            LogicalType::Map,
+            LogicalType::Geometry { crs: None },
+            LogicalType::Geography {
+                crs: None,
+                algorithm: EdgeInterpolationAlgorithm::default(),
+            },
+        ];
         check_sort_order(undefined, SortOrder::UNDEFINED);
     }
 

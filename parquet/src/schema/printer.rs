@@ -329,20 +329,16 @@ fn print_logical_and_converted(
             LogicalType::Variant => "VARIANT".to_string(),
             LogicalType::Geometry { crs } => {
                 if let Some(crs) = crs {
-                    // TODO: replace control characters quotes and backslashes
-                    // with unicode escapes for CRS values
-                    format!(r#"GEOMETRY("{crs}")"#)
+                    format!("GEOMETRY({crs})")
                 } else {
                     "GEOMETRY".to_string()
                 }
             }
             LogicalType::Geography { crs, algorithm } => {
                 if let Some(crs) = crs {
-                    // TODO: replace control characters quotes and backslashes
-                    // with unicode escapes for CRS values
-                    format!(r#"GEOGRAPHY({algorithm}, "{crs}")"#)
+                    format!("GEOGRAPHY({algorithm}, {crs})")
                 } else {
-                    format!(r#"GEOGRAPHY({algorithm})"#)
+                    format!("GEOGRAPHY({algorithm})")
                 }
             }
             LogicalType::Unknown => "UNKNOWN".to_string(),
@@ -819,7 +815,7 @@ mod tests {
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
-                r#"REQUIRED BYTE_ARRAY field (GEOMETRY("non-missing CRS"));"#,
+                "REQUIRED BYTE_ARRAY field (GEOMETRY(non-missing CRS));",
             ),
             (
                 build_primitive_type(
@@ -849,7 +845,7 @@ mod tests {
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
-                r#"REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL, "non-missing CRS"));"#,
+                "REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL, non-missing CRS));",
             ),
         ];
 
