@@ -16,8 +16,6 @@
 // under the License.
 
 //! Extension types.
-//!
-//! <div class="warning">This module is experimental. There might be breaking changes between minor releases.</div>
 
 #[cfg(feature = "canonical_extension_types")]
 mod canonical;
