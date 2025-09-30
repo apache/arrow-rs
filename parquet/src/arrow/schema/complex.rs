@@ -1000,7 +1000,21 @@ mod tests {
     }
 
     #[test]
-    fn convert_schema_with_repeated_primitive() -> crate::errors::Result<()> {
+    fn convert_schema_with_nested_list_repeated_primitive() -> crate::errors::Result<()> {
+        test_roundtrip(
+            "
+            message schema {
+                optional group f1 (LIST) {
+                    repeated group element {
+                        repeated int32 element;
+                    }
+                }
+            }
+        ")
+    }
+
+    #[test]
+    fn convert_schema_with_repeated_primitive_keep_field_id() -> crate::errors::Result<()> {
         let message_type = "
     message schema {
       repeated BYTE_ARRAY col_1 = 1;
@@ -1412,5 +1426,344 @@ message schema {
         );
 
         Ok(())
+    }
+
+    /// Backwards-compatibility: LIST with nullable element type - 1 - standard
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L452-L466)
+    #[test]
+    fn a1() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated group list {
+                  optional int32 element;
+                }
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, true))),
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: LIST with nullable element type - 2
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L468-L482)
+    #[test]
+    fn a2() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated group element {
+                  optional int32 num;
+                }
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new(
+                    "num",
+                    DataType::Int32,
+                    true,
+                ))),
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: LIST with non-nullable element type - 1 - standard
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L484-L495)
+    #[test]
+    fn a3() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated group list {
+                  required int32 element;
+                }
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: LIST with non-nullable element type - 2
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L497-L508)
+    #[test]
+    fn a4() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated group element {
+                  required int32 num;
+                }
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new("num", DataType::Int32, false))),
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: LIST with non-nullable element type - 3
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L510-L519)
+    #[test]
+    fn a5() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated int32 element;
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new("element", DataType::Int32, false))),
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: LIST with non-nullable element type - 4
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L521-L540)
+    #[test]
+    fn a6() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated group element {
+                  required binary str (UTF8);
+                  required int32 num;
+                }
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new(
+                    "element",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("str", DataType::Utf8, false),
+                        Field::new("num", DataType::Int32, false),
+                    ])),
+                    false,
+                ))),                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: LIST with non-nullable element type - 5 - parquet-avro style
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L542-L559)
+    #[test]
+    fn a7() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated group array {
+                  required binary str (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new(
+                    "array",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("str", DataType::Utf8, false),
+                    ])),
+                    false,
+                ))),
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: LIST with non-nullable element type - 6 - parquet-thrift style
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L561-L578)
+    #[test]
+    fn a8() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (LIST) {
+                repeated group f1_tuple {
+                  required binary str (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new(
+                "f1",
+                DataType::List(Arc::new(Field::new(
+                    "f1_tuple",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("str", DataType::Utf8, false),
+                    ])),
+                    false,
+                ))),
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: MAP with non-nullable value type - 1 - standard
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L652-L667)
+    #[test]
+    fn a9() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (MAP) {
+                repeated group key_value {
+                  required int32 key;
+                  required binary value (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new_map(
+                "f1",
+                "key_value",
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, false),
+                false,
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: MAP with non-nullable value type - 2
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L669-L684)
+    #[test]
+    fn a10() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (MAP_KEY_VALUE) {
+                repeated group map {
+                  required int32 num;
+                  required binary str (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new_map(
+                "f1",
+                "map",
+                Field::new("num", DataType::Int32, false),
+                Field::new("str", DataType::Utf8, false),
+                false,
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: MAP with non-nullable value type - 3 - prior to 1.4.x
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L686-L701)
+    #[test]
+    fn a11() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (MAP) {
+                repeated group map (MAP_KEY_VALUE) {
+                  required int32 key;
+                  required binary value (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new_map(
+                "f1",
+                "map",
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, false),
+                false,
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: MAP with nullable value type - 1 - standard
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L703-L718)
+    #[test]
+    fn a12() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (MAP) {
+                repeated group key_value {
+                  required int32 key;
+                  optional binary value (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new_map(
+                "f1",
+                "key_value",
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, true),
+                false,
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: MAP with nullable value type - 2
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L720-L735)
+    #[test]
+    fn a13() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (MAP_KEY_VALUE) {
+                repeated group map {
+                  required int32 num;
+                  optional binary str (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new_map(
+                "f1",
+                "map",
+                Field::new("num", DataType::Int32, false),
+                Field::new("str", DataType::Utf8, true),
+                false,
+                true,
+            )]),
+        )
+    }
+
+    /// Backwards-compatibility: MAP with nullable value type - 3 - parquet-avro style
+    /// Taken from [Spark](https://github.com/apache/spark/blob/8ab50765cd793169091d983b50d87a391f6ac1f4/sql/core/src/test/scala/org/apache/spark/sql/parquet/ParquetSchemaSuite.scala#L737-L752)
+    #[test]
+    fn a14() -> crate::errors::Result<()> {
+        test_expected_type(
+            "
+            message root {
+              optional group f1 (MAP) {
+                repeated group map (MAP_KEY_VALUE) {
+                  required int32 key;
+                  optional binary value (UTF8);
+                }
+              }
+            }",
+            Fields::from(vec![Field::new_map(
+                "f1",
+                "map",
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Utf8, true),
+                false,
+                true,
+            )]),
+        )
     }
 }
