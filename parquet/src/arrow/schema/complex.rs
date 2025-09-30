@@ -434,7 +434,8 @@ impl Visitor {
                 rep_level,
                 def_level,
                 data_type: arrow_key.map(|x| x.data_type().clone()),
-                treat_repeated_as_list_arrow_hint: true,
+                // Key is not repeated
+                treat_repeated_as_list_arrow_hint: false,
             };
 
             self.dispatch(map_key, context)?
@@ -445,6 +446,7 @@ impl Visitor {
                 rep_level,
                 def_level,
                 data_type: arrow_value.map(|x| x.data_type().clone()),
+                // Value type can be repeated
                 treat_repeated_as_list_arrow_hint: true,
             };
 
