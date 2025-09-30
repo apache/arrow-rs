@@ -241,7 +241,7 @@ pub enum LogicalType {
         /// A custom CRS. If unset, the CRS defaults to "OGC:CRS84".
         crs: Option<String>,
         /// Edge interpolation method.
-        algorithm: Option<EdgeInterpolationAlgorithm>,
+        algorithm: EdgeInterpolationAlgorithm,
     },
 }
 
@@ -694,6 +694,12 @@ pub enum EdgeInterpolationAlgorithm {
     UNKNOWN(i32),
 }
 
+impl Default for EdgeInterpolationAlgorithm {
+    fn default() -> Self {
+        Self::SPHERICAL
+    }
+}
+
 impl fmt::Display for Type {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{self:?}")
@@ -893,24 +899,27 @@ impl From<parquet::LogicalType> for LogicalType {
             parquet::LogicalType::GEOMETRY(t) => LogicalType::Geometry { crs: t.crs },
             parquet::LogicalType::GEOGRAPHY(t) => LogicalType::Geography {
                 crs: t.crs,
-                algorithm: t.algorithm.map(|algorithm| match algorithm {
-                    parquet::EdgeInterpolationAlgorithm::SPHERICAL => {
-                        EdgeInterpolationAlgorithm::ANDOYER
-                    }
-                    parquet::EdgeInterpolationAlgorithm::VINCENTY => {
-                        EdgeInterpolationAlgorithm::VINCENTY
-                    }
-                    parquet::EdgeInterpolationAlgorithm::ANDOYER => {
-                        EdgeInterpolationAlgorithm::ANDOYER
-                    }
-                    parquet::EdgeInterpolationAlgorithm::THOMAS => {
-                        EdgeInterpolationAlgorithm::THOMAS
-                    }
-                    parquet::EdgeInterpolationAlgorithm::KARNEY => {
-                        EdgeInterpolationAlgorithm::KARNEY
-                    }
-                    _ => EdgeInterpolationAlgorithm::UNKNOWN(algorithm.0),
-                }),
+                algorithm: t
+                    .algorithm
+                    .map(|algorithm| match algorithm {
+                        parquet::EdgeInterpolationAlgorithm::SPHERICAL => {
+                            EdgeInterpolationAlgorithm::SPHERICAL
+                        }
+                        parquet::EdgeInterpolationAlgorithm::VINCENTY => {
+                            EdgeInterpolationAlgorithm::VINCENTY
+                        }
+                        parquet::EdgeInterpolationAlgorithm::ANDOYER => {
+                            EdgeInterpolationAlgorithm::ANDOYER
+                        }
+                        parquet::EdgeInterpolationAlgorithm::THOMAS => {
+                            EdgeInterpolationAlgorithm::THOMAS
+                        }
+                        parquet::EdgeInterpolationAlgorithm::KARNEY => {
+                            EdgeInterpolationAlgorithm::KARNEY
+                        }
+                        _ => EdgeInterpolationAlgorithm::UNKNOWN(algorithm.0),
+                    })
+                    .unwrap_or(EdgeInterpolationAlgorithm::SPHERICAL),
             },
         }
     }
@@ -958,26 +967,24 @@ impl From<LogicalType> for parquet::LogicalType {
             LogicalType::Geography { crs, algorithm } => {
                 parquet::LogicalType::GEOGRAPHY(GeographyType {
                     crs,
-                    algorithm: algorithm.map(|algorithm| match algorithm {
-                        EdgeInterpolationAlgorithm::SPHERICAL => {
-                            parquet::EdgeInterpolationAlgorithm::SPHERICAL
-                        }
+                    algorithm: match algorithm {
+                        EdgeInterpolationAlgorithm::SPHERICAL => None,
                         EdgeInterpolationAlgorithm::VINCENTY => {
-                            parquet::EdgeInterpolationAlgorithm::VINCENTY
+                            Some(parquet::EdgeInterpolationAlgorithm::VINCENTY)
                         }
                         EdgeInterpolationAlgorithm::THOMAS => {
-                            parquet::EdgeInterpolationAlgorithm::THOMAS
+                            Some(parquet::EdgeInterpolationAlgorithm::THOMAS)
                         }
                         EdgeInterpolationAlgorithm::ANDOYER => {
-                            parquet::EdgeInterpolationAlgorithm::ANDOYER
+                            Some(parquet::EdgeInterpolationAlgorithm::ANDOYER)
                         }
                         EdgeInterpolationAlgorithm::KARNEY => {
-                            parquet::EdgeInterpolationAlgorithm::KARNEY
+                            Some(parquet::EdgeInterpolationAlgorithm::KARNEY)
                         }
                         EdgeInterpolationAlgorithm::UNKNOWN(code) => {
-                            parquet::EdgeInterpolationAlgorithm(code)
+                            Some(parquet::EdgeInterpolationAlgorithm(code))
                         }
-                    }),
+                    },
                 })
             }
         }
@@ -1288,7 +1295,7 @@ impl str::FromStr for LogicalType {
             "GEOMETRY" => Ok(LogicalType::Geometry { crs: None }),
             "GEOGRAPHY" => Ok(LogicalType::Geography {
                 crs: None,
-                algorithm: None,
+                algorithm: EdgeInterpolationAlgorithm::SPHERICAL,
             }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
@@ -1946,7 +1953,7 @@ mod tests {
         assert_eq!(
             ConvertedType::from(Some(LogicalType::Geography {
                 crs: None,
-                algorithm: None
+                algorithm: EdgeInterpolationAlgorithm::default()
             })),
             ConvertedType::NONE
         );

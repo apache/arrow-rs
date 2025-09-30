@@ -336,12 +336,15 @@ fn print_logical_and_converted(
                     "GEOMETRY".to_string()
                 }
             }
-            LogicalType::Geography { crs, algorithm } => match (crs, algorithm) {
-                (None, None) => "GEOGRAPHY".to_string(),
-                (Some(crs), None) => format!(r#"GEOGRAPHY("{crs}")"#),
-                (None, Some(algorithm)) => format!("GEOGRAPHY(None, {algorithm})"),
-                (Some(crs), Some(algorithm)) => format!(r#"GEOGRAPHY("{crs}", {algorithm})"#),
-            },
+            LogicalType::Geography { crs, algorithm } => {
+                if let Some(crs) = crs {
+                    // TODO: replace control characters quotes and backslashes
+                    // with unicode escapes for CRS values
+                    format!(r#"GEOGRAPHY({algorithm}, "{crs}")"#)
+                } else {
+                    format!(r#"GEOGRAPHY({algorithm})"#)
+                }
+            }
             LogicalType::Unknown => "UNKNOWN".to_string(),
         },
         None => {
@@ -825,13 +828,13 @@ mod tests {
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::Geography {
                         crs: None,
-                        algorithm: None,
+                        algorithm: EdgeInterpolationAlgorithm::default(),
                     }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
-                "REQUIRED BYTE_ARRAY field (GEOGRAPHY);",
+                "REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL));",
             ),
             (
                 build_primitive_type(
@@ -840,43 +843,13 @@ mod tests {
                     PhysicalType::BYTE_ARRAY,
                     Some(LogicalType::Geography {
                         crs: Some("non-missing CRS".to_string()),
-                        algorithm: None,
+                        algorithm: EdgeInterpolationAlgorithm::default(),
                     }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
                 )
                 .unwrap(),
-                r#"REQUIRED BYTE_ARRAY field (GEOGRAPHY("non-missing CRS"));"#,
-            ),
-            (
-                build_primitive_type(
-                    "field",
-                    None,
-                    PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::Geography {
-                        crs: None,
-                        algorithm: Some(EdgeInterpolationAlgorithm::KARNEY),
-                    }),
-                    ConvertedType::NONE,
-                    Repetition::REQUIRED,
-                )
-                .unwrap(),
-                r#"REQUIRED BYTE_ARRAY field (GEOGRAPHY(None, KARNEY));"#,
-            ),
-            (
-                build_primitive_type(
-                    "field",
-                    None,
-                    PhysicalType::BYTE_ARRAY,
-                    Some(LogicalType::Geography {
-                        crs: Some("non-missing CRS".to_string()),
-                        algorithm: Some(EdgeInterpolationAlgorithm::KARNEY),
-                    }),
-                    ConvertedType::NONE,
-                    Repetition::REQUIRED,
-                )
-                .unwrap(),
-                r#"REQUIRED BYTE_ARRAY field (GEOGRAPHY("non-missing CRS", KARNEY));"#,
+                r#"REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL, "non-missing CRS"));"#,
             ),
         ];
 
