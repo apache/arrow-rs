@@ -138,7 +138,7 @@ use std::io::BufRead;
 use std::sync::Arc;
 
 use chrono::Utc;
-use serde::Serialize;
+use serde_core::Serialize;
 
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;

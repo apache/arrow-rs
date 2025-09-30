@@ -19,7 +19,7 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#variable-shape-tensor>
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{ArrowError, DataType, Field, extension::ExtensionType};
 
@@ -140,7 +140,7 @@ impl VariableShapeTensor {
 }
 
 /// Extension type metadata for [`VariableShapeTensor`].
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariableShapeTensorMetadata {
     /// Explicit names to tensor dimensions.
     dim_names: Option<Vec<String>>,
@@ -148,9 +148,145 @@ pub struct VariableShapeTensorMetadata {
     /// Indices of the desired ordering of the original dimensions.
     permutations: Option<Vec<usize>>,
 
-    /// Sizes of individual tensor’s dimensions which are guaranteed to stay
+    /// Sizes of individual tensor's dimensions which are guaranteed to stay
     /// constant in uniform dimensions and can vary in non-uniform dimensions.
     uniform_shape: Option<Vec<Option<i32>>>,
+}
+
+impl Serialize for VariableShapeTensorMetadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("VariableShapeTensorMetadata", 3)?;
+        state.serialize_field("dim_names", &self.dim_names)?;
+        state.serialize_field("permutations", &self.permutations)?;
+        state.serialize_field("uniform_shape", &self.uniform_shape)?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for VariableShapeTensorMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        #[derive(Debug)]
+        enum Field {
+            DimNames,
+            Permutations,
+            UniformShape,
+        }
+
+        impl<'de> Deserialize<'de> for Field {
+            fn deserialize<D>(deserializer: D) -> Result<Field, D::Error>
+            where
+                D: Deserializer<'de>,
+            {
+                struct FieldVisitor;
+
+                impl<'de> Visitor<'de> for FieldVisitor {
+                    type Value = Field;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                        formatter.write_str("`dim_names`, `permutations`, or `uniform_shape`")
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Field, E>
+                    where
+                        E: de::Error,
+                    {
+                        match value {
+                            "dim_names" => Ok(Field::DimNames),
+                            "permutations" => Ok(Field::Permutations),
+                            "uniform_shape" => Ok(Field::UniformShape),
+                            _ => Err(de::Error::unknown_field(
+                                value,
+                                &["dim_names", "permutations", "uniform_shape"],
+                            )),
+                        }
+                    }
+                }
+
+                deserializer.deserialize_identifier(FieldVisitor)
+            }
+        }
+
+        struct VariableShapeTensorMetadataVisitor;
+
+        impl<'de> Visitor<'de> for VariableShapeTensorMetadataVisitor {
+            type Value = VariableShapeTensorMetadata;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct VariableShapeTensorMetadata")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<VariableShapeTensorMetadata, V::Error>
+            where
+                V: de::SeqAccess<'de>,
+            {
+                let dim_names = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let permutations = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let uniform_shape = seq
+                    .next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                Ok(VariableShapeTensorMetadata {
+                    dim_names,
+                    permutations,
+                    uniform_shape,
+                })
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<VariableShapeTensorMetadata, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut dim_names = None;
+                let mut permutations = None;
+                let mut uniform_shape = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::DimNames => {
+                            if dim_names.is_some() {
+                                return Err(de::Error::duplicate_field("dim_names"));
+                            }
+                            dim_names = Some(map.next_value()?);
+                        }
+                        Field::Permutations => {
+                            if permutations.is_some() {
+                                return Err(de::Error::duplicate_field("permutations"));
+                            }
+                            permutations = Some(map.next_value()?);
+                        }
+                        Field::UniformShape => {
+                            if uniform_shape.is_some() {
+                                return Err(de::Error::duplicate_field("uniform_shape"));
+                            }
+                            uniform_shape = Some(map.next_value()?);
+                        }
+                    }
+                }
+
+                Ok(VariableShapeTensorMetadata {
+                    dim_names,
+                    permutations,
+                    uniform_shape,
+                })
+            }
+        }
+
+        const FIELDS: &[&str] = &["dim_names", "permutations", "uniform_shape"];
+        deserializer.deserialize_struct("VariableShapeTensorMetadata", FIELDS, VariableShapeTensorMetadataVisitor)
+    }
 }
 
 impl VariableShapeTensorMetadata {
