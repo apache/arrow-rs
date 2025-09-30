@@ -29,16 +29,13 @@ use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
 use bytes::Bytes;
 
-#[cfg(feature = "encryption")]
-use crate::encryption::decrypt::FileDecryptionProperties;
-
 /// Helper struct for metadata parsing
 ///
 /// This structure parses thrift-encoded bytes into the correct Rust structs,
 /// such as [`ParquetMetaData`], handling decryption if necessary.
 //
 // Note this structure is used to minimize the number of
-// places need to add `#[cfg(feature = "encryption")]` checks.
+// places to add `#[cfg(feature = "encryption")]` checks.
 pub(crate) use inner::MetadataParser;
 
 #[cfg(feature = "encryption")]
@@ -74,11 +71,67 @@ mod inner {
             buf: &[u8],
             encrypted_footer: bool,
         ) -> Result<ParquetMetaData> {
-            decode_metadata_with_encryption(
-                buf,
-                encrypted_footer,
+            crate::file::metadata::thrift_gen::parquet_metadata_with_encryption(
                 self.file_decryption_properties.as_deref(),
+                encrypted_footer,
+                buf,
             )
+        }
+    }
+
+    pub(super) fn parse_single_column_index(
+        bytes: &[u8],
+        metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
+        row_group_index: usize,
+        col_index: usize,
+    ) -> crate::errors::Result<ColumnIndexMetaData> {
+        use crate::encryption::decrypt::CryptoContext;
+        match &column.column_crypto_metadata {
+            Some(crypto_metadata) => {
+                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
+                    general_err!("Cannot decrypt column index, no file decryptor set")
+                })?;
+                let crypto_context = CryptoContext::for_column(
+                    file_decryptor,
+                    crypto_metadata,
+                    row_group_index,
+                    col_index,
+                )?;
+                let column_decryptor = crypto_context.metadata_decryptor();
+                let aad = crypto_context.create_column_index_aad()?;
+                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
+                decode_column_index(&plaintext, column.column_type())
+            }
+            None => decode_column_index(bytes, column.column_type()),
+        }
+    }
+
+    pub(super) fn parse_single_offset_index(
+        bytes: &[u8],
+        metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
+        row_group_index: usize,
+        col_index: usize,
+    ) -> crate::errors::Result<OffsetIndexMetaData> {
+        use crate::encryption::decrypt::CryptoContext;
+        match &column.column_crypto_metadata {
+            Some(crypto_metadata) => {
+                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
+                    general_err!("Cannot decrypt offset index, no file decryptor set")
+                })?;
+                let crypto_context = CryptoContext::for_column(
+                    file_decryptor,
+                    crypto_metadata,
+                    row_group_index,
+                    col_index,
+                )?;
+                let column_decryptor = crypto_context.metadata_decryptor();
+                let aad = crypto_context.create_offset_index_aad()?;
+                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
+                decode_offset_index(&plaintext)
+            }
+            None => decode_offset_index(bytes),
         }
     }
 }
@@ -111,6 +164,26 @@ mod inner {
                 decode_metadata(buf)
             }
         }
+    }
+
+    pub(super) fn parse_single_column_index(
+        bytes: &[u8],
+        _metadata: &ParquetMetaData,
+        column: &ColumnChunkMetaData,
+        _row_group_index: usize,
+        _col_index: usize,
+    ) -> crate::errors::Result<ColumnIndexMetaData> {
+        decode_column_index(bytes, column.column_type())
+    }
+
+    pub(super) fn parse_single_offset_index(
+        bytes: &[u8],
+        _metadata: &ParquetMetaData,
+        _column: &ColumnChunkMetaData,
+        _row_group_index: usize,
+        _col_index: usize,
+    ) -> crate::errors::Result<OffsetIndexMetaData> {
+        decode_offset_index(bytes)
     }
 }
 
@@ -155,7 +228,7 @@ pub(crate) fn parse_column_index(
                     Some(r) => {
                         let r_start = usize::try_from(r.start - start_offset)?;
                         let r_end = usize::try_from(r.end - start_offset)?;
-                        parse_single_column_index(
+                        inner::parse_single_column_index(
                             &bytes[r_start..r_end],
                             metadata,
                             c,
@@ -171,46 +244,6 @@ pub(crate) fn parse_column_index(
 
     metadata.set_column_index(Some(index));
     Ok(())
-}
-
-#[cfg(feature = "encryption")]
-fn parse_single_column_index(
-    bytes: &[u8],
-    metadata: &ParquetMetaData,
-    column: &ColumnChunkMetaData,
-    row_group_index: usize,
-    col_index: usize,
-) -> crate::errors::Result<ColumnIndexMetaData> {
-    use crate::encryption::decrypt::CryptoContext;
-    match &column.column_crypto_metadata {
-        Some(crypto_metadata) => {
-            let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                general_err!("Cannot decrypt column index, no file decryptor set")
-            })?;
-            let crypto_context = CryptoContext::for_column(
-                file_decryptor,
-                crypto_metadata,
-                row_group_index,
-                col_index,
-            )?;
-            let column_decryptor = crypto_context.metadata_decryptor();
-            let aad = crypto_context.create_column_index_aad()?;
-            let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-            decode_column_index(&plaintext, column.column_type())
-        }
-        None => decode_column_index(bytes, column.column_type()),
-    }
-}
-
-#[cfg(not(feature = "encryption"))]
-fn parse_single_column_index(
-    bytes: &[u8],
-    _metadata: &ParquetMetaData,
-    column: &ColumnChunkMetaData,
-    _row_group_index: usize,
-    _col_index: usize,
-) -> crate::errors::Result<ColumnIndexMetaData> {
-    decode_column_index(bytes, column.column_type())
 }
 
 pub(crate) fn parse_offset_index(
@@ -231,7 +264,13 @@ pub(crate) fn parse_offset_index(
                 Some(r) => {
                     let r_start = usize::try_from(r.start - start_offset)?;
                     let r_end = usize::try_from(r.end - start_offset)?;
-                    parse_single_offset_index(&bytes[r_start..r_end], metadata, c, rg_idx, col_idx)
+                    inner::parse_single_offset_index(
+                        &bytes[r_start..r_end],
+                        metadata,
+                        c,
+                        rg_idx,
+                        col_idx,
+                    )
                 }
                 None => Err(general_err!("missing offset index")),
             };
@@ -254,66 +293,4 @@ pub(crate) fn parse_offset_index(
     }
     metadata.set_offset_index(Some(all_indexes));
     Ok(())
-}
-
-#[cfg(feature = "encryption")]
-fn parse_single_offset_index(
-    bytes: &[u8],
-    metadata: &ParquetMetaData,
-    column: &ColumnChunkMetaData,
-    row_group_index: usize,
-    col_index: usize,
-) -> crate::errors::Result<OffsetIndexMetaData> {
-    use crate::encryption::decrypt::CryptoContext;
-    match &column.column_crypto_metadata {
-        Some(crypto_metadata) => {
-            let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                general_err!("Cannot decrypt offset index, no file decryptor set")
-            })?;
-            let crypto_context = CryptoContext::for_column(
-                file_decryptor,
-                crypto_metadata,
-                row_group_index,
-                col_index,
-            )?;
-            let column_decryptor = crypto_context.metadata_decryptor();
-            let aad = crypto_context.create_offset_index_aad()?;
-            let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-            decode_offset_index(&plaintext)
-        }
-        None => decode_offset_index(bytes),
-    }
-}
-
-#[cfg(not(feature = "encryption"))]
-fn parse_single_offset_index(
-    bytes: &[u8],
-    _metadata: &ParquetMetaData,
-    _column: &ColumnChunkMetaData,
-    _row_group_index: usize,
-    _col_index: usize,
-) -> crate::errors::Result<OffsetIndexMetaData> {
-    decode_offset_index(bytes)
-}
-
-/// Decodes [`ParquetMetaData`] from the provided bytes, handling metadata that may be encrypted.
-///
-/// Typically this is used to decode the metadata from the end of a parquet
-/// file. The format of `buf` is the Thrift compact binary protocol, as specified
-/// by the [Parquet Spec]. Buffer can be encrypted with AES GCM or AES CTR
-/// ciphers as specfied in the [Parquet Encryption Spec].
-///
-/// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
-/// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
-#[cfg(feature = "encryption")]
-fn decode_metadata_with_encryption(
-    buf: &[u8],
-    encrypted_footer: bool,
-    file_decryption_properties: Option<&FileDecryptionProperties>,
-) -> crate::errors::Result<ParquetMetaData> {
-    super::thrift_gen::parquet_metadata_with_encryption(
-        file_decryption_properties,
-        encrypted_footer,
-        buf,
-    )
 }
