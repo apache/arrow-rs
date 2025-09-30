@@ -177,7 +177,7 @@ struct ColumnChunk<'a> {
 type CompressionCodec = Compression;
 thrift_struct!(
 struct ColumnMetaData<'a> {
-  1: required Type type_
+  1: required Type r#type
   2: required list<Encoding> encodings
   // we don't expose path_in_schema so skip
   //3: required list<string> path_in_schema
@@ -306,7 +306,7 @@ fn convert_column(
         return Err(general_err!("Expected to have column metadata"));
     }
     let col_metadata = column.meta_data.unwrap();
-    let column_type = col_metadata.type_;
+    let column_type = col_metadata.r#type;
     let encodings = col_metadata.encodings;
     let compression = col_metadata.codec;
     let file_path = column.file_path.map(|v| v.to_owned());
@@ -1095,7 +1095,7 @@ impl DataPageHeaderV2 {
 thrift_struct!(
 pub(crate) struct PageHeader {
   /// the type of the page: indicates which of the *_header fields is set
-  1: required PageType type_
+  1: required PageType r#type
 
   /// Uncompressed page size in bytes (not including this header)
   2: required i32 uncompressed_page_size
@@ -1191,7 +1191,7 @@ impl PageHeader {
             ));
         };
         Ok(Self {
-            type_,
+            r#type: type_,
             uncompressed_page_size,
             compressed_page_size,
             crc,

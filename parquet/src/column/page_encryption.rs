@@ -95,14 +95,14 @@ impl PageEncryptor {
         page_header: &PageHeader,
         sink: &mut W,
     ) -> Result<()> {
-        let module_type = match page_header.type_ {
+        let module_type = match page_header.r#type {
             PageType::DATA_PAGE => ModuleType::DataPageHeader,
             PageType::DATA_PAGE_V2 => ModuleType::DataPageHeader,
             PageType::DICTIONARY_PAGE => ModuleType::DictionaryPageHeader,
             _ => {
                 return Err(general_err!(
                     "Unsupported page type for page header encryption: {:?}",
-                    page_header.type_
+                    page_header.r#type
                 ))
             }
         };

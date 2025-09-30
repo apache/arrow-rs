@@ -413,7 +413,7 @@ pub(crate) fn decode_page(
         _ => buffer,
     };
 
-    let result = match page_header.type_ {
+    let result = match page_header.r#type {
         PageType::DICTIONARY_PAGE => {
             let dict_header = page_header.dictionary_page_header.as_ref().ok_or_else(|| {
                 ParquetError::General("Missing dictionary page header".to_string())
@@ -458,7 +458,7 @@ pub(crate) fn decode_page(
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            unimplemented!("Page type {:?} is not supported", page_header.type_)
+            unimplemented!("Page type {:?} is not supported", page_header.r#type)
         }
     };
 
@@ -894,7 +894,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += data_len as u64;
                     *remaining -= data_len as u64;
 
-                    if header.type_ == PageType::INDEX_PAGE {
+                    if header.r#type == PageType::INDEX_PAGE {
                         continue;
                     }
 
