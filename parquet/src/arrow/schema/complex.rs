@@ -147,7 +147,7 @@ struct VisitorContext {
     /// An optional [`DataType`] sourced from the embedded arrow schema
     data_type: Option<DataType>,
 
-    /// Whether to treat repeated types as list from arrow types or
+    /// Whether to treat repeated types as list from arrow types
     /// when true, if data_type provided it should be DataType::List() (or other list type)
     /// and the list field data type would be treated as the hint for the parquet type
     ///
