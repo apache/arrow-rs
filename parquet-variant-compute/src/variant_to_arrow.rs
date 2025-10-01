@@ -16,17 +16,16 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveArray, PrimitiveBuilder,
+    builder::BooleanBuilder, ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder,
 };
 use arrow::compute::CastOptions;
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
-use crate::type_conversion::PrimitiveFromVariant;
+use crate::type_conversion::{PrimitiveFromVariant, TimestampFromVariant};
 use crate::{VariantArray, VariantValueArrayBuilder};
 
-use arrow_schema::DataType::Date32;
 use arrow_schema::TimeUnit;
 use std::sync::Arc;
 
@@ -46,8 +45,8 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
     Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
-    TimestampMicro(VariantToPrimitiveArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>),
-    TimestampNano(VariantToPrimitiveArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
+    TimestampMicro(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>),
+    TimestampNano(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
     Date(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date32Type>),
 }
 
@@ -88,6 +87,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
     pub fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
+            Boolean(b) => b.append_value(value),
             Int8(b) => b.append_value(value),
             Int16(b) => b.append_value(value),
             Int32(b) => b.append_value(value),
@@ -99,7 +99,6 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_value(value),
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
-            Boolean(b) => b.append_value(value),
             TimestampMicro(b) => b.append_value(value),
             TimestampNano(b) => b.append_value(value),
             Date(b) => b.append_value(value),
@@ -211,28 +210,16 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             cast_options,
             capacity,
         )),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => {
-            let target_type = DataType::Timestamp(TimeUnit::Microsecond, tz.clone());
+        DataType::Timestamp(TimeUnit::Microsecond, tz) => TimestampMicro(
+            VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
+        ),
 
-            TimestampMicro(VariantToPrimitiveArrowRowBuilder::new_with_target_type(
-                cast_options,
-                capacity,
-                Some(target_type),
-            ))
-        }
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
-            let target_type = DataType::Timestamp(TimeUnit::Nanosecond, tz.clone());
-
-            TimestampNano(VariantToPrimitiveArrowRowBuilder::new_with_target_type(
-                cast_options,
-                capacity,
-                Some(target_type),
-            ))
-        }
-        DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new_with_target_type(
+        DataType::Timestamp(TimeUnit::Nanosecond, tz) => TimestampNano(
+            VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
+        ),
+        DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new(
             cast_options,
             capacity,
-            Some(Date32),
         )),
         _ if data_type.is_primitive() => {
             return Err(ArrowError::NotYetImplemented(format!(
@@ -339,117 +326,87 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
         "arrow_array::types::Float16Type" => "Float16",
         "arrow_array::types::TimestampMicrosecondType" => "Timestamp(Microsecond)",
         "arrow_array::types::TimestampNanosecondType" => "Timestamp(Nanosecond)",
+        "arrow_array::types::Date32Type" => "Date32",
         _ => "Unknown",
     }
 }
 
-/// Builder for converting variant values to boolean values
-/// Boolean is not primitive types in Arrow, so we need a separate builder
-pub(crate) struct VariantToBooleanArrowRowBuilder<'a> {
-    builder: arrow::array::BooleanBuilder,
-    cast_options: &'a CastOptions<'a>,
-}
-
-impl<'a> VariantToBooleanArrowRowBuilder<'a> {
-    fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
-        Self {
-            builder: arrow::array::BooleanBuilder::with_capacity(capacity),
-            cast_options,
+macro_rules! define_variant_to_primitive_builder {
+    (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
+    |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
+    |$value: ident| $value_transform:expr,
+    type_name: $type_name:expr) => {
+        pub(crate) struct $name<$lifetime $(, $generic : $bound )?>
+        {
+            builder: $builder_name $(<$array_type>)?,
+            cast_options: &$lifetime CastOptions<$lifetime>,
         }
-    }
 
-    fn append_null(&mut self) -> Result<()> {
-        self.builder.append_null();
-        Ok(())
-    }
-
-    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(v) = value.as_boolean() {
-            self.builder.append_value(v);
-            Ok(true)
-        } else {
-            if !self.cast_options.safe {
-                // Unsafe casting: return error on conversion failure
-                return Err(ArrowError::CastError(format!(
-                    "Failed to extract boolean from variant {:?} at path VariantPath([])",
-                    value
-                )));
+        impl<$lifetime $(, $generic: $bound+ )?> $name<$lifetime $(, $generic )?> {
+            fn new(
+                cast_options: &$lifetime CastOptions<$lifetime>,
+                $array_param: usize
+                // add this so that $init_expr can use it
+                $(, $field: $field_type)?) -> Self {
+                Self {
+                    builder: $init_expr,
+                    cast_options,
+                }
             }
-            // Safe casting: append null on conversion failure
-            self.builder.append_null();
-            Ok(false)
-        }
-    }
 
-    fn finish(mut self) -> Result<ArrayRef> {
-        Ok(Arc::new(self.builder.finish()))
-    }
-}
-
-/// Builder for converting variant values to primitive values
-pub(crate) struct VariantToPrimitiveArrowRowBuilder<'a, T: PrimitiveFromVariant> {
-    builder: arrow::array::PrimitiveBuilder<T>,
-    cast_options: &'a CastOptions<'a>,
-    // this used to change the data type of the resulting array, e.g. to add timezone info
-    target_data_type: Option<DataType>,
-}
-
-impl<'a, T: PrimitiveFromVariant> VariantToPrimitiveArrowRowBuilder<'a, T> {
-    fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
-        Self::new_with_target_type(cast_options, capacity, None)
-    }
-
-    fn new_with_target_type(
-        cast_options: &'a CastOptions<'a>,
-        capacity: usize,
-        target_data_type: Option<DataType>,
-    ) -> Self {
-        Self {
-            builder: PrimitiveBuilder::<T>::with_capacity(capacity),
-            cast_options,
-            target_data_type,
-        }
-    }
-}
-
-impl<'a, T: PrimitiveFromVariant> VariantToPrimitiveArrowRowBuilder<'a, T> {
-    fn append_null(&mut self) -> Result<()> {
-        self.builder.append_null();
-        Ok(())
-    }
-
-    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(v) = T::from_variant(value) {
-            self.builder.append_value(v);
-            Ok(true)
-        } else {
-            if !self.cast_options.safe {
-                // Unsafe casting: return error on conversion failure
-                return Err(ArrowError::CastError(format!(
-                    "Failed to extract primitive of type {} from variant {:?} at path VariantPath([])",
-                    get_type_name::<T>(),
-                    value
-                )));
+            fn append_null(&mut self) -> Result<()> {
+                self.builder.append_null();
+                Ok(())
             }
-            // Safe casting: append null on conversion failure
-            self.builder.append_null();
-            Ok(false)
+
+            fn append_value(&mut self, $value: &Variant<'_, '_>) -> Result<bool> {
+                if let Some(v) = $value_transform {
+                    self.builder.append_value(v);
+                    Ok(true)
+                } else {
+                    if !self.cast_options.safe {
+                        // Unsafe casting: return error on conversion failure
+                        return Err(ArrowError::CastError(format!(
+                            "Failed to extract primitive of type {} from variant {:?} at path VariantPath([])",
+                            $type_name,
+                            $value
+                        )));
+                    }
+                    // Safe casting: append null on conversion failure
+                    self.builder.append_null();
+                    Ok(false)
+                }
+            }
+
+            fn finish(mut self) -> Result<ArrayRef> {
+                Ok(Arc::new(self.builder.finish()))
+            }
         }
-    }
-
-    fn finish(mut self) -> Result<ArrayRef> {
-        let array: PrimitiveArray<T> = self.builder.finish();
-
-        if let Some(target_type) = self.target_data_type {
-            let data = array.into_data();
-            let new_data = data.into_builder().data_type(target_type).build()?;
-            let array_with_new_type = PrimitiveArray::<T>::from(new_data);
-            return Ok(Arc::new(array_with_new_type));
-        }
-
-        Ok(Arc::new(array))
     }
 }
+
+define_variant_to_primitive_builder!(
+    struct VariantToBooleanArrowRowBuilder<'a>
+    |capacity| -> BooleanBuilder { BooleanBuilder::with_capacity(capacity) },
+    |value|  value.as_boolean(),
+    type_name: "Boolean"
+);
+
+define_variant_to_primitive_builder!(
+    struct VariantToPrimitiveArrowRowBuilder<'a, T:PrimitiveFromVariant>
+    |capacity| -> PrimitiveBuilder<T> { PrimitiveBuilder::<T>::with_capacity(capacity) },
+    |value| T::from_variant(value),
+    type_name: get_type_name::<T>()
+);
+
+define_variant_to_primitive_builder!(
+    struct VariantToTimestampArrowRowBuilder<'a, T:TimestampFromVariant>
+    |capacity, tz: Option<Arc<str>> | -> PrimitiveBuilder<T> {
+        PrimitiveBuilder::<T>::with_capacity(capacity).with_timezone_opt(tz)
+    },
+    |value| T::from_variant(value),
+    type_name: get_type_name::<T>()
+);
 
 /// Builder for creating VariantArray output (for path extraction without type conversion)
 pub(crate) struct VariantToBinaryVariantArrowRowBuilder {
