@@ -898,7 +898,7 @@ fn typed_value_to_variant<'a>(
                 index
             )
         }
-        // todo other types here (note this is very similar to cast_to_variant.rs)
+        // todo other types here (note this is very similar to cast)
         // so it would be great to figure out how to share this code
         _ => {
             // We shouldn't panic in production code, but this is a
