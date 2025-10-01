@@ -166,7 +166,6 @@ impl fmt::Display for DataType {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
 
@@ -265,5 +264,23 @@ mod tests {
         let expected_metadata_string =
             "FixedSizeList(4 x nullable Int32, metadata: {\"key2\": \"value2\"})";
         assert_eq!(fixed_size_metadata_string, expected_metadata_string);
+    }
+
+    #[test]
+    fn test_display_union() {
+        let fields = vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ];
+        let type_ids = vec![0, 1];
+        let union_fields = type_ids
+            .into_iter()
+            .zip(fields.into_iter().map(Arc::new))
+            .collect();
+
+        let union_data_type = DataType::Union(union_fields, crate::UnionMode::Sparse);
+        let union_data_type_string = union_data_type.to_string();
+        let expected_string = "Union(Sparse, 0: Int32, 1: nullable Utf8)";
+        assert_eq!(union_data_type_string, expected_string);
     }
 }
