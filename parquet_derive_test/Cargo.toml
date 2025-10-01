@@ -24,7 +24,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = [ "parquet" ]
-edition = { workspace = true }
+edition = "2024"
 publish = false
 rust-version = { workspace = true }
 

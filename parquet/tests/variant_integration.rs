@@ -66,7 +66,6 @@ variant_test_case!(2);
 // },
 // ```
 variant_test_case!(3, "parquet_file must be set");
-// https://github.com/apache/arrow-rs/issues/8329
 variant_test_case!(4);
 variant_test_case!(5);
 variant_test_case!(6);
@@ -280,6 +279,10 @@ impl VariantTestCase {
 
         let variant_data = self.load_variants();
         let variant_array = self.load_parquet();
+        let variant_array = unshred_variant(&variant_array).unwrap();
+
+        // `load_parquet` returns shredded variant values, but the test expectations are provided as
+        // unshredded variant values. Unshred (failing for invalid input) so we can compare them.
         let variant_array = unshred_variant(&variant_array).unwrap();
 
         // if this is an error case, the expected error message should be set
