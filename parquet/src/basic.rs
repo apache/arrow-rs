@@ -457,7 +457,11 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
             }
             18 => {
                 let val = GeographyType::read_thrift(&mut *prot)?;
-                let algorithm = val.algorithm.unwrap_or_default();
+                // unset algorithm means SPHERICAL, per the spec:
+                // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
+                let algorithm = val
+                    .algorithm
+                    .unwrap_or(EdgeInterpolationAlgorithm::SPHERICAL);
                 Self::Geography {
                     crs: val.crs.map(|s| s.to_owned()),
                     algorithm: Some(algorithm),
@@ -930,24 +934,74 @@ enum BoundaryOrder {
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `EdgeInterpolationAlgorithm`
 
-// TODO(ets): we need to allow for unknown variants. Either hand code this one, or add a new
-// macro that adds an _Unknown variant.
+// this is hand coded to allow for the _Unknown variant (allows this to be forward compatible)
 
-thrift_enum!(
-/// Edge interpolation algorithm for Geography logical type
-enum EdgeInterpolationAlgorithm {
-  /// Edges are interpolated as geodesics on a sphere.
-  SPHERICAL = 0;
-  /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
-  VINCENTY = 1;
-  /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
-  THOMAS = 2;
-  /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
-  ANDOYER = 3;
-  /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
-  KARNEY = 4;
+/// Edge interpolation algorithm for [`LogicalType::Geography`]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(i32)]
+pub enum EdgeInterpolationAlgorithm {
+    /// Edges are interpolated as geodesics on a sphere.
+    SPHERICAL = 0,
+    /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
+    VINCENTY = 1,
+    /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
+    THOMAS = 2,
+    /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
+    ANDOYER = 3,
+    /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
+    KARNEY = 4,
+    /// Unknown algorithm
+    _Unknown(i32),
 }
-);
+
+impl fmt::Display for EdgeInterpolationAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_fmt(format_args!("{0:?}", self))
+    }
+}
+
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolationAlgorithm {
+    #[allow(deprecated)]
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let val = prot.read_i32()?;
+        match val {
+            0 => Ok(Self::SPHERICAL),
+            1 => Ok(Self::VINCENTY),
+            2 => Ok(Self::THOMAS),
+            3 => Ok(Self::ANDOYER),
+            4 => Ok(Self::KARNEY),
+            _ => Ok(Self::_Unknown(val)),
+        }
+    }
+}
+
+impl WriteThrift for EdgeInterpolationAlgorithm {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let val: i32 = match *self {
+            Self::SPHERICAL => 0,
+            Self::VINCENTY => 1,
+            Self::THOMAS => 2,
+            Self::ANDOYER => 3,
+            Self::KARNEY => 4,
+            Self::_Unknown(i) => i,
+        };
+        writer.write_i32(val)
+    }
+}
+
+impl WriteThriftField for EdgeInterpolationAlgorithm {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
 
 impl Default for EdgeInterpolationAlgorithm {
     fn default() -> Self {
@@ -961,7 +1015,7 @@ impl Default for EdgeInterpolationAlgorithm {
 thrift_union_all_empty!(
 /// The algorithm used in Bloom filter.
 union BloomFilterAlgorithm {
-  /** Block-based Bloom filter. **/
+  /// Block-based Bloom filter.
   1: SplitBlockAlgorithm BLOCK;
 }
 );
@@ -973,7 +1027,7 @@ thrift_union_all_empty!(
 /// The hash function used in Bloom filter. This function takes the hash of a column value
 /// using plain encoding.
 union BloomFilterHash {
-  /** xxHash Strategy. **/
+  /// xxHash Strategy.
   1: XxHash XXHASH;
 }
 );
