@@ -132,7 +132,24 @@ impl fmt::Display for DataType {
                 Ok(())
             }
             Self::Union(union_fields, union_mode) => {
-                write!(f, "Union({union_fields:?}, {union_mode:?})")
+                write!(f, "Union({union_mode:?}, ")?;
+                if !union_fields.is_empty() {
+                    let fields_str = union_fields
+                        .iter()
+                        .map(|v| {
+                            let type_id = v.0;
+                            let field = v.1;
+                            let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
+                            let data_type = field.data_type();
+                            let metadata_str = format_metadata(field.metadata());
+                            format!("{type_id:?}: {maybe_nullable}{data_type}{metadata_str}")
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    write!(f, "{fields_str}")?;
+                }
+                write!(f, ")")?;
+                Ok(())
             }
             Self::Dictionary(data_type, data_type1) => {
                 write!(f, "Dictionary({data_type}, {data_type1})")
@@ -148,6 +165,7 @@ impl fmt::Display for DataType {
         }
     }
 }
+
 
 #[cfg(test)]
 mod tests {
