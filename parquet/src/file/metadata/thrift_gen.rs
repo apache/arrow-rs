@@ -28,10 +28,9 @@ use crate::{
     errors::{ParquetError, Result},
     file::{
         metadata::{
-            ColumnChunkMetaData, KeyValue, LevelHistogram, ParquetMetaData, RowGroupMetaData,
-            SortingColumn,
+            ColumnChunkMetaData, KeyValue, LevelHistogram, PageEncodingStats, ParquetMetaData,
+            RowGroupMetaData, SortingColumn,
         },
-        page_encoding_stats::PageEncodingStats,
         statistics::ValueStatistics,
     },
     parquet_thrift::{
@@ -55,16 +54,41 @@ use crate::{
 // this needs to be visible to the schema conversion code
 thrift_struct!(
 pub(crate) struct SchemaElement<'a> {
-  /** Data type for this field. Not set if the current element is a non-leaf node */
-  1: optional Type type_;
+  /// Data type for this field. Not set if the current element is a non-leaf node
+  1: optional Type r#type;
+  /// If type is FIXED_LEN_BYTE_ARRAY, this is the byte length of the values.
+  /// Otherwise, if specified, this is the maximum bit length to store any of the values.
+  /// (e.g. a low cardinality INT col could have this set to 3).  Note that this is
+  /// in the schema, and therefore fixed for the entire file.
   2: optional i32 type_length;
+  /// Repetition of the field. The root of the schema does not have a repetition_type.
+  /// All other nodes must have one.
   3: optional Repetition repetition_type;
+  /// Name of the field in the schema
   4: required string<'a> name;
+  /// Nested fields. Since thrift does not support nested fields,
+  /// the nesting is flattened to a single list by a depth-first traversal.
+  /// The children count is used to construct the nested relationship.
+  /// This field is not set when the element is a primitive type.
   5: optional i32 num_children;
+  /// DEPRECATED: When the schema is the result of a conversion from another model.
+  /// Used to record the original type to help with cross conversion.
+  ///
+  /// This is superseded by logical_type.
   6: optional ConvertedType converted_type;
+  /// DEPRECATED: Used when this column contains decimal data.
+  /// See the DECIMAL converted type for more details.
+  ///
+  /// This is superseded by using the DecimalType annotation in logical_type.
   7: optional i32 scale
   8: optional i32 precision
+  /// When the original schema supports field ids, this will save the
+  /// original field id in the parquet schema
   9: optional i32 field_id;
+  /// The logical type of this SchemaElement
+  ///
+  /// LogicalType replaces ConvertedType, but ConvertedType is still required
+  /// for some logical types to ensure forward-compatibility in format v1.
   10: optional LogicalType logical_type
 }
 );
@@ -107,31 +131,30 @@ union EncryptionAlgorithm {
 #[cfg(feature = "encryption")]
 thrift_struct!(
 /// Crypto metadata for files with encrypted footer
-pub(crate) struct FileCryptoMetaData {
+pub(crate) struct FileCryptoMetaData<'a> {
   /// Encryption algorithm. This field is only used for files
   /// with encrypted footer. Files with plaintext footer store algorithm id
   /// inside footer (FileMetaData structure).
   1: required EncryptionAlgorithm encryption_algorithm
 
-  /** Retrieval metadata of key used for encryption of footer,
-   *  and (possibly) columns **/
-  2: optional binary key_metadata
+  /// Retrieval metadata of key used for encryption of footer,
+  /// and (possibly) columns.
+  2: optional binary<'a> key_metadata
 }
 );
 
 // the following are only used internally so are private
 thrift_struct!(
 struct FileMetaData<'a> {
-  /** Version of this file **/
   1: required i32 version
   2: required list<'a><SchemaElement> schema;
   3: required i64 num_rows
   4: required list<'a><RowGroup> row_groups
   5: optional list<KeyValue> key_value_metadata
-  6: optional string created_by
+  6: optional string<'a> created_by
   7: optional list<ColumnOrder> column_orders;
   8: optional EncryptionAlgorithm encryption_algorithm
-  9: optional binary footer_signing_key_metadata
+  9: optional binary<'a> footer_signing_key_metadata
 }
 );
 
@@ -165,7 +188,7 @@ struct ColumnChunk<'a> {
 #[cfg(not(feature = "encryption"))]
 thrift_struct!(
 struct ColumnChunk<'a> {
-  1: optional string file_path
+  1: optional string<'a> file_path
   2: required i64 file_offset = 0
   3: optional ColumnMetaData<'a> meta_data
   4: optional i64 offset_index_offset
@@ -178,7 +201,7 @@ struct ColumnChunk<'a> {
 type CompressionCodec = Compression;
 thrift_struct!(
 struct ColumnMetaData<'a> {
-  1: required Type type_
+  1: required Type r#type
   2: required list<Encoding> encodings
   // we don't expose path_in_schema so skip
   //3: required list<string> path_in_schema
@@ -215,9 +238,7 @@ struct BoundingBox {
 
 thrift_struct!(
 struct GeospatialStatistics {
-  /** A bounding box of geospatial instances */
   1: optional BoundingBox bbox;
-  /** Geospatial type codes of all instances, or an empty list if not known */
   2: optional list<i32> geospatial_types;
 }
 );
@@ -260,6 +281,14 @@ fn convert_row_group(
     row_group: RowGroup,
     schema_descr: Arc<SchemaDescriptor>,
 ) -> Result<RowGroupMetaData> {
+    if schema_descr.num_columns() != row_group.columns.len() {
+        return Err(general_err!(
+            "Column count mismatch. Schema has {} columns while Row Group has {}",
+            schema_descr.num_columns(),
+            row_group.columns.len()
+        ));
+    }
+
     let num_rows = row_group.num_rows;
     let sorting_columns = row_group.sorting_columns;
     let total_byte_size = row_group.total_byte_size;
@@ -299,7 +328,7 @@ fn convert_column(
         return Err(general_err!("Expected to have column metadata"));
     }
     let col_metadata = column.meta_data.unwrap();
-    let column_type = col_metadata.type_;
+    let column_type = col_metadata.r#type;
     let encodings = col_metadata.encodings;
     let compression = col_metadata.codec;
     let file_path = column.file_path.map(|v| v.to_owned());
@@ -643,6 +672,15 @@ fn row_group_from_encrypted_thrift(
 }
 
 #[cfg(feature = "encryption")]
+/// Decodes [`ParquetMetaData`] from the provided bytes, handling metadata that may be encrypted.
+///
+/// Typically this is used to decode the metadata from the end of a parquet
+/// file. The format of `buf` is the Thrift compact binary protocol, as specified
+/// by the [Parquet Spec]. Buffer can be encrypted with AES GCM or AES CTR
+/// ciphers as specfied in the [Parquet Encryption Spec].
+///
+/// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
+/// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
 pub(crate) fn parquet_metadata_with_encryption(
     file_decryption_properties: Option<&FileDecryptionProperties>,
     encrypted_footer: bool,
@@ -670,7 +708,7 @@ pub(crate) fn parquet_metadata_with_encryption(
             }
             let decryptor = get_file_decryptor(
                 t_file_crypto_metadata.encryption_algorithm,
-                t_file_crypto_metadata.key_metadata.as_ref(),
+                t_file_crypto_metadata.key_metadata,
                 file_decryption_properties,
             )?;
             let footer_decryptor = decryptor.get_footer_decryptor();
@@ -693,7 +731,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         }
     }
 
-    let file_meta = super::thrift_gen::FileMetaData::read_thrift(&mut prot)
+    let file_meta = FileMetaData::read_thrift(&mut prot)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
 
     let version = file_meta.version;
@@ -710,7 +748,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         // File has a plaintext footer but encryption algorithm is set
         let file_decryptor_value = get_file_decryptor(
             algo,
-            file_meta.footer_signing_key_metadata.as_ref(),
+            file_meta.footer_signing_key_metadata,
             file_decryption_properties,
         )?;
         if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
@@ -769,9 +807,9 @@ pub(crate) fn parquet_metadata_with_encryption(
 }
 
 #[cfg(feature = "encryption")]
-pub(super) fn get_file_decryptor(
+fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&Vec<u8>>,
+    footer_key_metadata: Option<&[u8]>,
     file_decryption_properties: &FileDecryptionProperties,
 ) -> Result<FileDecryptor> {
     match encryption_algorithm {
@@ -788,7 +826,7 @@ pub(super) fn get_file_decryptor(
 
             FileDecryptor::new(
                 file_decryption_properties,
-                footer_key_metadata.map(|v| v.as_slice()),
+                footer_key_metadata,
                 aad_file_unique,
                 aad_prefix,
             )
@@ -803,7 +841,7 @@ pub(super) fn get_file_decryptor(
 /// the Parquet footer. Page indexes will need to be added later.
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ParquetMetaData {
     fn read_thrift(prot: &mut R) -> Result<Self> {
-        let file_meta = super::thrift_gen::FileMetaData::read_thrift(prot)?;
+        let file_meta = FileMetaData::read_thrift(prot)?;
 
         let version = file_meta.version;
         let num_rows = file_meta.num_rows;
@@ -1088,7 +1126,7 @@ impl DataPageHeaderV2 {
 thrift_struct!(
 pub(crate) struct PageHeader {
   /// the type of the page: indicates which of the *_header fields is set
-  1: required PageType type_
+  1: required PageType r#type
 
   /// Uncompressed page size in bytes (not including this header)
   2: required i32 uncompressed_page_size
@@ -1184,7 +1222,7 @@ impl PageHeader {
             ));
         };
         Ok(Self {
-            type_,
+            r#type: type_,
             uncompressed_page_size,
             compressed_page_size,
             crc,
@@ -1312,7 +1350,7 @@ impl<'a> WriteThrift for FileMeta<'a> {
         // field 2 is schema. do depth-first traversal of tree, converting to SchemaElement and
         // writing along the way.
         let root = self.file_metadata.schema_descr().root_schema_ptr();
-        let schema_len = num_nodes(&root);
+        let schema_len = num_nodes(&root)?;
         writer.write_field_begin(FieldType::List, 2, 1)?;
         writer.write_list_begin(ElementType::Struct, schema_len)?;
         // recursively write Type nodes as SchemaElements
@@ -1347,6 +1385,16 @@ impl<'a> WriteThrift for FileMeta<'a> {
 }
 
 fn write_schema<W: Write>(
+    schema: &TypePtr,
+    writer: &mut ThriftCompactOutputProtocol<W>,
+) -> Result<()> {
+    if !schema.is_group() {
+        return Err(general_err!("Root schema must be Group type"));
+    }
+    write_schema_helper(schema, writer)
+}
+
+fn write_schema_helper<W: Write>(
     node: &TypePtr,
     writer: &mut ThriftCompactOutputProtocol<W>,
 ) -> Result<()> {
@@ -1359,7 +1407,7 @@ fn write_schema<W: Write>(
             precision,
         } => {
             let element = SchemaElement {
-                type_: Some(*physical_type),
+                r#type: Some(*physical_type),
                 type_length: if *type_length >= 0 {
                     Some(*type_length)
                 } else {
@@ -1395,7 +1443,7 @@ fn write_schema<W: Write>(
             };
 
             let element = SchemaElement {
-                type_: None,
+                r#type: None,
                 type_length: None,
                 repetition_type: repetition,
                 name: basic_info.name(),
@@ -1418,7 +1466,7 @@ fn write_schema<W: Write>(
 
             // Add child elements for a group
             for field in fields {
-                write_schema(field, writer)?;
+                write_schema_helper(field, writer)?;
             }
             Ok(())
         }
@@ -1611,9 +1659,75 @@ impl WriteThriftField for crate::geospatial::bounding_box::BoundingBox {
 }
 
 #[cfg(test)]
-mod tests {
-    use crate::file::metadata::thrift_gen::BoundingBox;
+pub(crate) mod tests {
+    use crate::errors::Result;
+    use crate::file::metadata::thrift_gen::{
+        convert_column, convert_row_group, write_schema, BoundingBox, ColumnChunk, RowGroup,
+        SchemaElement,
+    };
+    use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
+    use crate::parquet_thrift::{
+        read_thrift_vec, ElementType, ReadThrift, ThriftCompactOutputProtocol,
+        ThriftSliceInputProtocol,
+    };
+    use crate::schema::types::{
+        num_nodes, parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor, TypePtr,
+    };
+    use std::sync::Arc;
+
+    // for testing. decode thrift encoded RowGroup
+    pub(crate) fn read_row_group(
+        buf: &mut [u8],
+        schema_descr: Arc<SchemaDescriptor>,
+    ) -> Result<RowGroupMetaData> {
+        let mut reader = ThriftSliceInputProtocol::new(buf);
+        let rg = RowGroup::read_thrift(&mut reader)?;
+        convert_row_group(rg, schema_descr)
+    }
+
+    pub(crate) fn read_column_chunk(
+        buf: &mut [u8],
+        column_descr: Arc<ColumnDescriptor>,
+    ) -> Result<ColumnChunkMetaData> {
+        let mut reader = ThriftSliceInputProtocol::new(buf);
+        let cc = ColumnChunk::read_thrift(&mut reader)?;
+        convert_column(cc, column_descr)
+    }
+
+    pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {
+        let num_nodes = num_nodes(&schema)?;
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+
+        // kick off writing list
+        writer.write_list_begin(ElementType::Struct, num_nodes)?;
+
+        // write SchemaElements
+        write_schema(&schema, &mut writer)?;
+
+        let mut prot = ThriftSliceInputProtocol::new(&buf);
+        let se: Vec<SchemaElement> = read_thrift_vec(&mut prot)?;
+        parquet_schema_from_array(se)
+    }
+
+    pub(crate) fn schema_to_buf(schema: &TypePtr) -> Result<Vec<u8>> {
+        let num_nodes = num_nodes(schema)?;
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+
+        // kick off writing list
+        writer.write_list_begin(ElementType::Struct, num_nodes)?;
+
+        // write SchemaElements
+        write_schema(schema, &mut writer)?;
+        Ok(buf)
+    }
+
+    pub(crate) fn buf_to_schema_list<'a>(buf: &'a mut Vec<u8>) -> Result<Vec<SchemaElement<'a>>> {
+        let mut prot = ThriftSliceInputProtocol::new(buf.as_mut_slice());
+        read_thrift_vec(&mut prot)
+    }
 
     #[test]
     fn test_bounding_box_roundtrip() {

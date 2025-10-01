@@ -317,7 +317,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 /// 4. Length of encoded `FileMetaData` (4 bytes, little endian)
 /// 5. Parquet Magic Bytes (4 bytes)
 ///
-/// [`FileMetaData`]: crate::format::FileMetaData
+/// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
 /// [`ColumnChunkMetaData`]: crate::file::metadata::ColumnChunkMetaData
 /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
@@ -431,7 +431,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
     }
 
     fn convert_column_indexes(&self) -> Option<Vec<Vec<Option<ColumnIndexMetaData>>>> {
-        // FIXME(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
+        // TODO(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
         // but then converting back to ParquetColumnIndex in the end. need to unify this.
         self.metadata
             .column_index()
@@ -543,7 +543,7 @@ impl MetadataObjectWriter {
 
     /// Write [`FileMetaData`] in Thrift format, possibly encrypting it if required
     ///
-    /// [`FileMetaData`]: crate::format::FileMetaData
+    /// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
     fn write_file_metadata(&self, file_metadata: &FileMeta, mut sink: impl Write) -> Result<()> {
         match self.file_encryptor.as_ref() {
             Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
@@ -711,11 +711,11 @@ impl MetadataObjectWriter {
         })
     }
 
-    fn file_crypto_metadata(file_encryptor: &FileEncryptor) -> Result<FileCryptoMetaData> {
+    fn file_crypto_metadata(file_encryptor: &'_ FileEncryptor) -> Result<FileCryptoMetaData<'_>> {
         let properties = file_encryptor.properties();
         Ok(FileCryptoMetaData {
             encryption_algorithm: Self::encryption_algorithm_from_encryptor(file_encryptor),
-            key_metadata: properties.footer_key_metadata().cloned(),
+            key_metadata: properties.footer_key_metadata().map(|v| v.as_slice()),
         })
     }
 

@@ -44,30 +44,13 @@ pub struct PageLocation {
 }
 );
 
-impl From<&crate::format::PageLocation> for PageLocation {
-    fn from(value: &crate::format::PageLocation) -> Self {
-        Self {
-            offset: value.offset,
-            compressed_page_size: value.compressed_page_size,
-            first_row_index: value.first_row_index,
-        }
-    }
-}
-
-impl From<&PageLocation> for crate::format::PageLocation {
-    fn from(value: &PageLocation) -> Self {
-        Self {
-            offset: value.offset,
-            compressed_page_size: value.compressed_page_size,
-            first_row_index: value.first_row_index,
-        }
-    }
-}
-
 thrift_struct!(
 /// [`OffsetIndex`] information for a column chunk. Contains offsets and sizes for each page
 /// in the chunk. Optionally stores fully decoded page sizes for BYTE_ARRAY columns.
 ///
+/// See [`ParquetOffsetIndex`] for more information.
+///
+/// [`ParquetOffsetIndex`]: crate::file::metadata::ParquetOffsetIndex
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct OffsetIndexMetaData {
   /// Vector of [`PageLocation`] objects, one per page in the chunk.
@@ -79,18 +62,6 @@ pub struct OffsetIndexMetaData {
 );
 
 impl OffsetIndexMetaData {
-    /// Creates a new [`OffsetIndexMetaData`] from an [`OffsetIndex`].
-    ///
-    /// [`OffsetIndex`]: crate::format::OffsetIndex
-    #[allow(dead_code)]
-    pub(crate) fn try_new(index: crate::format::OffsetIndex) -> Result<Self> {
-        let page_locations = index.page_locations.iter().map(|loc| loc.into()).collect();
-        Ok(Self {
-            page_locations,
-            unencoded_byte_array_data_bytes: index.unencoded_byte_array_data_bytes,
-        })
-    }
-
     /// Vector of [`PageLocation`] objects, one per page in the chunk.
     pub fn page_locations(&self) -> &Vec<PageLocation> {
         &self.page_locations

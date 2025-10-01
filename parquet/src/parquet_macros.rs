@@ -20,13 +20,22 @@
 // They allow for pasting sections of the Parquet thrift IDL file
 // into a macro to generate rust structures and implementations.
 
-// TODO(ets): These macros need a good bit of documentation so other developers will be able
-// to use them correctly. Also need to write a .md file with complete examples of both how
-// to use the macros, and how to implement custom readers and writers when necessary.
+//! This is a collection of macros used to parse Thrift IDL descriptions of structs,
+//! unions, and enums into their corresponding Rust types. These macros will also
+//! generate the code necessary to serialize and deserialize to/from the [Thrift compact]
+//! protocol.
+//!
+//! Further details of how to use them (and other aspects of the Thrift serialization process)
+//! can be found in [THRIFT.md].
+//!
+//! [Thrift compact]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
+//! [THRIFT.md]: https://github.com/apache/arrow-rs/blob/main/parquet/THRIFT.md
 
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
-/// macro to generate rust enums from a thrift enum definition
+/// Macro used to generate rust enums from a Thrift `enum` definition.
+///
+/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 macro_rules! thrift_enum {
     ($(#[$($def_attrs:tt)*])* enum $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_name:ident = $field_value:literal;)* }) => {
         $(#[$($def_attrs)*])*
@@ -69,32 +78,19 @@ macro_rules! thrift_enum {
                 Ok(field_id)
             }
         }
-
-        // TODO: remove when we finally get rid of the format module
-        impl TryFrom<crate::format::$identifier> for $identifier {
-            type Error = ParquetError;
-
-            #[allow(deprecated)]
-            fn try_from(value: crate::format::$identifier) -> Result<Self> {
-                Ok(match value {
-                    $(crate::format::$identifier::$field_name => Self::$field_name,)*
-                    _ => return Err(general_err!("Unexpected parquet {}: {}", stringify!($identifier), value.0)),
-                })
-            }
-        }
-
-        impl From<$identifier> for crate::format::$identifier {
-            #[allow(deprecated)]
-            fn from(value: $identifier) -> Self {
-                match value {
-                    $($identifier::$field_name => Self::$field_name,)*
-                }
-            }
-        }
     }
 }
 
-/// macro to generate rust enums for thrift unions where all fields are typed with empty structs
+/// Macro used to generate Rust enums for Thrift unions in which all variants are typed with empty
+/// structs.
+///
+/// Because the compact protocol does not write any struct type information, these empty structs
+/// become a single `0` (end-of-fields marker) upon serialization. Rather than trying to deserialize
+/// an empty struct, we can instead simply read the `0` and discard it.
+///
+/// The resulting Rust enum will have all unit variants.
+///
+/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_all_empty {
@@ -153,30 +149,20 @@ macro_rules! thrift_union_all_empty {
                 Ok(field_id)
             }
         }
-
-        // TODO: remove when we finally get rid of the format module
-        impl From<crate::format::$identifier> for $identifier {
-            fn from(value: crate::format::$identifier) -> Self {
-                match value {
-                    $(crate::format::$identifier::$field_name(_) => Self::$field_name,)*
-                }
-            }
-        }
-
-        impl From<$identifier> for crate::format::$identifier {
-            fn from(value: $identifier) -> Self {
-                match value {
-                    $($identifier::$field_name => Self::$field_name(Default::default()),)*
-                }
-            }
-        }
     }
 }
 
-/// macro to generate rust enums for thrift unions where all variants are a mix of unit and tuple types.
-/// this requires modifying the thrift IDL. For variants with empty structs as their type,
-/// delete the typename (i.e. "1: EmptyStruct Var1;" => "1: Var1"). For variants with a non-empty
-/// type, put the typename in parens (e.g" "1: Type Var1;" => "1: (Type) Var1;").
+/// Macro used to generate Rust enums for Thrift unions where variants are a mix of unit and
+/// tuple types.
+///
+/// Use of this macro requires modifying the thrift IDL. For variants with empty structs as their
+/// type, delete the typename (i.e. `1: EmptyStruct Var1;` becomes `1: Var1`). For variants with a
+/// non-empty type, the typename must be contained within parens (e.g. `1: MyType Var1;` becomes
+/// `1: (MyType) Var1;`).
+///
+/// This macro allows for specifying lifetime annotations for the resulting `enum` and its fields.
+///
+/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union {
@@ -237,31 +223,11 @@ macro_rules! thrift_union {
     }
 }
 
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __thrift_write_variant_lhs {
-    ($field_name:ident $field_type:ident, $val:tt) => {
-        Self::$field_name($val)
-    };
-    ($field_name:ident, $val:tt) => {
-        Self::$field_name
-    };
-}
-
-#[doc(hidden)]
-#[macro_export]
-macro_rules! __thrift_write_variant_rhs {
-    ($field_id:literal $field_type:ident, $writer:tt, $val:ident) => {
-        $val.write_thrift_field($writer, $field_id, 0)?
-    };
-    ($field_id:literal, $writer:tt, $val:tt) => {
-        $writer.write_empty_struct($field_id, 0)?
-    };
-}
-
-/// macro to generate rust structs from a thrift struct definition
-/// unlike enum and union, this macro will allow for visibility specifier
-/// can also take optional lifetime for struct and elements within it (need e.g.)
+/// Macro used to generate Rust structs from a Thrift `struct` definition.
+///
+/// This macro allows for specifying lifetime annotations for the resulting `struct` and its fields.
+///
+/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 #[macro_export]
 macro_rules! thrift_struct {
     ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
@@ -301,66 +267,6 @@ macro_rules! thrift_struct {
             }
         }
 
-        impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
-            const ELEMENT_TYPE: ElementType = ElementType::Struct;
-
-            #[allow(unused_assignments)]
-            fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-                #[allow(unused_mut, unused_variables)]
-                let mut last_field_id = 0i16;
-                $($crate::__thrift_write_required_or_optional_field!($required_or_optional $field_name, $field_id, $field_type, self, writer, last_field_id);)*
-                writer.write_struct_end()
-            }
-        }
-
-        impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
-            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
-                writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-                self.write_thrift(writer)?;
-                Ok(field_id)
-            }
-        }
-    }
-}
-
-/// only implements ReadThrift for the give IDL struct definition
-#[macro_export]
-macro_rules! thrift_struct_read_impl {
-    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
-        $(#[cfg_attr(not(doctest), $($def_attrs)*)])*
-        impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for $identifier $(<$lt>)? {
-            fn read_thrift(prot: &mut R) -> Result<Self> {
-                $(let mut $field_name: Option<$crate::__thrift_field_type!($field_type $($field_lt)? $($element_type)?)> = None;)*
-                let mut last_field_id = 0i16;
-                loop {
-                    let field_ident = prot.read_field_begin(last_field_id)?;
-                    if field_ident.field_type == FieldType::Stop {
-                        break;
-                    }
-                    match field_ident.id {
-                        $($field_id => {
-                            let val = $crate::__thrift_read_field!(prot, field_ident, $field_type $($field_lt)? $($element_type)?);
-                            $field_name = Some(val);
-                        })*
-                        _ => {
-                            prot.skip(field_ident.field_type)?;
-                        }
-                    };
-                    last_field_id = field_ident.id;
-                }
-                $($crate::__thrift_result_required_or_optional!($required_or_optional $field_name);)*
-                Ok(Self {
-                    $($field_name),*
-                })
-            }
-        }
-    }
-}
-
-/// only implements WriteThrift for the give IDL struct definition
-#[macro_export]
-macro_rules! thrift_struct_write_impl {
-    ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
         impl $(<$lt>)? WriteThrift for $identifier $(<$lt>)? {
             const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
@@ -548,4 +454,26 @@ macro_rules! __thrift_read_variant {
         $prot.skip_empty_struct()?;
         Self::$field_name
     }};
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_variant_lhs {
+    ($field_name:ident $field_type:ident, $val:tt) => {
+        Self::$field_name($val)
+    };
+    ($field_name:ident, $val:tt) => {
+        Self::$field_name
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __thrift_write_variant_rhs {
+    ($field_id:literal $field_type:ident, $writer:tt, $val:ident) => {
+        $val.write_thrift_field($writer, $field_id, 0)?
+    };
+    ($field_id:literal, $writer:tt, $val:tt) => {
+        $writer.write_empty_struct($field_id, 0)?
+    };
 }

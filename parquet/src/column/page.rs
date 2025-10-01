@@ -218,7 +218,7 @@ impl CompressedPage {
         let page_type = self.page_type();
 
         let mut page_header = PageHeader {
-            type_: page_type,
+            r#type: page_type,
             uncompressed_page_size: uncompressed_size as i32,
             compressed_page_size: compressed_size as i32,
             // TODO: Add support for crc checksum
@@ -351,7 +351,7 @@ impl TryFrom<&crate::file::metadata::thrift_gen::PageHeader> for PageMetadata {
     fn try_from(
         value: &crate::file::metadata::thrift_gen::PageHeader,
     ) -> std::result::Result<Self, Self::Error> {
-        match value.type_ {
+        match value.r#type {
             PageType::DATA_PAGE => {
                 let header = value.data_page_header.as_ref().unwrap();
                 Ok(PageMetadata {

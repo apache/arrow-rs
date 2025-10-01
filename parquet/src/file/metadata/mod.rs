@@ -17,9 +17,7 @@
 
 //! Parquet metadata API
 //!
-//! Most users should use these structures to interact with Parquet metadata.
-//! The [crate::format] module contains lower level structures generated from the
-//! Parquet thrift definition.
+//! Users should use these structures to interact with Parquet metadata.
 //!
 //! * [`ParquetMetaData`]: Top level metadata container, read from the Parquet
 //!   file footer.
@@ -66,7 +64,6 @@
 //!    with a more idiomatic API. Note that, confusingly, some but not all
 //!    of these structures have the same name as the [`format`] structures.
 //!
-//! [`format`]: crate::format
 //! [`file::metadata`]: crate::file::metadata
 //! [parquet.thrift]:  https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
 //!
@@ -98,18 +95,15 @@ pub(crate) mod reader;
 pub(crate) mod thrift_gen;
 mod writer;
 
+use crate::basic::PageType;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
-use crate::file::column_crypto_metadata::{self, ColumnCryptoMetaData};
+use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
-use crate::file::statistics::{self, Statistics};
-use crate::file::{
-    page_encoding_stats::{self, PageEncodingStats},
-    page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation},
-};
-use crate::format::ColumnCryptoMetaData as TColumnCryptoMetaData;
+use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
+use crate::file::statistics::Statistics;
 use crate::geospatial::statistics as geo_statistics;
 use crate::schema::types::{
     ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescPtr, SchemaDescriptor,
@@ -168,7 +162,7 @@ pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
 /// `column_number`of row group `row_group_number`.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`OffsetIndex`]: crate::format::OffsetIndex
+/// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
 
 /// Parsed metadata for a single Parquet file
@@ -430,7 +424,6 @@ impl From<ParquetMetaData> for ParquetMetaDataBuilder {
     }
 }
 
-// TODO: should this move to thrift_gen?
 thrift_struct!(
 /// A key-value pair for [`FileMetaData`].
 pub struct KeyValue {
@@ -451,6 +444,15 @@ impl KeyValue {
         }
     }
 }
+
+thrift_struct!(
+/// PageEncodingStats for a column chunk and data page.
+pub struct PageEncodingStats {
+  1: required PageType page_type;
+  2: required Encoding encoding;
+  3: required i32 count;
+}
+);
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
@@ -553,7 +555,6 @@ impl FileMetaData {
     }
 }
 
-// TODO: should this move to thrift_gen?
 thrift_struct!(
 /// Sort order within a RowGroup of a leaf column
 pub struct SortingColumn {
@@ -568,26 +569,6 @@ pub struct SortingColumn {
   3: required bool nulls_first
 }
 );
-
-impl From<&crate::format::SortingColumn> for SortingColumn {
-    fn from(value: &crate::format::SortingColumn) -> Self {
-        Self {
-            column_idx: value.column_idx,
-            descending: value.descending,
-            nulls_first: value.nulls_first,
-        }
-    }
-}
-
-impl From<&SortingColumn> for crate::format::SortingColumn {
-    fn from(value: &SortingColumn) -> Self {
-        Self {
-            column_idx: value.column_idx,
-            descending: value.descending,
-            nulls_first: value.nulls_first,
-        }
-    }
-}
 
 /// Reference counted pointer for [`RowGroupMetaData`].
 pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
@@ -678,60 +659,6 @@ impl RowGroupMetaData {
     #[inline(always)]
     pub fn file_offset(&self) -> Option<i64> {
         self.file_offset
-    }
-
-    /// Method to convert from Thrift.
-    pub fn from_thrift(
-        schema_descr: SchemaDescPtr,
-        mut rg: crate::format::RowGroup,
-    ) -> Result<RowGroupMetaData> {
-        if schema_descr.num_columns() != rg.columns.len() {
-            return Err(general_err!(
-                "Column count mismatch. Schema has {} columns while Row Group has {}",
-                schema_descr.num_columns(),
-                rg.columns.len()
-            ));
-        }
-        let total_byte_size = rg.total_byte_size;
-        let num_rows = rg.num_rows;
-        let mut columns = vec![];
-
-        for (c, d) in rg.columns.drain(0..).zip(schema_descr.columns()) {
-            columns.push(ColumnChunkMetaData::from_thrift(d.clone(), c)?);
-        }
-
-        let sorting_columns = rg.sorting_columns.map(|scs| {
-            scs.iter()
-                .map(|sc| sc.into())
-                .collect::<Vec<SortingColumn>>()
-        });
-        Ok(RowGroupMetaData {
-            columns,
-            num_rows,
-            sorting_columns,
-            total_byte_size,
-            schema_descr,
-            file_offset: rg.file_offset,
-            ordinal: rg.ordinal,
-        })
-    }
-
-    /// Method to convert to Thrift.
-    pub fn to_thrift(&self) -> crate::format::RowGroup {
-        let sorting_columns = self.sorting_columns().map(|scs| {
-            scs.iter()
-                .map(|sc| sc.into())
-                .collect::<Vec<crate::format::SortingColumn>>()
-        });
-        crate::format::RowGroup {
-            columns: self.columns().iter().map(|v| v.to_thrift()).collect(),
-            total_byte_size: self.total_byte_size,
-            num_rows: self.num_rows,
-            sorting_columns,
-            file_offset: self.file_offset(),
-            total_compressed_size: Some(self.compressed_size()),
-            ordinal: self.ordinal,
-        }
     }
 
     /// Converts this [`RowGroupMetaData`] into a [`RowGroupMetaDataBuilder`]
@@ -1153,187 +1080,9 @@ impl ColumnChunkMetaData {
         self.column_crypto_metadata.as_ref()
     }
 
-    /// Method to convert from Thrift.
-    pub fn from_thrift(
-        column_descr: ColumnDescPtr,
-        cc: crate::format::ColumnChunk,
-    ) -> Result<Self> {
-        if cc.meta_data.is_none() {
-            return Err(general_err!("Expected to have column metadata"));
-        }
-        let mut col_metadata: crate::format::ColumnMetaData = cc.meta_data.unwrap();
-        let column_type = Type::try_from(col_metadata.type_)?;
-        let encodings = col_metadata
-            .encodings
-            .drain(0..)
-            .map(Encoding::try_from)
-            .collect::<Result<_>>()?;
-        let compression = Compression::try_from(col_metadata.codec)?;
-        let file_path = cc.file_path;
-        let file_offset = cc.file_offset;
-        let num_values = col_metadata.num_values;
-        let total_compressed_size = col_metadata.total_compressed_size;
-        let total_uncompressed_size = col_metadata.total_uncompressed_size;
-        let data_page_offset = col_metadata.data_page_offset;
-        let index_page_offset = col_metadata.index_page_offset;
-        let dictionary_page_offset = col_metadata.dictionary_page_offset;
-        let statistics = statistics::from_thrift(column_type, col_metadata.statistics)?;
-        //let geo_statistics =
-        //    geo_statistics::from_thrift(col_metadata.geospatial_statistics).map(Box::new);
-        let encoding_stats = col_metadata
-            .encoding_stats
-            .as_ref()
-            .map(|vec| {
-                vec.iter()
-                    .map(page_encoding_stats::try_from_thrift)
-                    .collect::<Result<_>>()
-            })
-            .transpose()?;
-        let bloom_filter_offset = col_metadata.bloom_filter_offset;
-        let bloom_filter_length = col_metadata.bloom_filter_length;
-        let offset_index_offset = cc.offset_index_offset;
-        let offset_index_length = cc.offset_index_length;
-        let column_index_offset = cc.column_index_offset;
-        let column_index_length = cc.column_index_length;
-        let (
-            unencoded_byte_array_data_bytes,
-            repetition_level_histogram,
-            definition_level_histogram,
-        ) = if let Some(size_stats) = col_metadata.size_statistics {
-            (
-                size_stats.unencoded_byte_array_data_bytes,
-                size_stats.repetition_level_histogram,
-                size_stats.definition_level_histogram,
-            )
-        } else {
-            (None, None, None)
-        };
-
-        let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
-        let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
-
-        #[cfg(feature = "encryption")]
-        let column_crypto_metadata = if let Some(crypto_metadata) = cc.crypto_metadata {
-            Some(column_crypto_metadata::try_from_thrift(&crypto_metadata)?)
-        } else {
-            None
-        };
-
-        let result = ColumnChunkMetaData {
-            column_descr,
-            encodings,
-            file_path,
-            file_offset,
-            num_values,
-            compression,
-            total_compressed_size,
-            total_uncompressed_size,
-            data_page_offset,
-            index_page_offset,
-            dictionary_page_offset,
-            statistics,
-            encoding_stats,
-            bloom_filter_offset,
-            bloom_filter_length,
-            offset_index_offset,
-            offset_index_length,
-            column_index_offset,
-            column_index_length,
-            unencoded_byte_array_data_bytes,
-            repetition_level_histogram,
-            definition_level_histogram,
-            geo_statistics: None,
-            #[cfg(feature = "encryption")]
-            column_crypto_metadata,
-            #[cfg(feature = "encryption")]
-            encrypted_column_metadata: None,
-        };
-        Ok(result)
-    }
-
-    /// Method to convert to Thrift.
-    pub fn to_thrift(&self) -> crate::format::ColumnChunk {
-        let column_metadata = self.to_column_metadata_thrift();
-
-        crate::format::ColumnChunk {
-            file_path: self.file_path().map(|s| s.to_owned()),
-            file_offset: self.file_offset,
-            meta_data: Some(column_metadata),
-            offset_index_offset: self.offset_index_offset,
-            offset_index_length: self.offset_index_length,
-            column_index_offset: self.column_index_offset,
-            column_index_length: self.column_index_length,
-            crypto_metadata: self.column_crypto_metadata_thrift(),
-            encrypted_column_metadata: None,
-        }
-    }
-
-    /// Method to convert to Thrift `ColumnMetaData`
-    pub fn to_column_metadata_thrift(&self) -> crate::format::ColumnMetaData {
-        let size_statistics = if self.unencoded_byte_array_data_bytes.is_some()
-            || self.repetition_level_histogram.is_some()
-            || self.definition_level_histogram.is_some()
-        {
-            let repetition_level_histogram = self
-                .repetition_level_histogram
-                .as_ref()
-                .map(|hist| hist.clone().into_inner());
-
-            let definition_level_histogram = self
-                .definition_level_histogram
-                .as_ref()
-                .map(|hist| hist.clone().into_inner());
-
-            Some(crate::format::SizeStatistics {
-                unencoded_byte_array_data_bytes: self.unencoded_byte_array_data_bytes,
-                repetition_level_histogram,
-                definition_level_histogram,
-            })
-        } else {
-            None
-        };
-
-        crate::format::ColumnMetaData {
-            type_: self.column_type().into(),
-            encodings: self.encodings().iter().map(|&v| v.into()).collect(),
-            path_in_schema: self.column_path().as_ref().to_vec(),
-            codec: self.compression.into(),
-            num_values: self.num_values,
-            total_uncompressed_size: self.total_uncompressed_size,
-            total_compressed_size: self.total_compressed_size,
-            key_value_metadata: None,
-            data_page_offset: self.data_page_offset,
-            index_page_offset: self.index_page_offset,
-            dictionary_page_offset: self.dictionary_page_offset,
-            statistics: statistics::to_thrift(self.statistics.as_ref()),
-            encoding_stats: self
-                .encoding_stats
-                .as_ref()
-                .map(|vec| vec.iter().map(page_encoding_stats::to_thrift).collect()),
-            bloom_filter_offset: self.bloom_filter_offset,
-            bloom_filter_length: self.bloom_filter_length,
-            size_statistics,
-            geospatial_statistics: geo_statistics::to_thrift(
-                self.geo_statistics.as_ref().map(|boxed| boxed.as_ref()),
-            ),
-        }
-    }
-
     /// Converts this [`ColumnChunkMetaData`] into a [`ColumnChunkMetaDataBuilder`]
     pub fn into_builder(self) -> ColumnChunkMetaDataBuilder {
         ColumnChunkMetaDataBuilder::from(self)
-    }
-
-    #[cfg(feature = "encryption")]
-    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
-        self.column_crypto_metadata
-            .as_ref()
-            .map(column_crypto_metadata::to_thrift)
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn column_crypto_metadata_thrift(&self) -> Option<TColumnCryptoMetaData> {
-        None
     }
 }
 
@@ -1547,7 +1296,7 @@ impl ColumnChunkMetaDataBuilder {
 /// Builder for Parquet [`ColumnIndex`], part of the Parquet [PageIndex]
 ///
 /// [PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-/// [`ColumnIndex`]: crate::format::ColumnIndex
+/// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 pub struct ColumnIndexBuilder {
     column_type: Type,
     null_pages: Vec<bool>,
@@ -1602,7 +1351,7 @@ impl ColumnIndexBuilder {
     /// Append the given page-level histograms to the [`ColumnIndex`] histograms.
     /// Does nothing if the `ColumnIndexBuilder` is not in the `valid` state.
     ///
-    /// [`ColumnIndex`]: crate::format::ColumnIndex
+    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn append_histograms(
         &mut self,
         repetition_level_histogram: &Option<LevelHistogram>,
@@ -1636,21 +1385,6 @@ impl ColumnIndexBuilder {
     /// Is the information in the builder valid?
     pub fn valid(&self) -> bool {
         self.valid
-    }
-
-    /// Build and get the thrift metadata of column index
-    ///
-    /// Note: callers should check [`Self::valid`] before calling this method
-    pub fn build_to_thrift(self) -> crate::format::ColumnIndex {
-        crate::format::ColumnIndex::new(
-            self.null_pages,
-            self.min_values,
-            self.max_values,
-            self.boundary_order.into(),
-            self.null_counts,
-            self.repetition_level_histograms,
-            self.definition_level_histograms,
-        )
     }
 
     /// Build and get the column index
@@ -1788,20 +1522,6 @@ impl OffsetIndexBuilder {
     }
 
     /// Build and get the thrift metadata of offset index
-    pub fn build_to_thrift(self) -> crate::format::OffsetIndex {
-        let locations = self
-            .offset_array
-            .iter()
-            .zip(self.compressed_page_size_array.iter())
-            .zip(self.first_row_index_array.iter())
-            .map(|((offset, size), row_index)| {
-                crate::format::PageLocation::new(*offset, *size, *row_index)
-            })
-            .collect::<Vec<_>>();
-        crate::format::OffsetIndex::new(locations, self.unencoded_byte_array_data_bytes_array)
-    }
-
-    /// Build and get the thrift metadata of offset index
     pub fn build(self) -> OffsetIndexMetaData {
         let locations = self
             .offset_array
@@ -1825,7 +1545,7 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::page_index::column_index::{ColumnIndex, PrimitiveColumnIndex};
+    use crate::file::metadata::thrift_gen::tests::{read_column_chunk, read_row_group};
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1844,12 +1564,13 @@ mod tests {
             .build()
             .unwrap();
 
-        let row_group_exp = row_group_meta.to_thrift();
-        let row_group_res = RowGroupMetaData::from_thrift(schema_descr, row_group_exp.clone())
-            .unwrap()
-            .to_thrift();
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        row_group_meta.write_thrift(&mut writer).unwrap();
 
-        assert_eq!(row_group_res, row_group_exp);
+        let row_group_res = read_row_group(&mut buf, schema_descr).unwrap();
+
+        assert_eq!(row_group_res, row_group_meta);
     }
 
     #[test]
@@ -1925,11 +1646,13 @@ mod tests {
             .set_ordinal(1)
             .build()
             .unwrap();
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        row_group_meta_2cols.write_thrift(&mut writer).unwrap();
 
-        let err =
-            RowGroupMetaData::from_thrift(schema_descr_3cols, row_group_meta_2cols.to_thrift())
-                .unwrap_err()
-                .to_string();
+        let err = read_row_group(&mut buf, schema_descr_3cols)
+            .unwrap_err()
+            .to_string();
         assert_eq!(
             err,
             "Parquet error: Column count mismatch. Schema has 3 columns while Row Group has 2"
@@ -1973,8 +1696,10 @@ mod tests {
             .build()
             .unwrap();
 
-        let col_chunk_res =
-            ColumnChunkMetaData::from_thrift(column_descr, col_metadata.to_thrift()).unwrap();
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1987,12 +1712,12 @@ mod tests {
             .build()
             .unwrap();
 
-        let col_chunk_exp = col_metadata.to_thrift();
-        let col_chunk_res = ColumnChunkMetaData::from_thrift(column_descr, col_chunk_exp.clone())
-            .unwrap()
-            .to_thrift();
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
 
-        assert_eq!(col_chunk_res, col_chunk_exp);
+        assert_eq!(col_chunk_res, col_metadata);
     }
 
     #[test]
@@ -2099,17 +1824,10 @@ mod tests {
 
         let mut column_index = ColumnIndexBuilder::new(Type::BOOLEAN);
         column_index.append(false, vec![1u8], vec![2u8, 3u8], 4);
-        let column_index = column_index.build_to_thrift();
-        let native_index = PrimitiveColumnIndex::<bool> {
-            column_index: ColumnIndex {
-                null_pages: column_index.null_pages,
-                boundary_order: column_index.boundary_order.try_into().unwrap(),
-                null_counts: column_index.null_counts,
-                repetition_level_histograms: column_index.repetition_level_histograms,
-                definition_level_histograms: column_index.definition_level_histograms,
-            },
-            min_values: vec![],
-            max_values: vec![],
+        let column_index = column_index.build().unwrap();
+        let native_index = match column_index {
+            ColumnIndexMetaData::BOOLEAN(index) => index,
+            _ => panic!("wrong type of column index"),
         };
 
         // Now, add in OffsetIndex
@@ -2120,20 +1838,18 @@ mod tests {
         offset_index.append_row_count(1);
         offset_index.append_offset_and_size(2, 3);
         offset_index.append_unencoded_byte_array_data_bytes(Some(10));
-        let offset_index = offset_index.build_to_thrift();
+        let offset_index = offset_index.build();
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
             .set_column_index(Some(vec![vec![ColumnIndexMetaData::BOOLEAN(native_index)]]))
-            .set_offset_index(Some(vec![vec![
-                OffsetIndexMetaData::try_new(offset_index).unwrap()
-            ]]))
+            .set_offset_index(Some(vec![vec![offset_index]]))
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2736;
+        let bigger_expected_size = 2738;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3168;
+        let bigger_expected_size = 3170;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

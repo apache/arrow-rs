@@ -89,7 +89,9 @@ pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
         return None;
     }
     match field.try_extension_type::<VariantType>() {
-        Ok(VariantType) => Some(LogicalType::Variant { specification_version: None }),
+        Ok(VariantType) => Some(LogicalType::Variant {
+            specification_version: None,
+        }),
         // Given check above, this should not error, but if it does ignore
         Err(_e) => None,
     }

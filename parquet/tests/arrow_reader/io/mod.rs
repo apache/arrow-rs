@@ -47,6 +47,7 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
 use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
+use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
 use parquet::file::FOOTER_SIZE;
 use parquet::schema::types::SchemaDescriptor;
@@ -256,7 +257,7 @@ struct TestColumnChunk {
     dictionary_page_location: Option<i64>,
 
     /// The location of the data pages in the file
-    page_locations: Vec<parquet::format::PageLocation>,
+    page_locations: Vec<PageLocation>,
 }
 
 /// Information about the pages in a single row group
@@ -294,16 +295,11 @@ impl TestRowGroups {
                         let start_offset = start_offset as usize;
                         let end_offset = start_offset + length as usize;
 
-                        let page_locations = page_locations
-                            .iter()
-                            .map(parquet::format::PageLocation::from)
-                            .collect();
-
                         TestColumnChunk {
                             name: column_name.clone(),
                             location: start_offset..end_offset,
                             dictionary_page_location,
-                            page_locations,
+                            page_locations: page_locations.clone(),
                         }
                     })
                     .map(|test_column_chunk| {

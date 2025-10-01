@@ -40,9 +40,8 @@ use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
     ColumnChunkMetaData, ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram,
-    OffsetIndexBuilder,
+    OffsetIndexBuilder, PageEncodingStats,
 };
-use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
