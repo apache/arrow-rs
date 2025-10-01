@@ -29,6 +29,7 @@ pub struct MapArrayReader {
 }
 
 impl MapArrayReader {
+    #[allow(rustdoc::private_intra_doc_links)]
     /// Creates a new [`MapArrayReader`] with a `def_level`, `rep_level` and `nullable`
     /// as defined on [`ParquetField`][crate::arrow::schema::ParquetField]
     pub fn new(

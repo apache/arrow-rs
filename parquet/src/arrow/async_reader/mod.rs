@@ -205,10 +205,10 @@ impl ArrowReaderMetadata {
 }
 
 #[doc(hidden)]
-/// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
-///
-/// Allows sharing the same builder for both the sync and async versions, whilst also not
-/// breaking the pre-existing ParquetRecordBatchStreamBuilder API
+// A newtype used within `ReaderOptionsBuilder` to distinguish sync readers from async
+//
+// Allows sharing the same builder for both the sync and async versions, whilst also not
+// breaking the pre-existing ParquetRecordBatchStreamBuilder API
 pub struct AsyncReader<T>(T);
 
 /// A builder for reading parquet files from an `async` source as  [`ParquetRecordBatchStream`]
