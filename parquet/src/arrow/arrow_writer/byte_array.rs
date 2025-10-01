@@ -17,9 +17,7 @@
 
 use crate::basic::{Encoding, LogicalType};
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::encoder::{
-    update_geo_stats_accumulator, ColumnValueEncoder, DataPageValues, DictionaryPage,
-};
+use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
@@ -572,9 +570,9 @@ where
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
     if encoder.statistics_enabled != EnabledStatistics::None {
-        // TODO Converted interval types no stats?
+        // TODO ensure Converted interval types have no stats written for them?
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
-            update_geo_stats_accumulator(accumulator.as_mut(), [0x01].iter());
+            update_geo_stats_accumulator(accumulator.as_mut(), values, indices.iter().cloned());
         } else if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
             if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
                 encoder.min_value = Some(min);
@@ -622,4 +620,25 @@ where
         max = max.max(val);
     }
     Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
+}
+
+/// Computes the min and max for the provided array and indices
+///
+/// This is a free function so it can be used with `downcast_op!`
+fn update_geo_stats_accumulator<T>(
+    bounder: &mut dyn GeoStatsAccumulator,
+    array: T,
+    valid: impl Iterator<Item = usize>,
+) where
+    T: ArrayAccessor,
+    T::Item: Copy + Ord + AsRef<[u8]>,
+{
+    if !bounder.is_valid() {
+        return;
+    }
+
+    for idx in valid {
+        let val = array.value(idx);
+        bounder.update_wkb(val.as_ref());
+    }
 }
