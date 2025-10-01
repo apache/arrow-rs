@@ -27,19 +27,21 @@ fn gen_vector<TItem: Copy>(item: TItem, len: usize) -> Vec<Option<TItem>> {
         .collect()
 }
 
+const ITER_LEN: usize = 16_384;
+
 fn criterion_benchmark(c: &mut Criterion) {
     // All ArrowPrimitiveType use the same implementation
     c.bench_function("Int64Array::from_iter", |b| {
-        let values = gen_vector(1, 81920);
+        let values = gen_vector(1, ITER_LEN);
         b.iter(|| hint::black_box(Int64Array::from_iter(values.iter())));
     });
     c.bench_function("Int64Array::from_trusted_len_iter", |b| unsafe {
-        let values = gen_vector(1, 81920);
+        let values = gen_vector(1, ITER_LEN);
         b.iter(|| hint::black_box(Int64Array::from_trusted_len_iter(values.iter())));
     });
 
     c.bench_function("BooleanArray::from_iter", |b| {
-        let values = gen_vector(true, 81920);
+        let values = gen_vector(true, ITER_LEN);
         b.iter(|| hint::black_box(BooleanArray::from_iter(values.iter())));
     });
 }
