@@ -622,7 +622,7 @@ where
     Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
 }
 
-/// Computes the min and max for the provided array and indices
+/// Updates geospatial statistics for the provided array and indices
 ///
 /// This is a free function so it can be used with `downcast_op!`
 fn update_geo_stats_accumulator<T>(
