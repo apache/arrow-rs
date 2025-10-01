@@ -272,7 +272,7 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
 
 /// Extension trait that directly adds row builder support for arrays that correspond to primitive
 /// variant types.
-trait PrimitiveVariantUnshredExt {
+trait AppendToVariantBuilder: Array {
     fn append_to_variant_builder(
         &self,
         builder: &mut impl VariantBuilderExt,
@@ -280,8 +280,8 @@ trait PrimitiveVariantUnshredExt {
     ) -> Result<()>;
 }
 
-/// Macro that handles the common unshredded case and returns early if handled.
-/// If not handled (shredded case), validates and returns the extracted value.
+/// Macro that handles the unshredded case (typed_value is missing or NULL) and returns early if
+/// handled.  If not handled (shredded case), validates and returns the extracted value.
 macro_rules! handle_unshredded_case {
     ($self:expr, $builder:expr, $metadata:expr, $index:expr, $partial_shredding:expr) => {{
         let value = $self.value.as_ref().filter(|v| v.is_valid($index));
@@ -308,13 +308,13 @@ macro_rules! handle_unshredded_case {
     }};
 }
 
-/// Generic unshred builder that works with any typed array implementing VariantUnshredExt
+/// Generic unshred builder that works with any Array implementing AppendToVariantBuilder
 struct UnshredPrimitiveRowBuilder<'a, T> {
     value: Option<&'a BinaryViewArray>,
     typed_value: &'a T,
 }
 
-impl<'a, T: Array + PrimitiveVariantUnshredExt> UnshredPrimitiveRowBuilder<'a, T> {
+impl<'a, T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<'a, T> {
     fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a T) -> Self {
         Self { value, typed_value }
     }
@@ -332,10 +332,10 @@ impl<'a, T: Array + PrimitiveVariantUnshredExt> UnshredPrimitiveRowBuilder<'a, T
     }
 }
 
-// Macro to generate VariantUnshredExt implementations with optional value transformation
-macro_rules! impl_variant_unshred {
+// Macro to generate AppendToVariantBuilder implementations with optional value transformation
+macro_rules! impl_append_to_variant_builder {
     ($array_type:ty $(, |$v:ident| $transform:expr)? ) => {
-        impl PrimitiveVariantUnshredExt for $array_type {
+        impl AppendToVariantBuilder for $array_type {
             fn append_to_variant_builder(
                 &self,
                 builder: &mut impl VariantBuilderExt,
@@ -353,21 +353,21 @@ macro_rules! impl_variant_unshred {
     };
 }
 
-impl_variant_unshred!(BooleanArray);
-impl_variant_unshred!(StringArray);
-impl_variant_unshred!(BinaryViewArray);
-impl_variant_unshred!(PrimitiveArray<Int8Type>);
-impl_variant_unshred!(PrimitiveArray<Int16Type>);
-impl_variant_unshred!(PrimitiveArray<Int32Type>);
-impl_variant_unshred!(PrimitiveArray<Int64Type>);
-impl_variant_unshred!(PrimitiveArray<Float32Type>);
-impl_variant_unshred!(PrimitiveArray<Float64Type>);
+impl_append_to_variant_builder!(BooleanArray);
+impl_append_to_variant_builder!(StringArray);
+impl_append_to_variant_builder!(BinaryViewArray);
+impl_append_to_variant_builder!(PrimitiveArray<Int8Type>);
+impl_append_to_variant_builder!(PrimitiveArray<Int16Type>);
+impl_append_to_variant_builder!(PrimitiveArray<Int32Type>);
+impl_append_to_variant_builder!(PrimitiveArray<Int64Type>);
+impl_append_to_variant_builder!(PrimitiveArray<Float32Type>);
+impl_append_to_variant_builder!(PrimitiveArray<Float64Type>);
 
-impl_variant_unshred!(PrimitiveArray<Date32Type>, |days_since_epoch| {
+impl_append_to_variant_builder!(PrimitiveArray<Date32Type>, |days_since_epoch| {
     Date32Type::to_naive_date(days_since_epoch)
 });
 
-impl_variant_unshred!(
+impl_append_to_variant_builder!(
     PrimitiveArray<Time64MicrosecondType>,
     |micros_since_midnight| {
         time64us_to_time(micros_since_midnight).ok_or_else(|| {
@@ -380,7 +380,7 @@ impl_variant_unshred!(
 
 // UUID from FixedSizeBinary(16)
 // NOTE: FixedSizeBinaryArray guarantees the byte length, so we can safely unwrap
-impl_variant_unshred!(FixedSizeBinaryArray, |bytes| {
+impl_append_to_variant_builder!(FixedSizeBinaryArray, |bytes| {
     Uuid::from_slice(bytes).unwrap()
 });
 
