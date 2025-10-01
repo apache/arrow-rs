@@ -555,7 +555,6 @@ impl FileMetaData {
     }
 }
 
-// TODO: should this move to thrift_gen?
 thrift_struct!(
 /// Sort order within a RowGroup of a leaf column
 pub struct SortingColumn {
