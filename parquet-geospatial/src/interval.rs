@@ -1073,8 +1073,9 @@ mod test {
 
         // Can't convert a wraparound interval that actually wraps around to an Interval
         let err = Interval::try_from(wraparound).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Can't convert wraparound interval"));
+        assert!(
+            err.to_string()
+                .contains("Can't convert wraparound interval")
+        );
     }
 }

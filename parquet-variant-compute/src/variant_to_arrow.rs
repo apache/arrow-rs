@@ -21,7 +21,7 @@ use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
-use crate::type_conversion::VariantAsPrimitive;
+use crate::type_conversion::PrimitiveFromVariant;
 use crate::{VariantArray, VariantValueArrayBuilder};
 
 use std::sync::Arc;
@@ -298,12 +298,12 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
 }
 
 /// Builder for converting variant values to primitive values
-pub(crate) struct VariantToPrimitiveArrowRowBuilder<'a, T: ArrowPrimitiveType> {
+pub(crate) struct VariantToPrimitiveArrowRowBuilder<'a, T: PrimitiveFromVariant> {
     builder: arrow::array::PrimitiveBuilder<T>,
     cast_options: &'a CastOptions<'a>,
 }
 
-impl<'a, T: ArrowPrimitiveType> VariantToPrimitiveArrowRowBuilder<'a, T> {
+impl<'a, T: PrimitiveFromVariant> VariantToPrimitiveArrowRowBuilder<'a, T> {
     fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
         Self {
             builder: PrimitiveBuilder::<T>::with_capacity(capacity),
@@ -312,18 +312,14 @@ impl<'a, T: ArrowPrimitiveType> VariantToPrimitiveArrowRowBuilder<'a, T> {
     }
 }
 
-impl<'a, T> VariantToPrimitiveArrowRowBuilder<'a, T>
-where
-    T: ArrowPrimitiveType,
-    for<'m, 'v> Variant<'m, 'v>: VariantAsPrimitive<T>,
-{
+impl<'a, T: PrimitiveFromVariant> VariantToPrimitiveArrowRowBuilder<'a, T> {
     fn append_null(&mut self) -> Result<()> {
         self.builder.append_null();
         Ok(())
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(v) = value.as_primitive() {
+        if let Some(v) = T::from_variant(value) {
             self.builder.append_value(v);
             Ok(true)
         } else {

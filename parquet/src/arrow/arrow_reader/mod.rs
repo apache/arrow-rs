@@ -693,7 +693,7 @@ impl ArrowReaderMetadata {
 }
 
 #[doc(hidden)]
-/// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
+// A newtype used within `ReaderOptionsBuilder` to distinguish sync readers from async
 pub struct SyncReader<T: ChunkReader>(T);
 
 impl<T: Debug + ChunkReader> Debug for SyncReader<T> {
