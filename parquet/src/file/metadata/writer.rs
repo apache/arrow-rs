@@ -711,11 +711,11 @@ impl MetadataObjectWriter {
         })
     }
 
-    fn file_crypto_metadata(file_encryptor: &FileEncryptor) -> Result<FileCryptoMetaData> {
+    fn file_crypto_metadata(file_encryptor: &'_ FileEncryptor) -> Result<FileCryptoMetaData<'_>> {
         let properties = file_encryptor.properties();
         Ok(FileCryptoMetaData {
             encryption_algorithm: Self::encryption_algorithm_from_encryptor(file_encryptor),
-            key_metadata: properties.footer_key_metadata().cloned(),
+            key_metadata: properties.footer_key_metadata().map(|v| v.as_slice()),
         })
     }
 

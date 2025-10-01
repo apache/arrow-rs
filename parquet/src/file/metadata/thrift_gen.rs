@@ -131,7 +131,7 @@ union EncryptionAlgorithm {
 #[cfg(feature = "encryption")]
 thrift_struct!(
 /// Crypto metadata for files with encrypted footer
-pub(crate) struct FileCryptoMetaData {
+pub(crate) struct FileCryptoMetaData<'a> {
   /// Encryption algorithm. This field is only used for files
   /// with encrypted footer. Files with plaintext footer store algorithm id
   /// inside footer (FileMetaData structure).
@@ -139,7 +139,7 @@ pub(crate) struct FileCryptoMetaData {
 
   /// Retrieval metadata of key used for encryption of footer,
   /// and (possibly) columns.
-  2: optional binary key_metadata
+  2: optional binary<'a> key_metadata
 }
 );
 
@@ -151,10 +151,10 @@ struct FileMetaData<'a> {
   3: required i64 num_rows
   4: required list<'a><RowGroup> row_groups
   5: optional list<KeyValue> key_value_metadata
-  6: optional string created_by
+  6: optional string<'a> created_by
   7: optional list<ColumnOrder> column_orders;
   8: optional EncryptionAlgorithm encryption_algorithm
-  9: optional binary footer_signing_key_metadata
+  9: optional binary<'a> footer_signing_key_metadata
 }
 );
 
@@ -708,7 +708,7 @@ pub(crate) fn parquet_metadata_with_encryption(
             }
             let decryptor = get_file_decryptor(
                 t_file_crypto_metadata.encryption_algorithm,
-                t_file_crypto_metadata.key_metadata.as_ref(),
+                t_file_crypto_metadata.key_metadata,
                 file_decryption_properties,
             )?;
             let footer_decryptor = decryptor.get_footer_decryptor();
@@ -731,7 +731,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         }
     }
 
-    let file_meta = super::thrift_gen::FileMetaData::read_thrift(&mut prot)
+    let file_meta = FileMetaData::read_thrift(&mut prot)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
 
     let version = file_meta.version;
@@ -748,7 +748,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         // File has a plaintext footer but encryption algorithm is set
         let file_decryptor_value = get_file_decryptor(
             algo,
-            file_meta.footer_signing_key_metadata.as_ref(),
+            file_meta.footer_signing_key_metadata,
             file_decryption_properties,
         )?;
         if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
@@ -807,9 +807,9 @@ pub(crate) fn parquet_metadata_with_encryption(
 }
 
 #[cfg(feature = "encryption")]
-pub(super) fn get_file_decryptor(
+fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&Vec<u8>>,
+    footer_key_metadata: Option<&[u8]>,
     file_decryption_properties: &FileDecryptionProperties,
 ) -> Result<FileDecryptor> {
     match encryption_algorithm {
@@ -826,7 +826,7 @@ pub(super) fn get_file_decryptor(
 
             FileDecryptor::new(
                 file_decryption_properties,
-                footer_key_metadata.map(|v| v.as_slice()),
+                footer_key_metadata,
                 aad_file_unique,
                 aad_prefix,
             )
@@ -841,7 +841,7 @@ pub(super) fn get_file_decryptor(
 /// the Parquet footer. Page indexes will need to be added later.
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ParquetMetaData {
     fn read_thrift(prot: &mut R) -> Result<Self> {
-        let file_meta = super::thrift_gen::FileMetaData::read_thrift(prot)?;
+        let file_meta = FileMetaData::read_thrift(prot)?;
 
         let version = file_meta.version;
         let num_rows = file_meta.num_rows;
