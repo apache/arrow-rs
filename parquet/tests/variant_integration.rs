@@ -279,7 +279,6 @@ impl VariantTestCase {
 
         let variant_data = self.load_variants();
         let variant_array = self.load_parquet();
-        let variant_array = unshred_variant(&variant_array).unwrap();
 
         // `load_parquet` returns shredded variant values, but the test expectations are provided as
         // unshredded variant values. Unshred (failing for invalid input) so we can compare them.

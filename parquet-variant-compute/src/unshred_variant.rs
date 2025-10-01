@@ -223,15 +223,18 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                 value,
                 typed_value.as_list(),
             )?),
-            DataType::LargeList(_) => Self::LargeList(
-                ListUnshredVariantBuilder::try_new(value, typed_value.as_list())?,
-            ),
-            DataType::ListView(_) => Self::ListView(
-                ListUnshredVariantBuilder::try_new(value, typed_value.as_list_view())?,
-            ),
-            DataType::LargeListView(_) => Self::LargeListView(
-                ListUnshredVariantBuilder::try_new(value, typed_value.as_list_view())?,
-            ),
+            DataType::LargeList(_) => Self::LargeList(ListUnshredVariantBuilder::try_new(
+                value,
+                typed_value.as_list(),
+            )?),
+            DataType::ListView(_) => Self::ListView(ListUnshredVariantBuilder::try_new(
+                value,
+                typed_value.as_list_view(),
+            )?),
+            DataType::LargeListView(_) => Self::LargeListView(ListUnshredVariantBuilder::try_new(
+                value,
+                typed_value.as_list_view(),
+            )?),
             DataType::FixedSizeList(_, _) => Self::FixedSizeList(
                 ListUnshredVariantBuilder::try_new(value, typed_value.as_fixed_size_list())?,
             ),
