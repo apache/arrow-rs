@@ -35,9 +35,12 @@ fn criterion_benchmark(c: &mut Criterion) {
         let values = gen_vector(1, ITER_LEN);
         b.iter(|| hint::black_box(Int64Array::from_iter(values.iter())));
     });
-    c.bench_function("Int64Array::from_trusted_len_iter", |b| unsafe {
+    c.bench_function("Int64Array::from_trusted_len_iter", |b| {
         let values = gen_vector(1, ITER_LEN);
-        b.iter(|| hint::black_box(Int64Array::from_trusted_len_iter(values.iter())));
+        b.iter(|| unsafe {
+            // SAFETY: values.iter() is a TrustedLenIterator
+            hint::black_box(Int64Array::from_trusted_len_iter(values.iter()))
+        });
     });
 
     c.bench_function("BooleanArray::from_iter", |b| {
