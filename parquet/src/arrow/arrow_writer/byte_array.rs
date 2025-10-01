@@ -15,14 +15,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::Encoding;
+use crate::basic::{Encoding, LogicalType};
 use crate::bloom_filter::Sbbf;
-use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
+use crate::column::writer::encoder::{
+    update_geo_stats_accumulator, ColumnValueEncoder, DataPageValues, DictionaryPage,
+};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
 use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::geospatial::accumulator::{
+    DefaultGeoStatsAccumulatorFactory, GeoStatsAccumulator, GeoStatsAccumulatorFactory,
+};
+use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
@@ -421,6 +427,7 @@ pub struct ByteArrayEncoder {
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
+    geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -447,6 +454,15 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
+        let geo_stats_accumulator = if matches!(
+            descr.logical_type(),
+            Some(LogicalType::Geometry) | Some(LogicalType::Geography)
+        ) {
+            Some(DefaultGeoStatsAccumulatorFactory::default().new_accumulator(descr))
+        } else {
+            None
+        };
+
         Ok(Self {
             fallback,
             statistics_enabled,
@@ -454,6 +470,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             dict_encoder: dictionary,
             min_value: None,
             max_value: None,
+            geo_stats_accumulator,
         })
     }
 
@@ -536,6 +553,14 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             _ => self.fallback.flush_data_page(min_value, max_value),
         }
     }
+
+    fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
+        if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
+            accumulator.finish()
+        } else {
+            None
+        }
+    }
 }
 
 /// Encodes the provided `values` and `indices` to `encoder`
@@ -547,7 +572,10 @@ where
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
     if encoder.statistics_enabled != EnabledStatistics::None {
-        if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
+        // TODO Converted interval types no stats?
+        if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
+            update_geo_stats_accumulator(accumulator.as_mut(), [0x01].iter());
+        } else if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
             if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
                 encoder.min_value = Some(min);
             }

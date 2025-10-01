@@ -1,9 +1,11 @@
-use crate::{geospatial::statistics::GeospatialStatistics, schema::types::ColumnDescriptor};
+//! This module provides implementations and traits for building [GeospatialStatistics]
+
+use crate::{geospatial::statistics::GeospatialStatistics, schema::types::ColumnDescPtr};
 
 /// Factory for [GeospatialStatistics] accumulators
 pub trait GeoStatsAccumulatorFactory {
     /// Create a new accumulator
-    fn new_accumulator(&self) -> Box<dyn GeoStatsAccumulator>;
+    fn new_accumulator(&self, descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator>;
 }
 
 /// Dynamic geospatial accumulator
@@ -12,7 +14,7 @@ pub trait GeoStatsAccumulator: Send {
     fn is_valid(&self) -> bool;
 
     /// Update with a single slice of possibly wkb-encoded values
-    fn update_wkb(&mut self, descr: &ColumnDescriptor, wkb: &[u8]);
+    fn update_wkb(&mut self, wkb: &[u8]);
 
     /// Compute the final statistics from internal state
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>>;
@@ -23,9 +25,13 @@ pub trait GeoStatsAccumulator: Send {
 pub struct DefaultGeoStatsAccumulatorFactory {}
 
 impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
-    fn new_accumulator(&self) -> Box<dyn GeoStatsAccumulator> {
+    fn new_accumulator(&self, _descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
         #[cfg(feature = "geospatial")]
-        return Box::new(ParquetGeoStatsAccumulator::default());
+        if let Some(crate::basic::LogicalType::Geometry) = _descr.logical_type() {
+            Box::new(ParquetGeoStatsAccumulator::default())
+        } else {
+            Box::new(VoidGeospatialStatisticsAccumulator::default())
+        }
 
         #[cfg(not(feature = "geospatial"))]
         return Box::new(VoidGeospatialStatisticsAccumulator::default());
@@ -41,7 +47,7 @@ impl GeoStatsAccumulator for VoidGeospatialStatisticsAccumulator {
         false
     }
 
-    fn update_wkb(&mut self, _descr: &ColumnDescriptor, _wkb: &[u8]) {}
+    fn update_wkb(&mut self, _wkb: &[u8]) {}
 
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>> {
         None
@@ -72,19 +78,39 @@ impl GeoStatsAccumulator for ParquetGeoStatsAccumulator {
         !self.invalid
     }
 
-    fn update_wkb(&mut self, descr: &ColumnDescriptor, wkb: &[u8]) {
-        use crate::basic::LogicalType;
-
-        if let Some(LogicalType::Geometry) = descr.logical_type() {
-            if self.bounder.update_wkb(wkb).is_err() {
-                self.invalid = true;
-            }
-        } else {
+    fn update_wkb(&mut self, wkb: &[u8]) {
+        if self.bounder.update_wkb(wkb).is_err() {
             self.invalid = true;
         }
     }
 
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>> {
-        todo!()
+        use parquet_geospatial::interval::IntervalTrait;
+
+        use crate::geospatial::bounding_box::BoundingBox;
+
+        if self.invalid || self.bounder.x().is_empty() || self.bounder.y().is_empty() {
+            return None;
+        }
+
+        let mut bbox = BoundingBox::new(
+            self.bounder.x().lo(),
+            self.bounder.x().hi(),
+            self.bounder.y().lo(),
+            self.bounder.y().hi(),
+        );
+
+        if !self.bounder.z().is_empty() {
+            bbox = bbox.with_zrange(self.bounder.z().lo(), self.bounder.z().hi());
+        }
+
+        if !self.bounder.m().is_empty() {
+            bbox = bbox.with_mrange(self.bounder.m().lo(), self.bounder.m().hi());
+        }
+
+        Some(Box::new(GeospatialStatistics::new(
+            Some(bbox),
+            Some(self.bounder.geometry_types()),
+        )))
     }
 }
