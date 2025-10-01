@@ -22,6 +22,7 @@ use half::f16;
 
 use crate::bloom_filter::Sbbf;
 use crate::format::{BoundaryOrder, ColumnIndex, OffsetIndex};
+use crate::geospatial::accumulator::GeoStatsAccumulator;
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
@@ -267,6 +268,7 @@ struct ColumnMetrics<T: Default> {
     variable_length_bytes: Option<i64>,
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
+    geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
 impl<T: Default> ColumnMetrics<T> {
@@ -466,17 +468,6 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
             update_max(&self.descr, max, &mut self.column_metrics.max_column_value);
         }
 
-        if self.statistics_enabled != EnabledStatistics::None
-            && matches!(
-                self.descr.logical_type(),
-                Some(LogicalType::Geometry) | Some(LogicalType::Geography)
-            )
-        {
-            // GeospatialStatistics are not written at the page level, so we need to loop
-            // through values and calculate those statistics here if requested (and if we
-            // were built with geospatial support so that we have the Bounder)
-        }
-
         // We can only set the distinct count if there are no other writes
         if self.encoder.num_values() == 0 {
             self.column_metrics.column_distinct_count = distinct_count;
@@ -506,6 +497,17 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 rep_levels.map(|lv| &lv[levels_offset..end_offset]),
             )?;
             levels_offset = end_offset;
+        }
+
+        if self.statistics_enabled != EnabledStatistics::None
+            && matches!(
+                self.descr.logical_type(),
+                Some(LogicalType::Geometry) | Some(LogicalType::Geography)
+            )
+        {
+            // GeospatialStatistics are not written at the page level, so we need to loop
+            // through values and calculate those statistics here if requested (and if we
+            // were built with geospatial support so that we have the Bounder)
         }
 
         // Return total number of values processed.
@@ -1231,12 +1233,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                     self.column_metrics.definition_level_histogram.take(),
                 );
 
-            if matches!(
-                self.descr.logical_type(),
-                Some(LogicalType::Geometry) | Some(LogicalType::Geography)
-            ) {
-                // + if we have any geostatistics to write
-                // builder.set_geo_statistics(value)
+            if let Some(accumulator) = self.column_metrics.geo_stats_accumulator.as_mut() {
+                if let Some(geo_stats) = accumulator.finish() {
+                    builder = builder.set_geo_statistics(geo_stats);
+                }
             }
         }
 

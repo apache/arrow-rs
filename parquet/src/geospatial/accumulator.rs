@@ -1,44 +1,28 @@
-use crate::data_type::private::ParquetValueType;
 use crate::{geospatial::statistics::GeospatialStatistics, schema::types::ColumnDescriptor};
 
+/// Factory for [GeospatialStatistics] accumulators
 pub trait GeoStatsAccumulatorFactory {
+    /// Create a new accumulator
     fn new_accumulator(&self) -> Box<dyn GeoStatsAccumulator>;
 }
 
-pub trait GeoStatsAccumulator {
+/// Dynamic geospatial accumulator
+pub trait GeoStatsAccumulator: Send {
+    /// Returns true if this accumulator has any plans to actually return statistics
     fn is_valid(&self) -> bool;
+
+    /// Update with a single slice of possibly wkb-encoded values
     fn update_wkb(&mut self, descr: &ColumnDescriptor, wkb: &[u8]);
+
+    /// Compute the final statistics from internal state
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
-pub fn update_geospatial_statistics_accumulator<'a, T, I>(
-    bounder: &mut dyn GeoStatsAccumulator,
-    descr: &ColumnDescriptor,
-    iter: I,
-) where
-    T: ParquetValueType + 'a,
-    I: Iterator<Item = &'a T>,
-{
-    use crate::basic::LogicalType;
-
-    if !bounder.is_valid()
-        || !matches!(
-            descr.logical_type(),
-            Some(LogicalType::Geometry) | Some(LogicalType::Geography)
-        )
-    {
-        return;
-    }
-
-    for val in iter {
-        bounder.update_wkb(descr, val.as_bytes());
-    }
-}
-
+/// Default accumulator for [GeospatialStatistics] reflecting the build-time features of this build
 #[derive(Debug, Default)]
-struct DefaultGeospatialStatisticsAccumulatorFactory {}
+pub struct DefaultGeoStatsAccumulatorFactory {}
 
-impl GeoStatsAccumulatorFactory for DefaultGeospatialStatisticsAccumulatorFactory {
+impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
     fn new_accumulator(&self) -> Box<dyn GeoStatsAccumulator> {
         #[cfg(feature = "geospatial")]
         return Box::new(ParquetGeoStatsAccumulator::default());
@@ -48,6 +32,7 @@ impl GeoStatsAccumulatorFactory for DefaultGeospatialStatisticsAccumulatorFactor
     }
 }
 
+/// A [GeoStatsAccumulator] that never computes any [GeospatialStatistics]
 #[derive(Debug, Default)]
 pub struct VoidGeospatialStatisticsAccumulator {}
 
@@ -63,9 +48,10 @@ impl GeoStatsAccumulator for VoidGeospatialStatisticsAccumulator {
     }
 }
 
+/// A [GeoStatsAccumulator] that uses the parquet-geospatial crate to compute statistics
 #[cfg(feature = "geospatial")]
 #[derive(Debug)]
-struct ParquetGeoStatsAccumulator {
+pub struct ParquetGeoStatsAccumulator {
     bounder: parquet_geospatial::bounding::GeometryBounder,
     invalid: bool,
 }
@@ -90,7 +76,7 @@ impl GeoStatsAccumulator for ParquetGeoStatsAccumulator {
         use crate::basic::LogicalType;
 
         if let Some(LogicalType::Geometry) = descr.logical_type() {
-            if let Err(_) = self.bounder.update_wkb(wkb) {
+            if self.bounder.update_wkb(wkb).is_err() {
                 self.invalid = true;
             }
         } else {
