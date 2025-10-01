@@ -349,7 +349,8 @@ pub enum LogicalType {
     },
     /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
     Geometry {
-        /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`, which means that the geometries
+        /// must be stored in longitude, latitude based on the WGS84 datum.
         crs: Option<String>,
     },
     /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
@@ -357,7 +358,7 @@ pub enum LogicalType {
         /// A custom CRS. If unset the defaults to `OGC:CRS84`.
         crs: Option<String>,
         /// An optional algorithm can be set to correctly interpret edges interpolation
-        /// of the geometries. If unset, the algorithm defaults to `SPHERICAL``.
+        /// of the geometries. If unset, the algorithm defaults to `SPHERICAL`.
         algorithm: Option<EdgeInterpolationAlgorithm>,
     },
     /// For forward compatibility; used when an unknown union value is encountered.
@@ -456,9 +457,10 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
             }
             18 => {
                 let val = GeographyType::read_thrift(&mut *prot)?;
+                let algorithm = val.algorithm.unwrap_or_default();
                 Self::Geography {
                     crs: val.crs.map(|s| s.to_owned()),
-                    algorithm: val.algorithm,
+                    algorithm: Some(algorithm),
                 }
             }
             _ => {
@@ -928,16 +930,30 @@ enum BoundaryOrder {
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `EdgeInterpolationAlgorithm`
 
+// TODO(ets): we need to allow for unknown variants. Either hand code this one, or add a new
+// macro that adds an _Unknown variant.
+
 thrift_enum!(
 /// Edge interpolation algorithm for Geography logical type
 enum EdgeInterpolationAlgorithm {
+  /// Edges are interpolated as geodesics on a sphere.
   SPHERICAL = 0;
+  /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
   VINCENTY = 1;
+  /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
   THOMAS = 2;
+  /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
   ANDOYER = 3;
+  /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
   KARNEY = 4;
 }
 );
+
+impl Default for EdgeInterpolationAlgorithm {
+    fn default() -> Self {
+        Self::SPHERICAL
+    }
+}
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `BloomFilterAlgorithm`
@@ -1359,7 +1375,7 @@ impl str::FromStr for LogicalType {
             "GEOMETRY" => Ok(LogicalType::Geometry { crs: None }),
             "GEOGRAPHY" => Ok(LogicalType::Geography {
                 crs: None,
-                algorithm: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
             }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
@@ -1817,6 +1833,17 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geometry { crs: None })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::default()),
+            })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
             ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
         );
@@ -1897,11 +1924,11 @@ mod tests {
         });
         test_roundtrip(LogicalType::Geography {
             crs: Some("foo".to_owned()),
-            algorithm: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
         });
         test_roundtrip(LogicalType::Geography {
             crs: None,
-            algorithm: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
         });
     }
 
@@ -2113,7 +2140,15 @@ mod tests {
         check_sort_order(signed, SortOrder::SIGNED);
 
         // Undefined comparison
-        let undefined = vec![LogicalType::List, LogicalType::Map];
+        let undefined = vec![
+            LogicalType::List,
+            LogicalType::Map,
+            LogicalType::Geometry { crs: None },
+            LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::default()),
+            },
+        ];
         check_sort_order(undefined, SortOrder::UNDEFINED);
     }
 
