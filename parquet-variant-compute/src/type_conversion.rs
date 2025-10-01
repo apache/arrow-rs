@@ -17,8 +17,10 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::datatypes::{self, ArrowPrimitiveType};
-use chrono::Datelike;
+use arrow::datatypes::{
+    self, ArrowPrimitiveType, ArrowTimestampType, Date32Type, TimestampMicrosecondType,
+    TimestampNanosecondType,
+};
 use parquet_variant::Variant;
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
@@ -41,10 +43,12 @@ pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
 
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
 macro_rules! impl_primitive_from_variant {
-    ($arrow_type:ty, $variant_method:ident) => {
+    ($arrow_type:ty, $variant_method:ident $(, $cast_fn:expr)?) => {
         impl PrimitiveFromVariant for $arrow_type {
             fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
-                variant.$variant_method()
+                let value = variant.$variant_method();
+                $( let value = value.map($cast_fn); )?
+                value
             }
         }
     };
@@ -61,35 +65,45 @@ impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
 impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
 impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
 impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
+impl_primitive_from_variant!(
+    datatypes::Date32Type,
+    as_naive_date,
+    Date32Type::from_naive_date
+);
 
-impl VariantAsPrimitive<datatypes::TimestampMicrosecondType> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i64> {
-        match self {
-            Variant::TimestampMicros(dt) => Some(dt.timestamp_micros()),
-            Variant::TimestampNtzMicros(ndt) => Some(ndt.and_utc().timestamp_micros()),
-            _ => None,
+pub(crate) trait TimestampFromVariant: ArrowTimestampType {
+    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
+}
+
+macro_rules! impl_timestamp_from_variant {
+    ($timestamp_type:ty, {
+        $(($variant_pattern:pat, $conversion:expr)),+ $(,)?
+    }) => {
+        impl TimestampFromVariant for $timestamp_type {
+            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
+                match variant {
+                    $(
+                        $variant_pattern => $conversion,
+                    )+
+                    _ => None,
+                }
+            }
         }
-    }
+    };
 }
 
-impl VariantAsPrimitive<datatypes::TimestampNanosecondType> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i64> {
-        match self {
-            Variant::TimestampNanos(dt) => dt.timestamp_nanos_opt(),
-            Variant::TimestampNtzNanos(ndt) => ndt.and_utc().timestamp_nanos_opt(),
-            _ => None,
-        }
-    }
-}
+impl_timestamp_from_variant!(TimestampMicrosecondType, {
+    (Variant::TimestampMicros(t), Some(t.timestamp_micros())),
+    (Variant::TimestampNtzMicros(t), Some(t.and_utc().timestamp_micros())),
+});
 
-impl VariantAsPrimitive<datatypes::Date32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i32> {
-        // The number of days from 0001-01-01 to 1970-01-01.
-        const DAYS_FROM_CE_TO_UNIX_EPOCH: i32 = 719163;
-        self.as_naive_date()
-            .map(|d| d.num_days_from_ce() - DAYS_FROM_CE_TO_UNIX_EPOCH)
-    }
-}
+impl_timestamp_from_variant!(TimestampNanosecondType, {
+    (Variant::TimestampMicros(t), Some(t.timestamp_micros()).map(|t| t * 1000)),
+    (Variant::TimestampNtzMicros(t), Some(t.and_utc().timestamp_micros()).map(|t| t * 1000)),
+    (Variant::TimestampNanos(t), t.timestamp_nanos_opt()),
+    (Variant::TimestampNtzNanos(t), t.and_utc().timestamp_nanos_opt()),
+});
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{

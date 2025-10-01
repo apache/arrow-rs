@@ -866,6 +866,18 @@ mod test {
         ])
     );
 
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_nano_ntz,
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
+        ])
+    );
+
     perfectly_shredded_variant_array_fn!(perfectly_shredded_timestamp_micro_variant_array, || {
         arrow::array::TimestampMicrosecondArray::from(vec![
             Some(-456000),
@@ -883,6 +895,19 @@ mod test {
             Some(-456000),
             Some(1758602096000001),
             Some(1758602096000002),
+        ])
+        .with_timezone("+00:00")
+    );
+
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_nano,
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
         ])
         .with_timezone("+00:00")
     );
