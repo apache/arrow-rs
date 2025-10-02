@@ -25,6 +25,7 @@ extern crate arrow;
 use arrow::array::*;
 use arrow_buffer::i256;
 use rand::Rng;
+use std::iter::repeat_n;
 use std::{hint, sync::Arc};
 
 fn array_from_vec(n: usize) {
@@ -206,5 +207,41 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, criterion_benchmark, decimal_benchmark);
+fn gen_option_vector<TItem: Copy>(item: TItem, len: usize) -> Vec<Option<TItem>> {
+    hint::black_box(
+        repeat_n(item, len)
+            .enumerate()
+            .map(|(idx, item)| if idx % 3 == 0 { None } else { Some(item) })
+            .collect(),
+    )
+}
+
+fn from_iter_benchmark(c: &mut Criterion) {
+    const ITER_LEN: usize = 16_384;
+
+    // All ArrowPrimitiveType use the same implementation
+    c.bench_function("Int64Array::from_iter", |b| {
+        let values = gen_option_vector(1, ITER_LEN);
+        b.iter(|| hint::black_box(Int64Array::from_iter(values.iter())));
+    });
+    c.bench_function("Int64Array::from_trusted_len_iter", |b| {
+        let values = gen_option_vector(1, ITER_LEN);
+        b.iter(|| unsafe {
+            // SAFETY: values.iter() is a TrustedLenIterator
+            hint::black_box(Int64Array::from_trusted_len_iter(values.iter()))
+        });
+    });
+
+    c.bench_function("BooleanArray::from_iter", |b| {
+        let values = gen_option_vector(true, ITER_LEN);
+        b.iter(|| hint::black_box(BooleanArray::from_iter(values.iter())));
+    });
+}
+
+criterion_group!(
+    benches,
+    criterion_benchmark,
+    decimal_benchmark,
+    from_iter_benchmark
+);
 criterion_main!(benches);
