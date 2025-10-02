@@ -18,7 +18,8 @@
 use crate::basic::{ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{BasicTypeInfo, Type};
-use arrow_schema::{DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION};
+use arrow_schema::{DataType, IntervalUnit, TimeUnit};
+use arrow_schema::{Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type, DecimalType};
 
 /// Converts [`Type`] to [`DataType`] with an optional `arrow_type_hint`
 /// provided by the arrow schema
@@ -132,35 +133,24 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
 }
 
 fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
-    if precision <= DECIMAL128_MAX_PRECISION as i32 {
-        decimal_128_type(scale, precision)
+    // Convert and validate inputs once
+    let scale = scale
+        .try_into()
+        .map_err(|_| arrow_err!("scale cannot be negative: {}", scale))?;
+    let precision = precision
+        .try_into()
+        .map_err(|_| arrow_err!("precision cannot be negative: {}", precision))?;
+
+    // Dispatch based on precision thresholds using DecimalType trait constants
+    if precision <= Decimal32Type::MAX_PRECISION {
+        Ok((Decimal32Type::TYPE_CONSTRUCTOR)(precision, scale))
+    } else if precision <= Decimal64Type::MAX_PRECISION {
+        Ok((Decimal64Type::TYPE_CONSTRUCTOR)(precision, scale))
+    } else if precision <= Decimal128Type::MAX_PRECISION {
+        Ok((Decimal128Type::TYPE_CONSTRUCTOR)(precision, scale))
     } else {
-        decimal_256_type(scale, precision)
+        Ok((Decimal256Type::TYPE_CONSTRUCTOR)(precision, scale))
     }
-}
-
-fn decimal_128_type(scale: i32, precision: i32) -> Result<DataType> {
-    let scale = scale
-        .try_into()
-        .map_err(|_| arrow_err!("scale cannot be negative: {}", scale))?;
-
-    let precision = precision
-        .try_into()
-        .map_err(|_| arrow_err!("precision cannot be negative: {}", precision))?;
-
-    Ok(DataType::Decimal128(precision, scale))
-}
-
-fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
-    let scale = scale
-        .try_into()
-        .map_err(|_| arrow_err!("scale cannot be negative: {}", scale))?;
-
-    let precision = precision
-        .try_into()
-        .map_err(|_| arrow_err!("precision cannot be negative: {}", precision))?;
-
-    Ok(DataType::Decimal256(precision, scale))
 }
 
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
@@ -183,7 +173,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             (32, false) => Ok(DataType::UInt32),
             _ => Err(arrow_err!("Cannot create INT32 physical type from {:?}", t)),
         },
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_type(scale, precision),
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
             ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
@@ -202,7 +192,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (None, ConvertedType::INT_32) => Ok(DataType::Int32),
         (None, ConvertedType::DATE) => Ok(DataType::Date32),
         (None, ConvertedType::TIME_MILLIS) => Ok(DataType::Time32(TimeUnit::Millisecond)),
-        (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
+        (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT32 logical type {:?} or converted type {}",
             logical,
@@ -260,8 +250,8 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             TimeUnit::Microsecond,
             Some("UTC".into()),
         )),
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
-        (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_type(scale, precision),
+        (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT64 logical type {:?} or converted type {}",
             logical,
