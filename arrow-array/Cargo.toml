@@ -80,7 +80,3 @@ harness = false
 [[bench]]
 name = "union_array"
 harness = false
-
-[[bench]]
-name = "from_iter_array"
-harness = false
