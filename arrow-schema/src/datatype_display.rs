@@ -17,7 +17,7 @@
 
 use std::{collections::HashMap, fmt};
 
-use crate::{DataType, field};
+use crate::DataType;
 
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
