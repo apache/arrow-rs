@@ -22,12 +22,12 @@
 //! - [`VariantArrayBuilder`]: For building [`VariantArray`]
 //!
 //! # Compute Kernels
-//! - [`json_to_variant()`]: Function to convert a Arrays of JSON strings to a `VariantArray`.
-//! - [`variant_to_json()`]: Function to convert a `VariantArray` to Arrays of JSON strings.
+//! - [`json_to_variant()`]: Function to convert Arrays of JSON strings to a `VariantArray`.
+//! - [`variant_to_json()`]: Function to convert a `VariantArray` to arrays of JSON strings.
 //! - [`cast_to_variant()`]: Cast Arrow arrays to `VariantArray`.
 //! - [`variant_get()`]: Convert `VariantArray` (or an inner path) to ArrowArrays type
 //! - [`shred_variant()`]: Shred a `VariantArray`
-//! - [`unshred_variant()`]: Unshred a  `VariantArray`.
+//! - [`unshred_variant()`]: Unshred a `VariantArray`.
 //!
 //! ## 🚧 Work In Progress
 //!
