@@ -929,6 +929,11 @@ fn typed_value_to_variant<'a>(
 /// So cast them to get the right type.
 fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     let new_type = canonicalize_and_verify_data_type(array.data_type())?;
+    if let Cow::Borrowed(_) = new_type {
+        if let Some(array) = array.as_struct_opt() {
+            return Ok(Arc::new(array.clone())); // bypass the unnecessary cast
+        }
+    }
     cast(array, new_type.as_ref())
 }
 
