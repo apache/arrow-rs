@@ -1585,7 +1585,7 @@ impl WriteThrift for crate::geospatial::statistics::GeospatialStatistics {
 
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
         let mut last_field_id = 0i16;
-        if let Some(bbox) = self.bbox() {
+        if let Some(bbox) = self.bounding_box() {
             last_field_id = bbox.write_thrift_field(writer, 1, last_field_id)?;
         }
         if let Some(geo_types) = self.geospatial_types() {

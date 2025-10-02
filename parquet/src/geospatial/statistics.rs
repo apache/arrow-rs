@@ -58,12 +58,12 @@ impl GeospatialStatistics {
         }
     }
 
-    /// Return the optional `BoundingBox`.
-    pub fn bbox(&self) -> Option<&BoundingBox> {
+    /// Optional bounding defining the spatial extent, where `None` represents a lack of information.
+    pub fn bounding_box(&self) -> Option<&BoundingBox> {
         self.bbox.as_ref()
     }
 
-    /// Return the optional list of geospatial types.
+    /// Optional list of geometry type identifiers, where `None` represents a lack of information.
     pub fn geospatial_types(&self) -> Option<&Vec<i32>> {
         self.geospatial_types.as_ref()
     }

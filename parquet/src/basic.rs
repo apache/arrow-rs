@@ -349,7 +349,8 @@ pub enum LogicalType {
     },
     /// A geospatial feature in the Well-Known Binary (WKB) format with linear/planar edges interpolation.
     Geometry {
-        /// A custom CRS. If unset the defaults to `OGC:CRS84`.
+        /// A custom CRS. If unset the defaults to `OGC:CRS84`, which means that the geometries
+        /// must be stored in longitude, latitude based on the WGS84 datum.
         crs: Option<String>,
     },
     /// A geospatial feature in the WKB format with an explicit (non-linear/non-planar) edges interpolation.
@@ -357,7 +358,7 @@ pub enum LogicalType {
         /// A custom CRS. If unset the defaults to `OGC:CRS84`.
         crs: Option<String>,
         /// An optional algorithm can be set to correctly interpret edges interpolation
-        /// of the geometries. If unset, the algorithm defaults to `SPHERICAL``.
+        /// of the geometries. If unset, the algorithm defaults to `SPHERICAL`.
         algorithm: Option<EdgeInterpolationAlgorithm>,
     },
     /// For forward compatibility; used when an unknown union value is encountered.
@@ -456,9 +457,14 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for LogicalType {
             }
             18 => {
                 let val = GeographyType::read_thrift(&mut *prot)?;
+                // unset algorithm means SPHERICAL, per the spec:
+                // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#geography
+                let algorithm = val
+                    .algorithm
+                    .unwrap_or(EdgeInterpolationAlgorithm::SPHERICAL);
                 Self::Geography {
                     crs: val.crs.map(|s| s.to_owned()),
-                    algorithm: val.algorithm,
+                    algorithm: Some(algorithm),
                 }
             }
             _ => {
@@ -928,16 +934,79 @@ enum BoundaryOrder {
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `EdgeInterpolationAlgorithm`
 
-thrift_enum!(
-/// Edge interpolation algorithm for Geography logical type
-enum EdgeInterpolationAlgorithm {
-  SPHERICAL = 0;
-  VINCENTY = 1;
-  THOMAS = 2;
-  ANDOYER = 3;
-  KARNEY = 4;
+// this is hand coded to allow for the _Unknown variant (allows this to be forward compatible)
+
+/// Edge interpolation algorithm for [`LogicalType::Geography`]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[repr(i32)]
+pub enum EdgeInterpolationAlgorithm {
+    /// Edges are interpolated as geodesics on a sphere.
+    SPHERICAL = 0,
+    /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
+    VINCENTY = 1,
+    /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
+    THOMAS = 2,
+    /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
+    ANDOYER = 3,
+    /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
+    KARNEY = 4,
+    /// Unknown algorithm
+    _Unknown(i32),
 }
-);
+
+impl fmt::Display for EdgeInterpolationAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.write_fmt(format_args!("{0:?}", self))
+    }
+}
+
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolationAlgorithm {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let val = prot.read_i32()?;
+        match val {
+            0 => Ok(Self::SPHERICAL),
+            1 => Ok(Self::VINCENTY),
+            2 => Ok(Self::THOMAS),
+            3 => Ok(Self::ANDOYER),
+            4 => Ok(Self::KARNEY),
+            _ => Ok(Self::_Unknown(val)),
+        }
+    }
+}
+
+impl WriteThrift for EdgeInterpolationAlgorithm {
+    const ELEMENT_TYPE: ElementType = ElementType::I32;
+    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
+        let val: i32 = match *self {
+            Self::SPHERICAL => 0,
+            Self::VINCENTY => 1,
+            Self::THOMAS => 2,
+            Self::ANDOYER => 3,
+            Self::KARNEY => 4,
+            Self::_Unknown(i) => i,
+        };
+        writer.write_i32(val)
+    }
+}
+
+impl WriteThriftField for EdgeInterpolationAlgorithm {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+
+impl Default for EdgeInterpolationAlgorithm {
+    fn default() -> Self {
+        Self::SPHERICAL
+    }
+}
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `BloomFilterAlgorithm`
@@ -945,7 +1014,7 @@ enum EdgeInterpolationAlgorithm {
 thrift_union_all_empty!(
 /// The algorithm used in Bloom filter.
 union BloomFilterAlgorithm {
-  /** Block-based Bloom filter. **/
+  /// Block-based Bloom filter.
   1: SplitBlockAlgorithm BLOCK;
 }
 );
@@ -957,7 +1026,7 @@ thrift_union_all_empty!(
 /// The hash function used in Bloom filter. This function takes the hash of a column value
 /// using plain encoding.
 union BloomFilterHash {
-  /** xxHash Strategy. **/
+  /// xxHash Strategy.
   1: XxHash XXHASH;
 }
 );
@@ -1359,7 +1428,7 @@ impl str::FromStr for LogicalType {
             "GEOMETRY" => Ok(LogicalType::Geometry { crs: None }),
             "GEOGRAPHY" => Ok(LogicalType::Geography {
                 crs: None,
-                algorithm: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
             }),
             other => Err(general_err!("Invalid parquet logical type {}", other)),
         }
@@ -1817,6 +1886,17 @@ mod tests {
             ConvertedType::NONE
         );
         assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geometry { crs: None })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
+            ConvertedType::from(Some(LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::default()),
+            })),
+            ConvertedType::NONE
+        );
+        assert_eq!(
             ConvertedType::from(Some(LogicalType::Unknown)),
             ConvertedType::NONE
         );
@@ -1897,11 +1977,11 @@ mod tests {
         });
         test_roundtrip(LogicalType::Geography {
             crs: Some("foo".to_owned()),
-            algorithm: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
         });
         test_roundtrip(LogicalType::Geography {
             crs: None,
-            algorithm: None,
+            algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
         });
     }
 
@@ -2113,7 +2193,15 @@ mod tests {
         check_sort_order(signed, SortOrder::SIGNED);
 
         // Undefined comparison
-        let undefined = vec![LogicalType::List, LogicalType::Map];
+        let undefined = vec![
+            LogicalType::List,
+            LogicalType::Map,
+            LogicalType::Geometry { crs: None },
+            LogicalType::Geography {
+                crs: None,
+                algorithm: Some(EdgeInterpolationAlgorithm::default()),
+            },
+        ];
         check_sort_order(undefined, SortOrder::UNDEFINED);
     }
 
