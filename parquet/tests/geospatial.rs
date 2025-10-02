@@ -29,6 +29,7 @@ mod test {
             properties::{EnabledStatistics, WriterProperties},
             reader::{FileReader, SerializedFileReader},
         },
+        geospatial::bounding_box::BoundingBox,
         geospatial::statistics::GeospatialStatistics,
         schema::types::{SchemaDescriptor, Type},
     };
@@ -45,7 +46,20 @@ mod test {
     }
 
     #[test]
-    fn test_write_statistics() {
+    fn test_write_statistics_arrow() {
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
+            "geom",
+            DataType::Binary,
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            arrow_schema.clone(),
+            vec![wkb_array_xy([(1.0, 2.0), (11.0, 12.0)])],
+        )
+        .unwrap();
+        let expected_geometry_types = vec![1];
+        let expected_bounding_box = BoundingBox::new(1.0, 11.0, 2.0, 12.0);
+
         let root = Type::group_type_builder("root")
             .with_fields(vec![Type::primitive_type_builder(
                 "geo",
@@ -59,12 +73,6 @@ mod test {
             .unwrap();
         let schema = SchemaDescriptor::new(root.into());
 
-        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
-            "geom",
-            DataType::Binary,
-            true,
-        )]));
-
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Chunk)
             .build();
@@ -75,22 +83,30 @@ mod test {
         let mut buf = Vec::with_capacity(1024);
         let mut file_writer =
             ArrowWriter::try_new_with_options(&mut buf, arrow_schema.clone(), options).unwrap();
-
-        let batch =
-            RecordBatch::try_new(arrow_schema, vec![wkb_array_xy([(1.0, 2.0), (11.0, 12.0)])])
-                .unwrap();
         file_writer.write(&batch).unwrap();
 
-        file_writer.finish().unwrap();
+        let thrift_metadata = file_writer.finish().unwrap();
         drop(file_writer);
 
-        let all_geo_statistics = read_geo_statistics(buf);
-        assert_eq!(all_geo_statistics.len(), 1);
-        let geo_statistics = all_geo_statistics[0].as_ref().unwrap();
-        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_xmin(), 1.0);
-        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_xmax(), 11.0);
-        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_ymin(), 2.0);
-        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_ymax(), 12.0);
+        // Check that statistics exist in thrift output
+        thrift_metadata.row_groups[0].columns[0]
+            .meta_data
+            .as_ref()
+            .unwrap()
+            .geospatial_statistics
+            .as_ref()
+            .expect("geospatial_statistics in thrift column metadata");
+
+        // Check statistics on file read
+        let all_geo_stats = read_geo_statistics(buf);
+        assert_eq!(all_geo_stats.len(), 1);
+        let geo_stats = all_geo_stats[0].as_ref().unwrap();
+
+        assert_eq!(
+            geo_stats.geospatial_types.as_ref().unwrap(),
+            &expected_geometry_types
+        );
+        assert_eq!(geo_stats.bbox.as_ref().unwrap(), &expected_bounding_box);
     }
 
     fn wkb_array_xy(coords: impl IntoIterator<Item = (f64, f64)>) -> ArrayRef {

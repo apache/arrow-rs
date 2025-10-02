@@ -723,6 +723,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
+        if let Some(geo_statistics) = metadata.geo_statistics() {
+            builder = builder.set_geo_statistics(Box::new(geo_statistics.clone()))
+        }
         if let Some(page_encoding_stats) = metadata.page_encoding_stats() {
             builder = builder.set_page_encoding_stats(page_encoding_stats.clone())
         }
