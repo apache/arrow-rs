@@ -104,6 +104,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | UInt8
             | Int16
             | UInt16
+            | Float16
             | Int32
             | UInt32
             | Float32
