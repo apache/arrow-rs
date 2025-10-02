@@ -104,6 +104,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             | UInt8
             | Int16
             | UInt16
+            | Float16
             | Int32
             | UInt32
             | Float32
@@ -760,6 +761,7 @@ pub fn cast_with_options(
             | UInt8
             | Int16
             | UInt16
+            | Float16
             | Int32
             | UInt32
             | Float32
@@ -7979,6 +7981,7 @@ mod tests {
         typed_test!(UInt32Array, UInt32, UInt32Type);
         typed_test!(UInt64Array, UInt64, UInt64Type);
 
+        typed_test!(Float16Array, Float16, Float16Type);
         typed_test!(Float32Array, Float32, Float32Type);
         typed_test!(Float64Array, Float64, Float64Type);
 
