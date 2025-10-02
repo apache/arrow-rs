@@ -26,7 +26,10 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use arrow_schema::{
+    ArrowError, DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
+    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+};
 use chrono::DateTime;
 use parquet_variant::Uuid;
 use parquet_variant::Variant;
@@ -972,9 +975,20 @@ fn canonicalize_and_verify_data_type(
         UInt8 | UInt16 | UInt32 | UInt64 | Float16 => fail!(),
 
         // Most decimal types are allowed, with restrictions on precision and scale
-        Decimal32(p, s) if is_valid_variant_decimal(p, s, 9) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal(p, s, 18) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, 38) => borrow!(),
+        //
+        // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
+        // requires using the narrowest decimal type for a given precision. Fix them up as needed.
+        Decimal32(p, s) if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) => borrow!(),
+        Decimal64(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => borrow!(),
+        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL128_MAX_PRECISION) => borrow!(),
+        Decimal64(p, s) | Decimal128(p, s)
+            if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) =>
+        {
+            Cow::Owned(Decimal32(*p, *s))
+        }
+        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => {
+            Cow::Owned(Decimal64(*p, *s))
+        }
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed
