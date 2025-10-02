@@ -34,7 +34,7 @@ use arrow_schema::ArrowError;
 /// ```
 /// # use arrow::array::{Array, ArrayRef, Int64Array};
 /// # use parquet_variant::Variant;
-/// # use parquet_variant_compute::cast_to_variant::cast_to_variant;
+/// # use parquet_variant_compute::cast_to_variant;
 /// // input is an Int64Array, which will be cast to a VariantArray
 /// let input = Int64Array::from(vec![Some(1), None, Some(3)]);
 /// let result = cast_to_variant(&input).unwrap();
