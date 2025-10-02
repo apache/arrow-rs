@@ -70,7 +70,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 /// Encodes `RecordBatch` into the Avro binary format.
-pub mod encoder;
+mod encoder;
 /// Logic for different Avro container file formats.
 pub mod format;
 
@@ -845,6 +845,95 @@ mod tests {
                 arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat rt");
             assert_eq!(roundtrip, original, "decimal round-trip mismatch for {rel}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_named_types_complex_roundtrip() -> Result<(), ArrowError> {
+        // 1. Read the new, more complex named references file.
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/data/named_types_complex.avro");
+        let rdr_file = File::open(&path).expect("open avro/named_types_complex.avro");
+
+        let mut reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for named_types_complex.avro");
+
+        // 2. Concatenate all batches to one RecordBatch.
+        let in_schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+
+        // 3. Sanity Checks: Validate that all named types were reused correctly.
+        {
+            let arrow_schema = original.schema();
+
+            // --- A. Validate 'User' record reuse ---
+            let author_field = arrow_schema.field_with_name("author")?;
+            let author_type = author_field.data_type();
+            let editors_field = arrow_schema.field_with_name("editors")?;
+            let editors_item_type = match editors_field.data_type() {
+                DataType::List(item_field) => item_field.data_type(),
+                other => panic!("Editors field should be a List, but was {:?}", other),
+            };
+            assert_eq!(
+                author_type, editors_item_type,
+                "The DataType for the 'author' struct and the 'editors' list items must be identical"
+            );
+
+            // --- B. Validate 'PostStatus' enum reuse ---
+            let status_field = arrow_schema.field_with_name("status")?;
+            let status_type = status_field.data_type();
+            assert!(
+                matches!(status_type, DataType::Dictionary(_, _)),
+                "Status field should be a Dictionary (Enum)"
+            );
+
+            let prev_status_field = arrow_schema.field_with_name("previous_status")?;
+            let prev_status_type = prev_status_field.data_type();
+            assert_eq!(
+                status_type, prev_status_type,
+                "The DataType for 'status' and 'previous_status' enums must be identical"
+            );
+
+            // --- C. Validate 'MD5' fixed reuse ---
+            let content_hash_field = arrow_schema.field_with_name("content_hash")?;
+            let content_hash_type = content_hash_field.data_type();
+            assert!(
+                matches!(content_hash_type, DataType::FixedSizeBinary(16)),
+                "Content hash should be FixedSizeBinary(16)"
+            );
+
+            let thumb_hash_field = arrow_schema.field_with_name("thumbnail_hash")?;
+            let thumb_hash_type = thumb_hash_field.data_type();
+            assert_eq!(
+                content_hash_type, thumb_hash_type,
+                "The DataType for 'content_hash' and 'thumbnail_hash' fixed types must be identical"
+            );
+        }
+
+        // 4. Write the data to an in-memory buffer.
+        let buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(buffer, original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+
+        // 5. Read the data back and compare for exact equality.
+        let mut rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build reader for round-trip");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+
+        assert_eq!(
+            roundtrip, original,
+            "Avro complex named types round-trip mismatch"
+        );
+
         Ok(())
     }
 

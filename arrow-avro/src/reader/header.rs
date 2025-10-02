@@ -270,6 +270,7 @@ mod test {
     use crate::schema::SCHEMA_METADATA_KEY;
     use crate::test_util::arrow_test_data;
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::{BufRead, BufReader};
 
@@ -326,6 +327,10 @@ mod test {
                 ])),
                 false
             )
+            .with_metadata(HashMap::from([(
+                "avro.name".to_string(),
+                "topLevelRecord".to_string()
+            )]))
         );
 
         assert_eq!(

@@ -18,7 +18,8 @@
 use crate::schema::{
     make_full_name, Array, Attributes, AvroSchema, ComplexType, Enum, Fixed, Map, Nullability,
     PrimitiveType, Record, Schema, Type, TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
-    AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME,
+    AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AVRO_NAME_METADATA_KEY,
+    AVRO_ROOT_RECORD_DEFAULT_NAME,
 };
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode,
@@ -978,10 +979,24 @@ impl From<&Codec> for UnionFieldKind {
     }
 }
 
+fn union_branch_name(dt: &AvroDataType) -> String {
+    if let Some(name) = dt.metadata.get(AVRO_NAME_METADATA_KEY) {
+        if name.contains(".") {
+            // Full name
+            return name.to_string();
+        }
+        if let Some(ns) = dt.metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+            return format!("{ns}.{name}");
+        }
+        return name.to_string();
+    }
+    dt.codec.union_field_name()
+}
+
 fn build_union_fields(encodings: &[AvroDataType]) -> UnionFields {
     let arrow_fields: Vec<Field> = encodings
         .iter()
-        .map(|encoding| encoding.field_with_name(&encoding.codec().union_field_name()))
+        .map(|encoding| encoding.field_with_name(&union_branch_name(encoding)))
         .collect();
     let type_ids: Vec<i8> = (0..arrow_fields.len()).map(|i| i as i8).collect();
     UnionFields::new(type_ids, arrow_fields)
@@ -1224,6 +1239,7 @@ impl<'a> Maker<'a> {
             Schema::Complex(c) => match c {
                 ComplexType::Record(r) => {
                     let namespace = r.namespace.or(namespace);
+                    let mut metadata = r.attributes.field_metadata();
                     let fields = r
                         .fields
                         .iter()
@@ -1234,10 +1250,14 @@ impl<'a> Maker<'a> {
                             })
                         })
                         .collect::<Result<_, ArrowError>>()?;
+                    metadata.insert(AVRO_NAME_METADATA_KEY.to_string(), r.name.to_string());
+                    if let Some(ns) = namespace {
+                        metadata.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), ns.to_string());
+                    }
                     let field = AvroDataType {
                         nullability: None,
                         codec: Codec::Struct(fields),
-                        metadata: r.attributes.field_metadata(),
+                        metadata,
                         resolution: None,
                     };
                     self.resolver.register(r.name, namespace, field.clone());
@@ -1256,14 +1276,19 @@ impl<'a> Maker<'a> {
                     let size = f.size.try_into().map_err(|e| {
                         ArrowError::ParseError(format!("Overflow converting size to i32: {e}"))
                     })?;
-                    let md = f.attributes.field_metadata();
+                    let namespace = f.namespace.or(namespace);
+                    let mut metadata = f.attributes.field_metadata();
+                    metadata.insert(AVRO_NAME_METADATA_KEY.to_string(), f.name.to_string());
+                    if let Some(ns) = namespace {
+                        metadata.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), ns.to_string());
+                    }
                     let field = match f.attributes.logical_type {
                         Some("decimal") => {
                             let (precision, scale, _) =
                                 parse_decimal_attributes(&f.attributes, Some(size as usize), true)?;
                             AvroDataType {
                                 nullability: None,
-                                metadata: md,
+                                metadata,
                                 codec: Codec::Decimal(precision, Some(scale), Some(size as usize)),
                                 resolution: None,
                             }
@@ -1276,14 +1301,14 @@ impl<'a> Maker<'a> {
                             };
                             AvroDataType {
                                 nullability: None,
-                                metadata: md,
+                                metadata,
                                 codec: Codec::Interval,
                                 resolution: None,
                             }
                         }
                         _ => AvroDataType {
                             nullability: None,
-                            metadata: md,
+                            metadata,
                             codec: Codec::Fixed(size),
                             resolution: None,
                         },
@@ -1298,12 +1323,15 @@ impl<'a> Maker<'a> {
                         .iter()
                         .map(|s| s.to_string())
                         .collect::<Arc<[String]>>();
-
                     let mut metadata = e.attributes.field_metadata();
                     let symbols_json = serde_json::to_string(&e.symbols).map_err(|e| {
                         ArrowError::ParseError(format!("Failed to serialize enum symbols: {e}"))
                     })?;
                     metadata.insert(AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(), symbols_json);
+                    metadata.insert(AVRO_NAME_METADATA_KEY.to_string(), e.name.to_string());
+                    if let Some(ns) = namespace {
+                        metadata.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), ns.to_string());
+                    }
                     let field = AvroDataType {
                         nullability: None,
                         metadata,
