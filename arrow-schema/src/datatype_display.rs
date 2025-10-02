@@ -282,5 +282,25 @@ mod tests {
         let union_data_type_string = union_data_type.to_string();
         let expected_string = "Union(Sparse, 0: Int32, 1: nullable Utf8)";
         assert_eq!(union_data_type_string, expected_string);
+
+        // Test with metadata
+        let mut field_with_metadata = Field::new("b", DataType::Utf8, true);
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        field_with_metadata.set_metadata(metadata);
+        let union_fields_with_metadata = vec![
+            (0, Arc::new(Field::new("a", DataType::Int32, false))),
+            (1, Arc::new(field_with_metadata)),
+        ]
+        .into_iter()
+        .collect();
+        let union_data_type_with_metadata =
+            DataType::Union(union_fields_with_metadata, crate::UnionMode::Sparse);
+        let union_data_type_with_metadata_string = union_data_type_with_metadata.to_string();
+        let expected_string_with_metadata =
+            "Union(Sparse, 0: Int32, 1: nullable Utf8, metadata: {\"key\": \"value\"})";
+        assert_eq!(
+            union_data_type_with_metadata_string,
+            expected_string_with_metadata
+        );
     }
 }
