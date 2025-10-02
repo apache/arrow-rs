@@ -961,7 +961,6 @@ impl fmt::Display for EdgeInterpolationAlgorithm {
 }
 
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolationAlgorithm {
-    #[allow(deprecated)]
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let val = prot.read_i32()?;
         match val {
