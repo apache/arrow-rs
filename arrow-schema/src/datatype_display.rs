@@ -17,7 +17,7 @@
 
 use std::{collections::HashMap, fmt};
 
-use crate::DataType;
+use crate::{DataType, field};
 
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -125,7 +125,7 @@ impl fmt::Display for DataType {
                             format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
                         })
                         .collect::<Vec<_>>()
-                        .join(", ");
+                        .join("; ");
                     write!(f, "{fields_str}")?;
                 }
                 write!(f, ")")?;
@@ -145,7 +145,7 @@ impl fmt::Display for DataType {
                             format!("{type_id:?}: {maybe_nullable}{data_type}{metadata_str}")
                         })
                         .collect::<Vec<_>>()
-                        .join(", ");
+                        .join("; ");
                     write!(f, "{fields_str}")?;
                 }
                 write!(f, ")")?;
@@ -267,6 +267,33 @@ mod tests {
     }
 
     #[test]
+    fn test_display_struct() {
+        let fields = vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, true),
+        ];
+        let struct_data_type = DataType::Struct(fields.into());
+        let struct_data_type_string = struct_data_type.to_string();
+        let expected_string = "Struct(\"a\": Int32; \"b\": nullable Utf8)";
+        assert_eq!(struct_data_type_string, expected_string);
+
+        // Test with metadata
+        let mut field_with_metadata = Field::new("b", DataType::Utf8, true);
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        field_with_metadata.set_metadata(metadata);
+        let struct_fields_with_metadata =
+            vec![Field::new("a", DataType::Int32, false), field_with_metadata];
+        let struct_data_type_with_metadata = DataType::Struct(struct_fields_with_metadata.into());
+        let struct_data_type_with_metadata_string = struct_data_type_with_metadata.to_string();
+        let expected_string_with_metadata =
+            "Struct(\"a\": Int32; \"b\": nullable Utf8, metadata: {\"key\": \"value\"})";
+        assert_eq!(
+            struct_data_type_with_metadata_string,
+            expected_string_with_metadata
+        );
+    }
+
+    #[test]
     fn test_display_union() {
         let fields = vec![
             Field::new("a", DataType::Int32, false),
@@ -280,7 +307,7 @@ mod tests {
 
         let union_data_type = DataType::Union(union_fields, crate::UnionMode::Sparse);
         let union_data_type_string = union_data_type.to_string();
-        let expected_string = "Union(Sparse, 0: Int32, 1: nullable Utf8)";
+        let expected_string = "Union(Sparse, 0: Int32; 1: nullable Utf8)";
         assert_eq!(union_data_type_string, expected_string);
 
         // Test with metadata
@@ -297,7 +324,7 @@ mod tests {
             DataType::Union(union_fields_with_metadata, crate::UnionMode::Sparse);
         let union_data_type_with_metadata_string = union_data_type_with_metadata.to_string();
         let expected_string_with_metadata =
-            "Union(Sparse, 0: Int32, 1: nullable Utf8, metadata: {\"key\": \"value\"})";
+            "Union(Sparse, 0: Int32; 1: nullable Utf8, metadata: {\"key\": \"value\"})";
         assert_eq!(
             union_data_type_with_metadata_string,
             expected_string_with_metadata
