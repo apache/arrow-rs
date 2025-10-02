@@ -1156,6 +1156,21 @@ fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
     }
 }
 
+fn min_fixed_bytes_for_precision(p: usize) -> usize {
+    // From the spec: max precision for n=1..=32 bytes:
+    // [2,4,6,9,11,14,16,18,21,23,26,28,31,33,35,38,40,43,45,47,50,52,55,57,59,62,64,67,69,71,74,76]
+    const MAX_P: [usize; 32] = [
+        2, 4, 6, 9, 11, 14, 16, 18, 21, 23, 26, 28, 31, 33, 35, 38, 40, 43, 45, 47, 50, 52, 55, 57,
+        59, 62, 64, 67, 69, 71, 74, 76,
+    ];
+    for (i, &max_p) in MAX_P.iter().enumerate() {
+        if p <= max_p {
+            return i + 1;
+        }
+    }
+    32 // saturate at Decimal256
+}
+
 fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
     match branch {
         Value::String(t) => Ok(format!("P:{t}")),
@@ -1205,26 +1220,30 @@ fn datatype_to_avro(
                  must be <= precision ({precision})"
             )));
         }
-
         let mut meta = JsonMap::from_iter([
             ("logicalType".into(), json!("decimal")),
             ("precision".into(), json!(*precision)),
             ("scale".into(), json!(*scale)),
         ]);
-        if let Some(size) = metadata
-            .get("size")
-            .and_then(|val| val.parse::<usize>().ok())
-        {
-            // Prefer fixed when a size is specified. Use Avro name/namespace when present.
-            if let Some(nm) = metadata.get(AVRO_NAME_METADATA_KEY) {
-                meta.insert("name".into(), json!(sanitise_avro_name(nm)));
-                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
-                    meta.insert("namespace".into(), json!(ns));
-                }
-            } else {
-                meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+        let mut fixed_size = metadata.get("size").and_then(|v| v.parse::<usize>().ok());
+        let carries_name = metadata.contains_key(AVRO_NAME_METADATA_KEY)
+            || metadata.contains_key(AVRO_NAMESPACE_METADATA_KEY);
+        if fixed_size.is_none() && carries_name {
+            fixed_size = Some(min_fixed_bytes_for_precision(*precision as usize));
+        }
+        if let Some(size) = fixed_size {
+            meta.insert("type".into(), json!("fixed"));
+            meta.insert("size".into(), json!(size));
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            meta.insert("name".into(), json!(chosen_name));
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                meta.insert("namespace".into(), json!(ns));
             }
         } else {
+            // default to bytes-backed decimal
             meta.insert("type".into(), json!("bytes"));
         }
         Ok(Value::Object(meta))
@@ -1249,9 +1268,9 @@ fn datatype_to_avro(
             let is_uuid = false;
             #[cfg(feature = "canonical_extension_types")]
             let is_uuid = (*len == 16
-                    && metadata
-                        .get("ARROW:extension:name")
-                        .is_some_and(|value| value == "uuid"));
+                && metadata
+                    .get("ARROW:extension:name")
+                    .is_some_and(|value| value == "uuid"));
             if is_uuid {
                 println!("WE ARE HERE");
                 json!({ "type": "string", "logicalType": "uuid" })
