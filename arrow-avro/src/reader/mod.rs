@@ -2740,16 +2740,38 @@ mod test {
             fields_json.len(),
             "full read column count vs writer fields"
         );
+        fn rebuild_list_array_with_element(
+            col: &ArrayRef,
+            new_elem: Arc<Field>,
+            is_large: bool,
+        ) -> ArrayRef {
+            if is_large {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .expect("expected LargeListArray");
+                let offsets = list.offsets().clone();
+                let values = list.values().clone();
+                let validity = list.nulls().cloned();
+                Arc::new(LargeListArray::try_new(new_elem, offsets, values, validity).unwrap())
+            } else {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .expect("expected ListArray");
+                let offsets = list.offsets().clone();
+                let values = list.values().clone();
+                let validity = list.nulls().cloned();
+                Arc::new(ListArray::try_new(new_elem, offsets, values, validity).unwrap())
+            }
+        }
         for (idx, f) in fields_json.iter().enumerate() {
             let name = f
                 .get("name")
                 .and_then(|n| n.as_str())
                 .unwrap_or_else(|| panic!("field at index {idx} has no name"));
-
-            // Build a reader schema selecting exactly this field, then read
             let reader_schema = make_reader_schema_with_selected_fields_in_order(path, &[name]);
             let projected = read_alltypes_with_reader_schema(path, reader_schema);
-
             assert_eq!(
                 projected.num_columns(),
                 1,
@@ -2760,16 +2782,44 @@ mod test {
                 num_rows,
                 "row count mismatch for projected column '{name}'"
             );
-
-            // Pull the data for this column from the full read
-            let col = full.column(idx).clone();
-            let full_field = schema_full.field(idx).as_ref().clone(); // Field (not FieldRef)
-            let projected_meta = projected.schema().field(0).metadata().clone();
-            let expected_field = std::sync::Arc::new(full_field.with_metadata(projected_meta));
+            let col_full = full.column(idx).clone();
+            let full_field = schema_full.field(idx).as_ref().clone();
+            let proj_field_ref = projected.schema().field(0).clone();
+            let proj_field = proj_field_ref.as_ref();
+            let top_meta = proj_field.metadata().clone();
+            let (expected_field_ref, expected_col): (Arc<Field>, ArrayRef) =
+                match (full_field.data_type(), proj_field.data_type()) {
+                    (&DataType::List(_), &DataType::List(ref proj_elem)) => {
+                        let new_col =
+                            rebuild_list_array_with_element(&col_full, proj_elem.clone(), false);
+                        let nf = Field::new(
+                            full_field.name().clone(),
+                            proj_field.data_type().clone(),
+                            full_field.is_nullable(),
+                        )
+                        .with_metadata(top_meta);
+                        (Arc::new(nf), new_col)
+                    }
+                    (&DataType::LargeList(_), &DataType::LargeList(ref proj_elem)) => {
+                        let new_col =
+                            rebuild_list_array_with_element(&col_full, proj_elem.clone(), true);
+                        let nf = Field::new(
+                            full_field.name().clone(),
+                            proj_field.data_type().clone(),
+                            full_field.is_nullable(),
+                        )
+                        .with_metadata(top_meta);
+                        (Arc::new(nf), new_col)
+                    }
+                    _ => {
+                        let nf = full_field.with_metadata(top_meta);
+                        (Arc::new(nf), col_full)
+                    }
+                };
 
             let expected = RecordBatch::try_new(
-                std::sync::Arc::new(Schema::new(vec![expected_field])),
-                vec![col],
+                Arc::new(Schema::new(vec![expected_field_ref])),
+                vec![expected_col],
             )
             .unwrap();
             assert_eq!(

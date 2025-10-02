@@ -950,7 +950,8 @@ mod tests {
         let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
         let original =
             arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
-        // Sanity: expect at least one Dictionary(Int32, Utf8) column (enum)
+        println!("original: {:?}", original); // Read correctly
+                                              // Sanity: expect at least one Dictionary(Int32, Utf8) column (enum)
         let has_enum_dict = in_schema.fields().iter().any(|f| {
             matches!(
                 f.data_type(),
@@ -976,6 +977,7 @@ mod tests {
         let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
         let roundtrip =
             arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+        println!("\n\n----roundtrip: {:?}\n\n", roundtrip); // Not written correctly
         assert_eq!(roundtrip, original, "Avro enum round-trip mismatch");
         Ok(())
     }

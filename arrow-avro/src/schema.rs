@@ -1817,21 +1817,24 @@ mod tests {
             }))
         );
         let codec = AvroField::try_from(&schema).unwrap();
-        assert_eq!(
-            codec.field(),
-            arrow_schema::Field::new(
-                "topLevelRecord",
-                DataType::Struct(Fields::from(vec![
-                    arrow_schema::Field::new("id", DataType::Int32, true),
-                    arrow_schema::Field::new(
-                        "timestamp_col",
-                        DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
-                        true
-                    ),
-                ])),
-                false
-            )
-        );
+        let expected_arrow_field = arrow_schema::Field::new(
+            "topLevelRecord",
+            DataType::Struct(Fields::from(vec![
+                arrow_schema::Field::new("id", DataType::Int32, true),
+                arrow_schema::Field::new(
+                    "timestamp_col",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                    true,
+                ),
+            ])),
+            false,
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            "topLevelRecord".to_string(),
+        )]));
+
+        assert_eq!(codec.field(), expected_arrow_field);
 
         let schema: Schema = serde_json::from_str(
             r#"{
@@ -2437,7 +2440,6 @@ mod tests {
                 {"name": "u", "type": ["int", "null"], "default": 42}
             ]
         }"#;
-
         let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
         match &schema {
             Schema::Complex(ComplexType::Record(_)) => {}
@@ -2447,7 +2449,6 @@ mod tests {
         let field = crate::codec::AvroField::try_from(&schema)
             .expect("Avro->Arrow conversion should succeed");
         let arrow_field = field.field();
-
         // Build expected Arrow field
         let expected_list_item = ArrowField::new(
             arrow_schema::Field::LIST_FIELD_DEFAULT_NAME,
@@ -2467,7 +2468,8 @@ mod tests {
         );
         let expected_c =
             ArrowField::new("c", DataType::Map(Arc::new(expected_entries), false), false);
-
+        let mut inner_md = std::collections::HashMap::new();
+        inner_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "Inner".to_string());
         let expected_inner = ArrowField::new(
             "inner",
             DataType::Struct(Fields::from(vec![
@@ -2475,8 +2477,10 @@ mod tests {
                 ArrowField::new("name", DataType::Utf8, false),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(inner_md);
+        let mut root_md = std::collections::HashMap::new();
+        root_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "R".to_string());
         let expected = ArrowField::new(
             "R",
             DataType::Struct(Fields::from(vec![
@@ -2487,8 +2491,8 @@ mod tests {
                 ArrowField::new("u", DataType::Int32, true),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(root_md);
         assert_eq!(arrow_field, expected);
     }
 
