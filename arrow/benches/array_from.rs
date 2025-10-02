@@ -118,7 +118,7 @@ fn decimal256_array_from_vec(array: &[Option<i256>]) {
     );
 }
 
-fn decimal_benchmark(c: &mut Criterion) {
+fn array_from_vec_decimal_benchmark(c: &mut Criterion) {
     // bench decimal32 array
     // create option<i32> array
     let size: usize = 1 << 15;
@@ -171,7 +171,7 @@ fn decimal_benchmark(c: &mut Criterion) {
     });
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn array_from_vec_benchmark(c: &mut Criterion) {
     c.bench_function("array_from_vec 128", |b| b.iter(|| array_from_vec(128)));
     c.bench_function("array_from_vec 256", |b| b.iter(|| array_from_vec(256)));
     c.bench_function("array_from_vec 512", |b| b.iter(|| array_from_vec(512)));
@@ -240,8 +240,8 @@ fn from_iter_benchmark(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    criterion_benchmark,
-    decimal_benchmark,
+    array_from_vec_benchmark,
+    array_from_vec_decimal_benchmark,
     from_iter_benchmark
 );
 criterion_main!(benches);
