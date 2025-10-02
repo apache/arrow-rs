@@ -15,33 +15,94 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::Schema;
-use parquet::{
-    arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
-    basic::LogicalType,
-    schema::types::{SchemaDescriptor, Type},
-};
+#[cfg(all(feature = "arrow", feature = "geospatial"))]
+mod test {
+    use std::sync::Arc;
 
-#[test]
-fn test_write_statistics() {
-    let root = Type::group_type_builder("root")
-        .with_fields(vec![Type::primitive_type_builder(
-            "geo",
-            parquet::basic::Type::BYTE_ARRAY,
-        )
-        .with_logical_type(Some(LogicalType::Geometry))
-        .build()
-        .unwrap()
-        .into()])
-        .build()
-        .unwrap();
-    let schema = SchemaDescriptor::new(root.into());
+    use arrow_array::{ArrayRef, BinaryArray, RecordBatch};
+    use arrow_schema::{DataType, Field, Schema};
+    use bytes::Bytes;
+    use parquet::{
+        arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
+        basic::LogicalType,
+        file::{
+            properties::{EnabledStatistics, WriterProperties},
+            reader::{FileReader, SerializedFileReader},
+        },
+        geospatial::statistics::GeospatialStatistics,
+        schema::types::{SchemaDescriptor, Type},
+    };
 
-    let arrow_schema = Schema::empty();
-    let options = ArrowWriterOptions::new().with_parquet_schema(schema);
+    fn read_geo_statistics(buf: Vec<u8>) -> Vec<Option<GeospatialStatistics>> {
+        let b = Bytes::from(buf);
+        let reader = SerializedFileReader::new(b).unwrap();
+        reader
+            .metadata()
+            .row_groups()
+            .iter()
+            .map(|row_group| row_group.column(0).geo_statistics().cloned())
+            .collect()
+    }
 
-    let buf = Vec::with_capacity(1024);
-    let mut file_writer =
-        ArrowWriter::try_new_with_options(buf, arrow_schema.into(), options).unwrap();
-    file_writer.finish().unwrap();
+    #[test]
+    fn test_write_statistics() {
+        let root = Type::group_type_builder("root")
+            .with_fields(vec![Type::primitive_type_builder(
+                "geo",
+                parquet::basic::Type::BYTE_ARRAY,
+            )
+            .with_logical_type(Some(LogicalType::Geometry))
+            .build()
+            .unwrap()
+            .into()])
+            .build()
+            .unwrap();
+        let schema = SchemaDescriptor::new(root.into());
+
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
+            "geom",
+            DataType::Binary,
+            true,
+        )]));
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let options = ArrowWriterOptions::new()
+            .with_parquet_schema(schema)
+            .with_properties(props);
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut file_writer =
+            ArrowWriter::try_new_with_options(&mut buf, arrow_schema.clone(), options).unwrap();
+
+        let batch =
+            RecordBatch::try_new(arrow_schema, vec![wkb_array_xy([(1.0, 2.0), (11.0, 12.0)])])
+                .unwrap();
+        file_writer.write(&batch).unwrap();
+
+        file_writer.finish().unwrap();
+        drop(file_writer);
+
+        let all_geo_statistics = read_geo_statistics(buf);
+        assert_eq!(all_geo_statistics.len(), 1);
+        let geo_statistics = all_geo_statistics[0].as_ref().unwrap();
+        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_xmin(), 1.0);
+        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_xmax(), 11.0);
+        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_ymin(), 2.0);
+        assert_eq!(geo_statistics.bbox.as_ref().unwrap().get_ymax(), 12.0);
+    }
+
+    fn wkb_array_xy(coords: impl IntoIterator<Item = (f64, f64)>) -> ArrayRef {
+        let array = BinaryArray::from_iter_values(coords.into_iter().map(|(x, y)| {
+            let mut item: [u8; 21] = [0; 21];
+            item[0] = 0x01;
+            item[1] = 0x01;
+            item[5..13].copy_from_slice(x.to_le_bytes().as_slice());
+            item[13..21].copy_from_slice(y.to_le_bytes().as_slice());
+            item
+        }));
+
+        Arc::new(array)
+    }
 }
