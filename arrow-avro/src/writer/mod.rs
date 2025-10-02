@@ -702,7 +702,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(feature = "canonical_extension_types"))]
     #[test]
     fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
         let in_file =
@@ -732,6 +731,7 @@ mod tests {
         let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
         let input =
             arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        println!("\n\ncheck input={:?}\n", input);
         let tmp = NamedTempFile::new().expect("create temp file");
         {
             let out_file = File::create(tmp.path()).expect("create temp avro");

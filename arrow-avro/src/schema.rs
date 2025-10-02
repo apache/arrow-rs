@@ -1089,6 +1089,7 @@ struct NameGenerator {
 
 impl NameGenerator {
     fn make_unique(&mut self, field_name: &str) -> String {
+        println!("field_name: {}", field_name);
         let field_name = sanitise_avro_name(field_name);
         if self.used.insert(field_name.clone()) {
             self.counters.insert(field_name.clone(), 1);
@@ -1214,9 +1215,15 @@ fn datatype_to_avro(
             .get("size")
             .and_then(|val| val.parse::<usize>().ok())
         {
-            meta.insert("type".into(), json!("fixed"));
-            meta.insert("size".into(), json!(size));
-            meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+            // Prefer fixed when a size is specified. Use Avro name/namespace when present.
+            if let Some(nm) = metadata.get(AVRO_NAME_METADATA_KEY) {
+                meta.insert("name".into(), json!(sanitise_avro_name(nm)));
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    meta.insert("namespace".into(), json!(ns));
+                }
+            } else {
+                meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+            }
         } else {
             meta.insert("type".into(), json!("bytes"));
         }
@@ -1238,21 +1245,31 @@ fn datatype_to_avro(
             Value::String("bytes".into())
         }
         DataType::FixedSizeBinary(len) => {
-            let is_uuid = metadata
-                .get("logicalType")
-                .is_some_and(|value| value == "uuid")
-                || (*len == 16
+            #[cfg(not(feature = "canonical_extension_types"))]
+            let is_uuid = false;
+            #[cfg(feature = "canonical_extension_types")]
+            let is_uuid = (*len == 16
                     && metadata
                         .get("ARROW:extension:name")
                         .is_some_and(|value| value == "uuid"));
             if is_uuid {
+                println!("WE ARE HERE");
                 json!({ "type": "string", "logicalType": "uuid" })
             } else {
-                json!({
-                    "type": "fixed",
-                    "name": name_gen.make_unique(field_name),
-                    "size": len
-                })
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                println!("CHOSEN NAME {}", chosen_name);
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("fixed")),
+                    ("name".into(), json!(chosen_name)),
+                    ("size".into(), json!(len)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             }
         }
         #[cfg(feature = "small_decimals")]
@@ -1315,12 +1332,22 @@ fn datatype_to_avro(
                 Value::String("long".into())
             }
         }
-        DataType::Interval(IntervalUnit::MonthDayNano) => json!({
-            "type": "fixed",
-            "name": name_gen.make_unique(&format!("{field_name}_duration")),
-            "size": 12,
-            "logicalType": "duration"
-        }),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(12)),
+                ("logicalType".into(), json!("duration")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
+        }
         DataType::Interval(IntervalUnit::YearMonth) => {
             extras.insert(
                 "arrowIntervalUnit".into(),
@@ -1409,21 +1436,39 @@ fn datatype_to_avro(
                 .iter()
                 .map(|field| arrow_field_to_avro(field, name_gen, null_order))
                 .collect::<Result<Vec<_>, _>>()?;
-            json!({
-                "type": "record",
-                "name": name_gen.make_unique(field_name),
-                "fields": avro_fields
-            })
+            // Prefer avro.name/avro.namespace when provided on the struct field metadata
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("record")),
+                ("name".into(), json!(chosen_name)),
+                ("fields".into(), Value::Array(avro_fields)),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            Value::Object(obj)
         }
         DataType::Dictionary(_, value) => {
             if let Some(j) = metadata.get(AVRO_ENUM_SYMBOLS_METADATA_KEY) {
                 let symbols: Vec<&str> =
                     serde_json::from_str(j).map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                json!({
-                    "type": "enum",
-                    "name": name_gen.make_unique(field_name),
-                    "symbols": symbols
-                })
+                // Prefer avro.name/namespace when provided for enums
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("enum")),
+                    ("name".into(), json!(chosen_name)),
+                    ("symbols".into(), json!(symbols)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             } else {
                 process_datatype(
                     value.as_ref(),

@@ -3599,7 +3599,7 @@ mod test {
                     return tid;
                 }
             }
-            panic!("no union child matches predicate")
+            panic!("no union child matches predicate");
         }
 
         fn uuid16_from_str(s: &str) -> [u8; 16] {
@@ -4419,154 +4419,10 @@ mod test {
             });
             expected_cols.push(arr);
         }
-        println!("ACTUAL COLUMN 5 = {:?}", actual.column(5));
         let expected = RecordBatch::try_new(schema.clone(), expected_cols).unwrap();
         assert_eq!(
             actual, expected,
             "full end-to-end equality for union_fields.avro"
-        );
-    }
-
-    #[test]
-    fn test_union_with_named_types_roundtrip() {
-        // This test focuses on the `union_fixed_dur_decfix` field from the
-        // `union_fields.avro` file. It ensures that the named types within the union
-        // ("Fx8", "Dur12", "DecFix16") are correctly read and preserved in the
-        // resulting Arrow `UnionArray`.
-
-        // --- Helper functions (as provided in the example) ---
-
-        fn tid_by_dt(fields: &UnionFields, pred: impl Fn(&DataType) -> bool) -> i8 {
-            for (tid, f) in fields.iter() {
-                if pred(f.data_type()) {
-                    return tid;
-                }
-            }
-            panic!("no union child matches predicate")
-        }
-
-        fn empty_child_for(dt: &DataType) -> Arc<dyn Array> {
-            match dt {
-                DataType::FixedSizeBinary(n) => Arc::new(FixedSizeBinaryArray::new_null(*n, 0)),
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    Arc::new(arrow_array::IntervalMonthDayNanoArray::from(Vec::<
-                        IntervalMonthDayNano,
-                    >::new(
-                    )))
-                }
-                DataType::Decimal128(p, s) => {
-                    let a =
-                        arrow_array::Decimal128Array::from_iter_values(std::iter::empty::<i128>());
-                    Arc::new(a.with_precision_and_scale(*p, *s).unwrap())
-                }
-                other => panic!("empty_child_for: unhandled type {other:?}"),
-            }
-        }
-
-        fn mk_dense_union(
-            fields: &UnionFields,
-            type_ids: Vec<i8>,
-            offsets: Vec<i32>,
-            provide: impl Fn(&Field) -> Option<ArrayRef>,
-        ) -> ArrayRef {
-            let children: Vec<ArrayRef> = fields
-                .iter()
-                .map(|(_, f)| provide(f).unwrap_or_else(|| empty_child_for(f.data_type())))
-                .collect();
-
-            Arc::new(
-                UnionArray::try_new(
-                    fields.clone(),
-                    ScalarBuffer::<i8>::from(type_ids),
-                    Some(ScalarBuffer::<i32>::from(offsets)),
-                    children,
-                )
-                .unwrap(),
-            ) as ArrayRef
-        }
-
-        // --- Test Setup ---
-
-        let path = "test/data/union_fields.avro";
-        let full_record_batch = read_file(path, 1024, false);
-        let schema = full_record_batch.schema();
-
-        // Isolate the specific field we want to test.
-        let field_name = "union_fixed_dur_decfix";
-        let field_idx = schema.index_of(field_name).unwrap();
-        let actual_array = full_record_batch.column(field_idx);
-
-        // --- Verification of Named Types ---
-
-        // 1. Extract the union fields and verify the names directly.
-        let (union_fields, mode) = match schema.field(field_idx).data_type() {
-            DataType::Union(f, m) => (f.clone(), *m),
-            other => panic!("{field_name} should be a Union, got {other:?}"),
-        };
-        assert!(matches!(mode, UnionMode::Dense));
-
-        let generated_names: Vec<&str> = union_fields
-            .iter()
-            .map(|(_, f)| f.name().as_str())
-            .collect();
-        let expected_names = vec!["Fx8", "Dur12", "DecFix16"];
-
-        // This assertion is the core of the test: it checks that the names
-        // within the union have been correctly deserialized.
-        assert_eq!(
-            generated_names, expected_names,
-            "Field names for union '{field_name}' did not round-trip correctly."
-        );
-
-        // --- Verification of Data Round-trip ---
-
-        // 2. Build the expected Array data to confirm the values also round-tripped correctly.
-        let fx8_a: [u8; 8] = *b"ABCDEFGH";
-        let dur_a = IntervalMonthDayNanoType::make_value(1, 2, 3_000_000_000);
-        let dur_b = IntervalMonthDayNanoType::make_value(12, 31, 999_000_000);
-        let dec_fix16_neg: i128 = -101; // Represents "-1.01" for decimal(10,2)
-
-        let tid_fx8 = tid_by_dt(&union_fields, |dt| {
-            matches!(dt, DataType::FixedSizeBinary(8))
-        });
-        let tid_dur = tid_by_dt(&union_fields, |dt| {
-            matches!(
-                dt,
-                DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano)
-            )
-        });
-        let tid_dec = tid_by_dt(&union_fields, |dt| {
-            matches!(dt, DataType::Decimal128(10, 2))
-        });
-
-        let type_ids = vec![tid_fx8, tid_dur, tid_dec, tid_dur];
-        let offsets = vec![0, 0, 0, 1];
-
-        let expected_array =
-            mk_dense_union(&union_fields, type_ids, offsets, |f| match f.data_type() {
-                DataType::FixedSizeBinary(8) => {
-                    let iter = [Some(fx8_a)].into_iter();
-                    Some(Arc::new(
-                        FixedSizeBinaryArray::try_from_sparse_iter_with_size(iter, 8).unwrap(),
-                    ) as ArrayRef)
-                }
-                DataType::Interval(IntervalUnit::MonthDayNano) => {
-                    Some(Arc::new(arrow_array::IntervalMonthDayNanoArray::from(vec![
-                        dur_a, dur_b,
-                    ])) as ArrayRef)
-                }
-                DataType::Decimal128(10, 2) => {
-                    let a = arrow_array::Decimal128Array::from_iter_values([dec_fix16_neg]);
-                    Some(Arc::new(a.with_precision_and_scale(10, 2).unwrap()) as ArrayRef)
-                }
-                _ => None,
-            });
-
-        // 3. Compare the actual array from the file with the expected array.
-        assert_eq!(
-            actual_array.as_ref(),
-            expected_array.as_ref(),
-            "Data for union '{field_name}' did not round-trip correctly."
         );
     }
 
@@ -5076,7 +4932,6 @@ mod test {
         let expected_batch = {
             #[cfg(feature = "avro_custom_types")]
             {
-                println!("Testing with 'avro_custom_types' feature ENABLED");
                 let schema = Arc::new(Schema::new(vec![
                     Field::new(
                         "duration_time_nanos",
