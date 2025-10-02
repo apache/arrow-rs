@@ -199,9 +199,31 @@ impl<'a> Parser<'a> {
         let timezone;
         match self.next_token()? {
             Token::Comma => {
-                timezone = Some(self.parse_double_quoted_string("Timezone")?);
+                match self.next_token()? {
+                    // Support old style `Timestamp(Nanosecond, None)`
+                    Token::None => {
+                        timezone = None;
+                    }
+                    // Support old style `Timestamp(Nanosecond, Some("Timezone"))`
+                    Token::Some => {
+                        self.expect_token(Token::LParen)?;
+                        timezone = Some(self.parse_double_quoted_string("Timezone")?);
+                        self.expect_token(Token::RParen)?;
+                    }
+                    Token::DoubleQuotedString(tz) => {
+                        // Support new style `Timestamp(Nanosecond, "Timezone")`
+                        timezone = Some(tz);
+                    }
+                    tok => {
+                        return Err(make_error(
+                            self.val,
+                            &format!("Expected None, Some, or a timezone string, got {tok:?}"),
+                        ));
+                    }
+                };
                 self.expect_token(Token::RParen)?;
             }
+            // No timezone (e.g `Timestamp(ns)`)
             Token::RParen => {
                 timezone = None;
             }
@@ -831,9 +853,63 @@ mod test {
         ];
 
         for (data_type_string, expected_data_type) in cases {
-            println!("Parsing '{data_type_string}', expecting '{expected_data_type}'");
             let parsed_data_type = parse_data_type(data_type_string).unwrap();
-            assert_eq!(parsed_data_type, expected_data_type);
+            assert_eq!(
+                parsed_data_type, expected_data_type,
+                "Parsing '{data_type_string}', expecting '{expected_data_type}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_parse_data_type_backwards_compatibility() {
+        // (string to parse, expected DataType)
+        let cases = [
+            (
+                "Timestamp(Nanosecond, None)",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            (
+                "Timestamp(Microsecond, None)",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+            ),
+            (
+                "Timestamp(Millisecond, None)",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+            ),
+            (
+                "Timestamp(Second, None)",
+                DataType::Timestamp(TimeUnit::Second, None),
+            ),
+            (
+                "Timestamp(Nanosecond, None)",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ),
+            // Timezones
+            (
+                r#"Timestamp(Nanosecond, Some("+00:00"))"#,
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(Microsecond, Some("+00:00"))"#,
+                DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(Millisecond, Some("+00:00"))"#,
+                DataType::Timestamp(TimeUnit::Millisecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(Second, Some("+00:00"))"#,
+                DataType::Timestamp(TimeUnit::Second, Some("+00:00".into())),
+            ),
+        ];
+
+        for (data_type_string, expected_data_type) in cases {
+            let parsed_data_type = parse_data_type(data_type_string).unwrap();
+            assert_eq!(
+                parsed_data_type, expected_data_type,
+                "Parsing '{data_type_string}', expecting '{expected_data_type}'"
+            );
         }
     }
 
