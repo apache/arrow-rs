@@ -19,6 +19,11 @@ use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
 use crate::{ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit};
 
+
+
+/// Parses a DataType from a string representation
+///
+/// For example, the string "Int32" would be parsed into [`DataType::Int32`]
 pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
     Parser::new(val).parse()
 }
@@ -36,8 +41,8 @@ fn make_error_expected(val: &str, expected: &Token, actual: &Token) -> ArrowErro
     make_error(val, &format!("Expected '{expected}', got '{actual}'"))
 }
 
-#[derive(Debug)]
 /// Implementation of `parse_data_type`, modeled after <https://github.com/sqlparser-rs/sqlparser-rs>
+#[derive(Debug)]
 struct Parser<'a> {
     val: &'a str,
     tokenizer: Peekable<Tokenizer<'a>>,
@@ -702,7 +707,7 @@ mod test {
         }
     }
 
-    /// convert data_type to a string, and then parse it as a type
+    /// Ensure we converting data_type to a string, and then parse it as a type
     /// verifying it is the same
     fn round_trip(data_type: DataType) {
         let data_type_string = data_type.to_string();
