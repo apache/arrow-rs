@@ -4902,7 +4902,6 @@ mod test {
             let expected_array = build_expected(&expected_dt, &values_i128);
             metadata.insert("precision".to_string(), precision.to_string());
             metadata.insert("scale".to_string(), scale.to_string());
-            // INSERT MD HERE
             let field =
                 Field::new("value", expected_dt.clone(), actual_nullable).with_metadata(metadata);
             let expected_schema = Arc::new(Schema::new(vec![field]));
