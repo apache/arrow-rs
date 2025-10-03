@@ -25,9 +25,9 @@
 //! - [`json_to_variant()`]: Function to convert Arrays of JSON strings to a `VariantArray`.
 //! - [`variant_to_json()`]: Function to convert a `VariantArray` to arrays of JSON strings.
 //! - [`cast_to_variant()`]: Cast Arrow arrays to `VariantArray`.
-//! - [`variant_get()`]: Convert `VariantArray` (or an inner path) to ArrowArrays type
-//! - [`shred_variant()`]: Shred a `VariantArray`
-//! - [`unshred_variant()`]: Unshred a `VariantArray`.
+//! - [`variant_get()`]: Convert `VariantArray` (or an inner path) to a strongly-typed Arrow array.
+//! - [`shred_variant()`]: Shred a `VariantArray` according to the provided shredding schema
+//! - [`unshred_variant()`]: Unshred a `VariantArray` to pure binary variant.
 //!
 //! ## 🚧 Work In Progress
 //!
