@@ -25,8 +25,8 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Decimal128Type, Decimal32Type, Decimal64Type,
-    DecimalType, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    ArrowPrimitiveType, DataType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type,
+    DecimalType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     Time64MicrosecondType, TimeUnit, TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow::error::{ArrowError, Result};
@@ -34,8 +34,8 @@ use arrow::temporal_conversions::time64us_to_time;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
-    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal16, VariantDecimal4,
-    VariantDecimal8, VariantMetadata,
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16, VariantMetadata,
 };
 use uuid::Uuid;
 

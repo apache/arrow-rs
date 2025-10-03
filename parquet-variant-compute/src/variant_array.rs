@@ -22,13 +22,13 @@ use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Date32Type, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
-    ArrowError, DataType, Field, FieldRef, Fields, TimeUnit, DECIMAL128_MAX_PRECISION,
-    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+    ArrowError, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
+    DataType, Field, FieldRef, Fields, TimeUnit,
 };
 use chrono::DateTime;
 use parquet_variant::Uuid;
