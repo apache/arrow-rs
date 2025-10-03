@@ -16,13 +16,13 @@
 // under the License.
 
 use crate::schema::{
-    make_full_name, Array, Attributes, AvroSchema, ComplexType, Enum, Fixed, Map, Nullability,
-    PrimitiveType, Record, Schema, Type, TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
-    AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME,
+    AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME,
+    Array, Attributes, AvroSchema, ComplexType, Enum, Fixed, Map, Nullability, PrimitiveType,
+    Record, Schema, Type, TypeName, make_full_name,
 };
 use arrow_schema::{
-    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Field, Fields,
+    IntervalUnit, TimeUnit, UnionFields, UnionMode,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
@@ -318,14 +318,14 @@ impl AvroDataType {
             Codec::Null => {
                 return Err(ArrowError::SchemaError(
                     "Default for `null` type must be JSON null".to_string(),
-                ))
+                ));
             }
             Codec::Boolean => match default_json {
                 Value::Bool(b) => AvroLiteral::Boolean(*b),
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Boolean default must be a JSON boolean".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Int32 | Codec::Date32 | Codec::TimeMillis => {
@@ -387,7 +387,7 @@ impl AvroDataType {
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Default value must be a JSON array for Avro array type".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Map(val_dt) => match default_json {
@@ -401,7 +401,7 @@ impl AvroDataType {
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Default value must be a JSON object for Avro map type".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Struct(fields) => match default_json {
@@ -443,7 +443,7 @@ impl AvroDataType {
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Default value for record/struct must be a JSON object".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Union(encodings, _, _) => {
@@ -1603,7 +1603,7 @@ impl<'a> Maker<'a> {
             _ => {
                 return Err(ArrowError::ParseError(format!(
                     "Illegal promotion {write_primitive:?} to {read_primitive:?}"
-                )))
+                )));
             }
         };
         let mut datatype = self.parse_type(reader_schema, None)?;

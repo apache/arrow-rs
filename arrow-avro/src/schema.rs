@@ -20,7 +20,7 @@ use arrow_schema::{
     UnionMode,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map as JsonMap, Value};
+use serde_json::{Map as JsonMap, Value, json};
 #[cfg(feature = "sha256")]
 use sha2::{Digest, Sha256};
 use std::cmp::PartialEq;
@@ -1388,7 +1388,7 @@ fn datatype_to_avro(
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Map 'entries' field must be Struct(key,value)".into(),
-                    ))
+                    ));
                 }
             };
             let values_schema = process_datatype(
@@ -1493,7 +1493,7 @@ fn datatype_to_avro(
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Arrow type {other:?} has no Avro representation"
-            )))
+            )));
         }
     };
     Ok((val, extras))
@@ -1979,9 +1979,11 @@ mod tests {
                     store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
                     Some(schema.clone())
                 );
-                assert!(store
-                    .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
-                    .is_none());
+                assert!(
+                    store
+                        .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
+                        .is_none()
+                );
             }
             Fingerprint::Id(id) => {
                 unreachable!("This test should only generate Rabin fingerprints")

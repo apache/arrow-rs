@@ -62,7 +62,7 @@ use crate::compression::CompressionCodec;
 use crate::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
 };
-use crate::writer::encoder::{write_long, RecordEncoder, RecordEncoderBuilder};
+use crate::writer::encoder::{RecordEncoder, RecordEncoderBuilder, write_long};
 use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Schema};
@@ -392,7 +392,7 @@ mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::reader::ReaderBuilder;
-    use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
+    use crate::schema::{AvroSchema, CONFLUENT_MAGIC, SchemaStore};
     use crate::test_util::arrow_test_data;
     use arrow_array::{ArrayRef, BinaryArray, DurationSecondArray, Int32Array, RecordBatch};
     use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};

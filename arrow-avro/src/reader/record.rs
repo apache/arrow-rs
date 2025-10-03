@@ -21,15 +21,15 @@ use crate::codec::{
 };
 use crate::reader::cursor::AvroCursor;
 use crate::schema::Nullability;
-use arrow_array::builder::{Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder};
 #[cfg(feature = "small_decimals")]
 use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
+use arrow_array::builder::{Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
-    UnionFields, UnionMode, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Field as ArrowField,
+    FieldRef, Fields, Schema as ArrowSchema, SchemaRef, UnionFields, UnionMode,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
@@ -3904,8 +3904,8 @@ mod tests {
     }
 
     #[test]
-    fn test_record_append_default_missing_fields_without_projector_defaults_yields_type_nulls_or_empties(
-    ) {
+    fn test_record_append_default_missing_fields_without_projector_defaults_yields_type_nulls_or_empties()
+     {
         let fields = vec![("a", DataType::Int32, true), ("b", DataType::Utf8, true)];
         let mut field_refs: Vec<FieldRef> = Vec::new();
         let mut encoders: Vec<Decoder> = Vec::new();

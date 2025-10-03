@@ -476,8 +476,8 @@
 //! ---
 use crate::codec::{AvroField, AvroFieldBuilder};
 use crate::schema::{
-    compare_schemas, AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore,
-    CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+    AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC, Schema,
+    SchemaStore, compare_schemas,
 };
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -717,7 +717,7 @@ impl Decoder {
                 None => {
                     return Err(ArrowError::ParseError(
                         "Missing magic bytes and fingerprint".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -1291,10 +1291,10 @@ mod test {
     use crate::compression::CompressionCodec;
     use crate::reader::record::RecordDecoder;
     use crate::reader::vlq::VLQDecoder;
-    use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
+    use crate::reader::{Decoder, Reader, ReaderBuilder, read_header};
     use crate::schema::{
-        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
-        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+        AVRO_ENUM_SYMBOLS_METADATA_KEY, AvroSchema, CONFLUENT_MAGIC, Fingerprint,
+        FingerprintAlgorithm, PrimitiveType, SINGLE_OBJECT_MAGIC, Schema as AvroRaw, SchemaStore,
     };
     use crate::test_util::arrow_test_data;
     use arrow::array::ArrayDataBuilder;
@@ -1310,7 +1310,7 @@ mod test {
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
     use arrow_buffer::{
-        i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
+        Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer, i256,
     };
     use arrow_schema::{
         ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit, UnionFields,
@@ -1318,14 +1318,14 @@ mod test {
     };
     use bytes::{Buf, BufMut, Bytes};
     use futures::executor::block_on;
-    use futures::{stream, Stream, StreamExt, TryStreamExt};
-    use serde_json::{json, Value};
+    use futures::{Stream, StreamExt, TryStreamExt, stream};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::fs;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Read};
     use std::sync::Arc;
-    use std::task::{ready, Poll};
+    use std::task::{Poll, ready};
 
     fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
         let file = File::open(path).unwrap();
