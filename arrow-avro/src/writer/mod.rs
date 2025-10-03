@@ -30,7 +30,7 @@
 //!   any container framing. This is useful when the schema is known out‑of‑band (i.e.,
 //!   via a registry) and you want minimal overhead.
 //!
-//! ## Which format should I use?
+//! ## Which format should you use?
 //!
 //! * Use **OCF** when you need a portable, self‑contained file. The schema travels with
 //!   the data, making it easy to read elsewhere.
@@ -702,6 +702,8 @@ mod tests {
         Ok(())
     }
 
+    // Strict equality (schema + values) only when canonical extension types are enabled
+    #[cfg(feature = "canonical_extension_types")]
     #[test]
     fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
         let in_file =
@@ -731,7 +733,6 @@ mod tests {
         let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
         let input =
             arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
-        println!("\n\ncheck input={:?}\n", input);
         let tmp = NamedTempFile::new().expect("create temp file");
         {
             let out_file = File::create(tmp.path()).expect("create temp avro");
@@ -748,6 +749,89 @@ mod tests {
         let round_trip =
             arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
         assert_eq!(round_trip, input);
+        Ok(())
+    }
+
+    // Feature OFF: only values are asserted equal; schema may legitimately differ (uuid as fixed(16))
+    #[cfg(not(feature = "canonical_extension_types"))]
+    #[test]
+    fn test_duration_and_uuid_ocf_without_extensions_round_trips_values() -> Result<(), ArrowError>
+    {
+        use arrow::datatypes::{DataType, IntervalUnit};
+        use std::io::BufReader;
+        use tempfile::NamedTempFile;
+
+        // Read input Avro (duration + uuid)
+        let in_file =
+            File::open("test/data/duration_uuid.avro").expect("open test/data/duration_uuid.avro");
+        let mut reader = ReaderBuilder::new()
+            .build(BufReader::new(in_file))
+            .expect("build reader for duration_uuid.avro");
+        let in_schema = reader.schema();
+
+        // Sanity checks: has MonthDayNano and a FixedSizeBinary(16)
+        assert!(
+            in_schema.fields().iter().any(|f| {
+                matches!(
+                    f.data_type(),
+                    DataType::Interval(IntervalUnit::MonthDayNano)
+                )
+            }),
+            "expected at least one Interval(MonthDayNano) field"
+        );
+        assert!(
+            in_schema
+                .fields()
+                .iter()
+                .any(|f| matches!(f.data_type(), DataType::FixedSizeBinary(16))),
+            "expected a FixedSizeBinary(16) field (uuid)"
+        );
+
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let input =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+
+        // Write to a temp OCF and read back
+        let tmp = NamedTempFile::new().expect("create temp file");
+        {
+            let out_file = File::create(tmp.path()).expect("create temp avro");
+            let mut writer = AvroWriter::new(out_file, in_schema.as_ref().clone())?;
+            writer.write(&input)?;
+            writer.finish()?;
+        }
+        let rt_file = File::open(tmp.path()).expect("open round_trip avro");
+        let mut rt_reader = ReaderBuilder::new()
+            .build(BufReader::new(rt_file))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+
+        // 1) Values must round-trip for both columns
+        assert_eq!(
+            round_trip.column(0),
+            input.column(0),
+            "duration column values differ"
+        );
+        assert_eq!(round_trip.column(1), input.column(1), "uuid bytes differ");
+
+        // 2) Schema expectation without extensions:
+        //    uuid is written as named fixed(16), so reader attaches avro.name
+        let uuid_rt = rt_schema.field_with_name("uuid_field")?;
+        assert_eq!(uuid_rt.data_type(), &DataType::FixedSizeBinary(16));
+        assert_eq!(
+            uuid_rt.metadata().get("avro.name").map(|s| s.as_str()),
+            Some("uuid_field")
+        );
+
+        // 3) Duration remains Interval(MonthDayNano)
+        let dur_rt = rt_schema.field_with_name("duration_field")?;
+        assert!(matches!(
+            dur_rt.data_type(),
+            DataType::Interval(IntervalUnit::MonthDayNano)
+        ));
+
         Ok(())
     }
 
@@ -950,8 +1034,7 @@ mod tests {
         let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
         let original =
             arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
-        println!("original: {:?}", original); // Read correctly
-                                              // Sanity: expect at least one Dictionary(Int32, Utf8) column (enum)
+        // Sanity: expect at least one Dictionary(Int32, Utf8) column (enum)
         let has_enum_dict = in_schema.fields().iter().any(|f| {
             matches!(
                 f.data_type(),
@@ -977,7 +1060,6 @@ mod tests {
         let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
         let roundtrip =
             arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
-        println!("\n\n----roundtrip: {:?}\n\n", roundtrip); // Not written correctly
         assert_eq!(roundtrip, original, "Avro enum round-trip mismatch");
         Ok(())
     }

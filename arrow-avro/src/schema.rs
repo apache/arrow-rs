@@ -14,7 +14,6 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
     UnionMode,
@@ -528,7 +527,7 @@ impl From<&Fingerprint> for FingerprintStrategy {
     fn from(f: &Fingerprint) -> Self {
         match f {
             Fingerprint::Rabin(_) => FingerprintStrategy::Rabin,
-            Fingerprint::Id(id) => FingerprintStrategy::Id(*id),
+            Fingerprint::Id(_) => FingerprintStrategy::Id(0),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -1089,7 +1088,6 @@ struct NameGenerator {
 
 impl NameGenerator {
     fn make_unique(&mut self, field_name: &str) -> String {
-        println!("field_name: {}", field_name);
         let field_name = sanitise_avro_name(field_name);
         if self.used.insert(field_name.clone()) {
             self.counters.insert(field_name.clone(), 1);
@@ -1264,22 +1262,26 @@ fn datatype_to_avro(
             Value::String("bytes".into())
         }
         DataType::FixedSizeBinary(len) => {
+            // UUID handling:
+            // - When the canonical extension feature is ON *and* this field is the Arrow canonical UUID
+            //   (extension name "arrow.uuid" or legacy "uuid"), emit Avro string with logicalType "uuid".
+            // - Otherwise, fall back to a named fixed of size = len.
             #[cfg(not(feature = "canonical_extension_types"))]
             let is_uuid = false;
             #[cfg(feature = "canonical_extension_types")]
-            let is_uuid = (*len == 16
+            let is_uuid = (*len == 16)
                 && metadata
                     .get("ARROW:extension:name")
-                    .is_some_and(|value| value == "uuid"));
+                    .map(|value| value == "arrow.uuid" || value == "uuid")
+                    .unwrap_or(false);
+
             if is_uuid {
-                println!("WE ARE HERE");
                 json!({ "type": "string", "logicalType": "uuid" })
             } else {
                 let chosen_name = metadata
                     .get(AVRO_NAME_METADATA_KEY)
                     .map(|s| sanitise_avro_name(s))
                     .unwrap_or_else(|| name_gen.make_unique(field_name));
-                println!("CHOSEN NAME {}", chosen_name);
                 let mut obj = JsonMap::from_iter([
                     ("type".into(), json!("fixed")),
                     ("name".into(), json!(chosen_name)),
@@ -1336,8 +1338,7 @@ fn datatype_to_avro(
         DataType::Duration(unit) => {
             #[cfg(feature = "avro_custom_types")]
             {
-                // When the feature is enabled, create an Avro schema object
-                // with the correct `logicalType` annotation.
+                // Optional: custom Arrow duration logical types if enabled.
                 let logical_type = match unit {
                     TimeUnit::Second => "arrow.duration-seconds",
                     TimeUnit::Millisecond => "arrow.duration-millis",
@@ -1352,6 +1353,7 @@ fn datatype_to_avro(
             }
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => {
+            // Avro duration logical type: fixed(12) with months/days/millis per spec.
             let chosen_name = metadata
                 .get(AVRO_NAME_METADATA_KEY)
                 .map(|s| sanitise_avro_name(s))
