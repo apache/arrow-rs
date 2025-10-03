@@ -56,15 +56,15 @@ macro_rules! impl_primitive_from_variant {
             }
         }
     };
-    ($arrow_type:ty $(, $variant_method:ident => $cast_fn:expr )+ ) => {
+    ($arrow_type:ty, $( $variant_type:pat => $variant_method:ident, $cast_fn:expr ),+ $(,)?) => {
         impl TimestampFromVariant for $arrow_type {
             fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
-                $(
-                    if let Some(value) = variant.$variant_method() {
-                        return Some($cast_fn(value));
-                    }
-                )+
-                None
+                match variant {
+                    $(
+                        $variant_type => variant.$variant_method().map($cast_fn),
+                    )+
+                    _ => None
+                }
             }
         }
     };
@@ -88,11 +88,11 @@ impl_primitive_from_variant!(
 );
 impl_primitive_from_variant!(
     datatypes::TimestampMicrosecondType,
-    as_timestamp_micros => |t| t);
+    Variant::TimestampNtzMicros(_) | Variant::TimestampMicros(_) => as_timestamp_micros, |t| t);
 impl_primitive_from_variant!(
     datatypes::TimestampNanosecondType,
-    as_timestamp_micros => |t| 1000 * t,
-    as_timestamp_nanos => |t| t);
+    Variant::TimestampNtzMicros(_) | Variant::TimestampMicros(_) => as_timestamp_micros, |t| 1000 * t,
+    Variant::TimestampNtzNanos(_) | Variant::TimestampNanos(_) => as_timestamp_nanos, |t| t);
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
