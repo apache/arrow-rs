@@ -480,11 +480,14 @@ impl From<&Option<bool>> for BooleanAdapter {
 
 impl<Ptr: Into<BooleanAdapter>> FromIterator<Ptr> for BooleanArray {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
-        let vec = iter.into_iter().collect::<Vec<_>>();
-        unsafe {
-            // SAFETY: Vec iterator is trusted len
-            BooleanArray::from_trusted_len_iter(vec)
-        }
+        let iter = iter.into_iter();
+        let capacity = match iter.size_hint() {
+            (lower, Some(upper)) if lower == upper => lower,
+            _ => 0,
+        };
+        let mut builder = BooleanBuilder::with_capacity(capacity);
+        builder.extend(iter.map(|item| item.into().native));
+        builder.finish()
     }
 }
 
