@@ -34,24 +34,16 @@ use std::{fs, path::PathBuf};
 
 type Result<T> = std::result::Result<T, String>;
 
-/// Creates a test function for a given case number
+/// Creates a test function for a given case number.
+///
+/// If an error message is provided, generate an error test case that expects it.
 ///
 /// Note the index is zero-based, while the case number is one-based
 macro_rules! variant_test_case {
-    ($case_num:literal) => {
+    ($case_num:literal $(, $expected_error:literal )? ) => {
         paste::paste! {
             #[test]
-            fn [<test_variant_integration_case_ $case_num>]() {
-                all_cases()[$case_num - 1].run()
-            }
-        }
-    };
-
-    // Generates an error test case, where the expected result is an error message
-    ($case_num:literal, $expected_error:literal) => {
-        paste::paste! {
-            #[test]
-            #[should_panic(expected = $expected_error)]
+            $( #[should_panic(expected = $expected_error)] )?
             fn [<test_variant_integration_case_ $case_num>]() {
                 all_cases()[$case_num - 1].run()
             }
@@ -65,8 +57,8 @@ macro_rules! variant_test_case {
 // - cases 40, 42, 87, 127 and 128 are expected to fail always (they include invalid variants)
 // - the remaining cases are expected to (eventually) pass
 
-variant_test_case!(1, "Unshredding not yet supported for type: List(");
-variant_test_case!(2, "Unshredding not yet supported for type: List(");
+variant_test_case!(1);
+variant_test_case!(2);
 // case 3 is empty in cases.json 🤷
 // ```json
 // {
@@ -94,31 +86,12 @@ variant_test_case!(20);
 variant_test_case!(21);
 variant_test_case!(22);
 variant_test_case!(23);
-// https://github.com/apache/arrow-rs/issues/8332
-variant_test_case!(
-    24,
-    "Unshredding not yet supported for type: Decimal128(9, 4)"
-);
-variant_test_case!(
-    25,
-    "Unshredding not yet supported for type: Decimal128(9, 4)"
-);
-variant_test_case!(
-    26,
-    "Unshredding not yet supported for type: Decimal128(18, 9)"
-);
-variant_test_case!(
-    27,
-    "Unshredding not yet supported for type: Decimal128(18, 9)"
-);
-variant_test_case!(
-    28,
-    "Unshredding not yet supported for type: Decimal128(38, 9)"
-);
-variant_test_case!(
-    29,
-    "Unshredding not yet supported for type: Decimal128(38, 9)"
-);
+variant_test_case!(24);
+variant_test_case!(25);
+variant_test_case!(26);
+variant_test_case!(27);
+variant_test_case!(28);
+variant_test_case!(29);
 variant_test_case!(30);
 variant_test_case!(31);
 variant_test_case!(32);
@@ -130,16 +103,14 @@ variant_test_case!(37);
 variant_test_case!(38);
 variant_test_case!(39);
 // Is an error case (should be failing as the expected error message indicates)
-// TODO: Once we support lists: "both value and typed_value are non-null"
-variant_test_case!(40, "Unshredding not yet supported for type: List(");
-variant_test_case!(41, "Unshredding not yet supported for type: List(");
+variant_test_case!(40, "both value and typed_value are non-null");
+variant_test_case!(41);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(42, "both value and typed_value are non-null");
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(43, "Field 'b' appears in both typed_value and value");
 variant_test_case!(44);
-// https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(45, "Unshredding not yet supported for type: List(");
+variant_test_case!(45);
 variant_test_case!(46);
 variant_test_case!(47);
 variant_test_case!(48);
@@ -180,12 +151,11 @@ variant_test_case!(82);
 variant_test_case!(83);
 // Invalid case, implementations can choose to read the shredded value or error out
 variant_test_case!(84);
-// https://github.com/apache/arrow-rs/issues/8337
-variant_test_case!(85, "Unshredding not yet supported for type: List(");
-variant_test_case!(86, "Unshredding not yet supported for type: List(");
+variant_test_case!(85);
+variant_test_case!(86);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(87, "Expected object in value field");
-variant_test_case!(88, "Unshredding not yet supported for type: List(");
+variant_test_case!(88);
 variant_test_case!(89);
 variant_test_case!(90);
 variant_test_case!(91);
@@ -224,7 +194,7 @@ variant_test_case!(123);
 variant_test_case!(124);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(125, "Field 'b' appears in both typed_value and value");
-variant_test_case!(126, "Unshredding not yet supported for type: List(");
+variant_test_case!(126);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(127, "Illegal shredded value type: UInt32");
 // Is an error case (should be failing as the expected error message indicates)
@@ -235,8 +205,8 @@ variant_test_case!(131);
 variant_test_case!(132);
 variant_test_case!(133);
 variant_test_case!(134);
-variant_test_case!(135, "Unshredding not yet supported for type: List(");
-variant_test_case!(136, "Unshredding not yet supported for type: List(");
+variant_test_case!(135);
+variant_test_case!(136);
 // Is an error case (should be failing as the expected error message indicates)
 variant_test_case!(137, "Illegal shredded value type: FixedSizeBinary(4)");
 variant_test_case!(138);
