@@ -17,7 +17,7 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::datatypes::{self, ArrowPrimitiveType};
+use arrow::datatypes::{self, ArrowPrimitiveType, ArrowTimestampType, Date32Type};
 use parquet_variant::Variant;
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
@@ -38,12 +38,33 @@ pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
 
+/// Extension trait for Arrow timestamp types that can extract their native value from a Variant
+/// We can't use [`PrimitiveFromVariant`] directly because we might need to use methods that
+/// are only available on [`ArrowTimestampType`] (such as with_timezone_opt)
+pub(crate) trait TimestampFromVariant: ArrowTimestampType {
+    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
+}
+
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
 macro_rules! impl_primitive_from_variant {
-    ($arrow_type:ty, $variant_method:ident) => {
+    ($arrow_type:ty, $variant_method:ident $(, $cast_fn:expr)?) => {
         impl PrimitiveFromVariant for $arrow_type {
             fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
-                variant.$variant_method()
+                let value = variant.$variant_method();
+                $( let value = value.map($cast_fn); )?
+                value
+            }
+        }
+    };
+    ($arrow_type:ty, $( $variant_type:pat => $variant_method:ident, $cast_fn:expr ),+ $(,)?) => {
+        impl TimestampFromVariant for $arrow_type {
+            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
+                match variant {
+                    $(
+                        $variant_type => variant.$variant_method().map($cast_fn),
+                    )+
+                    _ => None
+                }
             }
         }
     };
@@ -60,6 +81,18 @@ impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
 impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
 impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
 impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
+impl_primitive_from_variant!(
+    datatypes::Date32Type,
+    as_naive_date,
+    Date32Type::from_naive_date
+);
+impl_primitive_from_variant!(
+    datatypes::TimestampMicrosecondType,
+    Variant::TimestampNtzMicros(_) | Variant::TimestampMicros(_) => as_timestamp_micros, |t| t);
+impl_primitive_from_variant!(
+    datatypes::TimestampNanosecondType,
+    Variant::TimestampNtzMicros(_) | Variant::TimestampMicros(_) => as_timestamp_micros, |t| 1000 * t,
+    Variant::TimestampNtzNanos(_) | Variant::TimestampNanos(_) => as_timestamp_nanos, |t| t);
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
