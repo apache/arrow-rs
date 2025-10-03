@@ -21,7 +21,7 @@ use arrow::datatypes::{self, ArrowPrimitiveType, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
-use crate::type_conversion::{variant_decimal_to_decimal, PrimitiveFromVariant};
+use crate::type_conversion::{PrimitiveFromVariant, variant_decimal_to_decimal};
 use crate::{VariantArray, VariantValueArrayBuilder};
 
 use std::sync::Arc;

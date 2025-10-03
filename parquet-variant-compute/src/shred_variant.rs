@@ -329,8 +329,8 @@ mod tests {
     use arrow::array::{Array, Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields};
     use parquet_variant::{
-        ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder, VariantDecimal16,
-        VariantDecimal4, VariantDecimal8,
+        ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder, VariantDecimal4,
+        VariantDecimal8, VariantDecimal16,
     };
     use std::sync::Arc;
 
