@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+extern crate arrow;
 #[macro_use]
 extern crate criterion;
 
 use criterion::Criterion;
-
-extern crate arrow;
 
 use arrow::array::*;
 use arrow_buffer::i256;
@@ -207,13 +206,19 @@ fn array_from_vec_benchmark(c: &mut Criterion) {
     });
 }
 
-fn gen_option_vector<TItem: Copy>(item: TItem, len: usize) -> Vec<Option<TItem>> {
-    hint::black_box(
-        repeat_n(item, len)
-            .enumerate()
-            .map(|(idx, item)| if idx % 3 == 0 { None } else { Some(item) })
-            .collect(),
-    )
+fn gen_option_iter<TItem: Clone + 'static>(
+    item: TItem,
+    len: usize,
+) -> Box<dyn Iterator<Item = Option<TItem>>> {
+    hint::black_box(Box::new(repeat_n(item, len).enumerate().map(
+        |(idx, item)| {
+            if idx % 3 == 0 {
+                None
+            } else {
+                Some(item)
+            }
+        },
+    )))
 }
 
 fn from_iter_benchmark(c: &mut Criterion) {
@@ -221,26 +226,26 @@ fn from_iter_benchmark(c: &mut Criterion) {
 
     // All ArrowPrimitiveType use the same implementation
     c.bench_function("Int64Array::from_iter", |b| {
-        let values = gen_option_vector(1, ITER_LEN);
-        b.iter(|| hint::black_box(Int64Array::from_iter(values.iter())));
+        b.iter(|| hint::black_box(Int64Array::from_iter(gen_option_iter(1, ITER_LEN))));
     });
     c.bench_function("Int64Array::from_trusted_len_iter", |b| {
-        let values = gen_option_vector(1, ITER_LEN);
         b.iter(|| unsafe {
-            // SAFETY: values.iter() is a TrustedLenIterator
-            hint::black_box(Int64Array::from_trusted_len_iter(values.iter()))
+            // SAFETY: gen_option_iter is a TrustedLenIterator
+            hint::black_box(Int64Array::from_trusted_len_iter(gen_option_iter(
+                1, ITER_LEN,
+            )))
         });
     });
 
     c.bench_function("BooleanArray::from_iter", |b| {
-        let values = gen_option_vector(true, ITER_LEN);
-        b.iter(|| hint::black_box(BooleanArray::from_iter(values.iter())));
+        b.iter(|| hint::black_box(BooleanArray::from_iter(gen_option_iter(true, ITER_LEN))));
     });
     c.bench_function("BooleanArray::from_trusted_len_iter", |b| {
-        let values = gen_option_vector(true, ITER_LEN);
         b.iter(|| unsafe {
-            // SAFETY: values.iter() is a TrustedLenIterator
-            hint::black_box(BooleanArray::from_trusted_len_iter(values.iter()))
+            // SAFETY: gen_option_iter is a TrustedLenIterator
+            hint::black_box(BooleanArray::from_trusted_len_iter(gen_option_iter(
+                true, ITER_LEN,
+            )))
         });
     });
 }
