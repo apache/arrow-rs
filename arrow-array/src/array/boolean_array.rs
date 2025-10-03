@@ -445,7 +445,7 @@ impl<'a> BooleanArray {
 ///
 /// See also [NativeAdapter](crate::array::NativeAdapter).
 #[derive(Debug)]
-pub struct BooleanAdapter {
+struct BooleanAdapter {
     /// Corresponding Rust native type if available
     pub native: Option<bool>,
 }
@@ -504,6 +504,10 @@ impl BooleanArray {
     ///
     /// Panics if the iterator does not report an upper bound on `size_hint()`.
     #[inline]
+    #[allow(
+        private_bounds,
+        reason = "We will expose BooleanAdapter if there is a need"
+    )]
     pub unsafe fn from_trusted_len_iter<I, P>(iter: I) -> Self
     where
         P: Into<BooleanAdapter>,
