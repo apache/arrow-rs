@@ -25,18 +25,11 @@
 //! Arrow supports types like `Int8` and `Int16` that have no corresponding Parquet type.
 //! Data of these types must be coerced to the appropriate Parquet type when writing.
 //!
-//! For example, Arrow small integer types are coerced writing to Parquet:
+//! For example, Arrow small integer types are coerced when writing to Parquet:
 //! - `Int8` → `INT32` (i8 → i32)
 //! - `Int16` → `INT32` (i16 → i32)
 //! - `UInt8` → `INT32` (u8 → u32 → i32)
 //! - `UInt16` → `INT32` (u16 → u32 → i32)
-//!
-//! Decimal types with small precision are also coerced:
-//! - `Decimal32/64/128/256(precision 1-9)` → `INT32` (truncated via `as i32`)
-//! - `Decimal64/128/256(precision 10-18)` → `INT64` (truncated via `as i64`)
-//!
-//! In these situations, bloom filters store hashes of the *physical* Parquet values, but Arrow users
-//! will often need to check using the *logical* Arrow values.
 //!
 //! [`ArrowSbbf`] wraps an [`Sbbf`] and an Arrow [`DataType`], automatically coercing
 //! values to their Parquet representation before checking the bloom filter.
@@ -47,13 +40,11 @@
 //! use arrow_schema::DataType;
 //! use parquet::arrow::bloom_filter::ArrowSbbf;
 //!
-//! // Get bloom filter and metadata from row group reader
-//! let column_chunk = row_group_reader.metadata().column(0);
+//! // Get bloom filter from row group reader
 //! let sbbf = row_group_reader.get_column_bloom_filter(0)?;
-//! let parquet_type = column_chunk.column_type();
 //!
-//! // Create ArrowSbbf with both logical and physical types
-//! let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Int8, parquet_type);
+//! // Create ArrowSbbf with the logical Arrow type
+//! let arrow_sbbf = ArrowSbbf::new(&sbbf, &DataType::Int8);
 //!
 //! // Check with i8 value - automatically coerced to i32
 //! let value: i8 = 42;
@@ -62,31 +53,59 @@
 //! }
 //! ```
 //!
-//! # Date64 Handling
+//! # Date64 with Type Coercion
 //!
-//! [`ArrowSbbf`] correctly handles `Date64` values regardless of whether
-//! [`WriterProperties::set_coerce_types`] was used:
+//! `Date64` requires special handling because it can be stored as either INT32 or INT64
+//! depending on [`WriterProperties::set_coerce_types`].
 //!
-//! - When stored as INT64 (default): Values checked as-is (milliseconds since epoch)
-//! - When stored as INT32 (coerce_types=true): Values automatically converted from milliseconds to days
+//! When `coerce_types=true`, Date64 is stored as Date32 (INT32, days since epoch).
+//! Users must convert their Date64 values before checking:
 //!
-//! The physical type determines the correct conversion automatically.
+//! ```ignore
+//! use arrow_array::temporal_conversions::MILLISECONDS_IN_DAY;
+//! use arrow_array::Date64Array;
+//! use arrow_cast::cast;
+//! use arrow_schema::DataType;
+//!
+//! let date64_value = 864_000_000_i64; // milliseconds
+//!
+//! // Check the column's physical type to determine conversion
+//! let column_chunk = row_group_reader.metadata().column(0);
+//! match column_chunk.column_type() {
+//!     ParquetType::INT32 => {
+//!         // Date64 was coerced to Date32 - convert milliseconds to days
+//!         let date32_value = (date64_value / MILLISECONDS_IN_DAY) as i32;
+//!         let arrow_sbbf = ArrowSbbf::new(&sbbf, &DataType::Date32);
+//!         arrow_sbbf.check(&date32_value)
+//!     }
+//!     ParquetType::INT64 => {
+//!         // Date64 stored as-is - check directly
+//!         let arrow_sbbf = ArrowSbbf::new(&sbbf, &DataType::Date64);
+//!         arrow_sbbf.check(&date64_value)
+//!     }
+//!     _ => unreachable!()
+//! }
+//! ```
+//!
+//! Alternatively, use [`arrow_cast::cast`] for the conversion:
+//! ```ignore
+//! let date64_array = Date64Array::from(vec![date64_value]);
+//! let date32_array = cast(&date64_array, &DataType::Date32)?;
+//! let date32_value = date32_array.as_primitive::<Date32Type>().value(0);
+//! ```
 //!
 //! [`WriterProperties::set_coerce_types`]: crate::file::properties::WriterPropertiesBuilder::set_coerce_types
+//! [`arrow_cast::cast`]: https://docs.rs/arrow-cast/latest/arrow_cast/cast/fn.cast.html
 
-use crate::basic::Type as ParquetType;
 use crate::bloom_filter::Sbbf;
 use crate::data_type::AsBytes;
 use arrow_schema::DataType as ArrowType;
 
 /// Wraps an [`Sbbf`] and provides automatic type coercion based on Arrow schema.
-/// Ensures that checking bloom filters works correctly for Arrow types that require
-/// coercion to Parquet physical types (e.g., Int8 → INT32).
 #[derive(Debug, Clone)]
 pub struct ArrowSbbf<'a> {
     sbbf: &'a Sbbf,
     arrow_type: &'a ArrowType,
-    parquet_type: ParquetType,
 }
 
 impl<'a> ArrowSbbf<'a> {
@@ -94,18 +113,9 @@ impl<'a> ArrowSbbf<'a> {
     ///
     /// # Arguments
     /// * `sbbf` - Parquet bloom filter for the column
-    /// * `arrow_type` - Arrow data type for the column (logical type)
-    /// * `parquet_type` - Parquet physical type for the column
-    ///
-    /// The Parquet type can be obtained from [`ColumnChunkMetaData::column_type()`].
-    ///
-    /// [`ColumnChunkMetaData::column_type()`]: crate::file::metadata::ColumnChunkMetaData::column_type
-    pub fn new(sbbf: &'a Sbbf, arrow_type: &'a ArrowType, parquet_type: ParquetType) -> Self {
-        Self {
-            sbbf,
-            arrow_type,
-            parquet_type,
-        }
+    /// * `arrow_type` - Arrow data type for the column
+    pub fn new(sbbf: &'a Sbbf, arrow_type: &'a ArrowType) -> Self {
+        Self { sbbf, arrow_type }
     }
 
     /// Check if a value might be present in the bloom filter
@@ -254,36 +264,6 @@ impl<'a> ArrowSbbf<'a> {
                     _ => self.sbbf.check(value),
                 }
             }
-            ArrowType::Date64 => {
-                // Date64 can be stored as either INT32 or INT64 depending on coerce_types
-                let bytes = value.as_bytes();
-                if bytes.len() == 8 {
-                    let i64_val = i64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7],
-                    ]);
-                    match self.parquet_type {
-                        ParquetType::INT32 => {
-                            // Date64 was coerced to Date32 (days since epoch)
-                            // Convert milliseconds to days: ms / 86_400_000
-                            const MS_PER_DAY: i64 = 86_400_000;
-                            let days = (i64_val / MS_PER_DAY) as i32;
-                            self.sbbf.check(&days)
-                        }
-                        ParquetType::INT64 => {
-                            // Date64 stored as-is (milliseconds since epoch)
-                            self.sbbf.check(&i64_val)
-                        }
-                        _ => {
-                            // Unexpected physical type for Date64, fall back to direct check
-                            self.sbbf.check(value)
-                        }
-                    }
-                } else {
-                    // Unexpected size, fall back to direct check
-                    self.sbbf.check(value)
-                }
-            }
             // No coercion needed
             _ => self.sbbf.check(value),
         }
@@ -358,8 +338,8 @@ mod tests {
         // Check without coercion fails
         assert!(!sbbf.check(&test_value));
 
-        // Arrow Int8 -> ParquetType::INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Int8, ParquetType::INT32);
+        // Arrow Int8 -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Int8);
         assert!(arrow_sbbf.check(&test_value));
     }
 
@@ -374,7 +354,7 @@ mod tests {
         assert!(!sbbf.check(&test_value));
 
         // Arrow Int16 -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Int16, ParquetType::INT32);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Int16);
         assert!(arrow_sbbf.check(&test_value));
     }
 
@@ -389,7 +369,7 @@ mod tests {
         assert!(!sbbf.check(&test_value));
 
         // Arrow UInt8 -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt8, ParquetType::INT32);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt8);
         assert!(arrow_sbbf.check(&test_value));
     }
 
@@ -406,7 +386,7 @@ mod tests {
         assert!(!sbbf.check(&test_value));
 
         // Arrow UInt16 -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt16, ParquetType::INT32);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt16);
         assert!(arrow_sbbf.check(&test_value));
     }
 
@@ -425,7 +405,7 @@ mod tests {
         assert!(sbbf.check(&test_value));
 
         // Arrow UInt32 -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt16, ParquetType::INT32);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt32);
         assert!(arrow_sbbf.check(&test_value));
     }
 
@@ -444,7 +424,7 @@ mod tests {
         assert!(sbbf.check(&test_value));
 
         // Arrow UInt64 -> Parquet INT64
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt64, ParquetType::INT64);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt64);
         assert!(arrow_sbbf.check(&test_value));
     }
 
@@ -463,7 +443,7 @@ mod tests {
         assert!(!direct_result);
 
         // Arrow Decimal128(5, 2) -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal128(5, 2), ParquetType::INT32);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal128(5, 2));
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
         assert!(arrow_result);
     }
@@ -483,7 +463,7 @@ mod tests {
         assert!(!direct_result);
 
         // Arrow Decimal128(15, 2) -> Parquet INT64
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal128(15, 2), ParquetType::INT64);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal128(15, 2));
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
         assert!(arrow_result);
     }
@@ -501,7 +481,7 @@ mod tests {
         assert!(sbbf.check(&test_value));
 
         // Arrow Decimal32(5, 2) -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal32(5, 2), ParquetType::INT32);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal32(5, 2));
         assert!(arrow_sbbf.check(&test_value));
     }
 
@@ -519,11 +499,7 @@ mod tests {
         assert!(direct_result);
 
         // Arrow Float16 -> Parquet FIXED_LEN_BYTE_ARRAY
-        let arrow_sbbf = ArrowSbbf::new(
-            &sbbf,
-            &ArrowType::Float16,
-            ParquetType::FIXED_LEN_BYTE_ARRAY,
-        );
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Float16);
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
         assert!(arrow_result);
     }
@@ -539,31 +515,35 @@ mod tests {
         assert!(sbbf.check(&test_value));
 
         // Arrow Date64 -> Parquet INT64
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Date64, ParquetType::INT64);
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Date64);
         assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
     fn test_check_date64_with_coerce_types() {
-        const MS_PER_DAY: i64 = 86_400_000;
-        let test_value_ms = 10 * MS_PER_DAY; // 10 days in milliseconds
-        let array = Date64Array::from(vec![5 * MS_PER_DAY, test_value_ms, 15 * MS_PER_DAY]);
+        use arrow_array::temporal_conversions::MILLISECONDS_IN_DAY;
+
+        let test_value_ms = 10 * MILLISECONDS_IN_DAY; // 10 days in milliseconds
+        let array = Date64Array::from(vec![
+            5 * MILLISECONDS_IN_DAY,
+            test_value_ms,
+            15 * MILLISECONDS_IN_DAY,
+        ]);
         let field = Field::new("col", ArrowType::Date64, false);
 
         // Write with coerce_types enabled
         let props = WriterProperties::builder()
             .set_bloom_filter_enabled(true)
-            .set_coerce_types(true) // causes coercion from Arrow Date64 -> Parquet INT32
+            .set_coerce_types(true)
             .build();
         let sbbf = build_sbbf_with_props(Arc::new(array), field.clone(), props);
 
         // Check without coercion fails
-        let direct_result = sbbf.check(&test_value_ms);
-        assert!(!direct_result);
+        assert!(!sbbf.check(&test_value_ms));
 
-        // Arrow Date64 -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Date64, ParquetType::INT32);
-        let arrow_result = arrow_sbbf.check(&test_value_ms);
-        assert!(arrow_result);
+        // Arrow Date64 -> Arrow Date32 -> Parquet INT32
+        let date32_value = (test_value_ms / MILLISECONDS_IN_DAY) as i32;
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Date32); // Note: Date32, not Date64
+        assert!(arrow_sbbf.check(&date32_value));
     }
 }
