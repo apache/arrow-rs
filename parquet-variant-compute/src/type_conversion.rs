@@ -18,7 +18,7 @@
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
 use arrow::datatypes::{self, ArrowPrimitiveType};
-use parquet_variant::Variant;
+use parquet_variant::{Variant, VariantDecimal4};
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +60,50 @@ impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
 impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
 impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
 impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
+
+pub(crate) fn scale_variant_decimal4(variant: &VariantDecimal4, output_scale: i8) -> Option<i32> {
+    let input_scale = variant.scale() as i8;
+    if input_scale == output_scale {
+        Some(variant.integer())
+    } else if input_scale < output_scale {
+        scale_up_variant_decimal4(variant, output_scale)
+    } else {
+        scale_down_variant_decimal4(variant, output_scale)
+    }
+}
+
+fn scale_up_variant_decimal4(variant: &VariantDecimal4, output_scale: i8) -> Option<i32> {
+    // scale_up means output has more fractional digits than input
+    // multiply integer by 10^(output_scale - input_scale)
+    let input_scale = variant.scale() as i8;
+    let delta_scale = output_scale - input_scale;
+    let mul = 10i32.checked_pow(delta_scale as u32)?;
+    variant.integer().checked_mul(mul)
+}
+
+fn scale_down_variant_decimal4(variant: &VariantDecimal4, output_scale: i8) -> Option<i32> {
+    // scale_down means output has fewer fractional digits than input
+    // divide by 10^(input_scale - output_scale) with rounding
+    let input_scale = variant.scale() as i8;
+    let delta_scale = input_scale - output_scale;
+    let div = 10i32.checked_pow(delta_scale as u32)?;
+
+    let v = variant.integer();
+    let d = v.checked_div(div)?;
+    let r = v % div;
+
+    // rounding in the same way as convert_to_smaller_scale_decimal in arrow-cast
+    let half = div.checked_div(2)?;
+    let half_neg = half.checked_neg()?;
+
+    let adjusted = match v >= 0 {
+        true if r >= half => d.checked_add(1)?,
+        false if r <= half_neg => d.checked_sub(1)?,
+        _ => d,
+    };
+
+    Some(adjusted)
+}
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
@@ -109,8 +153,10 @@ macro_rules! decimal_to_variant_decimal {
         let (v, scale) = if *$scale < 0 {
             // For negative scale, we need to multiply the value by 10^|scale|
             // For example: 123 with scale -2 becomes 12300 with scale 0
-            let multiplier = <$value_type>::pow(10, (-*$scale) as u32);
-            (<$value_type>::checked_mul($v, multiplier), 0u8)
+            let v = (10 as $value_type)
+                .checked_pow((-*$scale) as u32)
+                .and_then(|m| m.checked_mul($v));
+            (v, 0u8)
         } else {
             (Some($v), *$scale as u8)
         };

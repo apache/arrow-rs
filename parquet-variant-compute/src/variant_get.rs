@@ -300,15 +300,15 @@ mod test {
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::VariantArray;
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
+        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Decimal32Array, Float32Array,
+        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use chrono::DateTime;
-    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
+    use parquet_variant::{Variant, VariantDecimal4, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -2673,5 +2673,87 @@ mod test {
             .build();
 
         Arc::new(struct_array)
+    }
+
+    #[test]
+    fn get_decimal32_unshredded_var_scales_to_scale2() {
+        // Build unshredded variant values with different scales
+        let mut builder = crate::VariantArrayBuilder::new(4);
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 2).unwrap())); // 12.34
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 3).unwrap())); // 1.234
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 0).unwrap())); // 1234
+        builder.append_null();
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), 2);
+        assert_eq!(result.value(0), 1234);
+        assert_eq!(result.value(1), 123);
+        assert_eq!(result.value(2), 123400);
+        assert!(result.is_null(3));
+    }
+
+    #[test]
+    fn get_decimal32_unshredded_scale_down_rounding() {
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 3).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1245, 3).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1235, 3).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1245, 3).unwrap()));
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.value(0), 124);
+        assert_eq!(result.value(1), 125);
+        assert_eq!(result.value(2), -124);
+        assert_eq!(result.value(3), -125);
+    }
+
+    #[test]
+    fn get_decimal32_precision_overflow_safe() {
+        // Exceed Decimal32 max precision (9) after scaling
+        let mut builder = crate::VariantArrayBuilder::new(1);
+        // 999,999,999 (9 digits) at scale 0 -> to scale 2 becomes 99,999,999,900 (11 digits) overflows
+        builder.append_variant(Variant::from(
+            VariantDecimal4::try_new(999_999_999, 0).unwrap(),
+        ));
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert!(result.is_null(0));
+    }
+
+    #[test]
+    fn get_decimal32_precision_overflow_unsafe_errors() {
+        let mut builder = crate::VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::from(
+            VariantDecimal4::try_new(999_999_999, 0).unwrap(),
+        ));
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(cast_options);
+        let err = variant_get(&variant_array, options).unwrap_err();
+
+        assert!(err.to_string().contains("Failed to cast to Decimal32(precision=9, scale=2) from variant Decimal4"));
     }
 }
