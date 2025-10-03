@@ -308,8 +308,8 @@ mod tests {
     /// Helper function to build a bloom filter for testing
     ///
     /// Writes the given array to a Parquet file with bloom filters enabled,
-    /// then reads it back and returns the bloom filter and physical type for the first column.
-    fn build_sbbf(array: ArrayRef, field: Field) -> (Sbbf, ParquetType) {
+    /// then reads it back and returns the bloom filter for the first column.
+    fn build_sbbf(array: ArrayRef, field: Field) -> Sbbf {
         build_sbbf_with_props(
             array,
             field,
@@ -320,11 +320,7 @@ mod tests {
     }
 
     /// Helper function to build a bloom filter with custom writer properties
-    fn build_sbbf_with_props(
-        array: ArrayRef,
-        field: Field,
-        props: WriterProperties,
-    ) -> (Sbbf, ParquetType) {
+    fn build_sbbf_with_props(array: ArrayRef, field: Field, props: WriterProperties) -> Sbbf {
         let schema = Arc::new(Schema::new(vec![field.clone()]));
         let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
 
@@ -344,100 +340,78 @@ mod tests {
             .build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
-        // Get bloom filter and physical type
+        // Get bloom filter
         let row_group_reader = reader.get_row_group(0).unwrap();
-        let metadata = row_group_reader.metadata();
-        let column_chunk = metadata.column(0);
-        let parquet_type = column_chunk.column_type();
-        let sbbf = row_group_reader
+        row_group_reader
             .get_column_bloom_filter(0)
             .expect("Bloom filter should exist")
-            .clone();
-
-        (sbbf, parquet_type)
+            .clone()
     }
 
     #[test]
-    fn test_int8_coercion() {
-        // Int8 -> Parquet INT32 (sign extension changes bytes)
+    fn test_check_int8() {
         let test_value = 3_i8;
         let array = Arc::new(Int8Array::from(vec![1_i8, 2, test_value, 4, 5]));
         let field = Field::new("col", ArrowType::Int8, false);
-        let (sbbf, parquet_type) = build_sbbf(array, field.clone());
+        let sbbf = build_sbbf(array, field.clone());
 
-        // Direct check should fail (bloom filter has i32)
-        assert!(!sbbf.check(&test_value), "Direct check should fail");
+        // Check without coercion fails
+        assert!(!sbbf.check(&test_value));
 
-        // ArrowSbbf check should succeed (coerces i8 to i32)
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow Int8 -> ParquetType::INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Int8, ParquetType::INT32);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_int16_coercion() {
-        // Int16 -> Parquet INT32 (sign extension changes bytes)
+    fn test_check_int16() {
         let test_value = 300_i16;
         let array = Arc::new(Int16Array::from(vec![100_i16, 200, test_value, 400, 500]));
         let field = Field::new("col", ArrowType::Int16, false);
-        let (sbbf, parquet_type) = build_sbbf(array, field.clone());
+        let sbbf = build_sbbf(array, field.clone());
 
-        // Direct check should fail (bloom filter has i32)
-        assert!(!sbbf.check(&test_value), "Direct check should fail");
+        // Check without coercion fails
+        assert!(!sbbf.check(&test_value));
 
-        // ArrowSbbf check should succeed (coerces i16 to i32)
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow Int16 -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Int16, ParquetType::INT32);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_uint8_coercion() {
-        // UInt8 -> Parquet INT32 (zero extension changes bytes)
+    fn test_check_uint8() {
         let test_value = 30_u8;
         let array = Arc::new(UInt8Array::from(vec![10_u8, 20, test_value, 40, 50]));
         let field = Field::new("col", ArrowType::UInt8, false);
-        let (sbbf, parquet_type) = build_sbbf(array, field.clone());
+        let sbbf = build_sbbf(array, field.clone());
 
-        // Direct check should fail (bloom filter has i32)
-        assert!(!sbbf.check(&test_value), "Direct check should fail");
+        // Check without coercion fails
+        assert!(!sbbf.check(&test_value));
 
-        // ArrowSbbf check should succeed (coerces u8 to i32)
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow UInt8 -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt8, ParquetType::INT32);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_uint16_coercion() {
-        // UInt16 -> Parquet INT32 (zero extension changes bytes)
+    fn test_check_uint16() {
         let test_value = 3000_u16;
         let array = Arc::new(UInt16Array::from(vec![
             1000_u16, 2000, test_value, 4000, 5000,
         ]));
         let field = Field::new("col", ArrowType::UInt16, false);
-        let (sbbf, parquet_type) = build_sbbf(array, field.clone());
+        let sbbf = build_sbbf(array, field.clone());
 
-        // Direct check should fail (bloom filter has i32)
-        assert!(!sbbf.check(&test_value), "Direct check should fail");
+        // Check without coercion fails
+        assert!(!sbbf.check(&test_value));
 
-        // ArrowSbbf check should succeed (coerces u16 to i32)
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow UInt16 -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt16, ParquetType::INT32);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_uint32_no_coercion() {
-        // UInt32 -> Parquet INT32 (reinterpret cast preserves bit pattern)
+    fn test_check_uint32() {
         let test_value = 3_000_000_000_u32; // > i32::MAX
         let array = Arc::new(UInt32Array::from(vec![
             100_u32,
@@ -445,22 +419,18 @@ mod tests {
             4_000_000_000_u32,
         ]));
         let field = Field::new("col", ArrowType::UInt32, false);
-        let (sbbf, parquet_type) = build_sbbf(array, field.clone());
+        let sbbf = build_sbbf(array, field.clone());
 
-        // Direct check should succeed (bit pattern preserved)
-        assert!(sbbf.check(&test_value), "Direct check should succeed");
+        // No coercion necessary
+        assert!(sbbf.check(&test_value));
 
-        // ArrowSbbf check should also succeed
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow UInt32 -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt16, ParquetType::INT32);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_uint64_no_coercion() {
-        // UInt64 -> Parquet INT64 (reinterpret cast preserves bit pattern)
+    fn test_check_uint64() {
         let test_value = 10_000_000_000_000_000_000_u64; // > i64::MAX
         let array = Arc::new(UInt64Array::from(vec![
             100_u64,
@@ -468,254 +438,113 @@ mod tests {
             15_000_000_000_000_000_000_u64,
         ]));
         let field = Field::new("col", ArrowType::UInt64, false);
-        let (sbbf, parquet_type) = build_sbbf(array, field.clone());
+        let sbbf = build_sbbf(array, field.clone());
 
-        // Direct check should succeed (bit pattern preserved)
-        assert!(sbbf.check(&test_value), "Direct check should succeed");
+        // No coercion necessary
+        assert!(sbbf.check(&test_value));
 
-        // ArrowSbbf check should also succeed
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow UInt64 -> Parquet INT64
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::UInt64, ParquetType::INT64);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_decimal128_small_coercion() {
-        // Decimal128(5, 2) -> Parquet INT32 (precision 1-9, truncation changes bytes)
+    fn test_check_decimal128_small() {
         let test_value = 20075_i128;
         let array = Decimal128Array::from(vec![10050_i128, test_value, 30099_i128])
             .with_precision_and_scale(5, 2)
             .unwrap();
         let field = Field::new("col", ArrowType::Decimal128(5, 2), false);
-        let schema = Arc::new(Schema::new(vec![field.clone()]));
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
 
-        // Write with bloom filter
-        let mut file = tempfile().unwrap();
-        let props = WriterProperties::builder()
-            .set_bloom_filter_enabled(true)
-            .build();
-        let mut writer = ArrowWriter::try_new(&mut file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Read back
-        let options = ReadOptionsBuilder::new()
-            .with_reader_properties(
-                ReaderProperties::builder()
-                    .set_read_bloom_filter(true)
-                    .build(),
-            )
-            .build();
-        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
-        let row_group_reader = reader.get_row_group(0).unwrap();
-        let metadata = row_group_reader.metadata();
-        let column_chunk = metadata.column(0);
-        let parquet_type = column_chunk.column_type();
-        let bloom_filter = row_group_reader
-            .get_column_bloom_filter(0)
-            .expect("Bloom filter should exist");
-
-        // Test 1: Direct check with i128 bytes should fail (bloom filter has i32)
+        // Check without coercion fails
         let test_bytes = test_value.to_le_bytes();
-        let direct_result = bloom_filter.check(&test_bytes[..]);
-        println!(
-            "Decimal128(5,2): Direct Sbbf check with i128 bytes = {}",
-            direct_result
-        );
-        assert!(
-            !direct_result,
-            "Direct check with i128 bytes should fail (bloom filter has i32)"
-        );
+        let direct_result = sbbf.check(&test_bytes[..]);
+        assert!(!direct_result);
 
-        // Test 2: ArrowSbbf check should succeed (coerces i128 to i32)
-        let arrow_sbbf = ArrowSbbf::new(&bloom_filter, field.data_type(), parquet_type);
+        // Arrow Decimal128(5, 2) -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal128(5, 2), ParquetType::INT32);
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
-        println!(
-            "Decimal128(5,2): ArrowSbbf check with i128 bytes = {}",
-            arrow_result
-        );
-        assert!(
-            arrow_result,
-            "ArrowSbbf check should succeed (coerces to i32)"
-        );
+        assert!(arrow_result);
     }
 
     #[test]
-    fn test_decimal128_medium_coercion() {
-        // Decimal128(15, 2) -> Parquet INT64 (precision 10-18, truncation changes bytes)
-        // Direct Sbbf check: false (bug - checking i128 but filter has i64)
-        // ArrowSbbf check: true (fix - coerces i128 to i64)
+    fn test_check_decimal128_medium() {
         let test_value = 9876543210987_i128;
         let array = Decimal128Array::from(vec![1234567890123_i128, test_value, 5555555555555_i128])
             .with_precision_and_scale(15, 2)
             .unwrap();
         let field = Field::new("col", ArrowType::Decimal128(15, 2), false);
-        let schema = Arc::new(Schema::new(vec![field.clone()]));
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
 
-        // Write with bloom filter
-        let mut file = tempfile().unwrap();
-        let props = WriterProperties::builder()
-            .set_bloom_filter_enabled(true)
-            .build();
-        let mut writer = ArrowWriter::try_new(&mut file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Read back
-        let options = ReadOptionsBuilder::new()
-            .with_reader_properties(
-                ReaderProperties::builder()
-                    .set_read_bloom_filter(true)
-                    .build(),
-            )
-            .build();
-        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
-        let row_group_reader = reader.get_row_group(0).unwrap();
-        let metadata = row_group_reader.metadata();
-        let column_chunk = metadata.column(0);
-        let parquet_type = column_chunk.column_type();
-        let bloom_filter = row_group_reader
-            .get_column_bloom_filter(0)
-            .expect("Bloom filter should exist");
-
-        // Test 1: Direct check with i128 bytes should fail (bloom filter has i64)
+        // Check without coercion fails
         let test_bytes = test_value.to_le_bytes();
-        let direct_result = bloom_filter.check(&test_bytes[..]);
-        println!(
-            "Decimal128(15,2): Direct Sbbf check with i128 bytes = {}",
-            direct_result
-        );
-        assert!(
-            !direct_result,
-            "Direct check with i128 bytes should fail (bloom filter has i64)"
-        );
+        let direct_result = sbbf.check(&test_bytes[..]);
+        assert!(!direct_result);
 
-        // Test 2: ArrowSbbf check should succeed (coerces i128 to i64)
-        let arrow_sbbf = ArrowSbbf::new(&bloom_filter, field.data_type(), parquet_type);
+        // Arrow Decimal128(15, 2) -> Parquet INT64
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal128(15, 2), ParquetType::INT64);
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
-        println!(
-            "Decimal128(15,2): ArrowSbbf check with i128 bytes = {}",
-            arrow_result
-        );
-        assert!(
-            arrow_result,
-            "ArrowSbbf check should succeed (coerces to i64)"
-        );
+        assert!(arrow_result);
     }
 
     #[test]
-    fn test_decimal32_no_coercion() {
-        // Decimal32(5, 2) -> Parquet INT32 (reinterpret cast preserves bit pattern for small precision)
-        // Direct Sbbf check: true (works without ArrowSbbf for Decimal32)
-        // ArrowSbbf check: true (wrapper doesn't hurt)
-        // Note: Decimal32 stores i32 natively, so no truncation occurs
+    fn test_check_decimal32() {
         let test_value = 20075_i32;
         let array = Decimal32Array::from(vec![10050_i32, test_value, 30099_i32])
             .with_precision_and_scale(5, 2)
             .unwrap();
         let field = Field::new("col", ArrowType::Decimal32(5, 2), false);
-        let (sbbf, parquet_type) = build_sbbf(Arc::new(array), field.clone());
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
 
-        // Direct check should succeed (bit pattern preserved)
-        assert!(sbbf.check(&test_value), "Direct check should succeed");
+        // No coercion necessary
+        assert!(sbbf.check(&test_value));
 
-        // ArrowSbbf check should also succeed
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow Decimal32(5, 2) -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal32(5, 2), ParquetType::INT32);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_float16_no_coercion() {
-        // Float16 -> Parquet FIXED_LEN_BYTE_ARRAY(2) (stored as-is)
-        // Direct Sbbf check: true (bit pattern preserved)
-        // ArrowSbbf check: true (wrapper doesn't hurt)
+    fn test_check_float16() {
         use half::f16;
         let test_value = f16::from_f32(2.5);
         let array = Float16Array::from(vec![f16::from_f32(1.5), test_value, f16::from_f32(3.5)]);
         let field = Field::new("col", ArrowType::Float16, false);
-        let schema = Arc::new(Schema::new(vec![field.clone()]));
-        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(array)]).unwrap();
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
 
-        // Write with bloom filter
-        let mut file = tempfile().unwrap();
-        let props = WriterProperties::builder()
-            .set_bloom_filter_enabled(true)
-            .build();
-        let mut writer = ArrowWriter::try_new(&mut file, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Read back
-        let options = ReadOptionsBuilder::new()
-            .with_reader_properties(
-                ReaderProperties::builder()
-                    .set_read_bloom_filter(true)
-                    .build(),
-            )
-            .build();
-        let reader = SerializedFileReader::new_with_options(file, options).unwrap();
-        let row_group_reader = reader.get_row_group(0).unwrap();
-        let metadata = row_group_reader.metadata();
-        let column_chunk = metadata.column(0);
-        let parquet_type = column_chunk.column_type();
-        let bloom_filter = row_group_reader
-            .get_column_bloom_filter(0)
-            .expect("Bloom filter should exist");
-
-        // Test 1: Direct check with f16 bytes should work (bit pattern preserved)
+        // No coercion necessary
         let test_bytes = test_value.to_le_bytes();
-        let direct_result = bloom_filter.check(&test_bytes[..]);
-        println!("Float16: Direct Sbbf check with bytes = {}", direct_result);
-        assert!(direct_result, "Direct check with bytes should succeed");
+        let direct_result = sbbf.check(&test_bytes[..]);
+        assert!(direct_result);
 
-        // Test 2: ArrowSbbf check should also work
-        let arrow_sbbf = ArrowSbbf::new(&bloom_filter, field.data_type(), parquet_type);
+        // Arrow Float16 -> Parquet FIXED_LEN_BYTE_ARRAY
+        let arrow_sbbf = ArrowSbbf::new(
+            &sbbf,
+            &ArrowType::Float16,
+            ParquetType::FIXED_LEN_BYTE_ARRAY,
+        );
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
-        println!("Float16: ArrowSbbf check with bytes = {}", arrow_result);
-        assert!(arrow_result, "ArrowSbbf check should succeed");
+        assert!(arrow_result);
     }
 
     #[test]
-    fn test_date64_no_coercion_by_default() {
-        // Date64 -> Parquet INT64 (stored as-is when coerce_types=false, which is default)
-        // Direct Sbbf check: true (no coercion by default)
-        // ArrowSbbf check: true (wrapper doesn't hurt)
-        // Note: Date64 CAN be coerced to Date32/INT32 with coerce_types=true,
-        // but that's not the default behavior, so bloom filters work correctly by default
+    fn test_check_date64_default() {
         let test_value = 2_000_000_000_i64;
         let array = Date64Array::from(vec![1_000_000_000_i64, test_value, 3_000_000_000_i64]);
         let field = Field::new("col", ArrowType::Date64, false);
-        let (sbbf, parquet_type) = build_sbbf(Arc::new(array), field.clone());
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
 
-        // Direct check should succeed (no coercion by default)
-        assert!(sbbf.check(&test_value), "Direct check should succeed");
+        // No coercion necessary
+        assert!(sbbf.check(&test_value));
 
-        // ArrowSbbf check should also succeed
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, field.data_type(), parquet_type);
-        assert!(
-            arrow_sbbf.check(&test_value),
-            "ArrowSbbf check should succeed"
-        );
+        // Arrow Date64 -> Parquet INT64
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Date64, ParquetType::INT64);
+        assert!(arrow_sbbf.check(&test_value));
     }
 
     #[test]
-    fn test_date64_with_coerce_types() {
-        // This test verifies that ArrowSbbf correctly handles Date64 when coerce_types=true.
-        //
-        // When WriterProperties::set_coerce_types(true) is used:
-        // - Date64 (i64 milliseconds) -> Date32 (i32 days) -> Parquet INT32
-        // - Conversion: milliseconds / 86_400_000 = days
-        //
-        // ArrowSbbf detects this by inspecting the physical type (INT32 vs INT64)
-        // and automatically performs the milliseconds-to-days conversion.
-
+    fn test_check_date64_with_coerce_types() {
         const MS_PER_DAY: i64 = 86_400_000;
         let test_value_ms = 10 * MS_PER_DAY; // 10 days in milliseconds
         let array = Date64Array::from(vec![5 * MS_PER_DAY, test_value_ms, 15 * MS_PER_DAY]);
@@ -724,39 +553,17 @@ mod tests {
         // Write with coerce_types enabled
         let props = WriterProperties::builder()
             .set_bloom_filter_enabled(true)
-            .set_coerce_types(true) // This causes Date64 -> Date32 (INT32)
+            .set_coerce_types(true) // causes coercion from Arrow Date64 -> Parquet INT32
             .build();
-        let (bloom_filter, parquet_type) =
-            build_sbbf_with_props(Arc::new(array), field.clone(), props);
+        let sbbf = build_sbbf_with_props(Arc::new(array), field.clone(), props);
 
-        // Verify physical type is INT32 (not INT64)
-        assert_eq!(
-            parquet_type,
-            ParquetType::INT32,
-            "Date64 with coerce_types=true should be stored as INT32"
-        );
+        // Check without coercion fails
+        let direct_result = sbbf.check(&test_value_ms);
+        assert!(!direct_result);
 
-        // Test 1: Direct check with i64 milliseconds fails (bloom filter has i32 days)
-        let direct_result = bloom_filter.check(&test_value_ms);
-        assert!(
-            !direct_result,
-            "Direct check with i64 ms should fail (bloom filter has i32 days)"
-        );
-
-        // Test 2: ArrowSbbf succeeds! It detects INT32 physical type and converts ms->days
-        let arrow_sbbf = ArrowSbbf::new(&bloom_filter, field.data_type(), parquet_type);
+        // Arrow Date64 -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Date64, ParquetType::INT32);
         let arrow_result = arrow_sbbf.check(&test_value_ms);
-        assert!(
-            arrow_result,
-            "ArrowSbbf should handle Date64 coercion automatically"
-        );
-
-        // Test 3: Manual conversion also works
-        let days = (test_value_ms / MS_PER_DAY) as i32;
-        let manual_result = bloom_filter.check(&days);
-        assert!(
-            manual_result,
-            "Manual conversion to i32 days should succeed"
-        );
+        assert!(arrow_result);
     }
 }
