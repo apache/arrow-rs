@@ -209,7 +209,7 @@ fn array_from_vec_benchmark(c: &mut Criterion) {
 fn gen_option_iter<TItem: Clone + 'static>(
     item: TItem,
     len: usize,
-) -> Box<dyn Iterator<Item = Option<TItem>>> {
+) -> Box<dyn ExactSizeIterator<Item = Option<TItem>>> {
     hint::black_box(Box::new(repeat_n(item, len).enumerate().map(
         |(idx, item)| {
             if idx % 3 == 0 {
