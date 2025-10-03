@@ -120,7 +120,7 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
-name = "array_from_vec"
+name = "array_from"
 harness = false
 
 [[bench]]

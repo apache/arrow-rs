@@ -419,13 +419,9 @@ impl<'m, 'v> PartialEq for VariantObject<'m, 'v> {
         // IFF two objects are valid and logically equal, they will have the same
         // field names in the same order, because the spec requires the object
         // fields to be sorted lexicographically.
-        for ((name_a, value_a), (name_b, value_b)) in self.iter().zip(other.iter()) {
-            if name_a != name_b || value_a != value_b {
-                return false;
-            }
-        }
-
-        true
+        self.iter()
+            .zip(other.iter())
+            .all(|((name_a, value_a), (name_b, value_b))| name_a == name_b && value_a == value_b)
     }
 }
 
