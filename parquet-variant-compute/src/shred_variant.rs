@@ -328,7 +328,10 @@ mod tests {
     use crate::VariantArrayBuilder;
     use arrow::array::{Array, Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields};
-    use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
+    use parquet_variant::{
+        ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder, VariantDecimal16,
+        VariantDecimal4, VariantDecimal8,
+    };
     use std::sync::Arc;
 
     fn create_test_variant_array(values: Vec<Option<Variant<'_, '_>>>) -> VariantArray {
@@ -444,6 +447,73 @@ mod tests {
         assert!(value_field.is_null(5)); // value should be null when shredded
         assert!(!typed_value_field.is_null(5));
         assert_eq!(typed_value_field.value(5), 3);
+    }
+
+    #[test]
+    fn test_decimal_shedding() {
+        // Test mixed scenarios in a single array
+        let input = create_test_variant_array(vec![
+            Some(Variant::from(4200i64)), // successful shred
+            Some(Variant::from("hello")), // failed shred (string)
+            None,                         // array-level null
+            Some(Variant::Null),          // variant null
+            Some(Variant::from(VariantDecimal4::try_new(314, 2).unwrap())), // successful shred
+            Some(Variant::from(VariantDecimal8::try_new(271828, 3).unwrap())), // successful shred
+            Some(Variant::from(
+                VariantDecimal16::try_new(123456789012345678901234567890, 2).unwrap(),
+            )), // successful shred
+        ]);
+
+        // Test Decimal32 target
+        let result_decimal32 = shred_variant(&input, &DataType::Decimal32(10, 2)).unwrap();
+        let typed_value_decimal32 = result_decimal32
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::Decimal32Array>()
+            .unwrap();
+        assert_eq!(typed_value_decimal32.value(0), 42); // 42 with scale 2
+        assert!(typed_value_decimal32.is_null(1)); // string doesn't convert to decimal
+        assert!(typed_value_decimal32.is_null(2)); // array null
+        assert!(typed_value_decimal32.is_null(3)); // variant null
+        assert_eq!(typed_value_decimal32.value(4), 314); // 3.14 with scale 2
+        assert_eq!(typed_value_decimal32.value(5), 2718280); // 271.828 with scale 3
+        assert!(typed_value_decimal32.is_null(6)); // too large for Decimal32
+
+        // Test Decimal64 target
+        let result_decimal64 = shred_variant(&input, &DataType::Decimal64(20, 2)).unwrap();
+        let typed_value_decimal64 = result_decimal64
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::Decimal64Array>()
+            .unwrap();
+        assert_eq!(typed_value_decimal64.value(0), 42); // 42 with
+        assert!(typed_value_decimal64.is_null(1)); // string doesn't convert to decimal
+        assert!(typed_value_decimal64.is_null(2)); // array null
+        assert!(typed_value_decimal64.is_null(3)); // variant null
+        assert_eq!(typed_value_decimal64.value(4), 314); // 3.
+        assert_eq!(typed_value_decimal64.value(5), 2718280); // 271.828 with scale 3
+        assert!(typed_value_decimal64.is_null(6)); // too large for Decimal64
+
+        // Test Decimal128 target
+        let result_decimal128 = shred_variant(&input, &DataType::Decimal128(38, 2)).unwrap();
+        let typed_value_decimal128 = result_decimal128
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::Decimal128Array>()
+            .unwrap();
+        assert_eq!(typed_value_decimal128.value(0), 42); // 42 with
+        assert!(typed_value_decimal128.is_null(1)); // string doesn't convert to decimal
+        assert!(typed_value_decimal128.is_null(2)); // array null
+        assert!(typed_value_decimal128.is_null(3)); // variant null
+        assert_eq!(typed_value_decimal128.value(4), 314); // 3.
+        assert_eq!(typed_value_decimal128.value(5), 2718280); // 271.828 with scale 3
+        assert_eq!(
+            typed_value_decimal128.value(6),
+            123456789012345678901234567890
+        );
     }
 
     #[test]

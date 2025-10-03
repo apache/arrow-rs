@@ -17,11 +17,11 @@
 
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
 use arrow::compute::CastOptions;
-use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
+use arrow::datatypes::{self, ArrowPrimitiveType, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
-use crate::type_conversion::PrimitiveFromVariant;
+use crate::type_conversion::{variant_decimal_to_decimal, PrimitiveFromVariant};
 use crate::{VariantArray, VariantValueArrayBuilder};
 
 use std::sync::Arc;
@@ -41,6 +41,9 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
     Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
+    Decimal32(VariantToDecimal32ArrowRowBuilder<'a>),
+    Decimal64(VariantToDecimal64ArrowRowBuilder<'a>),
+    Decimal128(VariantToDecimal128ArrowRowBuilder<'a>),
 }
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -70,6 +73,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_null(),
             Float32(b) => b.append_null(),
             Float64(b) => b.append_null(),
+            Decimal32(b) => b.append_null(),
+            Decimal64(b) => b.append_null(),
+            Decimal128(b) => b.append_null(),
         }
     }
 
@@ -87,6 +93,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_value(value),
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
+            Decimal32(b) => b.append_value(value),
+            Decimal64(b) => b.append_value(value),
+            Decimal128(b) => b.append_value(value),
         }
     }
 
@@ -104,6 +113,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.finish(),
             Float32(b) => b.finish(),
             Float64(b) => b.finish(),
+            Decimal32(b) => b.finish(),
+            Decimal64(b) => b.finish(),
+            Decimal128(b) => b.finish(),
         }
     }
 }
@@ -145,62 +157,72 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
 ) -> Result<PrimitiveVariantToArrowRowBuilder<'a>> {
     use PrimitiveVariantToArrowRowBuilder::*;
 
-    let builder = match data_type {
-        DataType::Int8 => Int8(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int16 => Int16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int32 => Int32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int64 => Int64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt8 => UInt8(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt16 => UInt16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt32 => UInt32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt64 => UInt64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float16 => Float16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float32 => Float32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float64 => Float64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        _ if data_type.is_primitive() => {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "Primitive data_type {data_type:?} not yet implemented"
-            )));
-        }
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Not a primitive type: {data_type:?}"
-            )));
-        }
-    };
+    let builder =
+        match data_type {
+            DataType::Int8 => Int8(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Int16 => Int16(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Int32 => Int32(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Int64 => Int64(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt8 => UInt8(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt16 => UInt16(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt32 => UInt32(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt64 => UInt64(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Float16 => Float16(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Float32 => Float32(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Float64 => Float64(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Decimal32(precision, scale) => Decimal32(
+                VariantToDecimal32ArrowRowBuilder::new(cast_options, capacity, *precision, *scale),
+            ),
+            DataType::Decimal64(precision, scale) => Decimal64(
+                VariantToDecimal64ArrowRowBuilder::new(cast_options, capacity, *precision, *scale),
+            ),
+            DataType::Decimal128(precision, scale) => Decimal128(
+                VariantToDecimal128ArrowRowBuilder::new(cast_options, capacity, *precision, *scale),
+            ),
+            _ if data_type.is_primitive() => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "Primitive data_type {data_type:?} not yet implemented"
+                )));
+            }
+            _ => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Not a primitive type: {data_type:?}"
+                )));
+            }
+        };
     Ok(builder)
 }
 
@@ -383,3 +405,82 @@ impl VariantToBinaryVariantArrowRowBuilder {
         Ok(ArrayRef::from(variant_array))
     }
 }
+
+macro_rules! define_variant_decimal_builder {
+    ($name:ident, $arrow_type:ty, $variant_method:ident, $native:ty) => {
+        pub(crate) struct $name<'a> {
+            builder: PrimitiveBuilder<$arrow_type>,
+            cast_options: &'a CastOptions<'a>,
+            precision: u8,
+            scale: i8,
+        }
+
+        impl<'a> $name<'a> {
+            fn new(
+                cast_options: &'a CastOptions<'a>,
+                capacity: usize,
+                precision: u8,
+                scale: i8,
+            ) -> Self {
+                let builder = PrimitiveBuilder::<$arrow_type>::with_capacity(capacity)
+                    .with_data_type(<$arrow_type>::TYPE_CONSTRUCTOR(precision, scale));
+                Self {
+                    builder,
+                    cast_options,
+                    precision,
+                    scale,
+                }
+            }
+
+            fn append_null(&mut self) -> Result<()> {
+                self.builder.append_null();
+                Ok(())
+            }
+
+            fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+                if let Some(decimal) = value.$variant_method() {
+                        dbg!(&decimal);
+                        dbg!(&self.scale);
+                    let value = variant_decimal_to_decimal!(decimal, self.scale, $native);
+                    if let Some(v) = value {
+
+                        self.builder.append_value(v);
+                        return Ok(true);
+                    }
+                }
+                if !self.cast_options.safe {
+                    return Err(ArrowError::CastError(format!(
+                        "Failed to extract decimal of type {:?} from variant {:?} at path VariantPath([])",
+                        <$arrow_type>::TYPE_CONSTRUCTOR(self.precision, self.scale),
+                        value
+                    )));
+                }
+                self.builder.append_null();
+                Ok(false)
+            }
+
+            fn finish(mut self) -> Result<ArrayRef> {
+                Ok(Arc::new(self.builder.finish()))
+            }
+        }
+    };
+}
+
+define_variant_decimal_builder!(
+    VariantToDecimal32ArrowRowBuilder,
+    datatypes::Decimal32Type,
+    as_decimal4,
+    i32
+);
+define_variant_decimal_builder!(
+    VariantToDecimal64ArrowRowBuilder,
+    datatypes::Decimal64Type,
+    as_decimal8,
+    i64
+);
+define_variant_decimal_builder!(
+    VariantToDecimal128ArrowRowBuilder,
+    datatypes::Decimal128Type,
+    as_decimal16,
+    i128
+);
