@@ -128,143 +128,235 @@ impl<'a> ArrowSbbf<'a> {
             ArrowType::Int8 => {
                 // Arrow Int8 -> Parquet INT32
                 let bytes = value.as_bytes();
+
+                debug_assert!(
+                    bytes.len() == 1,
+                    "ArrowSbbf: expected 1 byte for Int8, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
                 if bytes.len() == 1 {
                     let i8_val = i8::from_le_bytes([bytes[0]]);
                     let i32_val = i8_val as i32;
                     self.sbbf.check(&i32_val)
                 } else {
-                    // Unexpected size, fall back to direct check
-                    self.sbbf.check(value)
+                    true // Unexpected byte length, return false positive
                 }
             }
             ArrowType::Int16 => {
                 // Arrow Int16 -> Parquet INT32
                 let bytes = value.as_bytes();
+
+                debug_assert!(
+                    bytes.len() == 2,
+                    "ArrowSbbf: expected 2 bytes for Int16, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
                 if bytes.len() == 2 {
                     let i16_val = i16::from_le_bytes([bytes[0], bytes[1]]);
                     let i32_val = i16_val as i32;
                     self.sbbf.check(&i32_val)
                 } else {
-                    // Unexpected size, fall back to direct check
-                    self.sbbf.check(value)
+                    true // Unexpected byte length, return false positive
                 }
             }
             ArrowType::UInt8 => {
                 // Arrow UInt8 -> Parquet INT32
                 let bytes = value.as_bytes();
+
+                debug_assert!(
+                    bytes.len() == 1,
+                    "ArrowSbbf: expected 1 byte for UInt8, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
                 if bytes.len() == 1 {
                     let u8_val = bytes[0];
                     let u32_val = u8_val as u32;
                     let i32_val = u32_val as i32;
                     self.sbbf.check(&i32_val)
                 } else {
-                    // Unexpected size, fall back to direct check
-                    self.sbbf.check(value)
+                    true // Unexpected byte length, return false positive
                 }
             }
             ArrowType::UInt16 => {
                 // Arrow UInt16 -> Parquet INT32
                 let bytes = value.as_bytes();
+
+                debug_assert!(
+                    bytes.len() == 2,
+                    "ArrowSbbf: expected 2 bytes for UInt16, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
                 if bytes.len() == 2 {
                     let u16_val = u16::from_le_bytes([bytes[0], bytes[1]]);
                     let u32_val = u16_val as u32;
                     let i32_val = u32_val as i32;
                     self.sbbf.check(&i32_val)
                 } else {
-                    // Unexpected size, fall back to direct check
-                    self.sbbf.check(value)
+                    true // Unexpected byte length, return false positive
                 }
             }
-            ArrowType::Decimal32(precision, _)
-            | ArrowType::Decimal64(precision, _)
-            | ArrowType::Decimal128(precision, _)
-            | ArrowType::Decimal256(precision, _)
-                if *precision >= 1 && *precision <= 9 =>
-            {
-                // Decimal with precision 1-9 -> Parquet INT32
-                // Writer truncates via `as i32`
+            ArrowType::Decimal32(precision, _) if *precision >= 1 && *precision <= 9 => {
+                // Arrow Decimal32 (precision 1-9) -> Parquet INT32
                 let bytes = value.as_bytes();
-                match bytes.len() {
-                    4 => {
-                        // Decimal32: i32 value, directly reinterpret
-                        let i32_val = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                        self.sbbf.check(&i32_val)
-                    }
-                    8 => {
-                        // Decimal64: i64 value, truncate to i32
-                        let i64_val = i64::from_le_bytes([
-                            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                            bytes[7],
-                        ]);
-                        let i32_val = i64_val as i32;
-                        self.sbbf.check(&i32_val)
-                    }
-                    16 => {
-                        // Decimal128: i128 value, truncate to i32
-                        let i128_val = i128::from_le_bytes([
-                            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                            bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
-                            bytes[13], bytes[14], bytes[15],
-                        ]);
-                        let i32_val = i128_val as i32;
-                        self.sbbf.check(&i32_val)
-                    }
-                    32 => {
-                        // Decimal256: i256 stored as 32 bytes, truncate to i32
-                        // Read first 16 bytes as i128, then truncate
-                        let i128_val = i128::from_le_bytes([
-                            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                            bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
-                            bytes[13], bytes[14], bytes[15],
-                        ]);
-                        let i32_val = i128_val as i32;
-                        self.sbbf.check(&i32_val)
-                    }
-                    _ => self.sbbf.check(value),
+
+                debug_assert_eq!(
+                    bytes.len(),
+                    4,
+                    "ArrowSbbf: expected 4 bytes for Decimal32, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
+                if bytes.len() == 4 {
+                    let i32_val = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                    self.sbbf.check(&i32_val)
+                } else {
+                    true // Unexpected byte length, return false positive
                 }
             }
-            ArrowType::Decimal64(precision, _)
-            | ArrowType::Decimal128(precision, _)
-            | ArrowType::Decimal256(precision, _)
-                if *precision >= 10 && *precision <= 18 =>
-            {
-                // Decimal with precision 10-18 -> Parquet INT64
-                // Writer truncates via `as i64`
+            ArrowType::Decimal64(precision, _) if *precision >= 1 && *precision <= 9 => {
+                // Arrow Decimal64 (precision 1-9) -> Parquet INT32
                 let bytes = value.as_bytes();
-                match bytes.len() {
-                    8 => {
-                        // Decimal64: i64 value, directly use
-                        let i64_val = i64::from_le_bytes([
-                            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                            bytes[7],
-                        ]);
-                        self.sbbf.check(&i64_val)
-                    }
-                    16 => {
-                        // Decimal128: i128 value, truncate to i64
-                        let i128_val = i128::from_le_bytes([
-                            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                            bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
-                            bytes[13], bytes[14], bytes[15],
-                        ]);
-                        let i64_val = i128_val as i64;
-                        self.sbbf.check(&i64_val)
-                    }
-                    32 => {
-                        // Decimal256: i256 stored as 32 bytes, truncate to i64
-                        // Read first 16 bytes as i128, then truncate
-                        let i128_val = i128::from_le_bytes([
-                            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                            bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12],
-                            bytes[13], bytes[14], bytes[15],
-                        ]);
-                        let i64_val = i128_val as i64;
-                        self.sbbf.check(&i64_val)
-                    }
-                    _ => self.sbbf.check(value),
+
+                debug_assert_eq!(
+                    bytes.len(),
+                    8,
+                    "ArrowSbbf: expected 8 bytes for Decimal64, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
+                if bytes.len() == 8 {
+                    let i64_val = i64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]);
+                    let i32_val = i64_val as i32;
+                    self.sbbf.check(&i32_val)
+                } else {
+                    true // Unexpected byte length, return false positive
                 }
             }
-            // No coercion needed
+            ArrowType::Decimal128(precision, _) if *precision >= 1 && *precision <= 9 => {
+                // Arrow Decimal128 (precision 1-9) -> Parquet INT32
+                let bytes = value.as_bytes();
+
+                debug_assert_eq!(
+                    bytes.len(),
+                    16,
+                    "ArrowSbbf: expected 16 bytes for Decimal128, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
+                if bytes.len() == 16 {
+                    let i128_val = i128::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
+                        bytes[14], bytes[15],
+                    ]);
+                    let i32_val = i128_val as i32;
+                    self.sbbf.check(&i32_val)
+                } else {
+                    true // Unexpected byte length, return false positive
+                }
+            }
+            ArrowType::Decimal256(precision, _) if *precision >= 1 && *precision <= 9 => {
+                // Arrow Decimal256 (precision 1-9) -> Parquet INT32
+                let bytes = value.as_bytes();
+
+                debug_assert_eq!(
+                    bytes.len(),
+                    32,
+                    "ArrowSbbf: expected 32 bytes for Decimal256, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
+                if bytes.len() == 32 {
+                    // Decimal256: i256 stored as 32 bytes, truncate to i32
+                    // Read first 16 bytes as i128, then truncate
+                    let i128_val = i128::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
+                        bytes[14], bytes[15],
+                    ]);
+                    let i32_val = i128_val as i32;
+                    self.sbbf.check(&i32_val)
+                } else {
+                    true // Unexpected byte length, return false positive
+                }
+            }
+            ArrowType::Decimal64(precision, _) if *precision >= 10 && *precision <= 18 => {
+                // Arrow Decimal64 (precision 10-18) -> Parquet INT64
+                let bytes = value.as_bytes();
+
+                debug_assert_eq!(
+                    bytes.len(),
+                    8,
+                    "ArrowSbbf: expected 8 bytes for Decimal64, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
+                if bytes.len() == 8 {
+                    let i64_val = i64::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7],
+                    ]);
+                    self.sbbf.check(&i64_val)
+                } else {
+                    true // Unexpected byte length, return false positive
+                }
+            }
+            ArrowType::Decimal128(precision, _) if *precision >= 10 && *precision <= 18 => {
+                // Arrow Decimal128 (precision 10-18) -> Parquet INT64
+                let bytes = value.as_bytes();
+
+                debug_assert_eq!(
+                    bytes.len(),
+                    16,
+                    "ArrowSbbf: expected 16 bytes for Decimal128, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
+                if bytes.len() == 16 {
+                    // Read first 16 bytes as i128, then truncate to i64
+                    let i128_val = i128::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
+                        bytes[14], bytes[15],
+                    ]);
+                    let i64_val = i128_val as i64;
+                    self.sbbf.check(&i64_val)
+                } else {
+                    true // Unexpected byte length, return false positive
+                }
+            }
+            ArrowType::Decimal256(precision, _) if *precision >= 10 && *precision <= 18 => {
+                // Arrow Decimal256 (precision 10-18) -> Parquet INT64
+                let bytes = value.as_bytes();
+
+                debug_assert_eq!(
+                    bytes.len(),
+                    32,
+                    "ArrowSbbf: expected 32 bytes for Decimal256, got {}. This indicates a type mismatch.",
+                    bytes.len()
+                );
+
+                if bytes.len() == 32 {
+                    // Read first 16 bytes as i128, then truncate to i64
+                    let i128_val = i128::from_le_bytes([
+                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
+                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
+                        bytes[14], bytes[15],
+                    ]);
+                    let i64_val = i128_val as i64;
+                    self.sbbf.check(&i64_val)
+                } else {
+                    true // Unexpected byte length, return false positive
+                }
+            }
+            // No coercion necessary
             _ => self.sbbf.check(value),
         }
     }
