@@ -26,7 +26,10 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use arrow_schema::{
+    ArrowError, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
+    DataType, Field, FieldRef, Fields, TimeUnit,
+};
 use chrono::DateTime;
 use parquet_variant::Uuid;
 use parquet_variant::Variant;
@@ -926,6 +929,11 @@ fn typed_value_to_variant<'a>(
 /// So cast them to get the right type.
 fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     let new_type = canonicalize_and_verify_data_type(array.data_type())?;
+    if let Cow::Borrowed(_) = new_type {
+        if let Some(array) = array.as_struct_opt() {
+            return Ok(Arc::new(array.clone())); // bypass the unnecessary cast
+        }
+    }
     cast(array, new_type.as_ref())
 }
 
@@ -972,9 +980,20 @@ fn canonicalize_and_verify_data_type(
         UInt8 | UInt16 | UInt32 | UInt64 | Float16 => fail!(),
 
         // Most decimal types are allowed, with restrictions on precision and scale
-        Decimal32(p, s) if is_valid_variant_decimal(p, s, 9) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal(p, s, 18) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, 38) => borrow!(),
+        //
+        // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
+        // requires using the narrowest decimal type for a given precision. Fix those up first.
+        Decimal64(p, s) | Decimal128(p, s)
+            if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) =>
+        {
+            Cow::Owned(Decimal32(*p, *s))
+        }
+        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => {
+            Cow::Owned(Decimal64(*p, *s))
+        }
+        Decimal32(p, s) if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) => borrow!(),
+        Decimal64(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => borrow!(),
+        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL128_MAX_PRECISION) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed

@@ -86,31 +86,12 @@ variant_test_case!(20);
 variant_test_case!(21);
 variant_test_case!(22);
 variant_test_case!(23);
-// https://github.com/apache/arrow-rs/issues/8332
-variant_test_case!(
-    24,
-    "Unshredding not yet supported for type: Decimal128(9, 4)"
-);
-variant_test_case!(
-    25,
-    "Unshredding not yet supported for type: Decimal128(9, 4)"
-);
-variant_test_case!(
-    26,
-    "Unshredding not yet supported for type: Decimal128(18, 9)"
-);
-variant_test_case!(
-    27,
-    "Unshredding not yet supported for type: Decimal128(18, 9)"
-);
-variant_test_case!(
-    28,
-    "Unshredding not yet supported for type: Decimal128(38, 9)"
-);
-variant_test_case!(
-    29,
-    "Unshredding not yet supported for type: Decimal128(38, 9)"
-);
+variant_test_case!(24);
+variant_test_case!(25);
+variant_test_case!(26);
+variant_test_case!(27);
+variant_test_case!(28);
+variant_test_case!(29);
 variant_test_case!(30);
 variant_test_case!(31);
 variant_test_case!(32);
