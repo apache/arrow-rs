@@ -15,20 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#[macro_use]
-pub mod bit_util;
-mod bit_pack;
-pub(crate) mod interner;
+//! [`BoxedFuture`] type module
 
-pub mod push_buffers;
-#[cfg(any(test, feature = "test_common"))]
-pub(crate) mod test_common;
-pub mod utf8;
+/// BoxedFuture is the type alias of [`futures::future::BoxFuture`].
+#[cfg(not(target_arch = "wasm32"))]
+pub type BoxedFuture<'a, T> = futures::future::BoxFuture<'a, T>;
 
-#[cfg(feature = "async")]
-pub mod future;
-
-#[cfg(any(test, feature = "test_common"))]
-pub use self::test_common::page_util::{
-    DataPageBuilder, DataPageBuilderImpl, InMemoryPageIterator,
-};
+/// BoxedFuture is the type alias of [`futures::future::LocalBoxFuture`].
+#[cfg(target_arch = "wasm32")]
+pub type BoxedFuture<'a, T> = futures::future::LocalBoxFuture<'a, T>;

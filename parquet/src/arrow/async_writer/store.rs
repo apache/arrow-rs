@@ -16,7 +16,6 @@
 // under the License.
 
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use std::sync::Arc;
 
 use crate::arrow::async_writer::AsyncFileWriter;
@@ -93,7 +92,7 @@ impl ParquetObjectWriter {
 }
 
 impl AsyncFileWriter for ParquetObjectWriter {
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
+    fn write(&mut self, bs: Bytes) -> BoxedFuture<'_, Result<()>> {
         Box::pin(async {
             self.w
                 .put(bs)
@@ -102,7 +101,7 @@ impl AsyncFileWriter for ParquetObjectWriter {
         })
     }
 
-    fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
+    fn complete(&mut self) -> BoxedFuture<'_, Result<()>> {
         Box::pin(async {
             self.w
                 .shutdown()

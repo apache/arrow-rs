@@ -61,17 +61,15 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::ArrowWriterOptions,
-    arrow::ArrowWriter,
+    arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
     errors::{ParquetError, Result},
     file::{metadata::RowGroupMetaData, properties::WriterProperties},
     format::{FileMetaData, KeyValue},
+    future::BoxedFuture,
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use std::mem;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -83,40 +81,38 @@ pub trait AsyncFileWriter: Send {
     /// This design allows the writer implementer to control the buffering and I/O scheduling.
     ///
     /// The underlying writer MAY implement retry logic to prevent breaking users write process.
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>>;
+    fn write(&mut self, bs: Bytes) -> BoxedFuture<'_, Result<()>>;
 
     /// Flush any buffered data to the underlying writer and finish writing process.
     ///
     /// After `complete` returns `Ok(())`, caller SHOULD not call write again.
-    fn complete(&mut self) -> BoxFuture<'_, Result<()>>;
+    fn complete(&mut self) -> BoxedFuture<'_, Result<()>>;
 }
 
 impl AsyncFileWriter for Box<dyn AsyncFileWriter + '_> {
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
+    fn write(&mut self, bs: Bytes) -> BoxedFuture<'_, Result<()>> {
         self.as_mut().write(bs)
     }
 
-    fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
+    fn complete(&mut self) -> BoxedFuture<'_, Result<()>> {
         self.as_mut().complete()
     }
 }
 
 impl<T: AsyncWrite + Unpin + Send> AsyncFileWriter for T {
-    fn write(&mut self, bs: Bytes) -> BoxFuture<'_, Result<()>> {
-        async move {
+    fn write(&mut self, bs: Bytes) -> BoxedFuture<'_, Result<()>> {
+        Box::pin(async move {
             self.write_all(&bs).await?;
             Ok(())
-        }
-        .boxed()
+        })
     }
 
-    fn complete(&mut self) -> BoxFuture<'_, Result<()>> {
-        async move {
+    fn complete(&mut self) -> BoxedFuture<'_, Result<()>> {
+        Box::pin(async move {
             self.flush().await?;
             self.shutdown().await?;
             Ok(())
-        }
-        .boxed()
+        })
     }
 }
 
@@ -364,6 +360,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn test_async_writer_bytes_written() {
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let to_write = RecordBatch::try_from_iter([("col", col)]).unwrap();
@@ -386,6 +383,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn test_async_writer_file() {
         let col = Arc::new(Int64Array::from_iter_values([1, 2, 3])) as ArrayRef;
         let col2 = Arc::new(BinaryArray::from_iter_values(vec![
@@ -412,6 +410,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn in_progress_accounting() {
         // define schema
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
