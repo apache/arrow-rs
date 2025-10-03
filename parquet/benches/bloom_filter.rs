@@ -20,6 +20,7 @@ use arrow_schema::{DataType, Field, Schema};
 use criterion::*;
 use parquet::arrow::arrow_writer::ArrowWriter;
 use parquet::arrow::bloom_filter::ArrowSbbf;
+use parquet::basic::Type as ParquetType;
 use parquet::bloom_filter::Sbbf;
 use parquet::file::properties::{ReaderProperties, WriterProperties};
 use parquet::file::reader::{FileReader, SerializedFileReader};
@@ -31,8 +32,8 @@ use tempfile::tempfile;
 /// Helper function to create an Sbbf from an array for benchmarking
 ///
 /// Writes the given array to a Parquet file with bloom filters enabled,
-/// then reads it back and returns the bloom filter for the first column.
-fn setup_sbbf(array: ArrayRef, field: Field) -> Sbbf {
+/// then reads it back and returns the bloom filter and physical type for the first column.
+fn setup_sbbf(array: ArrayRef, field: Field) -> (Sbbf, ParquetType) {
     let schema = Arc::new(Schema::new(vec![field.clone()]));
     let batch = RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
 
@@ -55,27 +56,32 @@ fn setup_sbbf(array: ArrayRef, field: Field) -> Sbbf {
         .build();
     let reader = SerializedFileReader::new_with_options(file, options).unwrap();
     let row_group_reader = reader.get_row_group(0).unwrap();
+    let metadata = row_group_reader.metadata();
+    let column_chunk = metadata.column(0);
+    let parquet_type = column_chunk.column_type();
 
-    row_group_reader
+    let sbbf = row_group_reader
         .get_column_bloom_filter(0)
         .expect("Bloom filter should exist")
-        .clone()
+        .clone();
+
+    (sbbf, parquet_type)
 }
 
 fn bench_integer_types(c: &mut Criterion) {
     // Setup for Int8 benchmarks (requires coercion to i32)
     let int8_array = Arc::new(Int8Array::from(vec![42i8; 1000])) as ArrayRef;
     let int8_field = Field::new("col", DataType::Int8, false);
-    let sbbf_int8 = setup_sbbf(int8_array, int8_field);
-    let arrow_sbbf_int8 = ArrowSbbf::new(&sbbf_int8, &DataType::Int8);
+    let (sbbf_int8, physical_type_int8) = setup_sbbf(int8_array, int8_field);
+    let arrow_sbbf_int8 = ArrowSbbf::new(&sbbf_int8, &DataType::Int8, physical_type_int8);
     let test_val_i32 = 42i32;
     let test_val_i8 = 42i8;
 
     // Setup for Int32 benchmarks (no coercion needed)
     let int32_array = Arc::new(Int32Array::from(vec![42i32; 1000])) as ArrayRef;
     let int32_field = Field::new("col", DataType::Int32, false);
-    let sbbf_int32 = setup_sbbf(int32_array, int32_field);
-    let arrow_sbbf_int32 = ArrowSbbf::new(&sbbf_int32, &DataType::Int32);
+    let (sbbf_int32, physical_type_int32) = setup_sbbf(int32_array, int32_field);
+    let arrow_sbbf_int32 = ArrowSbbf::new(&sbbf_int32, &DataType::Int32, physical_type_int32);
 
     // Benchmark 1: Direct Sbbf::check with i32 (baseline)
     c.bench_function("Sbbf::check i32", |b| {
@@ -110,8 +116,8 @@ fn bench_decimal_types(c: &mut Criterion) {
             .unwrap(),
     ) as ArrayRef;
     let dec_small_field = Field::new("col", DataType::Decimal128(5, 2), false);
-    let sbbf_dec_small = setup_sbbf(dec_small_array, dec_small_field);
-    let arrow_sbbf_dec_small = ArrowSbbf::new(&sbbf_dec_small, &DataType::Decimal128(5, 2));
+    let (sbbf_dec_small, physical_type_dec_small) = setup_sbbf(dec_small_array, dec_small_field);
+    let arrow_sbbf_dec_small = ArrowSbbf::new(&sbbf_dec_small, &DataType::Decimal128(5, 2), physical_type_dec_small);
     let test_val_dec_small = 123456i128;
 
     // Setup for Decimal128 medium precision (coerces to i64)
@@ -121,8 +127,8 @@ fn bench_decimal_types(c: &mut Criterion) {
             .unwrap(),
     ) as ArrayRef;
     let dec_medium_field = Field::new("col", DataType::Decimal128(15, 2), false);
-    let sbbf_dec_medium = setup_sbbf(dec_medium_array, dec_medium_field);
-    let arrow_sbbf_dec_medium = ArrowSbbf::new(&sbbf_dec_medium, &DataType::Decimal128(15, 2));
+    let (sbbf_dec_medium, physical_type_dec_medium) = setup_sbbf(dec_medium_array, dec_medium_field);
+    let arrow_sbbf_dec_medium = ArrowSbbf::new(&sbbf_dec_medium, &DataType::Decimal128(15, 2), physical_type_dec_medium);
     let test_val_dec_medium = 123456789012345i128;
 
     // Setup for Decimal128 large precision (no coercion)
@@ -132,8 +138,8 @@ fn bench_decimal_types(c: &mut Criterion) {
             .unwrap(),
     ) as ArrayRef;
     let dec_large_field = Field::new("col", DataType::Decimal128(30, 2), false);
-    let sbbf_dec_large = setup_sbbf(dec_large_array, dec_large_field);
-    let arrow_sbbf_dec_large = ArrowSbbf::new(&sbbf_dec_large, &DataType::Decimal128(30, 2));
+    let (sbbf_dec_large, physical_type_dec_large) = setup_sbbf(dec_large_array, dec_large_field);
+    let arrow_sbbf_dec_large = ArrowSbbf::new(&sbbf_dec_large, &DataType::Decimal128(30, 2), physical_type_dec_large);
     let test_val_dec_large = 123456789012345678901234567890i128;
 
     // Benchmark 1: ArrowSbbf::check with Decimal128 small (coerce to i32)
