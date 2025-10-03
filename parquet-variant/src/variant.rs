@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8};
+pub use self::decimal::{VariantDecimal4, VariantDecimal8, VariantDecimal16};
 pub use self::list::VariantList;
-pub use self::metadata::{VariantMetadata, EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES};
+pub use self::metadata::{EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES, VariantMetadata};
 pub use self::object::VariantObject;
 
 // Publically export types used in the API
@@ -25,7 +25,7 @@ pub use half::f16;
 pub use uuid::Uuid;
 
 use crate::decoder::{
-    self, get_basic_type, get_primitive_type, VariantBasicType, VariantPrimitiveType,
+    self, VariantBasicType, VariantPrimitiveType, get_basic_type, get_primitive_type,
 };
 use crate::path::{VariantPath, VariantPathElement};
 use crate::utils::{first_byte_from_slice, fits_precision, slice_from_slice};

@@ -16,7 +16,7 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{
-    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantList,
+    ShortString, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantList,
     VariantMetadata, VariantObject,
 };
 use arrow_schema::ArrowError;
@@ -3403,10 +3403,12 @@ mod tests {
             // This should fail because "unknown_field" is not in the metadata
             let result = obj.try_insert("unknown_field", "value");
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Field name 'unknown_field' not found"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Field name 'unknown_field' not found")
+            );
         }
     }
 

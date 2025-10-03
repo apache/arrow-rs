@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::decoder::{map_bytes_to_offsets, OffsetSizeBytes};
+use crate::decoder::{OffsetSizeBytes, map_bytes_to_offsets};
 use crate::utils::{
     first_byte_from_slice, overflow_error, slice_from_slice, try_binary_search_range_by,
 };
