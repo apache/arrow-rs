@@ -76,9 +76,9 @@ pub(crate) trait TimestampFromVariant: ArrowTimestampType {
 }
 
 macro_rules! impl_timestamp_from_variant {
-    ($timestamp_type:ty, {
-        $(($variant_pattern:pat, $conversion:expr)),+ $(,)?
-    }) => {
+    ($timestamp_type:ty,
+    $( $variant_pattern:pat => $conversion:expr ),+ $(,)?
+    ) => {
         impl TimestampFromVariant for $timestamp_type {
             fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
                 match variant {
@@ -92,17 +92,19 @@ macro_rules! impl_timestamp_from_variant {
     };
 }
 
-impl_timestamp_from_variant!(TimestampMicrosecondType, {
-    (Variant::TimestampMicros(t), Some(t.timestamp_micros())),
-    (Variant::TimestampNtzMicros(t), Some(t.and_utc().timestamp_micros())),
-});
+impl_timestamp_from_variant!(
+    TimestampMicrosecondType,
+    Variant::TimestampMicros(t) => Some(t.timestamp_micros()),
+    Variant::TimestampNtzMicros(t) => Some(t.and_utc().timestamp_micros()),
+);
 
-impl_timestamp_from_variant!(TimestampNanosecondType, {
-    (Variant::TimestampMicros(t), Some(t.timestamp_micros()).map(|t| t * 1000)),
-    (Variant::TimestampNtzMicros(t), Some(t.and_utc().timestamp_micros()).map(|t| t * 1000)),
-    (Variant::TimestampNanos(t), t.timestamp_nanos_opt()),
-    (Variant::TimestampNtzNanos(t), t.and_utc().timestamp_nanos_opt()),
-});
+impl_timestamp_from_variant!(
+    TimestampNanosecondType,
+    Variant::TimestampMicros(t) => Some(t.timestamp_micros()).map(|t| t * 1000),
+    Variant::TimestampNtzMicros(t) => Some(t.and_utc().timestamp_micros()).map(|t| t * 1000),
+    Variant::TimestampNanos(t) => t.timestamp_nanos_opt(),
+    Variant::TimestampNtzNanos(t) => t.and_utc().timestamp_nanos_opt(),
+);
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
