@@ -345,9 +345,10 @@ macro_rules! define_variant_to_primitive_builder {
         impl<$lifetime $(, $generic: $bound+ )?> $name<$lifetime $(, $generic )?> {
             fn new(
                 cast_options: &$lifetime CastOptions<$lifetime>,
-                $array_param: usize
+                $array_param: usize,
                 // add this so that $init_expr can use it
-                $(, $field: $field_type)?) -> Self {
+                $( $field: $field_type, )?
+            ) -> Self {
                 Self {
                     builder: $init_expr,
                     cast_options,
