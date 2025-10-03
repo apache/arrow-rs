@@ -1371,8 +1371,6 @@ impl<'a, T: ArrowPrimitiveType> PrimitiveArray<T> {
 /// `FromIterator` for `PrimitiveArray` takes an iterator where the elements can be `into`
 /// this struct. So once implementing `From` or `Into` trait for a type, an iterator of
 /// the type can be collected to `PrimitiveArray`.
-///
-/// See also [BooleanAdapter](crate::array::BooleanAdapter).
 #[derive(Debug)]
 pub struct NativeAdapter<T: ArrowPrimitiveType> {
     /// Corresponding Rust native type if available
