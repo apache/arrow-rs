@@ -561,6 +561,72 @@ impl<'m, 'v> Variant<'m, 'v> {
         }
     }
 
+    /// Converts this variant to a `i64` representing microseconds since the Unix epoch if possible.
+    /// This is useful when convert the variant to arrow types.
+    ///
+    /// Returns Some(i64) for [`Variant::TimestampMicros`] and [`Variant::TimestampNtzMicros`],
+    /// None for the other variant types.
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use chrono::NaiveDate;
+    ///
+    /// // you can extract an i64 from Variant::TimestampMicros
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 10, 03).unwrap().and_hms_milli_opt(12, 34, 56, 789).unwrap().and_utc();
+    /// let v1 = Variant::from(datetime);
+    /// assert_eq!(v1.as_timestamp_micros(), Some(1759494896789000));
+    ///
+    /// // or Variant::TimestampNtzMicros
+    /// let datetime_ntz = NaiveDate::from_ymd_opt(2025, 10, 03).unwrap().and_hms_milli_opt(12, 34, 56, 789).unwrap();
+    /// let v2 = Variant::from(datetime_ntz);
+    /// assert_eq!(v1.as_timestamp_micros(), Some(1759494896789000));
+    ///
+    /// // but not from other variants
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 10, 03).unwrap().and_hms_nano_opt(12, 34, 56, 789123456).unwrap().and_utc();
+    /// let v3 = Variant::from(datetime_nanos);
+    /// assert_eq!(v3.as_timestamp_micros(), None);
+    /// ```
+    pub fn as_timestamp_micros(&self) -> Option<i64> {
+        match *self {
+            Variant::TimestampMicros(d) => Some(d.timestamp_micros()),
+            Variant::TimestampNtzMicros(d) => Some(d.and_utc().timestamp_micros()),
+            _ => None,
+        }
+    }
+
+    /// Converts this variant to a `i64` representing nanoseconds since the Unix epoch if possible.
+    /// This is useful when convert the variant to arrow types.
+    ///
+    /// Returns Some(i64) for [`Variant::TimestampNanos`] and [`Variant::TimestampNtzNanos`],
+    /// None for the other variant types.
+    ///
+    /// ```
+    /// use parquet_variant::Variant;
+    /// use chrono::NaiveDate;
+    ///
+    /// // you can extract an i64 from Variant::TimestampNanos
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 10, 03).unwrap().and_hms_nano_opt(12, 34, 56, 789123456).unwrap().and_utc();
+    /// let v1 = Variant::from(datetime);
+    /// assert_eq!(v1.as_timestamp_nanos(), Some(1759494896789123456));
+    ///
+    /// // or Variant::TimestampNtzNanos
+    /// let datetime_ntz = NaiveDate::from_ymd_opt(2025, 10, 03).unwrap().and_hms_nano_opt(12, 34, 56, 789123456).unwrap();
+    /// let v2 = Variant::from(datetime_ntz);
+    /// assert_eq!(v1.as_timestamp_nanos(), Some(1759494896789123456));
+    ///
+    /// // but not from other variants
+    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 10, 03).unwrap().and_hms_micro_opt(12, 34, 56, 789).unwrap().and_utc();
+    /// let v3 = Variant::from(datetime_micros);
+    /// assert_eq!(v3.as_timestamp_nanos(), None);
+    /// ```
+    pub fn as_timestamp_nanos(&self) -> Option<i64> {
+        match *self {
+            Variant::TimestampNanos(d) => d.timestamp_nanos_opt(),
+            Variant::TimestampNtzNanos(d) => d.and_utc().timestamp_nanos_opt(),
+            _ => None,
+        }
+    }
+
     /// Converts this variant to a `NaiveDateTime` if possible.
     ///
     /// Returns `Some(NaiveDateTime)` for timestamp variants,
