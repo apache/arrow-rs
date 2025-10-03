@@ -25,8 +25,8 @@ use arrow::array::{
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, Time64MicrosecondType, TimeUnit, TimestampMicrosecondType,
+    ArrowPrimitiveType, DataType, Date32Type, Float32Type, Float64Type, Int8Type, Int16Type,
+    Int32Type, Int64Type, Time64MicrosecondType, TimeUnit, TimestampMicrosecondType,
     TimestampNanosecondType,
 };
 use arrow::error::{ArrowError, Result};
