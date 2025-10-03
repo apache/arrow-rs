@@ -24,15 +24,15 @@ use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
 use crate::VariantArray;
-use crate::variant_array::ShreddingState;
+use crate::variant_array::BorrowedShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
 use arrow::array::AsArray;
 use std::sync::Arc;
 
-pub(crate) enum ShreddedPathStep {
+pub(crate) enum ShreddedPathStep<'a> {
     /// Path step succeeded, return the new shredding state
-    Success(ShreddingState),
+    Success(BorrowedShreddingState<'a>),
     /// The path element is not present in the `typed_value` column and there is no `value` column,
     /// so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
@@ -47,18 +47,16 @@ pub(crate) enum ShreddedPathStep {
 /// level, or if `typed_value` is not a struct, or if the requested field name does not exist.
 ///
 /// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
-pub(crate) fn follow_shredded_path_element(
-    shredding_state: &ShreddingState,
+pub(crate) fn follow_shredded_path_element<'a>(
+    shredding_state: &BorrowedShreddingState<'a>,
     path_element: &VariantPathElement<'_>,
     cast_options: &CastOptions,
-) -> Result<ShreddedPathStep> {
+) -> Result<ShreddedPathStep<'a>> {
     // If the requested path element is not present in `typed_value`, and `value` is missing, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
-    let missing_path_step = || {
-        let Some(_value_field) = shredding_state.value_field() else {
-            return ShreddedPathStep::Missing;
-        };
-        ShreddedPathStep::NotShredded
+    let missing_path_step = || match shredding_state.value_field() {
+        Some(_) => ShreddedPathStep::NotShredded,
+        None => ShreddedPathStep::Missing,
     };
 
     let Some(typed_value) = shredding_state.typed_value_field() else {
@@ -98,7 +96,8 @@ pub(crate) fn follow_shredded_path_element(
                 ))
             })?;
 
-            Ok(ShreddedPathStep::Success(struct_array.into()))
+            let state = BorrowedShreddingState::try_from(struct_array)?;
+            Ok(ShreddedPathStep::Success(state))
         }
         VariantPathElement::Index { .. } => {
             // TODO: Support array indexing. Among other things, it will require slicing not
@@ -152,7 +151,7 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state().clone();
+    let mut shredding_state = input.shredding_state().borrow();
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
