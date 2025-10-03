@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
@@ -557,7 +557,7 @@ impl From<BooleanBuffer> for BooleanArray {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -709,7 +709,7 @@ mod tests {
         let expected = v.clone().into_iter().collect::<BooleanArray>();
         let actual = unsafe {
             // SAFETY: `v` has trusted length
-            BooleanArray::from_trusted_len_iter(v.into_iter())
+            BooleanArray::from_trusted_len_iter(v)
         };
         assert_eq!(expected, actual);
     }
