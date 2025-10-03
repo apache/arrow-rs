@@ -2789,7 +2789,7 @@ mod test {
             let top_meta = proj_field.metadata().clone();
             let (expected_field_ref, expected_col): (Arc<Field>, ArrayRef) =
                 match (full_field.data_type(), proj_field.data_type()) {
-                    (&DataType::List(_), &DataType::List(ref proj_elem)) => {
+                    (&DataType::List(_), DataType::List(ref proj_elem)) => {
                         let new_col =
                             rebuild_list_array_with_element(&col_full, proj_elem.clone(), false);
                         let nf = Field::new(
@@ -2800,7 +2800,7 @@ mod test {
                         .with_metadata(top_meta);
                         (Arc::new(nf), new_col)
                     }
-                    (&DataType::LargeList(_), &DataType::LargeList(ref proj_elem)) => {
+                    (&DataType::LargeList(_), DataType::LargeList(ref proj_elem)) => {
                         let new_col =
                             rebuild_list_array_with_element(&col_full, proj_elem.clone(), true);
                         let nf = Field::new(
