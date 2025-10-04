@@ -31,7 +31,7 @@
 //! - `UInt8` → `INT32` (u8 → u32 → i32)
 //! - `UInt16` → `INT32` (u16 → u32 → i32)
 //!
-//! [`ArrowSbbf`] wraps an [`Sbbf`] and an Arrow [`DataType`], automatically coercing
+//! [`ArrowSbbf`] wraps an [`Sbbf`] and an Arrow [`arrow_schema::DataType`], automatically coercing
 //! values to their Parquet representation before checking the bloom filter.
 //!
 //! # Example
