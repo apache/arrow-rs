@@ -17,7 +17,9 @@
 
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
 use arrow::compute::CastOptions;
-use arrow::datatypes::{self, ArrowPrimitiveType, DataType, Decimal32Type};
+use arrow::datatypes::{
+    self, is_validate_decimal32_precision, ArrowPrimitiveType, DataType, Decimal32Type,
+};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
@@ -380,9 +382,14 @@ impl<'a> VariantToDecimal32ArrowRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        let maybe_scaled = value
-            .as_decimal4()
-            .and_then(|decimal| scale_variant_decimal(&decimal, self.scale, self.precision));
+        let maybe_scaled = scale_variant_decimal!(
+            value,
+            as_decimal4,
+            self.scale,
+            i32,
+            is_validate_decimal32_precision,
+            self.precision
+        );
 
         if let Some(scaled) = maybe_scaled {
             self.builder.append_value(scaled);
