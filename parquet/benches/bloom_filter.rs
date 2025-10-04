@@ -65,14 +65,14 @@ fn setup_sbbf(array: ArrayRef, field: Field) -> Sbbf {
 fn bench_integer_types(c: &mut Criterion) {
     // Setup for Int8 benchmarks
     let test_val_i8 = 42i8;
-    let int8_array = Arc::new(Int8Array::from(vec![test_val_i8; 1000])) as ArrayRef;
+    let int8_array = Arc::new(Int8Array::from(vec![test_val_i8; 1])) as ArrayRef;
     let int8_field = Field::new("col", DataType::Int8, false);
     let sbbf_int8 = setup_sbbf(int8_array, int8_field);
     let arrow_sbbf_int8 = ArrowSbbf::new(&sbbf_int8, &DataType::Int8);
 
     // Setup for Int32 benchmarks
     let test_val_i32 = 42i32;
-    let int32_array = Arc::new(Int32Array::from(vec![test_val_i32; 1000])) as ArrayRef;
+    let int32_array = Arc::new(Int32Array::from(vec![test_val_i32; 1])) as ArrayRef;
     let int32_field = Field::new("col", DataType::Int32, false);
     let sbbf_int32 = setup_sbbf(int32_array, int32_field);
     let arrow_sbbf_int32 = ArrowSbbf::new(&sbbf_int32, &DataType::Int32);
@@ -111,7 +111,7 @@ fn bench_decimal_types(c: &mut Criterion) {
     let test_val_dec_small = 123456i128;
     let test_bytes_dec_small = test_val_dec_small.to_le_bytes();
     let dec_small_array = Arc::new(
-        Decimal128Array::from(vec![test_val_dec_small; 1000])
+        Decimal128Array::from(vec![test_val_dec_small; 1])
             .with_precision_and_scale(5, 2)
             .unwrap(),
     ) as ArrayRef;
@@ -123,7 +123,7 @@ fn bench_decimal_types(c: &mut Criterion) {
     let test_val_dec_medium = 123456789012345i128;
     let test_bytes_dec_medium = test_val_dec_medium.to_le_bytes();
     let dec_medium_array = Arc::new(
-        Decimal128Array::from(vec![test_val_dec_medium; 1000])
+        Decimal128Array::from(vec![test_val_dec_medium; 1])
             .with_precision_and_scale(15, 2)
             .unwrap(),
     ) as ArrayRef;
@@ -135,7 +135,7 @@ fn bench_decimal_types(c: &mut Criterion) {
     let test_val_dec_large = 123456789012345678901234567890i128;
     let test_bytes_dec_large = test_val_dec_large.to_le_bytes();
     let dec_large_array = Arc::new(
-        Decimal128Array::from(vec![test_val_dec_large; 1000])
+        Decimal128Array::from(vec![test_val_dec_large; 1])
             .with_precision_and_scale(30, 2)
             .unwrap(),
     ) as ArrayRef;
