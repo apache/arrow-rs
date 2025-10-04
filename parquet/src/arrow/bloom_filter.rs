@@ -251,12 +251,7 @@ impl<'a> ArrowSbbf<'a> {
                 );
 
                 if bytes.len() == 16 {
-                    let i128_val = i128::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
-                        bytes[14], bytes[15],
-                    ]);
-                    let i32_val = i128_val as i32;
+                    let i32_val = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                     self.sbbf.check(&i32_val)
                 } else {
                     true // Unexpected byte length, return false positive
@@ -274,13 +269,7 @@ impl<'a> ArrowSbbf<'a> {
                 );
 
                 if bytes.len() == 32 {
-                    // Read first 16 bytes as i128, then truncate to i32
-                    let i128_val = i128::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
-                        bytes[14], bytes[15],
-                    ]);
-                    let i32_val = i128_val as i32;
+                    let i32_val = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                     self.sbbf.check(&i32_val)
                 } else {
                     true // Unexpected byte length, return false positive
@@ -319,13 +308,10 @@ impl<'a> ArrowSbbf<'a> {
                 );
 
                 if bytes.len() == 16 {
-                    // Read first 16 bytes as i128, then truncate to i64
-                    let i128_val = i128::from_le_bytes([
+                    let i64_val = i64::from_le_bytes([
                         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
-                        bytes[14], bytes[15],
+                        bytes[7],
                     ]);
-                    let i64_val = i128_val as i64;
                     self.sbbf.check(&i64_val)
                 } else {
                     true // Unexpected byte length, return false positive
@@ -343,13 +329,10 @@ impl<'a> ArrowSbbf<'a> {
                 );
 
                 if bytes.len() == 32 {
-                    // Read first 16 bytes as i128, then truncate to i64
-                    let i128_val = i128::from_le_bytes([
+                    let i64_val = i64::from_le_bytes([
                         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
-                        bytes[14], bytes[15],
+                        bytes[7],
                     ]);
-                    let i64_val = i128_val as i64;
                     self.sbbf.check(&i64_val)
                 } else {
                     true // Unexpected byte length, return false positive
