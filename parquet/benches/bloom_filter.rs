@@ -63,21 +63,20 @@ fn setup_sbbf(array: ArrayRef, field: Field) -> Sbbf {
 }
 
 fn bench_integer_types(c: &mut Criterion) {
-    // Setup for Int8 benchmarks (requires coercion to i32)
-    let int8_array = Arc::new(Int8Array::from(vec![42i8; 1000])) as ArrayRef;
+    // Setup for Int8 benchmarks
+    let test_val_i8 = 42i8;
+    let int8_array = Arc::new(Int8Array::from(vec![test_val_i8; 1000])) as ArrayRef;
     let int8_field = Field::new("col", DataType::Int8, false);
     let sbbf_int8 = setup_sbbf(int8_array, int8_field);
     let arrow_sbbf_int8 = ArrowSbbf::new(&sbbf_int8, &DataType::Int8);
-    let test_val_i32 = 42i32;
-    let test_val_i8 = 42i8;
 
-    // Setup for Int32 benchmarks (no coercion needed)
-    let int32_array = Arc::new(Int32Array::from(vec![42i32; 1000])) as ArrayRef;
+    // Setup for Int32 benchmarks
+    let test_val_i32 = 42i32;
+    let int32_array = Arc::new(Int32Array::from(vec![test_val_i32; 1000])) as ArrayRef;
     let int32_field = Field::new("col", DataType::Int32, false);
     let sbbf_int32 = setup_sbbf(int32_array, int32_field);
     let arrow_sbbf_int32 = ArrowSbbf::new(&sbbf_int32, &DataType::Int32);
 
-    // Benchmark 1: Direct Sbbf::check with i32 (baseline)
     c.bench_function("Sbbf::check i32", |b| {
         b.iter(|| {
             let result = sbbf_int8.check(&test_val_i32);
@@ -85,7 +84,6 @@ fn bench_integer_types(c: &mut Criterion) {
         })
     });
 
-    // Benchmark 2: ArrowSbbf::check with i8 (requires coercion to i32)
     c.bench_function("ArrowSbbf::check i8 (coerce to i32)", |b| {
         b.iter(|| {
             let result = arrow_sbbf_int8.check(&test_val_i8);
@@ -93,7 +91,6 @@ fn bench_integer_types(c: &mut Criterion) {
         })
     });
 
-    // Benchmark 3: ArrowSbbf::check with i32 (no coercion, passthrough)
     c.bench_function("ArrowSbbf::check i32 (no coercion)", |b| {
         b.iter(|| {
             let result = arrow_sbbf_int32.check(&test_val_i32);
@@ -103,40 +100,39 @@ fn bench_integer_types(c: &mut Criterion) {
 }
 
 fn bench_decimal_types(c: &mut Criterion) {
-    // Setup for Decimal128 small precision (coerces to i32)
+    // Setup for Decimal128 small precision
+    let test_val_dec_small = 123456i128;
     let dec_small_array = Arc::new(
-        Decimal128Array::from(vec![123456i128; 1000])
+        Decimal128Array::from(vec![test_val_dec_small; 1000])
             .with_precision_and_scale(5, 2)
             .unwrap(),
     ) as ArrayRef;
     let dec_small_field = Field::new("col", DataType::Decimal128(5, 2), false);
     let sbbf_dec_small = setup_sbbf(dec_small_array, dec_small_field);
     let arrow_sbbf_dec_small = ArrowSbbf::new(&sbbf_dec_small, &DataType::Decimal128(5, 2));
-    let test_val_dec_small = 123456i128;
 
-    // Setup for Decimal128 medium precision (coerces to i64)
+    // Setup for Decimal128 medium precision
+    let test_val_dec_medium = 123456789012345i128;
     let dec_medium_array = Arc::new(
-        Decimal128Array::from(vec![123456789012345i128; 1000])
+        Decimal128Array::from(vec![test_val_dec_medium; 1000])
             .with_precision_and_scale(15, 2)
             .unwrap(),
     ) as ArrayRef;
     let dec_medium_field = Field::new("col", DataType::Decimal128(15, 2), false);
     let sbbf_dec_medium = setup_sbbf(dec_medium_array, dec_medium_field);
     let arrow_sbbf_dec_medium = ArrowSbbf::new(&sbbf_dec_medium, &DataType::Decimal128(15, 2));
-    let test_val_dec_medium = 123456789012345i128;
 
-    // Setup for Decimal128 large precision (no coercion)
+    // Setup for Decimal128 large precision
+    let test_val_dec_large = 123456789012345678901234567890i128;
     let dec_large_array = Arc::new(
-        Decimal128Array::from(vec![123456789012345678901234567890i128; 1000])
+        Decimal128Array::from(vec![test_val_dec_large; 1000])
             .with_precision_and_scale(30, 2)
             .unwrap(),
     ) as ArrayRef;
     let dec_large_field = Field::new("col", DataType::Decimal128(30, 2), false);
     let sbbf_dec_large = setup_sbbf(dec_large_array, dec_large_field);
     let arrow_sbbf_dec_large = ArrowSbbf::new(&sbbf_dec_large, &DataType::Decimal128(30, 2));
-    let test_val_dec_large = 123456789012345678901234567890i128;
 
-    // Benchmark 1: ArrowSbbf::check with Decimal128 small (coerce to i32)
     c.bench_function("ArrowSbbf::check Decimal128(5,2) (coerce to i32)", |b| {
         b.iter(|| {
             let test_bytes = test_val_dec_small.to_le_bytes();
@@ -145,7 +141,6 @@ fn bench_decimal_types(c: &mut Criterion) {
         })
     });
 
-    // Benchmark 2: ArrowSbbf::check with Decimal128 medium (coerce to i64)
     c.bench_function("ArrowSbbf::check Decimal128(15,2) (coerce to i64)", |b| {
         b.iter(|| {
             let test_bytes = test_val_dec_medium.to_le_bytes();
@@ -154,7 +149,6 @@ fn bench_decimal_types(c: &mut Criterion) {
         })
     });
 
-    // Benchmark 3: ArrowSbbf::check with Decimal128 large (no coercion)
     c.bench_function("ArrowSbbf::check Decimal128(30,2) (no coercion)", |b| {
         b.iter(|| {
             let test_bytes = test_val_dec_large.to_le_bytes();
