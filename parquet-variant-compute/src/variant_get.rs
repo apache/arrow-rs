@@ -23,9 +23,9 @@ use arrow::{
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
+use crate::VariantArray;
 use crate::variant_array::BorrowedShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
-use crate::VariantArray;
 
 use arrow::array::AsArray;
 use std::sync::Arc;
@@ -295,20 +295,20 @@ impl<'a> GetOptions<'a> {
 mod test {
     use std::sync::Arc;
 
-    use super::{variant_get, GetOptions};
+    use super::{GetOptions, variant_get};
+    use crate::VariantArray;
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::VariantArray;
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
+        Int8Array, Int16Array, Int32Array, Int64Array, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow_schema::{DataType, Field, FieldRef, Fields};
     use chrono::DateTime;
-    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
+    use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantPath};
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -602,7 +602,10 @@ mod test {
 
         let err = variant_get(&array, options).unwrap_err();
         // TODO make this error message nicer (not Debug format)
-        assert_eq!(err.to_string(), "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])");
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])"
+        );
     }
 
     /// Perfect Shredding: extract the typed value as a VariantArray
@@ -1926,9 +1929,11 @@ mod test {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(matches!(error, ArrowError::CastError(_)));
-        assert!(error
-            .to_string()
-            .contains("Cannot access field 'nonexistent_field' on non-struct type"));
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot access field 'nonexistent_field' on non-struct type")
+        );
     }
 
     #[test]

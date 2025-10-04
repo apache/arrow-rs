@@ -80,7 +80,7 @@ pub(crate) enum AvroLiteral {
 
 /// Contains the necessary information to resolve a writer's record against a reader's record schema.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedRecord {
+pub(crate) struct ResolvedRecord {
     /// Maps a writer's field index to the corresponding reader's field index.
     /// `None` if the writer's field is not present in the reader's schema.
     pub(crate) writer_to_reader: Arc<[Option<usize>]>,
@@ -135,7 +135,7 @@ impl Display for Promotion {
 
 /// Information required to resolve a writer union against a reader union (or single type).
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResolvedUnion {
+pub(crate) struct ResolvedUnion {
     /// For each writer branch index, the reader branch index and how to read it.
     /// `None` means the writer branch doesn't resolve against the reader.
     pub(crate) writer_to_reader: Arc<[Option<(usize, Promotion)>]>,
@@ -149,7 +149,7 @@ pub struct ResolvedUnion {
 ///
 /// When resolving schemas, the writer's enum symbols must be mapped to the reader's symbols.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EnumMapping {
+pub(crate) struct EnumMapping {
     /// A mapping from the writer's symbol index to the reader's symbol index.
     pub(crate) mapping: Arc<[i32]>,
     /// The index to use for a writer's symbol that is not present in the reader's enum
@@ -167,7 +167,7 @@ fn with_extension_type(codec: &Codec, field: Field) -> Field {
 
 /// An Avro datatype mapped to the arrow data model
 #[derive(Debug, Clone, PartialEq)]
-pub struct AvroDataType {
+pub(crate) struct AvroDataType {
     nullability: Option<Nullability>,
     metadata: HashMap<String, String>,
     codec: Codec,
@@ -482,19 +482,19 @@ impl AvroDataType {
 
 /// A named [`AvroDataType`]
 #[derive(Debug, Clone, PartialEq)]
-pub struct AvroField {
+pub(crate) struct AvroField {
     name: String,
     data_type: AvroDataType,
 }
 
 impl AvroField {
     /// Returns the arrow [`Field`]
-    pub fn field(&self) -> Field {
+    pub(crate) fn field(&self) -> Field {
         self.data_type.field_with_name(&self.name)
     }
 
     /// Returns the [`AvroDataType`]
-    pub fn data_type(&self) -> &AvroDataType {
+    pub(crate) fn data_type(&self) -> &AvroDataType {
         &self.data_type
     }
 
@@ -506,7 +506,7 @@ impl AvroField {
     ///
     /// Returns a new `AvroField` with the same structure, but with string types
     /// converted to use `Utf8View` instead of `Utf8`.
-    pub fn with_utf8view(&self) -> Self {
+    pub(crate) fn with_utf8view(&self) -> Self {
         let mut field = self.clone();
         if let Codec::Utf8 = field.data_type.codec {
             field.data_type.codec = Codec::Utf8View;
@@ -518,7 +518,7 @@ impl AvroField {
     ///
     /// This is the field name as defined in the Avro schema.
     /// It's used to identify fields within a record structure.
-    pub fn name(&self) -> &str {
+    pub(crate) fn name(&self) -> &str {
         &self.name
     }
 }
@@ -545,7 +545,7 @@ impl<'a> TryFrom<&Schema<'a>> for AvroField {
 
 /// Builder for an [`AvroField`]
 #[derive(Debug)]
-pub struct AvroFieldBuilder<'a> {
+pub(crate) struct AvroFieldBuilder<'a> {
     writer_schema: &'a Schema<'a>,
     reader_schema: Option<&'a Schema<'a>>,
     use_utf8view: bool,
@@ -609,7 +609,7 @@ impl<'a> AvroFieldBuilder<'a> {
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#encodings>
 #[derive(Debug, Clone, PartialEq)]
-pub enum Codec {
+pub(crate) enum Codec {
     /// Represents Avro null type, maps to Arrow's Null data type
     Null,
     /// Represents Avro boolean type, maps to Arrow's Boolean data type
@@ -773,22 +773,7 @@ impl Codec {
     /// The conversion only happens if both:
     /// 1. `use_utf8view` is true
     /// 2. The codec is currently `Utf8`
-    ///
-    /// # Example
-    /// ```
-    /// # use arrow_avro::codec::Codec;
-    /// let utf8_codec1 = Codec::Utf8;
-    /// let utf8_codec2 = Codec::Utf8;
-    ///
-    /// // Convert to Utf8View
-    /// let view_codec = utf8_codec1.with_utf8view(true);
-    /// assert!(matches!(view_codec, Codec::Utf8View));
-    ///
-    /// // Don't convert if use_utf8view is false
-    /// let unchanged_codec = utf8_codec2.with_utf8view(false);
-    /// assert!(matches!(unchanged_codec, Codec::Utf8));
-    /// ```
-    pub fn with_utf8view(self, use_utf8view: bool) -> Self {
+    pub(crate) fn with_utf8view(self, use_utf8view: bool) -> Self {
         if use_utf8view && matches!(self, Self::Utf8) {
             Self::Utf8View
         } else {
