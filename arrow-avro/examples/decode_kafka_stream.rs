@@ -35,7 +35,7 @@
 use arrow_array::{Int64Array, RecordBatch, StringArray};
 use arrow_avro::reader::ReaderBuilder;
 use arrow_avro::schema::{
-    AvroSchema, Fingerprint, FingerprintAlgorithm, SchemaStore, CONFLUENT_MAGIC,
+    AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SchemaStore,
 };
 use arrow_schema::ArrowError;
 

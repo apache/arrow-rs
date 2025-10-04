@@ -25,7 +25,7 @@ authors = { workspace = true }
 license = { workspace = true }
 keywords = { workspace = true }
 include = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 rust-version = { workspace = true }
 
 [lib]

@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
+use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
 use crate::schema::{
-    AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, CONFLUENT_MAGIC,
+    AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, FingerprintStrategy,
     SCHEMA_METADATA_KEY, SINGLE_OBJECT_MAGIC,
 };
 use crate::writer::encoder::write_long;
