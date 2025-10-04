@@ -121,3 +121,26 @@ macro_rules! decimal_to_variant_decimal {
     }};
 }
 pub(crate) use decimal_to_variant_decimal;
+
+/// Convert a `VariantDecimal` back to a decimal value with the target scale
+macro_rules! variant_decimal_to_decimal {
+    ($variant_decimal:expr, $target_scale:expr, $value_type:ty) => {{
+        let value = $variant_decimal.integer();
+        let variant_scale = $variant_decimal.scale();
+
+        let scale_factor = $target_scale as i32 - variant_scale as i32;
+
+        if scale_factor == 0 {
+            Some(value)
+        } else if scale_factor > 0 {
+            // Variant scale is greater than target scale, need to downscale
+            let divisor = <$value_type>::pow(10, scale_factor as u32);
+            <$value_type>::checked_div(value, divisor)
+        } else {
+            // Variant scale is less than target scale, need to upscale
+            let multiplier = <$value_type>::pow(10, (-scale_factor) as u32);
+            <$value_type>::checked_mul(value, multiplier)
+        }
+    }};
+}
+pub(crate) use variant_decimal_to_decimal;
