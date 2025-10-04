@@ -23,9 +23,9 @@ use arrow::{
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
+use crate::VariantArray;
 use crate::variant_array::BorrowedShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
-use crate::VariantArray;
 
 use arrow::array::AsArray;
 use std::sync::Arc;
@@ -295,27 +295,27 @@ impl<'a> GetOptions<'a> {
 mod test {
     use std::sync::Arc;
 
-    use super::{variant_get, GetOptions};
+    use super::{GetOptions, variant_get};
+    use crate::VariantArray;
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::VariantArray;
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Decimal128Array, Decimal256Array,
-        Decimal32Array, Decimal64Array, Float32Array, Float64Array, Int16Array, Int32Array,
-        Int64Array, Int8Array, StringArray, StructArray,
+        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Decimal32Array, Decimal64Array,
+        Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array, Int16Array,
+        Int32Array, Int64Array, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
-    use arrow::datatypes::i256;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
+    use arrow::datatypes::i256;
     use arrow_schema::{
-        DataType, Field, FieldRef, Fields,
-        DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
+        DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
+        Field, FieldRef, Fields,
     };
     use chrono::DateTime;
     use parquet_variant::{
-        Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantPath,
-        EMPTY_VARIANT_METADATA_BYTES,
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
+        VariantPath,
     };
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {

@@ -18,14 +18,14 @@
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{
-    self, i256, is_validate_decimal256_precision, is_validate_decimal32_precision,
-    is_validate_decimal64_precision, is_validate_decimal_precision, ArrowPrimitiveType, DataType,
-    Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+    self, ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
+    Decimal256Type, i256, is_validate_decimal_precision, is_validate_decimal32_precision,
+    is_validate_decimal64_precision, is_validate_decimal256_precision,
 };
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
-use crate::type_conversion::{scale_variant_decimal, PrimitiveFromVariant};
+use crate::type_conversion::{PrimitiveFromVariant, scale_variant_decimal};
 use crate::{VariantArray, VariantValueArrayBuilder};
 
 use std::sync::Arc;
