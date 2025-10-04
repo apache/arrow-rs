@@ -28,6 +28,10 @@ use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
+use crate::geospatial::accumulator::{
+    DefaultGeoStatsAccumulatorFactory, GeoStatsAccumulator, GeoStatsAccumulatorFactory,
+};
+use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
 /// A collection of [`ParquetValueType`] encoded by a [`ColumnValueEncoder`]
@@ -121,6 +125,8 @@ pub trait ColumnValueEncoder {
     /// will *not* be tracked by the bloom filter as it is empty since. This should be called once
     /// near the end of encoding.
     fn flush_bloom_filter(&mut self) -> Option<Sbbf>;
+
+    fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
 pub struct ColumnValueEncoderImpl<T: DataType> {
@@ -133,6 +139,7 @@ pub struct ColumnValueEncoderImpl<T: DataType> {
     max_value: Option<T::T>,
     bloom_filter: Option<Sbbf>,
     variable_length_bytes: Option<i64>,
+    geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
 impl<T: DataType> ColumnValueEncoderImpl<T> {
@@ -145,16 +152,20 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
 
     fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
         if self.statistics_enabled != EnabledStatistics::None
-            // INTERVAL has undefined sort order, so don't write min/max stats for it
+            // INTERVAL, Geometry, and Geography have undefined sort order,so don't write min/max stats for them
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
-            if let Some((min, max)) = self.min_max(slice, None) {
-                update_min(&self.descr, &min, &mut self.min_value);
-                update_max(&self.descr, &max, &mut self.max_value);
-            }
+            if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
+                update_geo_stats_accumulator(accumulator.as_mut(), slice.iter());
+            } else {
+                if let Some((min, max)) = self.min_max(slice, None) {
+                    update_min(&self.descr, &min, &mut self.min_value);
+                    update_max(&self.descr, &max, &mut self.max_value);
+                }
 
-            if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
-                *self.variable_length_bytes.get_or_insert(0) += var_bytes;
+                if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
+                    *self.variable_length_bytes.get_or_insert(0) += var_bytes;
+                }
             }
         }
 
@@ -201,6 +212,15 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
             .transpose()?;
 
+        let geo_stats_accumulator = if matches!(
+            descr.logical_type(),
+            Some(LogicalType::Geometry) | Some(LogicalType::Geography)
+        ) {
+            Some(DefaultGeoStatsAccumulatorFactory::default().new_accumulator(descr))
+        } else {
+            None
+        };
+
         Ok(Self {
             encoder,
             dict_encoder,
@@ -211,6 +231,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             min_value: None,
             max_value: None,
             variable_length_bytes: None,
+            geo_stats_accumulator,
         })
     }
 
@@ -307,6 +328,14 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             variable_length_bytes: self.variable_length_bytes.take(),
         })
     }
+
+    fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
+        if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
+            accumulator.finish()
+        } else {
+            None
+        }
+    }
 }
 
 fn get_min_max<'a, T, I>(descr: &ColumnDescriptor, mut iter: I) -> Option<(T, T)>
@@ -365,5 +394,19 @@ fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace:
             T::try_from_le_slice(&f16::to_le_bytes(f16::from_f32(replace))).unwrap()
         }
         _ => val.clone(),
+    }
+}
+
+fn update_geo_stats_accumulator<'a, T, I>(bounder: &mut dyn GeoStatsAccumulator, iter: I)
+where
+    T: ParquetValueType + 'a,
+    I: Iterator<Item = &'a T>,
+{
+    if !bounder.is_valid() {
+        return;
+    }
+
+    for val in iter {
+        bounder.update_wkb(val.as_bytes());
     }
 }

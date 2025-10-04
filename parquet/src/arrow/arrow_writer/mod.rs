@@ -229,11 +229,18 @@ impl<W: Write + Send> ArrowWriter<W> {
         options: ArrowWriterOptions,
     ) -> Result<Self> {
         let mut props = options.properties;
-        let mut converter = ArrowSchemaConverter::new().with_coerce_types(props.coerce_types());
-        if let Some(schema_root) = &options.schema_root {
-            converter = converter.schema_root(schema_root);
-        }
-        let schema = converter.convert(&arrow_schema)?;
+
+        let schema = if let Some(parquet_schema) = options.schema_descr {
+            parquet_schema.clone()
+        } else {
+            let mut converter = ArrowSchemaConverter::new().with_coerce_types(props.coerce_types());
+            if let Some(schema_root) = &options.schema_root {
+                converter = converter.schema_root(schema_root);
+            }
+
+            converter.convert(&arrow_schema)?
+        };
+
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -458,6 +465,7 @@ pub struct ArrowWriterOptions {
     properties: WriterProperties,
     skip_arrow_metadata: bool,
     schema_root: Option<String>,
+    schema_descr: Option<SchemaDescriptor>,
 }
 
 impl ArrowWriterOptions {
@@ -488,6 +496,14 @@ impl ArrowWriterOptions {
     pub fn with_schema_root(self, schema_root: String) -> Self {
         Self {
             schema_root: Some(schema_root),
+            ..self
+        }
+    }
+
+    /// Explicitly specify the Parquet schema to be used
+    pub fn with_parquet_schema(self, schema_descr: SchemaDescriptor) -> Self {
+        Self {
+            schema_descr: Some(schema_descr),
             ..self
         }
     }

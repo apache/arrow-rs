@@ -45,9 +45,9 @@ use crate::geospatial::bounding_box::BoundingBox;
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct GeospatialStatistics {
     /// Optional bounding defining the spatial extent, where None represents a lack of information.
-    bbox: Option<BoundingBox>,
+    pub bbox: Option<BoundingBox>,
     /// Optional list of geometry type identifiers, where None represents lack of information
-    geospatial_types: Option<Vec<i32>>,
+    pub geospatial_types: Option<Vec<i32>>,
 }
 
 impl GeospatialStatistics {

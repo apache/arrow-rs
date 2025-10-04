@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::Encoding;
+use crate::basic::{Encoding, LogicalType};
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
@@ -23,6 +23,10 @@ use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+use crate::geospatial::accumulator::{
+    DefaultGeoStatsAccumulatorFactory, GeoStatsAccumulator, GeoStatsAccumulatorFactory,
+};
+use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
@@ -421,6 +425,7 @@ pub struct ByteArrayEncoder {
     min_value: Option<ByteArray>,
     max_value: Option<ByteArray>,
     bloom_filter: Option<Sbbf>,
+    geo_stats_accumulator: Option<Box<dyn GeoStatsAccumulator>>,
 }
 
 impl ColumnValueEncoder for ByteArrayEncoder {
@@ -447,6 +452,15 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
+        let geo_stats_accumulator = if matches!(
+            descr.logical_type(),
+            Some(LogicalType::Geometry) | Some(LogicalType::Geography)
+        ) {
+            Some(DefaultGeoStatsAccumulatorFactory::default().new_accumulator(descr))
+        } else {
+            None
+        };
+
         Ok(Self {
             fallback,
             statistics_enabled,
@@ -454,6 +468,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             dict_encoder: dictionary,
             min_value: None,
             max_value: None,
+            geo_stats_accumulator,
         })
     }
 
@@ -536,6 +551,14 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             _ => self.fallback.flush_data_page(min_value, max_value),
         }
     }
+
+    fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
+        if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
+            accumulator.finish()
+        } else {
+            None
+        }
+    }
 }
 
 /// Encodes the provided `values` and `indices` to `encoder`
@@ -547,7 +570,10 @@ where
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
     if encoder.statistics_enabled != EnabledStatistics::None {
-        if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
+        // TODO ensure Converted interval types have no stats written for them?
+        if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
+            update_geo_stats_accumulator(accumulator.as_mut(), values, indices.iter().cloned());
+        } else if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
             if encoder.min_value.as_ref().is_none_or(|m| m > &min) {
                 encoder.min_value = Some(min);
             }
@@ -594,4 +620,25 @@ where
         max = max.max(val);
     }
     Some((min.as_ref().to_vec().into(), max.as_ref().to_vec().into()))
+}
+
+/// Updates geospatial statistics for the provided array and indices
+///
+/// This is a free function so it can be used with `downcast_op!`
+fn update_geo_stats_accumulator<T>(
+    bounder: &mut dyn GeoStatsAccumulator,
+    array: T,
+    valid: impl Iterator<Item = usize>,
+) where
+    T: ArrayAccessor,
+    T::Item: Copy + Ord + AsRef<[u8]>,
+{
+    if !bounder.is_valid() {
+        return;
+    }
+
+    for idx in valid {
+        let val = array.value(idx);
+        bounder.update_wkb(val.as_ref());
+    }
 }
