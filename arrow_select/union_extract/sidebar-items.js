@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["EQ_SCALAR_CHUNK_SIZE","IS_SEQUENTIAL_CHUNK_SIZE"],"enum":["BoolValue"],"fn":["count_first_run","eq_scalar","eq_scalar_inner","extract_dense","extract_dense_all_selected","extract_sparse","is_sequential","is_sequential_generic","union_extract"]};

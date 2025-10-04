@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["PrimitiveVariantToArrowRowBuilder","VariantToArrowRowBuilder"],"fn":["get_type_name","make_primitive_variant_to_arrow_row_builder","make_variant_to_arrow_row_builder"],"struct":["VariantPathRowBuilder","VariantToBinaryVariantArrowRowBuilder","VariantToPrimitiveArrowRowBuilder"]};
