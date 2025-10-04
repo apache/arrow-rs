@@ -18,6 +18,7 @@
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::{FooterTail, ParquetMetaData, ParquetMetaDataPushDecoder};
 use crate::file::reader::ChunkReader;
 use crate::file::FOOTER_SIZE;
@@ -26,7 +27,6 @@ use std::{io::Read, ops::Range};
 
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
-use crate::file::metadata::parser::decode_metadata;
 use crate::DecodeResult;
 
 /// Reads [`ParquetMetaData`] from a byte stream, with either synchronous or
@@ -789,7 +789,6 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        // Note this API does not support encryption.
         decode_metadata(buf)
     }
 }

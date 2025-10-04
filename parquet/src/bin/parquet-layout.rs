@@ -41,7 +41,7 @@ use parquet::file::metadata::ParquetMetaDataReader;
 use serde::Serialize;
 use thrift::protocol::TCompactInputProtocol;
 
-use parquet::basic::{Compression, Encoding};
+use parquet::basic::Compression;
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
 use parquet::format::PageHeader;
@@ -105,7 +105,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         if let Some(dictionary) = header.dictionary_page_header {
                             pages.push(Page {
                                 compression,
-                                encoding: encoding(dictionary.encoding),
+                                encoding: encoding(dictionary.encoding.0),
                                 page_type: "dictionary",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -116,7 +116,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         } else if let Some(data_page) = header.data_page_header {
                             pages.push(Page {
                                 compression,
-                                encoding: encoding(data_page.encoding),
+                                encoding: encoding(data_page.encoding.0),
                                 page_type: "data_page_v1",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -129,7 +129,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
 
                             pages.push(Page {
                                 compression: compression.filter(|_| is_compressed),
-                                encoding: encoding(data_page.encoding),
+                                encoding: encoding(data_page.encoding.0),
                                 page_type: "data_page_v2",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -196,19 +196,19 @@ fn compression(compression: Compression) -> Option<&'static str> {
 }
 
 /// Returns a string representation for a given encoding
-fn encoding(encoding: parquet::format::Encoding) -> &'static str {
-    match Encoding::try_from(encoding) {
-        Ok(Encoding::PLAIN) => "plain",
-        Ok(Encoding::PLAIN_DICTIONARY) => "plain_dictionary",
-        Ok(Encoding::RLE) => "rle",
+fn encoding(encoding: i32) -> &'static str {
+    match encoding {
+        0 => "plain",
+        2 => "plain_dictionary",
+        3 => "rle",
         #[allow(deprecated)]
-        Ok(Encoding::BIT_PACKED) => "bit_packed",
-        Ok(Encoding::DELTA_BINARY_PACKED) => "delta_binary_packed",
-        Ok(Encoding::DELTA_LENGTH_BYTE_ARRAY) => "delta_length_byte_array",
-        Ok(Encoding::DELTA_BYTE_ARRAY) => "delta_byte_array",
-        Ok(Encoding::RLE_DICTIONARY) => "rle_dictionary",
-        Ok(Encoding::BYTE_STREAM_SPLIT) => "byte_stream_split",
-        Err(_) => "unknown",
+        4 => "bit_packed",
+        5 => "delta_binary_packed",
+        6 => "delta_length_byte_array",
+        7 => "delta_byte_array",
+        8 => "rle_dictionary",
+        9 => "byte_stream_split",
+        _ => "unknown",
     }
 }
 

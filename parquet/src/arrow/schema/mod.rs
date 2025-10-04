@@ -534,9 +534,9 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                     is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_ref().is_empty()),
                     unit: match time_unit {
                         TimeUnit::Second => unreachable!(),
-                        TimeUnit::Millisecond => ParquetTimeUnit::MILLIS(Default::default()),
-                        TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
-                        TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
+                        TimeUnit::Millisecond => ParquetTimeUnit::MILLIS,
+                        TimeUnit::Microsecond => ParquetTimeUnit::MICROS,
+                        TimeUnit::Nanosecond => ParquetTimeUnit::NANOS,
                     },
                 }))
                 .with_repetition(repetition)
@@ -573,7 +573,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
-                    TimeUnit::Millisecond => ParquetTimeUnit::MILLIS(Default::default()),
+                    TimeUnit::Millisecond => ParquetTimeUnit::MILLIS,
                     u => unreachable!("Invalid unit for Time32: {:?}", u),
                 },
             }))
@@ -584,8 +584,8 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
-                    TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
-                    TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
+                    TimeUnit::Microsecond => ParquetTimeUnit::MICROS,
+                    TimeUnit::Nanosecond => ParquetTimeUnit::NANOS,
                     u => unreachable!("Invalid unit for Time64: {:?}", u),
                 },
             }))

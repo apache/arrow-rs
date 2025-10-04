@@ -30,6 +30,7 @@ pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
 use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
 use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
+use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
     chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
 };
@@ -39,7 +40,6 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
-use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
@@ -261,7 +261,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Skip 1100      (skip the remaining 900 rows in row group 2 and the first 200 rows in row group 3)
     /// ```
     ///
-    /// [`Index`]: crate::file::page_index::index::Index
+    /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
@@ -819,17 +819,17 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
-            BloomFilterAlgorithm::BLOCK(_) => {
+            BloomFilterAlgorithm::BLOCK => {
                 // this match exists to future proof the singleton algorithm enum
             }
         }
         match header.compression {
-            BloomFilterCompression::UNCOMPRESSED(_) => {
+            BloomFilterCompression::UNCOMPRESSED => {
                 // this match exists to future proof the singleton compression enum
             }
         }
         match header.hash {
-            BloomFilterHash::XXHASH(_) => {
+            BloomFilterHash::XXHASH => {
                 // this match exists to future proof the singleton hash enum
             }
         }
@@ -1185,6 +1185,7 @@ mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
+    use crate::file::metadata::ParquetMetaData;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -2913,7 +2914,7 @@ mod tests {
         schema: TypePtr,
         field: Option<Field>,
         opts: &TestOptions,
-    ) -> Result<crate::format::FileMetaData> {
+    ) -> Result<ParquetMetaData> {
         let mut writer_props = opts.writer_props();
         if let Some(field) = field {
             let arrow_schema = Schema::new(vec![field]);

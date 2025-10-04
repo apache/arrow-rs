@@ -47,6 +47,7 @@ use crate::arrow::arrow_reader::{
 };
 use crate::arrow::ProjectionMask;
 
+use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
     chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
 };
@@ -55,7 +56,6 @@ use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
-use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 
 mod metadata;
 pub use metadata::*;
@@ -450,17 +450,17 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
-            BloomFilterAlgorithm::BLOCK(_) => {
+            BloomFilterAlgorithm::BLOCK => {
                 // this match exists to future proof the singleton algorithm enum
             }
         }
         match header.compression {
-            BloomFilterCompression::UNCOMPRESSED(_) => {
+            BloomFilterCompression::UNCOMPRESSED => {
                 // this match exists to future proof the singleton compression enum
             }
         }
         match header.hash {
-            BloomFilterHash::XXHASH(_) => {
+            BloomFilterHash::XXHASH => {
                 // this match exists to future proof the singleton hash enum
             }
         }
