@@ -62,35 +62,36 @@ impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
 impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
 
 macro_rules! scale_variant_decimal {
-    ($variant:expr, $variant_method:ident, $output_scale:expr, $int_ty:ty, $validate:path, $precision:expr) => {{
-        (|| -> Option<$int_ty> {
+    ($variant:expr, $variant_method:ident, $to_int_ty:expr, $output_scale:expr, $precision:expr, $validate:path) => {{
+        (|| -> Option<_> {
             let variant = $variant.$variant_method()?;
             let input_scale = variant.scale() as i8;
-            let ten: $int_ty = 10 as $int_ty;
+            let variant = $to_int_ty(variant.integer());
+            let ten = $to_int_ty(10);
 
-            let scaled: Option<$int_ty> = if input_scale == $output_scale {
-                Some(variant.integer())
+            let scaled = if input_scale == $output_scale {
+                Some(variant)
             } else if input_scale < $output_scale {
                 // scale_up means output has more fractional digits than input
                 // multiply integer by 10^(output_scale - input_scale)
                 let delta = ($output_scale - input_scale) as u32;
                 let mul = ten.checked_pow(delta)?;
-                variant.integer().checked_mul(mul)
+                variant.checked_mul(mul)
             } else {
                 // scale_down means output has fewer fractional digits than input
                 // divide by 10^(input_scale - output_scale) with rounding
                 let delta = (input_scale - $output_scale) as u32;
                 let div = ten.checked_pow(delta)?;
-                let v = variant.integer();
+                let v = variant;
                 let d = v.checked_div(div)?;
                 let r = v % div;
 
-                let half = div.checked_div(2)?;
+                let half = div.checked_div($to_int_ty(2))?;
                 let half_neg = half.checked_neg()?;
 
-                let adjusted = match v >= 0 {
-                    true if r >= half => d.checked_add(1)?,
-                    false if r <= half_neg => d.checked_sub(1)?,
+                let adjusted = match v >= $to_int_ty(0) {
+                    true if r >= half => d.checked_add($to_int_ty(1))?,
+                    false if r <= half_neg => d.checked_sub($to_int_ty(1))?,
                     _ => d,
                 };
                 Some(adjusted)

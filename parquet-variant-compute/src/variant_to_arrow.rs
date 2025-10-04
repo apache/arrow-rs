@@ -18,7 +18,9 @@
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{
-    self, is_validate_decimal32_precision, ArrowPrimitiveType, DataType, Decimal32Type,
+    self, i256, is_validate_decimal256_precision, is_validate_decimal32_precision,
+    is_validate_decimal64_precision, is_validate_decimal_precision, ArrowPrimitiveType, DataType,
+    Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
 };
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
@@ -43,6 +45,10 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
     Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
+    Decimal32(VariantToDecimal32ArrowRowBuilder<'a>),
+    Decimal64(VariantToDecimal64ArrowRowBuilder<'a>),
+    Decimal128(VariantToDecimal128ArrowRowBuilder<'a>),
+    Decimal256(VariantToDecimal256ArrowRowBuilder<'a>),
 }
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -51,7 +57,6 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
 /// with casting of leaf values to specific types.
 pub(crate) enum VariantToArrowRowBuilder<'a> {
     Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
-    Decimal32(VariantToDecimal32ArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
     // Path extraction wrapper - contains a boxed enum for any of the above
@@ -73,6 +78,10 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_null(),
             Float32(b) => b.append_null(),
             Float64(b) => b.append_null(),
+            Decimal32(b) => b.append_null(),
+            Decimal64(b) => b.append_null(),
+            Decimal128(b) => b.append_null(),
+            Decimal256(b) => b.append_null(),
         }
     }
 
@@ -90,6 +99,10 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.append_value(value),
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
+            Decimal32(b) => b.append_value(value),
+            Decimal64(b) => b.append_value(value),
+            Decimal128(b) => b.append_value(value),
+            Decimal256(b) => b.append_value(value),
         }
     }
 
@@ -107,6 +120,10 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float16(b) => b.finish(),
             Float32(b) => b.finish(),
             Float64(b) => b.finish(),
+            Decimal32(b) => b.finish(),
+            Decimal64(b) => b.finish(),
+            Decimal128(b) => b.finish(),
+            Decimal256(b) => b.finish(),
         }
     }
 }
@@ -116,7 +133,6 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.append_null(),
-            Decimal32(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
         }
@@ -126,7 +142,6 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.append_value(&value),
-            Decimal32(b) => b.append_value(&value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
         }
@@ -136,7 +151,6 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.finish(),
-            Decimal32(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
         }
@@ -196,6 +210,24 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             cast_options,
             capacity,
         )),
+        DataType::Decimal32(precision, scale) => Decimal32(VariantToDecimal32ArrowRowBuilder::new(
+            cast_options,
+            capacity,
+            *precision,
+            *scale,
+        )?),
+        DataType::Decimal64(precision, scale) => Decimal64(VariantToDecimal64ArrowRowBuilder::new(
+            cast_options,
+            capacity,
+            *precision,
+            *scale,
+        )?),
+        DataType::Decimal128(precision, scale) => Decimal128(
+            VariantToDecimal128ArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
+        ),
+        DataType::Decimal256(precision, scale) => Decimal256(
+            VariantToDecimal256ArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
+        ),
         _ if data_type.is_primitive() => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Primitive data_type {data_type:?} not yet implemented"
@@ -241,9 +273,6 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
                 "Converting unshredded variant arrays to arrow lists".to_string(),
             ));
         }
-        Some(DataType::Decimal32(precision, scale)) => Decimal32(
-            VariantToDecimal32ArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
-        ),
         Some(data_type) => {
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
@@ -385,10 +414,10 @@ impl<'a> VariantToDecimal32ArrowRowBuilder<'a> {
         let maybe_scaled = scale_variant_decimal!(
             value,
             as_decimal4,
+            |x: i32| x,
             self.scale,
-            i32,
-            is_validate_decimal32_precision,
-            self.precision
+            self.precision,
+            is_validate_decimal32_precision
         );
 
         if let Some(scaled) = maybe_scaled {
@@ -400,6 +429,180 @@ impl<'a> VariantToDecimal32ArrowRowBuilder<'a> {
         } else {
             Err(ArrowError::CastError(format!(
                 "Failed to cast to Decimal32(precision={}, scale={}) from variant {:?}",
+                self.precision, self.scale, value
+            )))
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(self.builder.finish()))
+    }
+}
+
+pub(crate) struct VariantToDecimal64ArrowRowBuilder<'a> {
+    builder: PrimitiveBuilder<Decimal64Type>,
+    cast_options: &'a CastOptions<'a>,
+    precision: u8,
+    scale: i8,
+}
+
+impl<'a> VariantToDecimal64ArrowRowBuilder<'a> {
+    fn new(
+        cast_options: &'a CastOptions<'a>,
+        capacity: usize,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Self> {
+        let builder = PrimitiveBuilder::<Decimal64Type>::with_capacity(capacity)
+            .with_precision_and_scale(precision, scale)?;
+        Ok(Self {
+            builder,
+            cast_options,
+            precision,
+            scale,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        let maybe_scaled = scale_variant_decimal!(
+            value,
+            as_decimal8,
+            |x: i64| x,
+            self.scale,
+            self.precision,
+            is_validate_decimal64_precision
+        );
+
+        if let Some(scaled) = maybe_scaled {
+            self.builder.append_value(scaled);
+            Ok(true)
+        } else if self.cast_options.safe {
+            self.builder.append_null();
+            Ok(false)
+        } else {
+            Err(ArrowError::CastError(format!(
+                "Failed to cast to Decimal64(precision={}, scale={}) from variant {:?}",
+                self.precision, self.scale, value
+            )))
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(self.builder.finish()))
+    }
+}
+
+pub(crate) struct VariantToDecimal128ArrowRowBuilder<'a> {
+    builder: PrimitiveBuilder<Decimal128Type>,
+    cast_options: &'a CastOptions<'a>,
+    precision: u8,
+    scale: i8,
+}
+
+impl<'a> VariantToDecimal128ArrowRowBuilder<'a> {
+    fn new(
+        cast_options: &'a CastOptions<'a>,
+        capacity: usize,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Self> {
+        let builder = PrimitiveBuilder::<Decimal128Type>::with_capacity(capacity)
+            .with_precision_and_scale(precision, scale)?;
+        Ok(Self {
+            builder,
+            cast_options,
+            precision,
+            scale,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        let maybe_scaled = scale_variant_decimal!(
+            value,
+            as_decimal16,
+            |x: i128| x,   
+            self.scale,
+            self.precision,
+            is_validate_decimal_precision
+        );
+
+        if let Some(scaled) = maybe_scaled {
+            self.builder.append_value(scaled);
+            Ok(true)
+        } else if self.cast_options.safe {
+            self.builder.append_null();
+            Ok(false)
+        } else {
+            Err(ArrowError::CastError(format!(
+                "Failed to cast to Decimal128(precision={}, scale={}) from variant {:?}",
+                self.precision, self.scale, value
+            )))
+        }
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(self.builder.finish()))
+    }
+}
+
+pub(crate) struct VariantToDecimal256ArrowRowBuilder<'a> {
+    builder: PrimitiveBuilder<Decimal256Type>,
+    cast_options: &'a CastOptions<'a>,
+    precision: u8,
+    scale: i8,
+}
+
+impl<'a> VariantToDecimal256ArrowRowBuilder<'a> {
+    fn new(
+        cast_options: &'a CastOptions<'a>,
+        capacity: usize,
+        precision: u8,
+        scale: i8,
+    ) -> Result<Self> {
+        let builder = PrimitiveBuilder::<Decimal256Type>::with_capacity(capacity)
+            .with_precision_and_scale(precision, scale)?;
+        Ok(Self {
+            builder,
+            cast_options,
+            precision,
+            scale,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        let maybe_scaled = scale_variant_decimal!(
+            value,
+            as_decimal16,
+            i256::from_i128,
+            self.scale,
+            self.precision,
+            is_validate_decimal256_precision
+        );
+
+        if let Some(scaled) = maybe_scaled {
+            self.builder.append_value(scaled);
+            Ok(true)
+        } else if self.cast_options.safe {
+            self.builder.append_null();
+            Ok(false)
+        } else {
+            Err(ArrowError::CastError(format!(
+                "Failed to cast to Decimal256(precision={}, scale={}) from variant {:?}",
                 self.precision, self.scale, value
             )))
         }
