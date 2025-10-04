@@ -274,8 +274,7 @@ impl<'a> ArrowSbbf<'a> {
                 );
 
                 if bytes.len() == 32 {
-                    // Decimal256: i256 stored as 32 bytes, truncate to i32
-                    // Read first 16 bytes as i128, then truncate
+                    // Read first 16 bytes as i128, then truncate to i32
                     let i128_val = i128::from_le_bytes([
                         bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
                         bytes[7], bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13],
@@ -370,8 +369,8 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use arrow_array::{
-        ArrayRef, Date64Array, Decimal128Array, Decimal32Array, Float16Array, Int16Array,
-        Int8Array, RecordBatch, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Float16Array,
+        Int16Array, Int8Array, RecordBatch, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
     };
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
@@ -556,6 +555,58 @@ mod tests {
 
         // Arrow Decimal128(15, 2) -> Parquet INT64
         let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal128(15, 2));
+        let arrow_result = arrow_sbbf.check(&test_bytes[..]);
+        assert!(arrow_result);
+    }
+
+    #[test]
+    fn test_check_decimal256_small() {
+        use arrow_buffer::i256;
+
+        let test_value = i256::from_i128(20075_i128);
+        let array = Decimal256Array::from(vec![
+            i256::from_i128(10050_i128),
+            test_value,
+            i256::from_i128(30099_i128),
+        ])
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+        let field = Field::new("col", ArrowType::Decimal256(5, 2), false);
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
+
+        // Check without coercion fails
+        let test_bytes = test_value.to_le_bytes();
+        let direct_result = sbbf.check(&test_bytes[..]);
+        assert!(!direct_result);
+
+        // Arrow Decimal256(5, 2) -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal256(5, 2));
+        let arrow_result = arrow_sbbf.check(&test_bytes[..]);
+        assert!(arrow_result);
+    }
+
+    #[test]
+    fn test_check_decimal256_medium() {
+        use arrow_buffer::i256;
+
+        let test_value = i256::from_i128(9876543210987_i128);
+        let array = Decimal256Array::from(vec![
+            i256::from_i128(1234567890123_i128),
+            test_value,
+            i256::from_i128(5555555555555_i128),
+        ])
+        .with_precision_and_scale(15, 2)
+        .unwrap();
+        let field = Field::new("col", ArrowType::Decimal256(15, 2), false);
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
+
+        // Check without coercion fails
+        let test_bytes = test_value.to_le_bytes();
+        let direct_result = sbbf.check(&test_bytes[..]);
+        assert!(!direct_result);
+
+        // Arrow Decimal256(15, 2) -> Parquet INT64
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal256(15, 2));
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
         assert!(arrow_result);
     }
