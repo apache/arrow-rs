@@ -22,7 +22,7 @@ use crate::format as parquet;
 use crate::format::{ColumnIndex, OffsetIndex};
 use crate::thrift::TSerializable;
 use std::fmt::Debug;
-use std::io::{BufWriter, IoSlice, Read};
+use std::io::{IoSlice, Read};
 use std::{io::Write, sync::Arc};
 use thrift::protocol::TCompactOutputProtocol;
 
@@ -46,19 +46,19 @@ use crate::file::{metadata::*, PARQUET_MAGIC};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
-/// of bytes that have been written. The given [`Write`] is wrapped
-/// with a [`BufWriter`] to optimize writing performance.
+/// of bytes that have been written. If the underlying writer
+/// performs poorly with small, repeated writes (e.g., a TCP socket),
+/// consider wrapping it in a [`std::io::BufWriter`] for better performance.
 pub struct TrackedWrite<W: Write> {
-    inner: BufWriter<W>,
+    inner: W,
     bytes_written: usize,
 }
 
 impl<W: Write> TrackedWrite<W> {
     /// Create a new [`TrackedWrite`] from a [`Write`]
     pub fn new(inner: W) -> Self {
-        let buf_write = BufWriter::new(inner);
         Self {
-            inner: buf_write,
+            inner,
             bytes_written: 0,
         }
     }
@@ -70,7 +70,7 @@ impl<W: Write> TrackedWrite<W> {
 
     /// Returns a reference to the underlying writer.
     pub fn inner(&self) -> &W {
-        self.inner.get_ref()
+        &self.inner
     }
 
     /// Returns a mutable reference to the underlying writer.
@@ -78,14 +78,12 @@ impl<W: Write> TrackedWrite<W> {
     /// It is inadvisable to directly write to the underlying writer, doing so
     /// will likely result in data corruption
     pub fn inner_mut(&mut self) -> &mut W {
-        self.inner.get_mut()
+        &mut self.inner
     }
 
     /// Returns the underlying writer.
-    pub fn into_inner(self) -> Result<W> {
-        self.inner.into_inner().map_err(|err| {
-            ParquetError::General(format!("fail to get inner writer: {:?}", err.to_string()))
-        })
+    pub fn into_inner(self) -> W {
+        self.inner
     }
 }
 
@@ -183,7 +181,9 @@ impl<W: Write> Debug for SerializedFileWriter<W> {
 }
 
 impl<W: Write + Send> SerializedFileWriter<W> {
-    /// Creates new file writer.
+    /// Creates new file writer. If the underlying writer performs poorly
+    /// with small, repeated writes (e.g., a TCP socket), consider wrapping
+    /// it in a [`std::io::BufWriter`] for better performance.
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
         let mut buf = TrackedWrite::new(buf);
 
@@ -431,7 +431,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.assert_previous_writer_closed()?;
         let _ = self.write_metadata()?;
 
-        self.buf.into_inner()
+        Ok(self.buf.into_inner())
     }
 
     /// Returns the number of bytes written to this instance
@@ -1970,7 +1970,7 @@ mod tests {
         // Splice column data into a row group
         let mut row_group_writer = file_writer.next_row_group().unwrap();
         for (write, close) in column_state {
-            let buf = Bytes::from(write.into_inner().unwrap());
+            let buf = Bytes::from(write.into_inner());
             row_group_writer
                 .append_column(&buf, close.unwrap())
                 .unwrap();
