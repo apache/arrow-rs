@@ -172,9 +172,7 @@ impl<'a> ArrowSbbf<'a> {
                 );
 
                 if bytes.len() == 1 {
-                    let u8_val = bytes[0];
-                    let u32_val = u8_val as u32;
-                    let i32_val = u32_val as i32;
+                    let i32_val = bytes[0] as i32;
                     self.sbbf.check(&i32_val)
                 } else {
                     true // Unexpected byte length, return false positive
@@ -192,8 +190,7 @@ impl<'a> ArrowSbbf<'a> {
 
                 if bytes.len() == 2 {
                     let u16_val = u16::from_le_bytes([bytes[0], bytes[1]]);
-                    let u32_val = u16_val as u32;
-                    let i32_val = u32_val as i32;
+                    let i32_val = u16_val as i32;
                     self.sbbf.check(&i32_val)
                 } else {
                     true // Unexpected byte length, return false positive
@@ -211,11 +208,7 @@ impl<'a> ArrowSbbf<'a> {
                 );
 
                 if bytes.len() == 8 {
-                    let i64_val = i64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7],
-                    ]);
-                    let i32_val = i64_val as i32;
+                    let i32_val = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                     self.sbbf.check(&i32_val)
                 } else {
                     true // Unexpected byte length, return false positive
