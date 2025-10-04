@@ -387,7 +387,7 @@ impl Sbbf {
     }
 
     /// Check if an [AsBytes] value is probably present or definitely absent in the filter
-    pub fn check<T: AsBytes>(&self, value: &T) -> bool {
+    pub fn check<T: AsBytes + ?Sized>(&self, value: &T) -> bool {
         self.check_hash(hash_as_bytes(value))
     }
 
