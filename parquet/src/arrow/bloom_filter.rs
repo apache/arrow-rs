@@ -503,6 +503,42 @@ mod tests {
     }
 
     #[test]
+    fn test_check_float16() {
+        use half::f16;
+        let test_value = f16::from_f32(2.5);
+        let array = Float16Array::from(vec![f16::from_f32(1.5), test_value, f16::from_f32(3.5)]);
+        let field = Field::new("col", ArrowType::Float16, false);
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
+
+        // No coercion necessary
+        let test_bytes = test_value.to_le_bytes();
+        let direct_result = sbbf.check(&test_bytes[..]);
+        assert!(direct_result);
+
+        // Arrow Float16 -> Parquet FIXED_LEN_BYTE_ARRAY
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Float16);
+        let arrow_result = arrow_sbbf.check(&test_bytes[..]);
+        assert!(arrow_result);
+    }
+
+    #[test]
+    fn test_check_decimal32() {
+        let test_value = 20075_i32;
+        let array = Decimal32Array::from(vec![10050_i32, test_value, 30099_i32])
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+        let field = Field::new("col", ArrowType::Decimal32(5, 2), false);
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
+
+        // No coercion necessary
+        assert!(sbbf.check(&test_value));
+
+        // Arrow Decimal32(5, 2) -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal32(5, 2));
+        assert!(arrow_sbbf.check(&test_value));
+    }
+
+    #[test]
     fn test_check_decimal128_small() {
         let test_value = 20075_i128;
         let array = Decimal128Array::from(vec![10050_i128, test_value, 30099_i128])
@@ -590,42 +626,6 @@ mod tests {
 
         // Arrow Decimal256(15, 2) -> Parquet INT64
         let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal256(15, 2));
-        let arrow_result = arrow_sbbf.check(&test_bytes[..]);
-        assert!(arrow_result);
-    }
-
-    #[test]
-    fn test_check_decimal32() {
-        let test_value = 20075_i32;
-        let array = Decimal32Array::from(vec![10050_i32, test_value, 30099_i32])
-            .with_precision_and_scale(5, 2)
-            .unwrap();
-        let field = Field::new("col", ArrowType::Decimal32(5, 2), false);
-        let sbbf = build_sbbf(Arc::new(array), field.clone());
-
-        // No coercion necessary
-        assert!(sbbf.check(&test_value));
-
-        // Arrow Decimal32(5, 2) -> Parquet INT32
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal32(5, 2));
-        assert!(arrow_sbbf.check(&test_value));
-    }
-
-    #[test]
-    fn test_check_float16() {
-        use half::f16;
-        let test_value = f16::from_f32(2.5);
-        let array = Float16Array::from(vec![f16::from_f32(1.5), test_value, f16::from_f32(3.5)]);
-        let field = Field::new("col", ArrowType::Float16, false);
-        let sbbf = build_sbbf(Arc::new(array), field.clone());
-
-        // No coercion necessary
-        let test_bytes = test_value.to_le_bytes();
-        let direct_result = sbbf.check(&test_bytes[..]);
-        assert!(direct_result);
-
-        // Arrow Float16 -> Parquet FIXED_LEN_BYTE_ARRAY
-        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Float16);
         let arrow_result = arrow_sbbf.check(&test_bytes[..]);
         assert!(arrow_result);
     }
