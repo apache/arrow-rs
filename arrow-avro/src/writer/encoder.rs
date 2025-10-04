@@ -34,7 +34,6 @@ use arrow_array::{
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit};
-use serde::Serialize;
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -244,7 +243,7 @@ impl<'a> FieldEncoder<'a> {
                 DataType::LargeBinary => {
                     Encoder::LargeBinary(BinaryEncoder(array.as_binary::<i64>()))
                 }
-                DataType::FixedSizeBinary(len) => {
+                DataType::FixedSizeBinary(_len) => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<FixedSizeBinaryArray>()
@@ -429,11 +428,6 @@ impl<'a> FieldEncoder<'a> {
                         "Avro enum site requires DataType::Dictionary, found: {other:?}"
                     )))
                 }
-            }
-            other => {
-                return Err(ArrowError::NotYetImplemented(format!(
-                    "Avro writer: {other:?} not yet supported",
-                )));
             }
         };
         // Compute the effective null state from writer-declared nullability and data nulls.
@@ -1048,12 +1042,10 @@ impl<'a> MapEncoder<'a> {
         let offsets = self.map.offsets();
         let start = offsets[idx] as usize;
         let end = offsets[idx + 1] as usize;
-
-        let mut write_item = |out: &mut W, j: usize| {
+        let write_item = |out: &mut W, j: usize| {
             let j_val = j.saturating_sub(self.values_offset);
             self.values.encode(out, j_val)
         };
-
         match self.keys {
             KeyKind::Utf8(arr) => MapEncoder::<'a>::encode_map_entries(
                 out,
@@ -1425,7 +1417,6 @@ mod tests {
     use arrow_array::{
         Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         Int64Array, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, StringArray,
-        TimestampMicrosecondArray,
     };
     use arrow_schema::{DataType, Field, Fields};
 

@@ -474,18 +474,18 @@
 //!   descriptive error. Populate the store up front to avoid this.
 //!
 //! ---
-use crate::codec::{AvroField, AvroFieldBuilder};
+use crate::codec::AvroFieldBuilder;
+use crate::reader::header::read_header;
 use crate::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore, CONFLUENT_MAGIC,
     SINGLE_OBJECT_MAGIC,
 };
-use arrow_array::{Array, RecordBatch, RecordBatchReader};
+use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
 use block::BlockDecoder;
-use header::{Header, HeaderDecoder};
+use header::Header;
 use indexmap::IndexMap;
 use record::RecordDecoder;
-use std::collections::HashMap;
 use std::io::BufRead;
 
 mod block;
@@ -493,26 +493,6 @@ mod cursor;
 mod header;
 mod record;
 mod vlq;
-
-/// Read the Avro file header (magic, metadata, sync marker) from `reader`.
-fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
-    let mut decoder = HeaderDecoder::default();
-    loop {
-        let buf = reader.fill_buf()?;
-        if buf.is_empty() {
-            break;
-        }
-        let read = buf.len();
-        let decoded = decoder.decode(buf)?;
-        reader.consume(decoded);
-        if decoded != read {
-            break;
-        }
-    }
-    decoder.flush().ok_or_else(|| {
-        ArrowError::ParseError("Unexpected EOF while reading Avro header".to_string())
-    })
-}
 
 fn is_incomplete_data(err: &ArrowError) -> bool {
     matches!(
@@ -652,8 +632,6 @@ pub struct Decoder {
     remaining_capacity: usize,
     cache: IndexMap<Fingerprint, RecordDecoder>,
     fingerprint_algorithm: FingerprintAlgorithm,
-    utf8_view: bool,
-    strict_mode: bool,
     pending_schema: Option<(Fingerprint, RecordDecoder)>,
     awaiting_body: bool,
 }
@@ -988,7 +966,7 @@ impl ReaderBuilder {
             .with_utf8view(self.utf8_view)
             .with_strict_mode(self.strict_mode)
             .build()?;
-        RecordDecoder::try_new_with_options(root.data_type(), self.utf8_view)
+        RecordDecoder::try_new_with_options(root.data_type())
     }
 
     fn make_record_decoder_from_schemas(
@@ -1013,9 +991,7 @@ impl ReaderBuilder {
             active_fingerprint,
             active_decoder,
             cache,
-            utf8_view: self.utf8_view,
             fingerprint_algorithm,
-            strict_mode: self.strict_mode,
             pending_schema: None,
             awaiting_body: false,
         }
@@ -1287,14 +1263,12 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 
 #[cfg(test)]
 mod test {
-    use crate::codec::{AvroDataType, AvroField, AvroFieldBuilder, Codec};
-    use crate::compression::CompressionCodec;
+    use crate::codec::AvroFieldBuilder;
     use crate::reader::record::RecordDecoder;
-    use crate::reader::vlq::VLQDecoder;
-    use crate::reader::{read_header, Decoder, Reader, ReaderBuilder};
+    use crate::reader::{Decoder, Reader, ReaderBuilder};
     use crate::schema::{
-        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, Schema as AvroRaw,
-        SchemaStore, AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, SchemaStore,
+        AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
     use crate::writer::AvroWriter;
@@ -1304,29 +1278,35 @@ mod test {
         ListBuilder, MapBuilder, StringBuilder, StructBuilder,
     };
     use arrow_array::cast::AsArray;
+    #[cfg(not(feature = "avro_custom_types"))]
+    use arrow_array::types::Int64Type;
+    #[cfg(feature = "avro_custom_types")]
     use arrow_array::types::{
         DurationMicrosecondType, DurationMillisecondType, DurationNanosecondType,
-        DurationSecondType, Int64Type,
+        DurationSecondType,
     };
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
     use arrow_buffer::{
         i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
     };
+    #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{
         ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit, UnionFields,
         UnionMode,
     };
-    use bytes::{Buf, BufMut, Bytes};
+    #[cfg(not(feature = "avro_custom_types"))]
+    use arrow_schema::{
+        ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, UnionFields, UnionMode,
+    };
+    use bytes::Bytes;
     use futures::executor::block_on;
     use futures::{stream, Stream, StreamExt, TryStreamExt};
     use serde_json::{json, Value};
     use std::collections::HashMap;
-    use std::fs;
     use std::fs::File;
-    use std::io::{BufReader, Cursor, Read};
+    use std::io::{BufReader, Cursor};
     use std::sync::Arc;
-    use std::task::{ready, Poll};
 
     fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
         let file = File::open(path).unwrap();
@@ -2185,8 +2165,7 @@ mod test {
         let mut decoder = make_decoder(&store, fp_int, &schema_long);
         let writer_schema_long = schema_long.schema().unwrap();
         let root_long = AvroFieldBuilder::new(&writer_schema_long).build().unwrap();
-        let long_decoder =
-            RecordDecoder::try_new_with_options(root_long.data_type(), decoder.utf8_view).unwrap();
+        let long_decoder = RecordDecoder::try_new_with_options(root_long.data_type()).unwrap();
         let _ = decoder.cache.insert(fp_long, long_decoder);
         let mut buf = Vec::from(SINGLE_OBJECT_MAGIC);
         match fp_long {
@@ -2235,7 +2214,6 @@ mod test {
     fn test_two_messages_schema_switch() {
         let w_int = make_value_schema(PrimitiveType::Int);
         let w_long = make_value_schema(PrimitiveType::Long);
-        let r_long = w_long.clone();
         let mut store = SchemaStore::new();
         let fp_int = store.register(w_int).unwrap();
         let fp_long = store.register(w_long).unwrap();
@@ -2345,69 +2323,10 @@ mod test {
             .with_active_fingerprint(Fingerprint::Id(id))
             .build_decoder()
             .unwrap();
-        let buf = &crate::schema::CONFLUENT_MAGIC[..0]; // empty incomplete magic
+        let buf = &CONFLUENT_MAGIC[..0]; // empty incomplete magic
         let res = decoder.handle_prefix(buf).unwrap();
         assert_eq!(res, Some(0));
         assert!(decoder.pending_schema.is_none());
-    }
-
-    fn test_split_message_across_chunks() {
-        let writer_schema = make_value_schema(PrimitiveType::Int);
-        let reader_schema = writer_schema.clone();
-        let mut store = SchemaStore::new();
-        let fp = store.register(writer_schema).unwrap();
-        let msg1 = make_message(fp, 7);
-        let msg2 = make_message(fp, 8);
-        let msg3 = make_message(fp, 9);
-        let (pref2, body2) = msg2.split_at(10);
-        let (pref3, body3) = msg3.split_at(10);
-        let mut decoder = ReaderBuilder::new()
-            .with_batch_size(8)
-            .with_reader_schema(reader_schema)
-            .with_writer_schema_store(store)
-            .with_active_fingerprint(fp)
-            .build_decoder()
-            .unwrap();
-        let _ = decoder.decode(&msg1).unwrap();
-        let batch1 = decoder.flush().unwrap().expect("batch1");
-        assert_eq!(batch1.num_rows(), 1);
-        assert_eq!(
-            batch1
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            7
-        );
-        let _ = decoder.decode(pref2).unwrap();
-        assert!(decoder.flush().unwrap().is_none());
-        let mut chunk3 = Vec::from(body2);
-        chunk3.extend_from_slice(pref3);
-        let _ = decoder.decode(&chunk3).unwrap();
-        let batch2 = decoder.flush().unwrap().expect("batch2");
-        assert_eq!(batch2.num_rows(), 1);
-        assert_eq!(
-            batch2
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            8
-        );
-        let _ = decoder.decode(body3).unwrap();
-        let batch3 = decoder.flush().unwrap().expect("batch3");
-        assert_eq!(batch3.num_rows(), 1);
-        assert_eq!(
-            batch3
-                .column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0),
-            9
-        );
     }
 
     #[test]
@@ -2495,20 +2414,6 @@ mod test {
 
     #[test]
     fn test_utf8view_support() {
-        let schema_json = r#"{
-            "type": "record",
-            "name": "test",
-            "fields": [{
-                "name": "str_field",
-                "type": "string"
-            }]
-        }"#;
-
-        let schema: crate::schema::Schema = serde_json::from_str(schema_json).unwrap();
-        let avro_field = AvroField::try_from(&schema).unwrap();
-
-        let data_type = avro_field.data_type();
-
         struct TestHelper;
         impl TestHelper {
             fn with_utf8view(field: &Field) -> Field {
@@ -3009,7 +2914,6 @@ mod test {
         let mut tid_rec_a: Option<i8> = None;
         let mut tid_rec_b: Option<i8> = None;
         let mut tid_array: Option<i8> = None;
-        let mut tid_map: Option<i8> = None;
         for (tid, f) in fields.iter() {
             match f.data_type() {
                 DataType::Dictionary(_, _) => tid_enum = Some(tid),
@@ -3024,7 +2928,6 @@ mod test {
                     }
                 }
                 DataType::List(_) => tid_array = Some(tid),
-                DataType::Map(_, _) => tid_map = Some(tid),
                 _ => {}
             }
         }

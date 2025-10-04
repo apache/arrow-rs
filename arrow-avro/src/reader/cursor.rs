@@ -85,7 +85,7 @@ impl<'a> AvroCursor<'a> {
             ArrowError::ParseError("offset overflow reading avro bytes".to_string())
         })?;
 
-        if (self.buf.len() < len) {
+        if self.buf.len() < len {
             return Err(ArrowError::ParseError(
                 "Unexpected EOF reading bytes".to_string(),
             ));
@@ -97,7 +97,7 @@ impl<'a> AvroCursor<'a> {
 
     #[inline]
     pub(crate) fn get_float(&mut self) -> Result<f32, ArrowError> {
-        if (self.buf.len() < 4) {
+        if self.buf.len() < 4 {
             return Err(ArrowError::ParseError(
                 "Unexpected EOF reading float".to_string(),
             ));
@@ -109,7 +109,7 @@ impl<'a> AvroCursor<'a> {
 
     #[inline]
     pub(crate) fn get_double(&mut self) -> Result<f64, ArrowError> {
-        if (self.buf.len() < 8) {
+        if self.buf.len() < 8 {
             return Err(ArrowError::ParseError(
                 "Unexpected EOF reading float".to_string(),
             ));

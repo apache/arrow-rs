@@ -84,7 +84,7 @@ fn read_varint_array(buf: [u8; 10]) -> Option<(u64, usize)> {
 #[cold]
 fn read_varint_slow(buf: &[u8]) -> Option<(u64, usize)> {
     let mut value = 0;
-    for (count, byte) in buf.iter().take(10).enumerate() {
+    for (count, _byte) in buf.iter().take(10).enumerate() {
         let byte = buf[count];
         value |= u64::from(byte & 0x7F) << (count * 7);
         if byte <= 0x7F {
