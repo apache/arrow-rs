@@ -19,8 +19,9 @@ use arrow::array::{Array, ArrayRef, StringArray};
 use arrow::util::test_util::seedable_rng;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet_variant::{Variant, VariantBuilder};
-use parquet_variant_compute::variant_get::{GetOptions, variant_get};
-use parquet_variant_compute::{VariantArray, VariantArrayBuilder, json_to_variant};
+use parquet_variant_compute::{
+    GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
+};
 use rand::Rng;
 use rand::SeedableRng;
 use rand::distr::Alphanumeric;
