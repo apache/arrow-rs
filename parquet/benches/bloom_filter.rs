@@ -77,9 +77,9 @@ fn bench_integer_types(c: &mut Criterion) {
     let sbbf_int32 = setup_sbbf(int32_array, int32_field);
     let arrow_sbbf_int32 = ArrowSbbf::new(&sbbf_int32, &DataType::Int32);
 
-    c.bench_function("Sbbf::check i32", |b| {
+    c.bench_function("Sbbf::check i8", |b| {
         b.iter(|| {
-            let result = sbbf_int8.check(&test_val_i32);
+            let result = sbbf_int8.check(&test_val_i8);
             hint::black_box(result);
         })
     });
@@ -87,6 +87,13 @@ fn bench_integer_types(c: &mut Criterion) {
     c.bench_function("ArrowSbbf::check i8 (coerce to i32)", |b| {
         b.iter(|| {
             let result = arrow_sbbf_int8.check(&test_val_i8);
+            hint::black_box(result);
+        })
+    });
+
+    c.bench_function("Sbbf::check i32", |b| {
+        b.iter(|| {
+            let result = sbbf_int32.check(&test_val_i32);
             hint::black_box(result);
         })
     });
@@ -133,6 +140,14 @@ fn bench_decimal_types(c: &mut Criterion) {
     let sbbf_dec_large = setup_sbbf(dec_large_array, dec_large_field);
     let arrow_sbbf_dec_large = ArrowSbbf::new(&sbbf_dec_large, &DataType::Decimal128(30, 2));
 
+    c.bench_function("Sbbf::check Decimal128(5,2)", |b| {
+        b.iter(|| {
+            let i32_val = test_val_dec_small as i32;
+            let result = sbbf_dec_small.check(&i32_val);
+            hint::black_box(result);
+        })
+    });
+
     c.bench_function("ArrowSbbf::check Decimal128(5,2) (coerce to i32)", |b| {
         b.iter(|| {
             let test_bytes = test_val_dec_small.to_le_bytes();
@@ -141,10 +156,26 @@ fn bench_decimal_types(c: &mut Criterion) {
         })
     });
 
+    c.bench_function("Sbbf::check Decimal128(15,2)", |b| {
+        b.iter(|| {
+            let i64_val = test_val_dec_medium as i64;
+            let result = sbbf_dec_medium.check(&i64_val);
+            hint::black_box(result);
+        })
+    });
+
     c.bench_function("ArrowSbbf::check Decimal128(15,2) (coerce to i64)", |b| {
         b.iter(|| {
             let test_bytes = test_val_dec_medium.to_le_bytes();
             let result = arrow_sbbf_dec_medium.check(&test_bytes[..]);
+            hint::black_box(result);
+        })
+    });
+
+    c.bench_function("Sbbf::check Decimal128(30,2)", |b| {
+        b.iter(|| {
+            let test_bytes = test_val_dec_large.to_le_bytes();
+            let result = sbbf_dec_large.check(&test_bytes[..]);
             hint::black_box(result);
         })
     });
