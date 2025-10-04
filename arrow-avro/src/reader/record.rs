@@ -40,6 +40,16 @@ use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
 
+/// Runtime plan for decoding reader-side `["null", T]` types.
+#[derive(Clone, Copy, Debug)]
+enum NullablePlan {
+    /// Writer actually wrote a union (branch tag present).
+    ReadTag,
+    /// Writer wrote a single (non-union) value resolved to the non-null branch
+    /// of the reader union; do NOT read a branch tag, but apply any promotion.
+    FromSingle { promotion: Promotion },
+}
+
 /// Macro to decode a decimal payload for a given width and integer type.
 macro_rules! decode_decimal {
     ($size:expr, $buf:expr, $builder:expr, $N:expr, $Int:ty) => {{
@@ -267,7 +277,7 @@ enum Decoder {
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Union(UnionDecoder),
-    Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
+    Nullable(Nullability, NullBufferBuilder, Box<Decoder>, NullablePlan),
 }
 
 impl Decoder {
@@ -508,11 +518,23 @@ impl Decoder {
             }
         };
         Ok(match data_type.nullability() {
-            Some(nullability) => Self::Nullable(
-                nullability,
-                NullBufferBuilder::new(DEFAULT_CAPACITY),
-                Box::new(decoder),
-            ),
+            Some(nullability) => {
+                // Default to reading a union branch tag unless the resolution proves otherwise.
+                let mut plan = NullablePlan::ReadTag;
+                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
+                    if !info.writer_is_union && info.reader_is_union {
+                        if let Some(Some((_reader_idx, promo))) = info.writer_to_reader.first() {
+                            plan = NullablePlan::FromSingle { promotion: *promo };
+                        }
+                    }
+                }
+                Self::Nullable(
+                    nullability,
+                    NullBufferBuilder::new(DEFAULT_CAPACITY),
+                    Box::new(decoder),
+                    plan,
+                )
+            }
             None => decoder,
         })
     }
@@ -571,7 +593,7 @@ impl Decoder {
             Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
             Self::Union(u) => u.append_null()?,
-            Self::Nullable(_, null_buffer, inner) => {
+            Self::Nullable(_, null_buffer, inner, _) => {
                 null_buffer.append(false);
                 inner.append_null();
             }
@@ -582,7 +604,7 @@ impl Decoder {
     /// Append a single default literal into the decoder's buffers
     fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), ArrowError> {
         match self {
-            Self::Nullable(_, nb, inner) => {
+            Self::Nullable(_, nb, inner, _) => {
                 if matches!(lit, AvroLiteral::Null) {
                     nb.append(false);
                     inner.append_null()
@@ -939,19 +961,27 @@ impl Decoder {
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
             Self::Union(u) => u.decode(buf)?,
-            Self::Nullable(order, nb, encoding) => {
-                let branch = buf.read_vlq()?;
-                let is_not_null = match *order {
-                    Nullability::NullFirst => branch != 0,
-                    Nullability::NullSecond => branch == 0,
-                };
-                if is_not_null {
-                    // It is important to decode before appending to null buffer in case of decode error
-                    encoding.decode(buf)?;
-                } else {
-                    encoding.append_null();
+            Self::Nullable(order, nb, encoding, plan) => {
+                match *plan {
+                    NullablePlan::FromSingle { promotion } => {
+                        encoding.decode_with_promotion(buf, promotion)?;
+                        nb.append(true);
+                    }
+                    NullablePlan::ReadTag => {
+                        let branch = buf.read_vlq()?;
+                        let is_not_null = match *order {
+                            Nullability::NullFirst => branch != 0,
+                            Nullability::NullSecond => branch == 0,
+                        };
+                        if is_not_null {
+                            // It is important to decode before appending to null buffer in case of decode error
+                            encoding.decode(buf)?;
+                        } else {
+                            encoding.append_null();
+                        }
+                        nb.append(is_not_null);
+                    }
                 }
-                nb.append(is_not_null);
             }
         }
         Ok(())
@@ -1018,7 +1048,7 @@ impl Decoder {
     /// Flush decoded records to an [`ArrayRef`]
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
         Ok(match self {
-            Self::Nullable(_, n, e) => e.flush(n.finish())?,
+            Self::Nullable(_, n, e, _) => e.flush(n.finish())?,
             Self::Null(size) => Arc::new(NullArray::new(std::mem::replace(size, 0))),
             Self::Boolean(b) => Arc::new(BooleanArray::new(b.finish(), nulls)),
             Self::Int32(values) => Arc::new(flush_primitive::<Int32Type>(values, nulls)),
@@ -2742,6 +2772,7 @@ mod tests {
             Nullability::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
+            NullablePlan::ReadTag,
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0));
@@ -2784,6 +2815,7 @@ mod tests {
             Nullability::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
+            NullablePlan::ReadTag,
         );
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
@@ -3663,6 +3695,7 @@ mod tests {
             Nullability::NullFirst,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
+            NullablePlan::ReadTag,
         );
         dec.append_default(&AvroLiteral::Null).unwrap();
         dec.append_default(&AvroLiteral::Int(11)).unwrap();
@@ -3916,6 +3949,7 @@ mod tests {
             Nullability::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
+            NullablePlan::ReadTag,
         );
         let enc_b = Decoder::Nullable(
             Nullability::NullSecond,
@@ -3924,6 +3958,7 @@ mod tests {
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             )),
+            NullablePlan::ReadTag,
         );
         encoders.push(enc_a);
         encoders.push(enc_b);

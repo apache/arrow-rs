@@ -364,7 +364,7 @@ impl<W: Write, F: AvroFormat> Writer<W, F> {
     }
 
     fn write_ocf_block(&mut self, batch: &RecordBatch, sync: &[u8; 16]) -> Result<(), ArrowError> {
-        let mut buf = Vec::<u8>::with_capacity(1024);
+        let mut buf = Vec::<u8>::with_capacity(self.capacity);
         self.encoder.encode(&mut buf, batch)?;
         let encoded = match self.compression {
             Some(codec) => codec.compress(&buf)?,
@@ -1313,7 +1313,42 @@ mod tests {
     }
 
     #[test]
+    fn test_builder_propagates_capacity_to_writer() -> Result<(), ArrowError> {
+        let cap = 64 * 1024;
+        let buffer = Vec::<u8>::new();
+        let mut writer = WriterBuilder::new(make_schema())
+            .with_capacity(cap)
+            .build::<_, AvroOcfFormat>(buffer)?;
+        assert_eq!(writer.capacity, cap, "builder capacity not propagated");
+        let batch = make_batch();
+        writer.write(&batch)?;
+        writer.finish()?;
+        let out = writer.into_inner();
+        assert_eq!(&out[..4], b"Obj\x01", "OCF magic missing/incorrect");
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_writer_stores_capacity_direct_writes() -> Result<(), ArrowError> {
+        use arrow_array::{ArrayRef, Int32Array};
+        use arrow_schema::{DataType, Field, Schema};
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let cap = 8192;
+        let mut writer = WriterBuilder::new(schema)
+            .with_capacity(cap)
+            .build::<_, AvroBinaryFormat>(Vec::new())?;
+        assert_eq!(writer.capacity, cap);
+        writer.write(&batch)?;
+        let _bytes = writer.into_inner();
+        Ok(())
+    }
+
     #[cfg(feature = "avro_custom_types")]
+    #[test]
     fn test_roundtrip_duration_logical_types_ocf() -> Result<(), ArrowError> {
         let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("test/data/duration_logical_types.avro")
@@ -1373,7 +1408,6 @@ mod tests {
             arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
 
         assert_eq!(round_trip, input);
-
         Ok(())
     }
 }
