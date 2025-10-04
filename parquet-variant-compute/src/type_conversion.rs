@@ -86,9 +86,9 @@ macro_rules! scale_variant_decimal {
                 let d = v.checked_div(div)?;
                 let r = v % div;
 
+                // rounding in the same way as convert_to_smaller_scale_decimal in arrow-cast
                 let half = div.checked_div($to_int_ty(2))?;
                 let half_neg = half.checked_neg()?;
-
                 let adjusted = match v >= $to_int_ty(0) {
                     true if r >= half => d.checked_add($to_int_ty(1))?,
                     false if r <= half_neg => d.checked_sub($to_int_ty(1))?,
