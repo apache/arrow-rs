@@ -199,24 +199,6 @@ impl<'a> ArrowSbbf<'a> {
                     true // Unexpected byte length, return false positive
                 }
             }
-            ArrowType::Decimal32(precision, _) if *precision >= 1 && *precision <= 9 => {
-                // Arrow Decimal32 (precision 1-9) -> Parquet INT32
-                let bytes = value.as_bytes();
-
-                debug_assert_eq!(
-                    bytes.len(),
-                    4,
-                    "ArrowSbbf: expected 4 bytes for Decimal32, got {}. This indicates a type mismatch.",
-                    bytes.len()
-                );
-
-                if bytes.len() == 4 {
-                    let i32_val = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
-                    self.sbbf.check(&i32_val)
-                } else {
-                    true // Unexpected byte length, return false positive
-                }
-            }
             ArrowType::Decimal64(precision, _) if *precision >= 1 && *precision <= 9 => {
                 // Arrow Decimal64 (precision 1-9) -> Parquet INT32
                 let bytes = value.as_bytes();
@@ -271,27 +253,6 @@ impl<'a> ArrowSbbf<'a> {
                 if bytes.len() == 32 {
                     let i32_val = i32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
                     self.sbbf.check(&i32_val)
-                } else {
-                    true // Unexpected byte length, return false positive
-                }
-            }
-            ArrowType::Decimal64(precision, _) if *precision >= 10 && *precision <= 18 => {
-                // Arrow Decimal64 (precision 10-18) -> Parquet INT64
-                let bytes = value.as_bytes();
-
-                debug_assert_eq!(
-                    bytes.len(),
-                    8,
-                    "ArrowSbbf: expected 8 bytes for Decimal64, got {}. This indicates a type mismatch.",
-                    bytes.len()
-                );
-
-                if bytes.len() == 8 {
-                    let i64_val = i64::from_le_bytes([
-                        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6],
-                        bytes[7],
-                    ]);
-                    self.sbbf.check(&i64_val)
                 } else {
                     true // Unexpected byte length, return false positive
                 }
@@ -352,8 +313,9 @@ mod tests {
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::file::serialized_reader::ReadOptionsBuilder;
     use arrow_array::{
-        ArrayRef, Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Float16Array,
-        Int16Array, Int8Array, RecordBatch, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+        ArrayRef, Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
+        Float16Array, Int16Array, Int8Array, RecordBatch, UInt16Array, UInt32Array, UInt64Array,
+        UInt8Array,
     };
     use arrow_schema::{Field, Schema};
     use std::sync::Arc;
@@ -535,6 +497,43 @@ mod tests {
 
         // Arrow Decimal32(5, 2) -> Parquet INT32
         let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal32(5, 2));
+        assert!(arrow_sbbf.check(&test_value));
+    }
+
+    #[test]
+    fn test_check_decimal64_small() {
+        let test_value = 20075_i64;
+        let array = Decimal64Array::from(vec![10050_i64, test_value, 30099_i64])
+            .with_precision_and_scale(5, 2)
+            .unwrap();
+        let field = Field::new("col", ArrowType::Decimal64(5, 2), false);
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
+
+        // Check without coercion fails
+        let test_bytes = test_value.to_le_bytes();
+        let direct_result = sbbf.check(&test_bytes[..]);
+        assert!(!direct_result);
+
+        // Arrow Decimal64(5, 2) -> Parquet INT32
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal64(5, 2));
+        let arrow_result = arrow_sbbf.check(&test_bytes[..]);
+        assert!(arrow_result);
+    }
+
+    #[test]
+    fn test_check_decimal64_medium() {
+        let test_value = 9876543210987_i64;
+        let array = Decimal64Array::from(vec![1234567890123_i64, test_value, 5555555555555_i64])
+            .with_precision_and_scale(15, 2)
+            .unwrap();
+        let field = Field::new("col", ArrowType::Decimal64(15, 2), false);
+        let sbbf = build_sbbf(Arc::new(array), field.clone());
+
+        // No coercion necessary
+        assert!(sbbf.check(&test_value));
+
+        // Arrow Decimal64(15, 2) -> Parquet INT64
+        let arrow_sbbf = ArrowSbbf::new(&sbbf, &ArrowType::Decimal64(15, 2));
         assert!(arrow_sbbf.check(&test_value));
     }
 
