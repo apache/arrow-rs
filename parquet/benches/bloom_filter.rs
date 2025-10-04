@@ -158,6 +158,20 @@ fn bench_decimal_types(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches_int, bench_integer_types);
-criterion_group!(benches_decimal, bench_decimal_types);
+fn config() -> Criterion {
+    Criterion::default().noise_threshold(0.05)
+}
+
+criterion_group! {
+    name = benches_int;
+    config = config();
+    targets = bench_integer_types
+}
+
+criterion_group! {
+    name = benches_decimal;
+    config = config();
+    targets = bench_decimal_types
+}
+
 criterion_main!(benches_int, benches_decimal);
