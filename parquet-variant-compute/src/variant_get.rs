@@ -309,8 +309,8 @@ mod test {
     use arrow::datatypes::i256;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow_schema::{
-        DataType, Field, FieldRef, Fields, DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION,
-        DECIMAL64_MAX_PRECISION,
+        DataType, Field, FieldRef, Fields,
+        DECIMAL128_MAX_PRECISION, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION,
     };
     use chrono::DateTime;
     use parquet_variant::{
@@ -610,7 +610,10 @@ mod test {
 
         let err = variant_get(&array, options).unwrap_err();
         // TODO make this error message nicer (not Debug format)
-        assert_eq!(err.to_string(), "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])");
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])"
+        );
     }
 
     /// Perfect Shredding: extract the typed value as a VariantArray
@@ -1934,9 +1937,11 @@ mod test {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(matches!(error, ArrowError::CastError(_)));
-        assert!(error
-            .to_string()
-            .contains("Cannot access field 'nonexistent_field' on non-struct type"));
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot access field 'nonexistent_field' on non-struct type")
+        );
     }
 
     #[test]
@@ -2773,9 +2778,11 @@ mod test {
             .with_cast_options(cast_options);
         let err = variant_get(&variant_array, options).unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Failed to cast to Decimal32(precision=9, scale=2) from variant Decimal4"));
+        assert!(
+            err.to_string().contains(
+                "Failed to cast to Decimal32(precision=9, scale=2) from variant Decimal4"
+            )
+        );
     }
 
     #[test]
@@ -2855,9 +2862,11 @@ mod test {
             .with_cast_options(cast_options);
         let err = variant_get(&variant_array, options).unwrap_err();
 
-        assert!(err
-            .to_string()
-            .contains("Failed to cast to Decimal64(precision=18, scale=2) from variant Decimal8"));
+        assert!(
+            err.to_string().contains(
+                "Failed to cast to Decimal64(precision=18, scale=2) from variant Decimal8"
+            )
+        );
     }
 
     #[test]
