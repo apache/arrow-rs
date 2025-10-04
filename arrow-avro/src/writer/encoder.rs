@@ -43,7 +43,7 @@ use uuid::Uuid;
 ///
 /// Spec: <https://avro.apache.org/docs/1.11.1/specification/#binary-encoding>
 #[inline]
-pub fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(), ArrowError> {
+pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(), ArrowError> {
     let mut zz = ((value << 1) ^ (value >> 63)) as u64;
     // At most 10 bytes for 64-bit varint
     let mut buf = [0u8; 10];
@@ -532,7 +532,7 @@ struct FieldBinding {
 
 /// Builder for `RecordEncoder` write plan
 #[derive(Debug)]
-pub struct RecordEncoderBuilder<'a> {
+pub(crate) struct RecordEncoderBuilder<'a> {
     avro_root: &'a AvroField,
     arrow_schema: &'a ArrowSchema,
     fingerprint: Option<Fingerprint>,
@@ -540,7 +540,7 @@ pub struct RecordEncoderBuilder<'a> {
 
 impl<'a> RecordEncoderBuilder<'a> {
     /// Create a new builder from the Avro root and Arrow schema.
-    pub fn new(avro_root: &'a AvroField, arrow_schema: &'a ArrowSchema) -> Self {
+    pub(crate) fn new(avro_root: &'a AvroField, arrow_schema: &'a ArrowSchema) -> Self {
         Self {
             avro_root,
             arrow_schema,
