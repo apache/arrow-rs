@@ -301,7 +301,7 @@ mod test {
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float32Array,
-        Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
+        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;

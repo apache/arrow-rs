@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    builder::BooleanBuilder, ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder,
+    ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder, builder::BooleanBuilder,
 };
 use arrow::compute::CastOptions;
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
