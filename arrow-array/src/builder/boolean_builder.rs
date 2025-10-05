@@ -237,7 +237,7 @@ impl Extend<Option<bool>> for BooleanBuilder {
         let buffered = iter.into_iter().collect::<Vec<_>>();
         let array = unsafe {
             // SAFETY: buffered.into_iter() is a trusted length iterator
-            BooleanArray::from_trusted_len_iter(buffered)
+            BooleanArray::from_trusted_len_iter(buffered.into_iter())
         };
         self.append_array(&array)
     }
