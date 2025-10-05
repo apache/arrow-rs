@@ -48,6 +48,7 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
 /// Useful for variant_get kernels that need to extract specific paths from variant values, possibly
 /// with casting of leaf values to specific types.
 pub(crate) enum VariantToArrowRowBuilder<'a> {
+    Boolean(VariantToBooleanArrowRowBuilder<'a>),
     Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
 
@@ -112,6 +113,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToArrowRowBuilder::*;
         match self {
+            Boolean(b) => b.append_null(),
             Primitive(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
@@ -121,6 +123,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
     pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
         use VariantToArrowRowBuilder::*;
         match self {
+            Boolean(b) => b.append_value(&value),
             Primitive(b) => b.append_value(&value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
@@ -130,6 +133,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
     pub fn finish(self) -> Result<ArrayRef> {
         use VariantToArrowRowBuilder::*;
         match self {
+            Boolean(b) => b.finish(),
             Primitive(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
@@ -235,6 +239,9 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
                 "Converting unshredded variant arrays to arrow lists".to_string(),
             ));
         }
+        Some(DataType::Boolean) => {
+            Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity))
+        }
         Some(data_type) => {
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
@@ -294,6 +301,49 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
         "arrow_array::types::Float64Type" => "Float64",
         "arrow_array::types::Float16Type" => "Float16",
         _ => "Unknown",
+    }
+}
+
+use arrow::array::BooleanBuilder;
+/// Builder for converting variant values to boolean values
+pub(crate) struct VariantToBooleanArrowRowBuilder<'a> {
+    builder: BooleanBuilder,
+    cast_options: &'a CastOptions<'a>,
+}
+
+impl<'a> VariantToBooleanArrowRowBuilder<'a> {
+    pub fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
+        Self {
+            builder: BooleanBuilder::with_capacity(capacity),
+            cast_options,
+        }
+    }
+
+    pub fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        Ok(())
+    }
+
+    pub fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        if let Some(v) = value.as_boolean() {
+            self.builder.append_value(v);
+            Ok(true)
+        } else {
+            if !self.cast_options.safe {
+                // Unsafe casting: return error on conversion failure
+                return Err(ArrowError::CastError(format!(
+                    "Failed to extract boolean from variant {:?} at path VariantPath([])",
+                    value
+                )));
+            }
+            // Safe casting: append null on conversion failure
+            self.builder.append_null();
+            Ok(false)
+        }
+    }
+
+    pub fn finish(mut self) -> Result<ArrayRef> {
+        Ok(Arc::new(self.builder.finish()))
     }
 }
 

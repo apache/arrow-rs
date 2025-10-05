@@ -19,7 +19,8 @@
 
 use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
 use crate::variant_to_arrow::{
-    PrimitiveVariantToArrowRowBuilder, make_primitive_variant_to_arrow_row_builder,
+    PrimitiveVariantToArrowRowBuilder, VariantToBooleanArrowRowBuilder,
+    make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
@@ -123,6 +124,13 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 "Shredding variant array values as arrow lists".to_string(),
             ));
         }
+        DataType::Boolean => {
+            // let builder = make_boolean_variant_to_arrow_row_builder(cast_options, capacity)?;
+            let builder = VariantToBooleanArrowRowBuilder::new(cast_options, capacity);
+            let typed_value_builder =
+                VariantToShreddedBooleanVariantRowBuilder::new(builder, capacity, top_level);
+            VariantToShreddedVariantRowBuilder::Boolean(typed_value_builder)
+        }
         _ => {
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
@@ -135,6 +143,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
 }
 
 pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
+    Boolean(VariantToShreddedBooleanVariantRowBuilder<'a>),
     Primitive(VariantToShreddedPrimitiveVariantRowBuilder<'a>),
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
@@ -142,6 +151,7 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
+            Boolean(b) => b.append_null(),
             Primitive(b) => b.append_null(),
             Object(b) => b.append_null(),
         }
@@ -150,6 +160,7 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
     pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
+            Boolean(b) => b.append_value(value),
             Primitive(b) => b.append_value(value),
             Object(b) => b.append_value(value),
         }
@@ -158,9 +169,56 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
     pub fn finish(self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
+            Boolean(b) => b.finish(),
             Primitive(b) => b.finish(),
             Object(b) => b.finish(),
         }
+    }
+}
+
+pub(crate) struct VariantToShreddedBooleanVariantRowBuilder<'a> {
+    value_builder: VariantValueArrayBuilder,
+    typed_value_builder: VariantToBooleanArrowRowBuilder<'a>,
+    nulls: NullBufferBuilder,
+    top_level: bool,
+}
+
+impl<'a> VariantToShreddedBooleanVariantRowBuilder<'a> {
+    pub(crate) fn new(
+        typed_value_builder: VariantToBooleanArrowRowBuilder<'a>,
+        capacity: usize,
+        top_level: bool,
+    ) -> Self {
+        Self {
+            value_builder: VariantValueArrayBuilder::new(capacity),
+            typed_value_builder,
+            nulls: NullBufferBuilder::new(capacity),
+            top_level,
+        }
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.nulls.append(!self.top_level);
+        self.value_builder.append_null();
+        self.typed_value_builder.append_null()
+    }
+
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        self.nulls.append_non_null();
+        if self.typed_value_builder.append_value(&value)? {
+            self.value_builder.append_null();
+        } else {
+            self.value_builder.append_value(value);
+        }
+        Ok(true)
+    }
+
+    fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
+        Ok((
+            self.value_builder.build()?,
+            self.typed_value_builder.finish()?,
+            self.nulls.finish(),
+        ))
     }
 }
 
