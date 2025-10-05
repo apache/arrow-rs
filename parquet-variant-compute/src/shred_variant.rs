@@ -465,13 +465,13 @@ mod tests {
         assert!(!result.is_null(0));
         assert!(value_field.is_null(0));
         assert!(!typed_value_field.is_null(0));
-        assert_eq!(typed_value_field.value(0), true);
+        assert!(typed_value_field.value(0));
 
         // Row 1: false
         assert!(!result.is_null(1));
         assert!(value_field.is_null(1));
         assert!(!typed_value_field.is_null(1));
-        assert_eq!(typed_value_field.value(1), false);
+        assert!(!typed_value_field.value(1));
 
         // Row 2: array-level null
         assert!(result.is_null(2));
