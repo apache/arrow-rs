@@ -439,6 +439,73 @@ mod tests {
     }
 
     #[test]
+    fn test_boolean_shredding() {
+        // Create a VariantArray with a mix of booleans, nulls, and non-boolean values
+        let input = create_test_variant_array(vec![
+            Some(Variant::from(true)),   // should shred
+            Some(Variant::from(false)),  // should shred
+            None,                        // array-level null
+            Some(Variant::Null),         // variant null
+            Some(Variant::from(1i64)),   // not a bool, should not shred
+            Some(Variant::from("true")), // not a bool, should not shred
+        ]);
+
+        let result = shred_variant(&input, &DataType::Boolean).unwrap();
+
+        let value_field = result.value_field().unwrap();
+        let typed_value_field = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::BooleanArray>()
+            .unwrap();
+
+        assert_eq!(result.len(), 6);
+
+        // Row 0: true
+        assert!(!result.is_null(0));
+        assert!(value_field.is_null(0));
+        assert!(!typed_value_field.is_null(0));
+        assert_eq!(typed_value_field.value(0), true);
+
+        // Row 1: false
+        assert!(!result.is_null(1));
+        assert!(value_field.is_null(1));
+        assert!(!typed_value_field.is_null(1));
+        assert_eq!(typed_value_field.value(1), false);
+
+        // Row 2: array-level null
+        assert!(result.is_null(2));
+
+        // Row 3: Variant::Null
+        assert!(!result.is_null(3));
+        assert!(!value_field.is_null(3));
+        assert!(typed_value_field.is_null(3));
+        assert_eq!(
+            Variant::new(result.metadata_field().value(3), value_field.value(3)),
+            Variant::Null
+        );
+
+        // Row 4: 1i64 (not a bool)
+        assert!(!result.is_null(4));
+        assert!(!value_field.is_null(4));
+        assert!(typed_value_field.is_null(4));
+        assert_eq!(
+            Variant::new(result.metadata_field().value(4), value_field.value(4)),
+            Variant::from(1i64)
+        );
+
+        // Row 5: "true" (not a bool)
+        assert!(!result.is_null(5));
+        assert!(!value_field.is_null(5));
+        assert!(typed_value_field.is_null(5));
+        assert_eq!(
+            Variant::new(result.metadata_field().value(5), value_field.value(5)),
+            Variant::from("true")
+        );
+    }
+
+    #[test]
     fn test_primitive_shredding_comprehensive() {
         // Test mixed scenarios in a single array
         let input = create_test_variant_array(vec![
