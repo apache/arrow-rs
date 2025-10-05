@@ -304,17 +304,16 @@ fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
     }
 }
 
-use arrow::array::BooleanBuilder;
 /// Builder for converting variant values to boolean values
 pub(crate) struct VariantToBooleanArrowRowBuilder<'a> {
-    builder: BooleanBuilder,
+    builder: arrow::array::BooleanBuilder,
     cast_options: &'a CastOptions<'a>,
 }
 
 impl<'a> VariantToBooleanArrowRowBuilder<'a> {
     pub fn new(cast_options: &'a CastOptions<'a>, capacity: usize) -> Self {
         Self {
-            builder: BooleanBuilder::with_capacity(capacity),
+            builder: arrow::array::BooleanBuilder::with_capacity(capacity),
             cast_options,
         }
     }

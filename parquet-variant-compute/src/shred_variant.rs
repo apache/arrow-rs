@@ -125,7 +125,6 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             ));
         }
         DataType::Boolean => {
-            // let builder = make_boolean_variant_to_arrow_row_builder(cast_options, capacity)?;
             let builder = VariantToBooleanArrowRowBuilder::new(cast_options, capacity);
             let typed_value_builder =
                 VariantToShreddedBooleanVariantRowBuilder::new(builder, capacity, top_level);
