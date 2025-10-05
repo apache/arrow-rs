@@ -46,7 +46,11 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
     Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
     TimestampMicro(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>),
+    TimestampMicroNtz(
+        VariantToTimestampNtzArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>,
+    ),
     TimestampNano(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
+    TimestampNanoNtz(VariantToTimestampNtzArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
     Date(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date32Type>),
 }
 
@@ -79,7 +83,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float32(b) => b.append_null(),
             Float64(b) => b.append_null(),
             TimestampMicro(b) => b.append_null(),
+            TimestampMicroNtz(b) => b.append_null(),
             TimestampNano(b) => b.append_null(),
+            TimestampNanoNtz(b) => b.append_null(),
             Date(b) => b.append_null(),
         }
     }
@@ -100,7 +106,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float32(b) => b.append_value(value),
             Float64(b) => b.append_value(value),
             TimestampMicro(b) => b.append_value(value),
+            TimestampMicroNtz(b) => b.append_value(value),
             TimestampNano(b) => b.append_value(value),
+            TimestampNanoNtz(b) => b.append_value(value),
             Date(b) => b.append_value(value),
         }
     }
@@ -121,7 +129,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Float32(b) => b.finish(),
             Float64(b) => b.finish(),
             TimestampMicro(b) => b.finish(),
+            TimestampMicroNtz(b) => b.finish(),
             TimestampNano(b) => b.finish(),
+            TimestampNanoNtz(b) => b.finish(),
             Date(b) => b.finish(),
         }
     }
@@ -210,10 +220,15 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             cast_options,
             capacity,
         )),
+        DataType::Timestamp(TimeUnit::Microsecond, None) => TimestampMicroNtz(
+            VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
+        ),
         DataType::Timestamp(TimeUnit::Microsecond, tz) => TimestampMicro(
             VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
         ),
-
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => TimestampNanoNtz(
+            VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
+        ),
         DataType::Timestamp(TimeUnit::Nanosecond, tz) => TimestampNano(
             VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
         ),
@@ -401,7 +416,14 @@ define_variant_to_primitive_builder!(
 );
 
 define_variant_to_primitive_builder!(
-    struct VariantToTimestampArrowRowBuilder<'a, T:TimestampFromVariant>
+    struct VariantToTimestampNtzArrowRowBuilder<'a, T:TimestampFromVariant<true>>
+    |capacity| -> PrimitiveBuilder<T> { PrimitiveBuilder::<T>::with_capacity(capacity) },
+    |value| T::from_variant(value),
+    type_name: get_type_name::<T>()
+);
+
+define_variant_to_primitive_builder!(
+    struct VariantToTimestampArrowRowBuilder<'a, T:TimestampFromVariant<false>>
     |capacity, tz: Option<Arc<str>> | -> PrimitiveBuilder<T> {
         PrimitiveBuilder::<T>::with_capacity(capacity).with_timezone_opt(tz)
     },

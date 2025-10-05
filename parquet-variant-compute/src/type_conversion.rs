@@ -18,6 +18,7 @@
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
 use arrow::datatypes::{self, ArrowPrimitiveType, ArrowTimestampType, Date32Type};
+use chrono::{DateTime, Utc};
 use parquet_variant::Variant;
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
@@ -41,9 +42,18 @@ pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
 /// Extension trait for Arrow timestamp types that can extract their native value from a Variant
 /// We can't use [`PrimitiveFromVariant`] directly because we might need to use methods that
 /// are only available on [`ArrowTimestampType`] (such as with_timezone_opt)
-pub(crate) trait TimestampFromVariant: ArrowTimestampType {
+pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
+
+/// Extension trait that [`ArrowTimestampType`] handle [`DateTime<Utc>`] like [`NaiveDateTime`]
+trait MakeValueTz: ArrowTimestampType {
+    fn make_value_tz(timestamp: DateTime<Utc>) -> Option<i64> {
+        Self::make_value(timestamp.naive_utc())
+    }
+}
+
+impl<T: ArrowTimestampType> MakeValueTz for T {}
 
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
 macro_rules! impl_primitive_from_variant {
@@ -56,15 +66,13 @@ macro_rules! impl_primitive_from_variant {
             }
         }
     };
-    ($arrow_type:ty, $( $variant_type:pat => $variant_method:ident, $cast_fn:expr ),+ $(,)?) => {
-        impl TimestampFromVariant for $arrow_type {
+}
+
+macro_rules! impl_timestamp_from_variant {
+    ($timestamp_type:ty, $variant_method:ident, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
+        impl TimestampFromVariant<{ $ntz }> for $timestamp_type {
             fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
-                match variant {
-                    $(
-                        $variant_type => variant.$variant_method().map($cast_fn),
-                    )+
-                    _ => None
-                }
+                variant.$variant_method().and_then($cast_fn)
             }
         }
     };
@@ -86,13 +94,30 @@ impl_primitive_from_variant!(
     as_naive_date,
     Date32Type::from_naive_date
 );
-impl_primitive_from_variant!(
+impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
-    Variant::TimestampNtzMicros(_) | Variant::TimestampMicros(_) => as_timestamp_micros, |t| t);
-impl_primitive_from_variant!(
+    as_timestamp_ntz_micros,
+    ntz = true,
+    Self::make_value,
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampMicrosecondType,
+    as_timestamp_micros,
+    ntz = false,
+    Self::make_value_tz
+);
+impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
-    Variant::TimestampNtzMicros(_) | Variant::TimestampMicros(_) => as_timestamp_micros, |t| 1000 * t,
-    Variant::TimestampNtzNanos(_) | Variant::TimestampNanos(_) => as_timestamp_nanos, |t| t);
+    as_timestamp_ntz_nanos,
+    ntz = true,
+    Self::make_value
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampNanosecondType,
+    as_timestamp_nanos,
+    ntz = false,
+    Self::make_value_tz
+);
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
