@@ -46,7 +46,7 @@ pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
 
-/// Extension trait that [`ArrowTimestampType`] handle [`DateTime<Utc>`] like [`NaiveDateTime`]
+/// Extension trait that `ArrowTimestampType` handle `DateTime<Utc>` like `NaiveDateTime`
 trait MakeValueTz: ArrowTimestampType {
     fn make_value_tz(timestamp: DateTime<Utc>) -> Option<i64> {
         Self::make_value(timestamp.naive_utc())
