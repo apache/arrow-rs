@@ -80,3 +80,7 @@ harness = false
 [[bench]]
 name = "union_array"
 harness = false
+
+[[bench]]
+name = "from_vs_builder"
+harness = false
