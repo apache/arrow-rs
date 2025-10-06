@@ -38,6 +38,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::page_cache::PageCacheStrategy;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
@@ -122,6 +123,8 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
+
+    pub(crate) page_cache: Option<Arc<dyn PageCacheStrategy>>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -159,6 +162,7 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
+            page_cache: None,
         }
     }
 
@@ -367,6 +371,17 @@ impl<T> ArrowReaderBuilder<T> {
             max_predicate_cache_size,
             ..self
         }
+    }
+
+    /// Enable page caching with a custom cache instance.
+    ///
+    /// Page caching stores decoded pages to avoid redundant I/O and decompression
+    /// when the same pages are accessed multiple times across different columns or files.
+    ///
+    /// This method allows you to provide a custom cache instance that can be shared
+    /// across multiple readers for cross-file caching.
+    pub fn with_page_cache(self, page_cache: Option<Arc<dyn PageCacheStrategy>>) -> Self {
+        Self { page_cache, ..self }
     }
 }
 
@@ -868,6 +883,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            page_cache: _,
         } = self;
 
         // Try to avoid allocate large buffer
