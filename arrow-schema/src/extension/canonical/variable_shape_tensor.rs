@@ -19,7 +19,9 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#variable-shape-tensor>
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_core::de::{self, MapAccess, Visitor};
+use serde_core::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 use crate::{ArrowError, DataType, Field, extension::ExtensionType};
 
@@ -158,7 +160,7 @@ impl Serialize for VariableShapeTensorMetadata {
     where
         S: Serializer,
     {
-        use serde::ser::SerializeStruct;
+        use serde_core::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("VariableShapeTensorMetadata", 3)?;
         state.serialize_field("dim_names", &self.dim_names)?;
         state.serialize_field("permutations", &self.permutations)?;
@@ -172,9 +174,6 @@ impl<'de> Deserialize<'de> for VariableShapeTensorMetadata {
     where
         D: Deserializer<'de>,
     {
-        use serde::de::{self, MapAccess, Visitor};
-        use std::fmt;
-
         #[derive(Debug)]
         enum Field {
             DimNames,
@@ -285,7 +284,11 @@ impl<'de> Deserialize<'de> for VariableShapeTensorMetadata {
         }
 
         const FIELDS: &[&str] = &["dim_names", "permutations", "uniform_shape"];
-        deserializer.deserialize_struct("VariableShapeTensorMetadata", FIELDS, VariableShapeTensorMetadataVisitor)
+        deserializer.deserialize_struct(
+            "VariableShapeTensorMetadata",
+            FIELDS,
+            VariableShapeTensorMetadataVisitor,
+        )
     }
 }
 

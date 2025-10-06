@@ -19,7 +19,10 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#fixed-shape-tensor>
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_core::de::{self, MapAccess, Visitor};
+use serde_core::ser::SerializeStruct;
+use serde_core::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
 use crate::{ArrowError, DataType, extension::ExtensionType};
 
@@ -146,7 +149,6 @@ impl Serialize for FixedShapeTensorMetadata {
     where
         S: Serializer,
     {
-        use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("FixedShapeTensorMetadata", 3)?;
         state.serialize_field("shape", &self.shape)?;
         state.serialize_field("dim_names", &self.dim_names)?;
@@ -160,9 +162,6 @@ impl<'de> Deserialize<'de> for FixedShapeTensorMetadata {
     where
         D: Deserializer<'de>,
     {
-        use serde::de::{self, MapAccess, Visitor};
-        use std::fmt;
-
         #[derive(Debug)]
         enum Field {
             Shape,
@@ -275,7 +274,11 @@ impl<'de> Deserialize<'de> for FixedShapeTensorMetadata {
         }
 
         const FIELDS: &[&str] = &["shape", "dim_names", "permutations"];
-        deserializer.deserialize_struct("FixedShapeTensorMetadata", FIELDS, FixedShapeTensorMetadataVisitor)
+        deserializer.deserialize_struct(
+            "FixedShapeTensorMetadata",
+            FIELDS,
+            FixedShapeTensorMetadataVisitor,
+        )
     }
 }
 
@@ -515,9 +518,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "FixedShapeTensor metadata deserialization failed: missing field `shape`"
-    )]
+    #[should_panic(expected = "FixedShapeTensor metadata deserialization failed: \
+        unknown field `not-shape`, expected one of `shape`, `dim_names`, `permutations`")]
     fn invalid_metadata() {
         let fixed_shape_tensor =
             FixedShapeTensor::try_new(DataType::Float32, [100, 200, 500], None, None).unwrap();

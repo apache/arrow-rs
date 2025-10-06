@@ -19,6 +19,7 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#opaque>
 
+use serde_core::ser::SerializeStruct;
 use serde_core::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{MapAccess, Visitor},
