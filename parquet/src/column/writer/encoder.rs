@@ -157,15 +157,13 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
         {
             if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
                 update_geo_stats_accumulator(accumulator.as_mut(), slice.iter());
-            } else {
-                if let Some((min, max)) = self.min_max(slice, None) {
-                    update_min(&self.descr, &min, &mut self.min_value);
-                    update_max(&self.descr, &max, &mut self.max_value);
-                }
+            } else if let Some((min, max)) = self.min_max(slice, None) {
+                update_min(&self.descr, &min, &mut self.min_value);
+                update_max(&self.descr, &max, &mut self.max_value);
+            }
 
-                if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
-                    *self.variable_length_bytes.get_or_insert(0) += var_bytes;
-                }
+            if let Some(var_bytes) = T::T::variable_length_bytes(slice) {
+                *self.variable_length_bytes.get_or_insert(0) += var_bytes;
             }
         }
 
