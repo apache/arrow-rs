@@ -292,10 +292,7 @@ mod tests {
             Ok(_) => panic!("expected failure"),
             Err(e) => {
                 let err = e.to_string();
-                assert!(
-                    err.contains("not found: No such file or directory (os error 2)"),
-                    "{err}",
-                );
+                assert!(err.contains("I don't exist.parquet not found:"), "{err}",);
             }
         }
     }

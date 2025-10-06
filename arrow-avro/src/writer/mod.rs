@@ -392,10 +392,14 @@ mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::reader::ReaderBuilder;
-    use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
+    use crate::schema::{AvroSchema, SchemaStore};
     use crate::test_util::arrow_test_data;
-    use arrow_array::{ArrayRef, BinaryArray, DurationSecondArray, Int32Array, RecordBatch};
-    use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use arrow_array::{ArrayRef, BinaryArray, Int32Array, RecordBatch};
+    #[cfg(not(feature = "avro_custom_types"))]
+    use arrow_schema::{DataType, Field, Schema};
+    #[cfg(feature = "avro_custom_types")]
+    use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    #[cfg(feature = "avro_custom_types")]
     use std::collections::HashSet;
     use std::fs::File;
     use std::io::{BufReader, Cursor};
@@ -422,7 +426,6 @@ mod tests {
 
     #[test]
     fn test_stream_writer_writes_prefix_per_row_rt() -> Result<(), ArrowError> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -561,7 +564,7 @@ mod tests {
         for rel in files {
             let path = arrow_test_data(rel);
             let rdr_file = File::open(&path).expect("open input avro");
-            let mut reader = ReaderBuilder::new()
+            let reader = ReaderBuilder::new()
                 .build(BufReader::new(rdr_file))
                 .expect("build reader");
             let schema = reader.schema();
@@ -589,7 +592,7 @@ mod tests {
             writer.finish()?;
             drop(writer);
             let rt_file = File::open(&out_path).expect("open roundtrip avro");
-            let mut rt_reader = ReaderBuilder::new()
+            let rt_reader = ReaderBuilder::new()
                 .build(BufReader::new(rt_file))
                 .expect("build roundtrip reader");
             let rt_schema = rt_reader.schema();
@@ -609,7 +612,7 @@ mod tests {
     fn test_roundtrip_nested_records_writer() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/nested_records.avro");
         let rdr_file = File::open(&path).expect("open nested_records.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for nested_records.avro");
         let schema = reader.schema();
@@ -624,7 +627,7 @@ mod tests {
             writer.finish()?;
         }
         let rt_file = File::open(&out_path).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -642,7 +645,7 @@ mod tests {
     fn test_roundtrip_nested_lists_writer() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/nested_lists.snappy.avro");
         let rdr_file = File::open(&path).expect("open nested_lists.snappy.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for nested_lists.snappy.avro");
         let schema = reader.schema();
@@ -659,7 +662,7 @@ mod tests {
             writer.finish()?;
         }
         let rt_file = File::open(&out_path).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -677,7 +680,7 @@ mod tests {
     fn test_round_trip_simple_fixed_ocf() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/simple_fixed.avro");
         let rdr_file = File::open(&path).expect("open avro/simple_fixed.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build avro reader");
         let schema = reader.schema();
@@ -691,7 +694,7 @@ mod tests {
         writer.finish()?;
         drop(writer);
         let rt_file = File::open(tmp.path()).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -706,9 +709,10 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     #[test]
     fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
+        use arrow_schema::{DataType, IntervalUnit};
         let in_file =
             File::open("test/data/duration_uuid.avro").expect("open test/data/duration_uuid.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(in_file))
             .expect("build reader for duration_uuid.avro");
         let in_schema = reader.schema();
@@ -741,7 +745,7 @@ mod tests {
             writer.finish()?;
         }
         let rt_file = File::open(tmp.path()).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -764,7 +768,7 @@ mod tests {
         // Read input Avro (duration + uuid)
         let in_file =
             File::open("test/data/duration_uuid.avro").expect("open test/data/duration_uuid.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(in_file))
             .expect("build reader for duration_uuid.avro");
         let in_schema = reader.schema();
@@ -800,7 +804,7 @@ mod tests {
             writer.finish()?;
         }
         let rt_file = File::open(tmp.path()).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -843,7 +847,7 @@ mod tests {
         // Load source Avro with Map fields
         let path = arrow_test_data("avro/nonnullable.impala.avro");
         let rdr_file = File::open(&path).expect("open avro/nonnullable.impala.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for nonnullable.impala.avro");
         // Collect all input batches and concatenate to a single RecordBatch
@@ -868,7 +872,7 @@ mod tests {
         writer.finish()?;
         let out_bytes = writer.into_inner();
         // Read the produced bytes back with the Reader
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(Cursor::new(out_bytes))
             .expect("build reader for round-tripped in-memory OCF");
         let rt_schema = rt_reader.schema();
@@ -908,7 +912,7 @@ mod tests {
             };
             // Read original file into a single RecordBatch for comparison
             let f_in = File::open(&path).expect("open input avro");
-            let mut rdr = ReaderBuilder::new().build(BufReader::new(f_in))?;
+            let rdr = ReaderBuilder::new().build(BufReader::new(f_in))?;
             let in_schema = rdr.schema();
             let in_batches = rdr.collect::<Result<Vec<_>, _>>()?;
             let original =
@@ -922,7 +926,7 @@ mod tests {
             writer.finish()?;
             // Read back the file we just wrote and compare equality (schema + data)
             let f_rt = File::open(&out_path).expect("open roundtrip avro");
-            let mut rt_rdr = ReaderBuilder::new().build(BufReader::new(f_rt))?;
+            let rt_rdr = ReaderBuilder::new().build(BufReader::new(f_rt))?;
             let rt_schema = rt_rdr.schema();
             let rt_batches = rt_rdr.collect::<Result<Vec<_>, _>>()?;
             let roundtrip =
@@ -939,7 +943,7 @@ mod tests {
             PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/data/named_types_complex.avro");
         let rdr_file = File::open(&path).expect("open avro/named_types_complex.avro");
 
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for named_types_complex.avro");
 
@@ -1005,7 +1009,7 @@ mod tests {
         let bytes = writer.into_inner();
 
         // 5. Read the data back and compare for exact equality.
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(Cursor::new(bytes))
             .expect("build reader for round-trip");
         let rt_schema = rt_reader.schema();
@@ -1026,7 +1030,7 @@ mod tests {
         // Read the known-good enum file (same as reader::test_simple)
         let path = arrow_test_data("avro/simple_enum.avro");
         let rdr_file = File::open(&path).expect("open avro/simple_enum.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for simple_enum.avro");
         // Concatenate all batches to one RecordBatch for a clean equality check
@@ -1053,7 +1057,7 @@ mod tests {
         writer.finish()?;
         let bytes = writer.into_inner();
         // Read back and compare for exact equality (schema + data)
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(Cursor::new(bytes))
             .expect("reader for round-trip");
         let rt_schema = rt_reader.schema();
@@ -1110,7 +1114,7 @@ mod tests {
         let in_file = File::open(&file_path)
             .unwrap_or_else(|_| panic!("Failed to open test file: {}", file_path));
 
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(in_file))
             .expect("build reader for duration_logical_types.avro");
         let in_schema = reader.schema();
@@ -1151,7 +1155,7 @@ mod tests {
         }
 
         let rt_file = File::open(tmp.path()).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
