@@ -14,12 +14,10 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-
 use crate::schema::{
-    make_full_name, Array, Attributes, AvroSchema, ComplexType, Enum, Fixed, Map, Nullability,
-    PrimitiveType, Record, Schema, Type, TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
+    make_full_name, Array, Attributes, ComplexType, Enum, Fixed, Map, Nullability, PrimitiveType,
+    Record, Schema, Type, TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
     AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AVRO_NAME_METADATA_KEY,
-    AVRO_ROOT_RECORD_DEFAULT_NAME,
 };
 use arrow_schema::{
     ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode,
@@ -78,8 +76,6 @@ pub(crate) enum AvroLiteral {
     Array(Vec<AvroLiteral>),
     /// Represents a JSON object default for an Avro map/struct, mapping string keys to value literals.
     Map(IndexMap<String, AvroLiteral>),
-    /// Represents an unsupported literal type.
-    Unsupported,
 }
 
 /// Contains the necessary information to resolve a writer's record against a reader's record schema.
@@ -209,7 +205,7 @@ impl AvroDataType {
     }
 
     /// Returns an arrow [`Field`] with the given name
-    pub fn field_with_name(&self, name: &str) -> Field {
+    pub(crate) fn field_with_name(&self, name: &str) -> Field {
         let mut nullable = self.nullability.is_some();
         if !nullable {
             if let Codec::Union(children, _, _) = self.codec() {
@@ -231,7 +227,7 @@ impl AvroDataType {
     ///
     /// The codec determines how Avro data is encoded and mapped to Arrow data types.
     /// This is useful when we need to inspect or use the specific encoding of a field.
-    pub fn codec(&self) -> &Codec {
+    pub(crate) fn codec(&self) -> &Codec {
         &self.codec
     }
 
@@ -524,29 +520,6 @@ impl AvroField {
     /// It's used to identify fields within a record structure.
     pub(crate) fn name(&self) -> &str {
         &self.name
-    }
-
-    /// Performs schema resolution between a writer and reader schema.
-    ///
-    /// This is the primary entry point for handling schema evolution. It produces an
-    /// `AvroField` that contains all the necessary information to read data written
-    /// with the `writer` schema as if it were written with the `reader` schema.
-    pub(crate) fn resolve_from_writer_and_reader<'a>(
-        writer_schema: &'a Schema<'a>,
-        reader_schema: &'a Schema<'a>,
-        use_utf8view: bool,
-        strict_mode: bool,
-    ) -> Result<Self, ArrowError> {
-        let top_name = match reader_schema {
-            Schema::Complex(ComplexType::Record(r)) => r.name.to_string(),
-            _ => AVRO_ROOT_RECORD_DEFAULT_NAME.to_string(),
-        };
-        let mut resolver = Maker::new(use_utf8view, strict_mode);
-        let data_type = resolver.make_data_type(writer_schema, Some(reader_schema), None)?;
-        Ok(Self {
-            name: top_name,
-            data_type,
-        })
     }
 }
 
@@ -1657,28 +1630,6 @@ impl<'a> Maker<'a> {
         Ok(datatype)
     }
 
-    fn resolve_nullable_union<'s>(
-        &mut self,
-        writer_variants: &'s [Schema<'a>],
-        reader_variants: &'s [Schema<'a>],
-        namespace: Option<&'a str>,
-    ) -> Result<AvroDataType, ArrowError> {
-        match (
-            nullable_union_variants(writer_variants),
-            nullable_union_variants(reader_variants),
-        ) {
-            (Some((write_nb, write_nonnull)), Some((_read_nb, read_nonnull))) => {
-                let mut dt = self.make_data_type(write_nonnull, Some(read_nonnull), namespace)?;
-                dt.nullability = Some(write_nb);
-                Ok(dt)
-            }
-            _ => Err(ArrowError::NotYetImplemented(
-                "Union resolution requires both writer and reader to be 2-branch nullable unions"
-                    .to_string(),
-            )),
-        }
-    }
-
     // Resolve writer vs. reader enum schemas according to Avro 1.11.1.
     //
     // # How enums resolve (writer to reader)
@@ -1943,9 +1894,11 @@ impl<'a> Maker<'a> {
 mod tests {
     use super::*;
     use crate::schema::{
-        Attributes, Field as AvroFieldSchema, Fixed, PrimitiveType, Schema, Type, TypeName,
+        Array, Attributes, ComplexType, Field as AvroFieldSchema, Fixed, PrimitiveType, Record,
+        Schema, Type, TypeName, AVRO_ROOT_RECORD_DEFAULT_NAME,
     };
-    use serde_json;
+    use indexmap::IndexMap;
+    use serde_json::{self, Value};
 
     fn create_schema_with_logical_type(
         primitive_type: PrimitiveType,
@@ -1962,21 +1915,6 @@ mod tests {
         })
     }
 
-    fn create_fixed_schema(size: usize, logical_type: &'static str) -> Schema<'static> {
-        let attributes = Attributes {
-            logical_type: Some(logical_type),
-            additional: Default::default(),
-        };
-
-        Schema::Complex(ComplexType::Fixed(Fixed {
-            name: "fixed_type",
-            namespace: None,
-            aliases: Vec::new(),
-            size,
-            attributes,
-        }))
-    }
-
     fn resolve_promotion(writer: PrimitiveType, reader: PrimitiveType) -> AvroDataType {
         let writer_schema = Schema::TypeName(TypeName::Primitive(writer));
         let reader_schema = Schema::TypeName(TypeName::Primitive(reader));
@@ -1991,17 +1929,6 @@ mod tests {
     }
     fn mk_union(branches: Vec<Schema<'_>>) -> Schema<'_> {
         Schema::Union(branches)
-    }
-
-    fn mk_record_name(name: &str) -> Schema<'_> {
-        Schema::Complex(ComplexType::Record(Record {
-            name,
-            namespace: None,
-            doc: None,
-            aliases: vec![],
-            fields: vec![],
-            attributes: Attributes::default(),
-        }))
     }
 
     #[test]
@@ -2096,7 +2023,7 @@ mod tests {
 
     #[test]
     fn test_decimal_logical_type_not_implemented() {
-        let mut codec = Codec::Fixed(16);
+        let codec = Codec::Fixed(16);
 
         let process_decimal = || -> Result<(), ArrowError> {
             if let Codec::Fixed(_) = codec {
@@ -2584,9 +2511,14 @@ mod tests {
     fn test_resolve_from_writer_and_reader_defaults_root_name_for_non_record_reader() {
         let writer_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
         let reader_schema = Schema::TypeName(TypeName::Primitive(PrimitiveType::String));
-        let field =
-            AvroField::resolve_from_writer_and_reader(&writer_schema, &reader_schema, false, false)
-                .expect("resolution should succeed");
+        let mut maker = Maker::new(false, false);
+        let data_type = maker
+            .make_data_type(&writer_schema, Some(&reader_schema), None)
+            .expect("resolution should succeed");
+        let field = AvroField {
+            name: AVRO_ROOT_RECORD_DEFAULT_NAME.to_string(),
+            data_type,
+        };
         assert_eq!(field.name(), AVRO_ROOT_RECORD_DEFAULT_NAME);
         assert!(matches!(field.data_type().codec(), Codec::Utf8));
     }
