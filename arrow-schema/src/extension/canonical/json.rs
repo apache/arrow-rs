@@ -58,6 +58,54 @@ impl Serialize for Empty {
     }
 }
 
+struct EmptyVisitor;
+
+impl<'de> Visitor<'de> for EmptyVisitor {
+    type Value = Empty;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("struct Empty")
+    }
+
+    fn visit_seq<A>(self, mut _seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: de::SeqAccess<'de>,
+    {
+        Ok(Empty {})
+    }
+
+    fn visit_map<V>(self, mut map: V) -> Result<Empty, V::Error>
+    where
+        V: MapAccess<'de>,
+    {
+        if let Some(key) = map.next_key::<String>()? {
+            return Err(de::Error::unknown_field(&key, EMPTY_FIELDS));
+        }
+        Ok(Empty {})
+    }
+
+    fn visit_u64<E>(self, _v: u64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(de::Error::unknown_field("", EMPTY_FIELDS))
+    }
+
+    fn visit_str<E>(self, _v: &str) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(de::Error::unknown_field("", EMPTY_FIELDS))
+    }
+
+    fn visit_bytes<E>(self, _v: &[u8]) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Err(de::Error::unknown_field("", EMPTY_FIELDS))
+    }
+}
+
 static EMPTY_FIELDS: &[&str] = &[];
 
 impl<'de> Deserialize<'de> for Empty {
@@ -65,54 +113,6 @@ impl<'de> Deserialize<'de> for Empty {
     where
         D: Deserializer<'de>,
     {
-        struct EmptyVisitor;
-
-        impl<'de> Visitor<'de> for EmptyVisitor {
-            type Value = Empty;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("struct Empty")
-            }
-
-            fn visit_seq<A>(self, mut _seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: de::SeqAccess<'de>,
-            {
-                Ok(Empty {})
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<Empty, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
-                if let Some(key) = map.next_key::<String>()? {
-                    return Err(de::Error::unknown_field(&key, EMPTY_FIELDS));
-                }
-                Ok(Empty {})
-            }
-
-            fn visit_u64<E>(self, _v: u64) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Err(de::Error::unknown_field("", EMPTY_FIELDS))
-            }
-
-            fn visit_str<E>(self, _v: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Err(de::Error::unknown_field("", EMPTY_FIELDS))
-            }
-
-            fn visit_bytes<E>(self, _v: &[u8]) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                Err(de::Error::unknown_field("", EMPTY_FIELDS))
-            }
-        }
-
         deserializer.deserialize_struct("Empty", EMPTY_FIELDS, EmptyVisitor)
     }
 }

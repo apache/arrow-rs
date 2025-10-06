@@ -86,113 +86,116 @@ impl Serialize for OpaqueMetadata {
     }
 }
 
+#[derive(Debug)]
+enum MetadataField {
+    TypeName,
+    VendorName,
+}
+
+struct MetadataFieldVisitor;
+
+impl<'de> Visitor<'de> for MetadataFieldVisitor {
+    type Value = MetadataField;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("`type_name` or `vendor_name`")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<MetadataField, E>
+    where
+        E: serde_core::de::Error,
+    {
+        match value {
+            "type_name" => Ok(MetadataField::TypeName),
+            "vendor_name" => Ok(MetadataField::VendorName),
+            _ => Err(serde_core::de::Error::unknown_field(
+                value,
+                &["type_name", "vendor_name"],
+            )),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MetadataField {
+    fn deserialize<D>(deserializer: D) -> Result<MetadataField, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_identifier(MetadataFieldVisitor)
+    }
+}
+
+struct OpaqueMetadataVisitor;
+
+impl<'de> Visitor<'de> for OpaqueMetadataVisitor {
+    type Value = OpaqueMetadata;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("struct OpaqueMetadata")
+    }
+
+    fn visit_seq<V>(self, mut seq: V) -> Result<OpaqueMetadata, V::Error>
+    where
+        V: serde_core::de::SeqAccess<'de>,
+    {
+        let type_name = seq
+            .next_element()?
+            .ok_or_else(|| serde_core::de::Error::invalid_length(0, &self))?;
+        let vendor_name = seq
+            .next_element()?
+            .ok_or_else(|| serde_core::de::Error::invalid_length(1, &self))?;
+        Ok(OpaqueMetadata {
+            type_name,
+            vendor_name,
+        })
+    }
+
+    fn visit_map<V>(self, mut map: V) -> Result<OpaqueMetadata, V::Error>
+    where
+        V: MapAccess<'de>,
+    {
+        let mut type_name = None;
+        let mut vendor_name = None;
+
+        while let Some(key) = map.next_key()? {
+            match key {
+                MetadataField::TypeName => {
+                    if type_name.is_some() {
+                        return Err(serde_core::de::Error::duplicate_field("type_name"));
+                    }
+                    type_name = Some(map.next_value()?);
+                }
+                MetadataField::VendorName => {
+                    if vendor_name.is_some() {
+                        return Err(serde_core::de::Error::duplicate_field("vendor_name"));
+                    }
+                    vendor_name = Some(map.next_value()?);
+                }
+            }
+        }
+
+        let type_name =
+            type_name.ok_or_else(|| serde_core::de::Error::missing_field("type_name"))?;
+        let vendor_name =
+            vendor_name.ok_or_else(|| serde_core::de::Error::missing_field("vendor_name"))?;
+
+        Ok(OpaqueMetadata {
+            type_name,
+            vendor_name,
+        })
+    }
+}
+
 impl<'de> Deserialize<'de> for OpaqueMetadata {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        #[derive(Debug)]
-        enum Field {
-            TypeName,
-            VendorName,
-        }
-
-        impl<'de> Deserialize<'de> for Field {
-            fn deserialize<D>(deserializer: D) -> Result<Field, D::Error>
-            where
-                D: Deserializer<'de>,
-            {
-                struct FieldVisitor;
-
-                impl<'de> Visitor<'de> for FieldVisitor {
-                    type Value = Field;
-
-                    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                        formatter.write_str("`type_name` or `vendor_name`")
-                    }
-
-                    fn visit_str<E>(self, value: &str) -> Result<Field, E>
-                    where
-                        E: serde_core::de::Error,
-                    {
-                        match value {
-                            "type_name" => Ok(Field::TypeName),
-                            "vendor_name" => Ok(Field::VendorName),
-                            _ => Err(serde_core::de::Error::unknown_field(
-                                value,
-                                &["type_name", "vendor_name"],
-                            )),
-                        }
-                    }
-                }
-
-                deserializer.deserialize_identifier(FieldVisitor)
-            }
-        }
-
-        struct OpaqueMetadataVisitor;
-
-        impl<'de> Visitor<'de> for OpaqueMetadataVisitor {
-            type Value = OpaqueMetadata;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("struct OpaqueMetadata")
-            }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<OpaqueMetadata, V::Error>
-            where
-                V: serde_core::de::SeqAccess<'de>,
-            {
-                let type_name = seq
-                    .next_element()?
-                    .ok_or_else(|| serde_core::de::Error::invalid_length(0, &self))?;
-                let vendor_name = seq
-                    .next_element()?
-                    .ok_or_else(|| serde_core::de::Error::invalid_length(1, &self))?;
-                Ok(OpaqueMetadata {
-                    type_name,
-                    vendor_name,
-                })
-            }
-
-            fn visit_map<V>(self, mut map: V) -> Result<OpaqueMetadata, V::Error>
-            where
-                V: MapAccess<'de>,
-            {
-                let mut type_name = None;
-                let mut vendor_name = None;
-
-                while let Some(key) = map.next_key()? {
-                    match key {
-                        Field::TypeName => {
-                            if type_name.is_some() {
-                                return Err(serde_core::de::Error::duplicate_field("type_name"));
-                            }
-                            type_name = Some(map.next_value()?);
-                        }
-                        Field::VendorName => {
-                            if vendor_name.is_some() {
-                                return Err(serde_core::de::Error::duplicate_field("vendor_name"));
-                            }
-                            vendor_name = Some(map.next_value()?);
-                        }
-                    }
-                }
-
-                let type_name =
-                    type_name.ok_or_else(|| serde_core::de::Error::missing_field("type_name"))?;
-                let vendor_name = vendor_name
-                    .ok_or_else(|| serde_core::de::Error::missing_field("vendor_name"))?;
-
-                Ok(OpaqueMetadata {
-                    type_name,
-                    vendor_name,
-                })
-            }
-        }
-
-        const FIELDS: &[&str] = &["type_name", "vendor_name"];
-        deserializer.deserialize_struct("OpaqueMetadata", FIELDS, OpaqueMetadataVisitor)
+        deserializer.deserialize_struct(
+            "OpaqueMetadata",
+            &["type_name", "vendor_name"],
+            OpaqueMetadataVisitor,
+        )
     }
 }
 
