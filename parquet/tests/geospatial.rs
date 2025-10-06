@@ -17,7 +17,7 @@
 
 #[cfg(all(feature = "arrow", feature = "geospatial"))]
 mod test {
-    use std::sync::Arc;
+    use std::{iter::zip, sync::Arc};
 
     use arrow_array::{ArrayRef, BinaryArray, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
@@ -103,9 +103,17 @@ mod test {
 
     #[test]
     fn test_write_statistics_not_arrow() {
-        let column_values = [wkb_item_xy(1.0, 2.0), wkb_item_xy(11.0, 12.0)].map(ByteArray::from);
-        let expected_geometry_types = vec![1];
-        let expected_bounding_box = BoundingBox::new(1.0, 11.0, 2.0, 12.0);
+        let column_values = vec![
+            [wkb_item_xy(1.0, 2.0), wkb_item_xy(11.0, 12.0)].map(ByteArray::from),
+            [wkb_item_xy(21.0, 22.0), wkb_item_xy(31.0, 32.0)].map(ByteArray::from),
+        ];
+        let def_levels = [[1, 1], [1, 1]];
+
+        let expected_geometry_types = [Some(vec![1]), Some(vec![1])];
+        let expected_bounding_box = [
+            Some(BoundingBox::new(1.0, 11.0, 2.0, 12.0)),
+            Some(BoundingBox::new(21.0, 31.0, 22.0, 32.0)),
+        ];
 
         let root = Type::group_type_builder("root")
             .with_fields(vec![Type::primitive_type_builder(
@@ -127,26 +135,34 @@ mod test {
         let mut buf = Vec::with_capacity(1024);
         let mut writer =
             SerializedFileWriter::new(&mut buf, schema.root_schema_ptr(), Arc::new(props)).unwrap();
-        let mut rg = writer.next_row_group().unwrap();
-        let mut col = rg.next_column().unwrap().unwrap();
-        col.typed::<ByteArrayType>()
-            .write_batch(&column_values, Some(&[1, 1]), None)
-            .unwrap();
-        col.close().unwrap();
-        rg.close().unwrap();
+
+        for (def_levels, values) in zip(&def_levels, &column_values) {
+            let mut rg = writer.next_row_group().unwrap();
+            let mut col = rg.next_column().unwrap().unwrap();
+            col.typed::<ByteArrayType>()
+                .write_batch(values, Some(def_levels), None)
+                .unwrap();
+            col.close().unwrap();
+            rg.close().unwrap();
+        }
 
         writer.close().unwrap();
 
         // Check statistics on file read
         let all_geo_stats = read_geo_statistics(buf);
-        assert_eq!(all_geo_stats.len(), 1);
-        let geo_stats = all_geo_stats[0].as_ref().unwrap();
+        assert_eq!(all_geo_stats.len(), column_values.len());
+        assert_eq!(expected_geometry_types.len(), column_values.len());
+        assert_eq!(expected_bounding_box.len(), column_values.len());
 
-        assert_eq!(
-            geo_stats.geospatial_types.as_ref().unwrap(),
-            &expected_geometry_types
-        );
-        assert_eq!(geo_stats.bbox.as_ref().unwrap(), &expected_bounding_box);
+        for i in 0..column_values.len() {
+            if let Some(geo_stats) = all_geo_stats[i].as_ref() {
+                assert_eq!(geo_stats.geospatial_types, expected_geometry_types[i]);
+                assert_eq!(geo_stats.bbox, expected_bounding_box[i]);
+            } else {
+                assert!(expected_geometry_types[i].is_none());
+                assert!(expected_bounding_box[i].is_none());
+            }
+        }
     }
 
     fn wkb_array_xy(coords: impl IntoIterator<Item = (f64, f64)>) -> ArrayRef {
