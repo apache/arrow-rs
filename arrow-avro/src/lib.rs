@@ -242,7 +242,6 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
-#![allow(unused)] // Temporary
 
 /// Core functionality for reading Avro data into Arrow arrays
 ///
