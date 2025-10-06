@@ -308,10 +308,7 @@ mod test {
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
-    use arrow_schema::{
-        DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION, DataType,
-        Field, FieldRef, Fields,
-    };
+    use arrow_schema::{DataType, Field, FieldRef, Fields};
     use chrono::DateTime;
     use parquet_variant::{
         EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
@@ -2688,18 +2685,6 @@ mod test {
         Arc::new(struct_array)
     }
 
-    macro_rules! max_unscaled_value {
-        (32, $precision:expr) => {
-            (u32::pow(10, $precision as u32) - 1) as i32
-        };
-        (64, $precision:expr) => {
-            (u64::pow(10, $precision as u32) - 1) as i64
-        };
-        (128, $precision:expr) => {
-            (u128::pow(10, $precision as u32) - 1) as i128
-        };
-    }
-
     #[test]
     fn get_decimal32_unshredded_var_scales_to_scale2() {
         // Build unshredded variant values with different scales
@@ -2750,7 +2735,7 @@ mod test {
         // Exceed Decimal32 max precision (9) after scaling
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION), 0).unwrap(),
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -2766,7 +2751,7 @@ mod test {
     fn get_decimal32_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(max_unscaled_value!(32, DECIMAL32_MAX_PRECISION), 0).unwrap(),
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -2836,7 +2821,7 @@ mod test {
         // Exceed Decimal64 max precision (18) after scaling
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION), 0).unwrap(),
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -2852,7 +2837,7 @@ mod test {
     fn get_decimal64_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(max_unscaled_value!(64, DECIMAL64_MAX_PRECISION), 0).unwrap(),
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -2922,8 +2907,7 @@ mod test {
         // Exceed Decimal128 max precision (38) after scaling
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION), 0)
-                .unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -2939,8 +2923,7 @@ mod test {
     fn get_decimal128_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION), 0)
-                .unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3009,12 +2992,10 @@ mod test {
         // Exceed Decimal128 max precision (38) after scaling
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION), 1)
-                .unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 1).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION), 0)
-                .unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3027,7 +3008,7 @@ mod test {
         // So expected integer is (10^38-1) * 10^(39-1) = (10^38-1) * 10^38
         let base = i256::from_i128(10);
         let factor = base.checked_pow(38).unwrap();
-        let expected = i256::from_i128(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION))
+        let expected = i256::from_i128(VariantDecimal16::MAX_UNSCALED_VALUE as i128)
             .checked_mul(factor)
             .unwrap();
         assert_eq!(result.value(0), expected);
@@ -3039,12 +3020,10 @@ mod test {
         // Exceed Decimal128 max precision (38) after scaling
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION), 1)
-                .unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 1).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(max_unscaled_value!(128, DECIMAL128_MAX_PRECISION), 0)
-                .unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 

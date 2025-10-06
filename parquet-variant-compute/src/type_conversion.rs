@@ -63,42 +63,39 @@ impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
 
 macro_rules! scale_variant_decimal {
     ($variant:expr, $variant_method:ident, $to_int_ty:expr, $output_scale:expr, $precision:expr, $validate:path) => {{
-        (|| -> Option<_> {
-            let variant = $variant.$variant_method()?;
-            let input_scale = variant.scale() as i8;
-            let variant = $to_int_ty(variant.integer());
-            let ten = $to_int_ty(10);
+        let variant = $variant.$variant_method()?;
+        let input_scale = variant.scale() as i8;
+        let variant = $to_int_ty(variant.integer());
+        let ten = $to_int_ty(10);
 
-            let scaled = if input_scale == $output_scale {
-                Some(variant)
-            } else if input_scale < $output_scale {
-                // scale_up means output has more fractional digits than input
-                // multiply integer by 10^(output_scale - input_scale)
-                let delta = ($output_scale - input_scale) as u32;
-                let mul = ten.checked_pow(delta)?;
-                variant.checked_mul(mul)
-            } else {
-                // scale_down means output has fewer fractional digits than input
-                // divide by 10^(input_scale - output_scale) with rounding
-                let delta = (input_scale - $output_scale) as u32;
-                let div = ten.checked_pow(delta)?;
-                let v = variant;
-                let d = v.checked_div(div)?;
-                let r = v % div;
+        let scaled = if input_scale == $output_scale {
+            Some(variant)
+        } else if input_scale < $output_scale {
+            // scale_up means output has more fractional digits than input
+            // multiply integer by 10^(output_scale - input_scale)
+            let delta = ($output_scale - input_scale) as u32;
+            let mul = ten.checked_pow(delta)?;
+            variant.checked_mul(mul)
+        } else {
+            // scale_down means output has fewer fractional digits than input
+            // divide by 10^(input_scale - output_scale) with rounding
+            let delta = (input_scale - $output_scale) as u32;
+            let div = ten.checked_pow(delta)?;
+            let d = variant.checked_div(div)?;
+            let r = variant % div;
 
-                // rounding in the same way as convert_to_smaller_scale_decimal in arrow-cast
-                let half = div.checked_div($to_int_ty(2))?;
-                let half_neg = half.checked_neg()?;
-                let adjusted = match v >= $to_int_ty(0) {
-                    true if r >= half => d.checked_add($to_int_ty(1))?,
-                    false if r <= half_neg => d.checked_sub($to_int_ty(1))?,
-                    _ => d,
-                };
-                Some(adjusted)
+            // rounding in the same way as convert_to_smaller_scale_decimal in arrow-cast
+            let half = div.checked_div($to_int_ty(2))?;
+            let half_neg = half.checked_neg()?;
+            let adjusted = match variant >= $to_int_ty(0) {
+                true if r >= half => d.checked_add($to_int_ty(1))?,
+                false if r <= half_neg => d.checked_sub($to_int_ty(1))?,
+                _ => d,
             };
+            Some(adjusted)
+        };
 
-            scaled.filter(|v| $validate(*v, $precision))
-        })()
+        scaled.filter(|v| $validate(*v, $precision))
     }};
 }
 pub(crate) use scale_variant_decimal;
@@ -151,9 +148,8 @@ macro_rules! decimal_to_variant_decimal {
         let (v, scale) = if *$scale < 0 {
             // For negative scale, we need to multiply the value by 10^|scale|
             // For example: 123 with scale -2 becomes 12300 with scale 0
-            let v = (10 as $value_type)
-                .checked_pow((-*$scale) as u32)
-                .and_then(|m| m.checked_mul($v));
+            let v =
+                <$value_type>::checked_pow(10, (-*$scale) as u32).and_then(|m| m.checked_mul($v));
             (v, 0u8)
         } else {
             (Some($v), *$scale as u8)

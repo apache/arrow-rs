@@ -18,9 +18,9 @@
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{
-    self, ArrowPrimitiveType, DataType, Decimal32Type, Decimal64Type, Decimal128Type,
-    Decimal256Type, i256, is_validate_decimal_precision, is_validate_decimal32_precision,
-    is_validate_decimal64_precision, is_validate_decimal256_precision,
+    self, ArrowPrimitiveType, DataType, i256, is_validate_decimal_precision,
+    is_validate_decimal32_precision, is_validate_decimal64_precision,
+    is_validate_decimal256_precision,
 };
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
@@ -376,18 +376,18 @@ impl<'a, T: PrimitiveFromVariant> VariantToPrimitiveArrowRowBuilder<'a, T> {
 }
 
 // Minimal per-decimal hook: just wraps scale_variant_decimal! with correct parameters
-pub(crate) trait VariantDecimalScaler: datatypes::DecimalType {
-    fn scale_from_variant(
+pub(crate) trait RescaleVariantDecimal: datatypes::DecimalType {
+    fn rescale_variant_decimal(
         value: &Variant<'_, '_>,
         scale: i8,
         precision: u8,
     ) -> Option<<Self as ArrowPrimitiveType>::Native>;
 }
 
-macro_rules! impl_variant_decimal_scaler {
+macro_rules! impl_rescale_variant_decimal {
     ($t:ty, $variant_method:ident, $to_native:expr, $validate:path) => {
-        impl VariantDecimalScaler for $t {
-            fn scale_from_variant(
+        impl RescaleVariantDecimal for $t {
+            fn rescale_variant_decimal(
                 value: &Variant<'_, '_>,
                 scale: i8,
                 precision: u8,
@@ -405,43 +405,40 @@ macro_rules! impl_variant_decimal_scaler {
     };
 }
 
-impl_variant_decimal_scaler!(
-    Decimal32Type,
+impl_rescale_variant_decimal!(
+    datatypes::Decimal32Type,
     as_decimal4,
-    |x: i32| x,
+    i32::from,
     is_validate_decimal32_precision
 );
-impl_variant_decimal_scaler!(
-    Decimal64Type,
+impl_rescale_variant_decimal!(
+    datatypes::Decimal64Type,
     as_decimal8,
-    |x: i64| x,
+    i64::from,
     is_validate_decimal64_precision
 );
-impl_variant_decimal_scaler!(
-    Decimal128Type,
+impl_rescale_variant_decimal!(
+    datatypes::Decimal128Type,
     as_decimal16,
-    |x: i128| x,
+    i128::from,
     is_validate_decimal_precision
 );
-impl_variant_decimal_scaler!(
-    Decimal256Type,
+impl_rescale_variant_decimal!(
+    datatypes::Decimal256Type,
     as_decimal16,
     i256::from_i128,
     is_validate_decimal256_precision
 );
 
 /// Builder for converting variant values to arrow Decimal values
-pub(crate) struct VariantToDecimalArrowRowBuilder<
-    'a,
-    T: datatypes::DecimalType + VariantDecimalScaler,
-> {
+pub(crate) struct VariantToDecimalArrowRowBuilder<'a, T: RescaleVariantDecimal> {
     builder: PrimitiveBuilder<T>,
     cast_options: &'a CastOptions<'a>,
     precision: u8,
     scale: i8,
 }
 
-impl<'a, T: datatypes::DecimalType + VariantDecimalScaler> VariantToDecimalArrowRowBuilder<'a, T> {
+impl<'a, T: RescaleVariantDecimal> VariantToDecimalArrowRowBuilder<'a, T> {
     fn new(
         cast_options: &'a CastOptions<'a>,
         capacity: usize,
@@ -464,7 +461,7 @@ impl<'a, T: datatypes::DecimalType + VariantDecimalScaler> VariantToDecimalArrow
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(scaled) = T::scale_from_variant(value, self.scale, self.precision) {
+        if let Some(scaled) = T::rescale_variant_decimal(value, self.scale, self.precision) {
             self.builder.append_value(scaled);
             Ok(true)
         } else if self.cast_options.safe {
