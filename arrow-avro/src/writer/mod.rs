@@ -737,16 +737,13 @@ mod tests {
         let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
         let input =
             arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
-        let tmp = NamedTempFile::new().expect("create temp file");
-        {
-            let out_file = File::create(tmp.path()).expect("create temp avro");
-            let mut writer = AvroWriter::new(out_file, in_schema.as_ref().clone())?;
-            writer.write(&input)?;
-            writer.finish()?;
-        }
-        let rt_file = File::open(tmp.path()).expect("open round_trip avro");
+        // Write to an in‑memory OCF and read back
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), in_schema.as_ref().clone())?;
+        writer.write(&input)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
         let rt_reader = ReaderBuilder::new()
-            .build(BufReader::new(rt_file))
+            .build(Cursor::new(bytes))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
         let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
@@ -763,7 +760,6 @@ mod tests {
     {
         use arrow::datatypes::{DataType, IntervalUnit};
         use std::io::BufReader;
-        use tempfile::NamedTempFile;
 
         // Read input Avro (duration + uuid)
         let in_file =
@@ -796,16 +792,12 @@ mod tests {
             arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
 
         // Write to a temp OCF and read back
-        let tmp = NamedTempFile::new().expect("create temp file");
-        {
-            let out_file = File::create(tmp.path()).expect("create temp avro");
-            let mut writer = AvroWriter::new(out_file, in_schema.as_ref().clone())?;
-            writer.write(&input)?;
-            writer.finish()?;
-        }
-        let rt_file = File::open(tmp.path()).expect("open round_trip avro");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), in_schema.as_ref().clone())?;
+        writer.write(&input)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
         let rt_reader = ReaderBuilder::new()
-            .build(BufReader::new(rt_file))
+            .build(Cursor::new(bytes))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
         let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
