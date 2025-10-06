@@ -86,17 +86,8 @@ mod test {
             ArrowWriter::try_new_with_options(&mut buf, arrow_schema.clone(), options).unwrap();
         file_writer.write(&batch).unwrap();
 
-        let thrift_metadata = file_writer.finish().unwrap();
+        file_writer.finish().unwrap();
         drop(file_writer);
-
-        // Check that statistics exist in thrift output
-        thrift_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap()
-            .geospatial_statistics
-            .as_ref()
-            .expect("geospatial_statistics in thrift column metadata");
 
         // Check statistics on file read
         let all_geo_stats = read_geo_statistics(buf);
@@ -144,16 +135,7 @@ mod test {
         col.close().unwrap();
         rg.close().unwrap();
 
-        let thrift_metadata = writer.close().unwrap();
-
-        // Check that statistics exist in thrift output
-        thrift_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap()
-            .geospatial_statistics
-            .as_ref()
-            .expect("geospatial_statistics in thrift column metadata");
+        writer.close().unwrap();
 
         // Check statistics on file read
         let all_geo_stats = read_geo_statistics(buf);
