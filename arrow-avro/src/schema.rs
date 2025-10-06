@@ -910,6 +910,10 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                     .fields
                     .iter()
                     .map(|f| {
+                        // PCF [STRIP] per Avro spec: keep only attributes relevant to parsing
+                        // ("name" and "type" for fields) and **strip others** such as doc,
+                        // default, order, and **aliases**. This preserves canonicalization. See:
+                        // https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas
                         let field_type =
                             build_canonical(&f.r#type, child_ns.as_deref().or(enclosing_ns))?;
                         Ok(format!(
@@ -1098,7 +1102,7 @@ impl NameGenerator {
     }
 }
 
-fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
+fn merge_extras(schema: Value, extras: JsonMap<String, Value>) -> Value {
     if extras.is_empty() {
         return schema;
     }
@@ -1290,23 +1294,19 @@ fn datatype_to_avro(
             };
             json!({ "type": "long", "logicalType": logical_type })
         }
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::Duration(_unit) => Value::String("long".into()),
+        #[cfg(feature = "avro_custom_types")]
         DataType::Duration(unit) => {
-            #[cfg(feature = "avro_custom_types")]
-            {
-                // When the feature is enabled, create an Avro schema object
-                // with the correct `logicalType` annotation.
-                let logical_type = match unit {
-                    TimeUnit::Second => "arrow.duration-seconds",
-                    TimeUnit::Millisecond => "arrow.duration-millis",
-                    TimeUnit::Microsecond => "arrow.duration-micros",
-                    TimeUnit::Nanosecond => "arrow.duration-nanos",
-                };
-                json!({ "type": "long", "logicalType": logical_type })
-            }
-            #[cfg(not(feature = "avro_custom_types"))]
-            {
-                Value::String("long".into())
-            }
+            // When the feature is enabled, create an Avro schema object
+            // with the correct `logicalType` annotation.
+            let logical_type = match unit {
+                TimeUnit::Second => "arrow.duration-seconds",
+                TimeUnit::Millisecond => "arrow.duration-millis",
+                TimeUnit::Microsecond => "arrow.duration-micros",
+                TimeUnit::Nanosecond => "arrow.duration-nanos",
+            };
+            json!({ "type": "long", "logicalType": logical_type })
         }
         DataType::Interval(IntervalUnit::MonthDayNano) => json!({
             "type": "fixed",
@@ -1483,6 +1483,7 @@ fn datatype_to_avro(
 
             Value::Array(branches)
         }
+        #[cfg(not(feature = "small_decimals"))]
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Arrow type {other:?} has no Avro representation"
@@ -1553,7 +1554,7 @@ fn arrow_field_to_avro(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField, AvroFieldBuilder};
+    use crate::codec::{AvroField, AvroFieldBuilder};
     use arrow_schema::{DataType, Fields, SchemaBuilder, TimeUnit, UnionFields};
     use serde_json::json;
     use std::sync::Arc;
@@ -2081,15 +2082,15 @@ mod tests {
                         .is_none()
                 );
             }
-            Fingerprint::Id(id) => {
+            Fingerprint::Id(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
             #[cfg(feature = "md5")]
-            Fingerprint::MD5(id) => {
+            Fingerprint::MD5(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
             #[cfg(feature = "sha256")]
-            Fingerprint::SHA256(id) => {
+            Fingerprint::SHA256(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
         }
@@ -2179,8 +2180,7 @@ mod tests {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
         let canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
-        let expected_fingerprint =
-            Fingerprint::Rabin(super::compute_fingerprint_rabin(canonical_form));
+        let expected_fingerprint = Fingerprint::Rabin(compute_fingerprint_rabin(canonical_form));
         let fingerprint = store.register(schema.clone()).unwrap();
         assert_eq!(fingerprint, expected_fingerprint);
         let looked_up = store.lookup(&fingerprint).cloned();
@@ -2308,6 +2308,7 @@ mod tests {
         assert_json_contains(&avro_uuid.json_string, "\"logicalType\":\"uuid\"");
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_interval_duration() {
         let interval_field = ArrowField::new(
@@ -2322,7 +2323,6 @@ mod tests {
         let dur_field = ArrowField::new("latency", DataType::Duration(TimeUnit::Nanosecond), false);
         let s2 = single_field_schema(dur_field);
         let avro2 = AvroSchema::try_from(&s2).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro2.json_string,
             "\"logicalType\":\"arrow.duration-nanos\"",
@@ -2461,13 +2461,13 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_duration_list_extras_propagated() {
         let child = ArrowField::new("lat", DataType::Duration(TimeUnit::Microsecond), false);
         let list_dt = DataType::List(Arc::new(child));
         let arrow_schema = single_field_schema(ArrowField::new("durations", list_dt, false));
         let avro = AvroSchema::try_from(&arrow_schema).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro.json_string,
             "\"logicalType\":\"arrow.duration-micros\"",
@@ -2499,6 +2499,7 @@ mod tests {
         assert_json_contains(&avro.json_string, "\"arrowFixedSize\":3");
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_map_duration_value_extra() {
         let val_field = ArrowField::new("value", DataType::Duration(TimeUnit::Second), true);
@@ -2513,7 +2514,6 @@ mod tests {
         let map_dt = DataType::Map(Arc::new(entries_struct), false);
         let schema = single_field_schema(ArrowField::new("metrics", map_dt, false));
         let avro = AvroSchema::try_from(&schema).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro.json_string,
             "\"logicalType\":\"arrow.duration-seconds\"",

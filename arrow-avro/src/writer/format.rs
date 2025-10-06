@@ -16,10 +16,7 @@
 // under the License.
 
 use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
-use crate::schema::{
-    AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, FingerprintStrategy,
-    SCHEMA_METADATA_KEY, SINGLE_OBJECT_MAGIC,
-};
+use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::write_long;
 use arrow_schema::{ArrowError, Schema};
 use rand::RngCore;
