@@ -284,7 +284,7 @@ pub(crate) struct Enum<'a> {
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#arrays>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Array<'a> {
+pub(crate) struct Array<'a> {
     /// The schema for items in this array
     #[serde(borrow)]
     pub(crate) items: Box<Schema<'a>>,
