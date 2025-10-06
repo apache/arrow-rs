@@ -16,7 +16,6 @@
 // under the License.
 
 use arrow_schema::ArrowError;
-use std::io;
 use std::io::{Read, Write};
 
 /// The metadata key used for storing the JSON encoded [`CompressionCodec`]

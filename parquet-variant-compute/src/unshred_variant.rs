@@ -17,22 +17,26 @@
 
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
+use crate::arrow_to_variant::ListLikeArray;
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
-    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, PrimitiveArray,
-    StringArray, StructArray,
+    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
+    GenericListArray, GenericListViewArray, PrimitiveArray, StringArray, StructArray,
 };
 use arrow::buffer::NullBuffer;
 use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Float32Type, Float64Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, Time64MicrosecondType, TimeUnit, TimestampMicrosecondType,
-    TimestampNanosecondType,
+    ArrowPrimitiveType, DataType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type,
+    DecimalType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Time64MicrosecondType, TimeUnit, TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow::error::{ArrowError, Result};
 use arrow::temporal_conversions::time64us_to_time;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
-use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt, VariantMetadata};
+use parquet_variant::{
+    ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
+    VariantDecimal16, VariantMetadata,
+};
 use uuid::Uuid;
 
 /// Removes all (nested) typed_value columns from a VariantArray by converting them back to binary
@@ -91,6 +95,9 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveInt64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int64Type>>),
     PrimitiveFloat32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float32Type>>),
     PrimitiveFloat64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float64Type>>),
+    Decimal32(DecimalUnshredRowBuilder<'a, Decimal32Spec>),
+    Decimal64(DecimalUnshredRowBuilder<'a, Decimal64Spec>),
+    Decimal128(DecimalUnshredRowBuilder<'a, Decimal128Spec>),
     PrimitiveDate32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Date32Type>>),
     PrimitiveTime64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Time64MicrosecondType>>),
     TimestampMicrosecond(TimestampUnshredRowBuilder<'a, TimestampMicrosecondType>),
@@ -99,6 +106,11 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveString(UnshredPrimitiveRowBuilder<'a, StringArray>),
     PrimitiveBinaryView(UnshredPrimitiveRowBuilder<'a, BinaryViewArray>),
     PrimitiveUuid(UnshredPrimitiveRowBuilder<'a, FixedSizeBinaryArray>),
+    List(ListUnshredVariantBuilder<'a, GenericListArray<i32>>),
+    LargeList(ListUnshredVariantBuilder<'a, GenericListArray<i64>>),
+    ListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i32>>),
+    LargeListView(ListUnshredVariantBuilder<'a, GenericListViewArray<i64>>),
+    FixedSizeList(ListUnshredVariantBuilder<'a, FixedSizeListArray>),
     Struct(StructUnshredVariantBuilder<'a>),
     ValueOnly(ValueOnlyUnshredVariantBuilder<'a>),
     Null(NullUnshredVariantBuilder<'a>),
@@ -124,6 +136,9 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::PrimitiveInt64(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveFloat32(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveFloat64(b) => b.append_row(builder, metadata, index),
+            Self::Decimal32(b) => b.append_row(builder, metadata, index),
+            Self::Decimal64(b) => b.append_row(builder, metadata, index),
+            Self::Decimal128(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveDate32(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveTime64(b) => b.append_row(builder, metadata, index),
             Self::TimestampMicrosecond(b) => b.append_row(builder, metadata, index),
@@ -132,6 +147,11 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             Self::PrimitiveString(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveBinaryView(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveUuid(b) => b.append_row(builder, metadata, index),
+            Self::List(b) => b.append_row(builder, metadata, index),
+            Self::LargeList(b) => b.append_row(builder, metadata, index),
+            Self::ListView(b) => b.append_row(builder, metadata, index),
+            Self::LargeListView(b) => b.append_row(builder, metadata, index),
+            Self::FixedSizeList(b) => b.append_row(builder, metadata, index),
             Self::Struct(b) => b.append_row(builder, metadata, index),
             Self::ValueOnly(b) => b.append_row(builder, metadata, index),
             Self::Null(b) => b.append_row(builder, metadata, index),
@@ -165,6 +185,26 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Int64 => primitive_builder!(PrimitiveInt64, as_primitive),
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
+            DataType::Decimal32(_, scale) => Self::Decimal32(DecimalUnshredRowBuilder::new(
+                value,
+                typed_value.as_primitive(),
+                *scale,
+            )),
+            DataType::Decimal64(_, scale) => Self::Decimal64(DecimalUnshredRowBuilder::new(
+                value,
+                typed_value.as_primitive(),
+                *scale,
+            )),
+            DataType::Decimal128(_, scale) => Self::Decimal128(DecimalUnshredRowBuilder::new(
+                value,
+                typed_value.as_primitive(),
+                *scale,
+            )),
+            DataType::Decimal256(_, _) => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Decimal256 is not a valid variant shredding type".to_string(),
+                ));
+            }
             DataType::Date32 => primitive_builder!(PrimitiveDate32, as_primitive),
             DataType::Time64(TimeUnit::Microsecond) => {
                 primitive_builder!(PrimitiveTime64, as_primitive)
@@ -208,6 +248,25 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                 value,
                 typed_value.as_struct(),
             )?),
+            DataType::List(_) => Self::List(ListUnshredVariantBuilder::try_new(
+                value,
+                typed_value.as_list(),
+            )?),
+            DataType::LargeList(_) => Self::LargeList(ListUnshredVariantBuilder::try_new(
+                value,
+                typed_value.as_list(),
+            )?),
+            DataType::ListView(_) => Self::ListView(ListUnshredVariantBuilder::try_new(
+                value,
+                typed_value.as_list_view(),
+            )?),
+            DataType::LargeListView(_) => Self::LargeListView(ListUnshredVariantBuilder::try_new(
+                value,
+                typed_value.as_list_view(),
+            )?),
+            DataType::FixedSizeList(_, _) => Self::FixedSizeList(
+                ListUnshredVariantBuilder::try_new(value, typed_value.as_fixed_size_list())?,
+            ),
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Unshredding not yet supported for type: {}",
@@ -445,6 +504,96 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
     }
 }
 
+/// Trait to unify decimal unshredding across Decimal32/64/128 types
+trait DecimalSpec {
+    type Arrow: ArrowPrimitiveType + DecimalType;
+
+    fn into_variant(
+        raw: <Self::Arrow as ArrowPrimitiveType>::Native,
+        scale: i8,
+    ) -> Result<Variant<'static, 'static>>;
+}
+
+/// Spec for Decimal32 -> VariantDecimal4
+struct Decimal32Spec;
+
+impl DecimalSpec for Decimal32Spec {
+    type Arrow = Decimal32Type;
+
+    fn into_variant(raw: i32, scale: i8) -> Result<Variant<'static, 'static>> {
+        let scale =
+            u8::try_from(scale).map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
+        let value = VariantDecimal4::try_new(raw, scale)
+            .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
+        Ok(value.into())
+    }
+}
+
+/// Spec for Decimal64 -> VariantDecimal8
+struct Decimal64Spec;
+
+impl DecimalSpec for Decimal64Spec {
+    type Arrow = Decimal64Type;
+
+    fn into_variant(raw: i64, scale: i8) -> Result<Variant<'static, 'static>> {
+        let scale =
+            u8::try_from(scale).map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
+        let value = VariantDecimal8::try_new(raw, scale)
+            .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
+        Ok(value.into())
+    }
+}
+
+/// Spec for Decimal128 -> VariantDecimal16
+struct Decimal128Spec;
+
+impl DecimalSpec for Decimal128Spec {
+    type Arrow = Decimal128Type;
+
+    fn into_variant(raw: i128, scale: i8) -> Result<Variant<'static, 'static>> {
+        let scale =
+            u8::try_from(scale).map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
+        let value = VariantDecimal16::try_new(raw, scale)
+            .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
+        Ok(value.into())
+    }
+}
+
+/// Generic builder for decimal unshredding that caches scale
+struct DecimalUnshredRowBuilder<'a, S: DecimalSpec> {
+    value: Option<&'a BinaryViewArray>,
+    typed_value: &'a PrimitiveArray<S::Arrow>,
+    scale: i8,
+}
+
+impl<'a, S: DecimalSpec> DecimalUnshredRowBuilder<'a, S> {
+    fn new(
+        value: Option<&'a BinaryViewArray>,
+        typed_value: &'a PrimitiveArray<S::Arrow>,
+        scale: i8,
+    ) -> Self {
+        Self {
+            value,
+            typed_value,
+            scale,
+        }
+    }
+
+    fn append_row(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        metadata: &VariantMetadata,
+        index: usize,
+    ) -> Result<()> {
+        handle_unshredded_case!(self, builder, metadata, index, false);
+
+        let raw = self.typed_value.value(index);
+        let variant = S::into_variant(raw, self.scale)?;
+        builder.append_value(variant);
+        Ok(())
+    }
+}
+
 /// Builder for unshredding struct/object types with nested fields
 struct StructUnshredVariantBuilder<'a> {
     value: Option<&'a arrow::array::BinaryViewArray>,
@@ -513,6 +662,62 @@ impl<'a> StructUnshredVariantBuilder<'a> {
         }
 
         object_builder.finish();
+        Ok(())
+    }
+}
+
+/// Builder for unshredding list/array types with recursive element processing
+struct ListUnshredVariantBuilder<'a, L: ListLikeArray> {
+    value: Option<&'a BinaryViewArray>,
+    typed_value: &'a L,
+    element_unshredder: Box<UnshredVariantRowBuilder<'a>>,
+}
+
+impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
+    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a L) -> Result<Self> {
+        // Create a recursive unshredder for the list elements
+        // The element type comes from the values array of the list
+        let element_values = typed_value.values();
+
+        // For shredded lists, each element would be a ShreddedVariantFieldArray (struct)
+        // Extract value/typed_value from the element struct
+        let Some(element_values) = element_values.as_struct_opt() else {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid shredded variant array element: expected Struct, got {}",
+                element_values.data_type()
+            )));
+        };
+
+        // Create recursive unshredder for elements
+        //
+        // NOTE: A None/None array element is technically invalid, but the shredding spec
+        // requires us to emit `Variant::Null` when a required value is missing.
+        let element_unshredder = UnshredVariantRowBuilder::try_new_opt(element_values.try_into()?)?
+            .unwrap_or_else(|| UnshredVariantRowBuilder::null(None));
+
+        Ok(Self {
+            value,
+            typed_value,
+            element_unshredder: Box::new(element_unshredder),
+        })
+    }
+
+    fn append_row(
+        &mut self,
+        builder: &mut impl VariantBuilderExt,
+        metadata: &VariantMetadata,
+        index: usize,
+    ) -> Result<()> {
+        handle_unshredded_case!(self, builder, metadata, index, false);
+
+        // If we get here, typed_value is valid and value is NULL -- process the list elements
+        let mut list_builder = builder.try_new_list()?;
+        for element_index in self.typed_value.element_range(index) {
+            self.element_unshredder
+                .append_row(&mut list_builder, metadata, element_index)?;
+        }
+
+        list_builder.finish();
         Ok(())
     }
 }

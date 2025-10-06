@@ -268,6 +268,91 @@ Options:
 **Source / Repro script:**
 `create_avro_union_file.py` (Gist): contains the full writer schema, record builders covering four rows, and the `fastavro.writer` call which emits `union_fields.avro`.
 
+## Comprehensive E2E Coverage File
+
+**Purpose:** A single OCF that exercises **all decoder paths** used by `arrow-avro` with both **nested and non‑nested** shapes, including **dense unions** (null‑first, null‑second, multi‑branch), **aliases** (type and field), **default values**, **docs** and **namespaces**, and combinations thereof. It’s intended to validate the final `Reader` implementation and to stress schema‑resolution behavior in the tests under `arrow-avro/src/reader/mod.rs`.
+
+**File:** `comprehensive_e2e.avro`
+**Top‑level record (writer schema):** `org.apache.arrow.avrotests.v1.E2eComprehensive`
+**Record count:** four rows (each row selects different union branches and nested shapes)
+
+**Coverage summary (by Arrow / Avro mapping):**
+
+* Primitives: **boolean, int, long, float, double**
+* Binary / Text: **bytes**, **string (UTF‑8)**
+* Logical types: **date**, **time‑millis**, **time‑micros**, **timestamp‑millis (UTC)**, **timestamp‑micros (UTC)**, **local‑timestamp‑millis**, **local‑timestamp‑micros**, **uuid (string)**, **decimal** on **bytes** and **fixed**, **duration** on **fixed(12)**
+* Named types: **fixed**, **enum**, **record**
+* Collections: **array**, **map**
+* Unions: **nullable unions**, **ambiguous scalar unions**, **unions of named types**, and **unions nested inside arrays/maps/records**
+* Schema‑evolution hooks: **type aliases**, **field aliases**, **defaults** (including union defaults on the first branch), **docs**, and **namespaces**
+
+**Writer schema (overview of fields):**
+
+| Field                         | Type / details                                                                                          |
+|-------------------------------|---------------------------------------------------------------------------------------------------------|
+| `id`                          | `long`                                                                                                  |
+| `flag`                        | `boolean` (default `true`)                                                                              |
+| `ratio_f32`                   | `float` (default `0.0`)                                                                                 |
+| `ratio_f64`                   | `double` (default `0.0`)                                                                                |
+| `count_i32`                   | `int` (default `0`)                                                                                     |
+| `count_i64`                   | `long` (default `0`)                                                                                    |
+| `opt_i32_nullfirst`           | `["null","int"]` (default `null`)                                                                       |
+| `opt_str_nullsecond`          | `["string","null"]` (default `""`, alias: `old_opt_str`)                                                |
+| `tri_union_prim`              | `["int","string","boolean"]` (default `0`)                                                              |
+| `str_utf8`                    | `string` (default `"default"`)                                                                          |
+| `raw_bytes`                   | `bytes` (default `""`)                                                                                  |
+| `fx16_plain`                  | `fixed` `types.Fx16` (size 16, alias `Fixed16Old`)                                                      |
+| `dec_bytes_s10_2`             | `bytes` + `logicalType: decimal` (precision 10, scale 2)                                                |
+| `dec_fix_s20_4`               | `fixed` `types.DecFix20` (size 20) + `logicalType: decimal` (precision 20, scale 4)                     |
+| `uuid_str`                    | `string` + `logicalType: uuid`                                                                          |
+| `d_date`                      | `int` + `logicalType: date`                                                                             |
+| `t_millis`                    | `int` + `logicalType: time-millis`                                                                      |
+| `t_micros`                    | `long` + `logicalType: time-micros`                                                                     |
+| `ts_millis_utc`               | `long` + `logicalType: timestamp-millis`                                                                |
+| `ts_micros_utc`               | `long` + `logicalType: timestamp-micros`                                                                |
+| `ts_millis_local`             | `long` + `logicalType: local-timestamp-millis`                                                          |
+| `ts_micros_local`             | `long` + `logicalType: local-timestamp-micros`                                                          |
+| `interval_mdn`                | `fixed` `types.Dur12` (size 12) + `logicalType: duration`                                               |
+| `status`                      | `enum` `types.Status` = {`UNKNOWN`,`NEW`,`PROCESSING`,`DONE`} (alias: `State`)                          |
+| `arr_union`                   | `array<["long","string","null"]>`                                                                       |
+| `map_union`                   | `map<["null","double","string"]>`                                                                       |
+| `address`                     | `record` `types.Address` {`street` (alias: `street_name`), `zip:int`, `country:string`}                 |
+| `maybe_auth`                  | `record` `types.MaybeAuth` {`user:string`, `token:["null","bytes"]` (default `null`)}                   |
+| `union_enum_record_array_map` | `[types.Color enum, types.RecA record, types.RecB record, array<long>, map<string>]`                    |
+| `union_date_or_fixed4`        | `[int (logicalType=date), fixed Fx4 size 4]`                                                            |
+| `union_interval_or_string`    | `[fixed Dur12U size 12 (logicalType=duration), string]`                                                 |
+| `union_uuid_or_fixed10`       | `[string (logicalType=uuid), fixed Fx10 size 10]`                                                       |
+| `array_records_with_union`    | `array<record types.KV { key:string, val:["null","int","long"] }>`                                      |
+| `union_map_or_array_int`      | `[map<int>, array<int>]`                                                                                |
+| `renamed_with_default`        | `int` (default `42`, alias: `old_count`)                                                                |
+| `person`                      | `record` `com.example.v2.PersonV2` (alias: `com.example.Person`) `{ name:string, age:int (default 0) }` |
+
+**How this file was created**
+
+* Script: [`create_comprehensive_avro_file.py`](https://gist.github.com/jecsand838/26f9666da8de22651027d485bd83f4a3)
+  Uses **fastavro** to write `comprehensive_e2e.avro` with the schema above and four records that intentionally vary union branches and nested shapes.
+
+**Re‑generation**
+
+From the repository root:
+
+```bash
+# 1) Ensure Python 3 is available, then install fastavro
+python -m pip install --upgrade fastavro
+
+# 2) Run the generator (writes ./comprehensive_e2e.avro by default)
+python create_comprehensive_avro_file.py
+
+# 3) Move or copy the file into this directory if needed
+mv comprehensive_e2e.avro arrow-avro/test/data/
+```
+
+**Notes / tips for tests**
+
+* For **unions of named types** (record/enum/fixed), the generator uses fastavro’s **tuple notation** to select the union branch and, where needed, supplies the **fully‑qualified name (FQN)** to avoid ambiguity when namespaces apply.
+* The file contains many **defaults** and **aliases** (type and field) to exercise **schema resolution** code paths.
+* As with all OCFs, a random **sync marker** is embedded in the file header; byte‑for‑byte output may vary across runs without affecting the schema or logical content.
+
 ## Other Files
 
 This directory contains other small OCF files used by `arrow-avro` tests. Details on these will be added in
