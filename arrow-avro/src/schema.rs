@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "canonical_extension_types")]
+use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
     UnionMode,
@@ -1269,10 +1271,9 @@ fn datatype_to_avro(
             #[cfg(feature = "canonical_extension_types")]
             let is_uuid = (*len == 16)
                 && metadata
-                    .get("ARROW:extension:name")
-                    .map(|value| value == "arrow.uuid" || value == "uuid")
+                    .get(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY)
+                    .map(|value| value == arrow_schema::extension::Uuid::NAME || value == "uuid")
                     .unwrap_or(false);
-
             if is_uuid {
                 json!({ "type": "string", "logicalType": "uuid" })
             } else {

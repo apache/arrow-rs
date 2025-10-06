@@ -288,7 +288,9 @@ mod test {
     use super::*;
     use crate::codec::AvroField;
     use crate::reader::read_header;
-    use crate::schema::SCHEMA_METADATA_KEY;
+    use crate::schema::{
+        AVRO_NAME_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME, SCHEMA_METADATA_KEY,
+    };
     use crate::test_util::arrow_test_data;
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
     use std::collections::HashMap;
@@ -349,8 +351,8 @@ mod test {
                 false
             )
             .with_metadata(HashMap::from([(
-                "avro.name".to_string(),
-                "topLevelRecord".to_string()
+                AVRO_NAME_METADATA_KEY.to_string(),
+                AVRO_ROOT_RECORD_DEFAULT_NAME.to_string()
             )]))
         );
 
