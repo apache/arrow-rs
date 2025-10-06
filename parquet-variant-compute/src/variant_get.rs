@@ -2737,6 +2737,8 @@ mod test {
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
 
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), 2);
         assert_eq!(result.value(0), 124);
         assert_eq!(result.value(1), 125);
         assert_eq!(result.value(2), -124);
@@ -2821,6 +2823,8 @@ mod test {
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
 
+        assert_eq!(result.precision(), 18);
+        assert_eq!(result.scale(), 2);
         assert_eq!(result.value(0), 124);
         assert_eq!(result.value(1), 125);
         assert_eq!(result.value(2), -124);
@@ -2905,6 +2909,8 @@ mod test {
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
 
+        assert_eq!(result.precision(), 38);
+        assert_eq!(result.scale(), 2);
         assert_eq!(result.value(0), 124);
         assert_eq!(result.value(1), 125);
         assert_eq!(result.value(2), -124);
@@ -2990,6 +2996,8 @@ mod test {
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal256Array>().unwrap();
 
+        assert_eq!(result.precision(), 76);
+        assert_eq!(result.scale(), 2);
         assert_eq!(result.value(0), i256::from_i128(124));
         assert_eq!(result.value(1), i256::from_i128(125));
         assert_eq!(result.value(2), i256::from_i128(-124));
