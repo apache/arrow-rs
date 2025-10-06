@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "canonical_extension_types")]
+use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
     UnionMode,
@@ -521,7 +523,7 @@ impl From<&Fingerprint> for FingerprintStrategy {
     fn from(f: &Fingerprint) -> Self {
         match f {
             Fingerprint::Rabin(_) => FingerprintStrategy::Rabin,
-            Fingerprint::Id(id) => FingerprintStrategy::Id(*id),
+            Fingerprint::Id(_) => FingerprintStrategy::Id(0),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -1152,6 +1154,21 @@ fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
     }
 }
 
+fn min_fixed_bytes_for_precision(p: usize) -> usize {
+    // From the spec: max precision for n=1..=32 bytes:
+    // [2,4,6,9,11,14,16,18,21,23,26,28,31,33,35,38,40,43,45,47,50,52,55,57,59,62,64,67,69,71,74,76]
+    const MAX_P: [usize; 32] = [
+        2, 4, 6, 9, 11, 14, 16, 18, 21, 23, 26, 28, 31, 33, 35, 38, 40, 43, 45, 47, 50, 52, 55, 57,
+        59, 62, 64, 67, 69, 71, 74, 76,
+    ];
+    for (i, &max_p) in MAX_P.iter().enumerate() {
+        if p <= max_p {
+            return i + 1;
+        }
+    }
+    32 // saturate at Decimal256
+}
+
 fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
     match branch {
         Value::String(t) => Ok(format!("P:{t}")),
@@ -1201,20 +1218,30 @@ fn datatype_to_avro(
                  must be <= precision ({precision})"
             )));
         }
-
         let mut meta = JsonMap::from_iter([
             ("logicalType".into(), json!("decimal")),
             ("precision".into(), json!(*precision)),
             ("scale".into(), json!(*scale)),
         ]);
-        if let Some(size) = metadata
-            .get("size")
-            .and_then(|val| val.parse::<usize>().ok())
-        {
+        let mut fixed_size = metadata.get("size").and_then(|v| v.parse::<usize>().ok());
+        let carries_name = metadata.contains_key(AVRO_NAME_METADATA_KEY)
+            || metadata.contains_key(AVRO_NAMESPACE_METADATA_KEY);
+        if fixed_size.is_none() && carries_name {
+            fixed_size = Some(min_fixed_bytes_for_precision(*precision as usize));
+        }
+        if let Some(size) = fixed_size {
             meta.insert("type".into(), json!("fixed"));
             meta.insert("size".into(), json!(size));
-            meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            meta.insert("name".into(), json!(chosen_name));
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                meta.insert("namespace".into(), json!(ns));
+            }
         } else {
+            // default to bytes-backed decimal
             meta.insert("type".into(), json!("bytes"));
         }
         Ok(Value::Object(meta))
@@ -1235,21 +1262,34 @@ fn datatype_to_avro(
             Value::String("bytes".into())
         }
         DataType::FixedSizeBinary(len) => {
-            let is_uuid = metadata
-                .get("logicalType")
-                .is_some_and(|value| value == "uuid")
-                || (*len == 16
-                    && metadata
-                        .get("ARROW:extension:name")
-                        .is_some_and(|value| value == "uuid"));
+            // UUID handling:
+            // - When the canonical extension feature is ON *and* this field is the Arrow canonical UUID
+            //   (extension name "arrow.uuid" or legacy "uuid"), emit Avro string with logicalType "uuid".
+            // - Otherwise, fall back to a named fixed of size = len.
+            #[cfg(not(feature = "canonical_extension_types"))]
+            let is_uuid = false;
+            #[cfg(feature = "canonical_extension_types")]
+            let is_uuid = (*len == 16)
+                && metadata
+                    .get(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY)
+                    .map(|value| value == arrow_schema::extension::Uuid::NAME || value == "uuid")
+                    .unwrap_or(false);
             if is_uuid {
                 json!({ "type": "string", "logicalType": "uuid" })
             } else {
-                json!({
-                    "type": "fixed",
-                    "name": name_gen.make_unique(field_name),
-                    "size": len
-                })
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("fixed")),
+                    ("name".into(), json!(chosen_name)),
+                    ("size".into(), json!(len)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             }
         }
         #[cfg(feature = "small_decimals")]
@@ -1308,12 +1348,23 @@ fn datatype_to_avro(
             };
             json!({ "type": "long", "logicalType": logical_type })
         }
-        DataType::Interval(IntervalUnit::MonthDayNano) => json!({
-            "type": "fixed",
-            "name": name_gen.make_unique(&format!("{field_name}_duration")),
-            "size": 12,
-            "logicalType": "duration"
-        }),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            // Avro duration logical type: fixed(12) with months/days/millis per spec.
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(12)),
+                ("logicalType".into(), json!("duration")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
+        }
         DataType::Interval(IntervalUnit::YearMonth) => {
             extras.insert(
                 "arrowIntervalUnit".into(),
@@ -1402,21 +1453,39 @@ fn datatype_to_avro(
                 .iter()
                 .map(|field| arrow_field_to_avro(field, name_gen, null_order))
                 .collect::<Result<Vec<_>, _>>()?;
-            json!({
-                "type": "record",
-                "name": name_gen.make_unique(field_name),
-                "fields": avro_fields
-            })
+            // Prefer avro.name/avro.namespace when provided on the struct field metadata
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("record")),
+                ("name".into(), json!(chosen_name)),
+                ("fields".into(), Value::Array(avro_fields)),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            Value::Object(obj)
         }
         DataType::Dictionary(_, value) => {
             if let Some(j) = metadata.get(AVRO_ENUM_SYMBOLS_METADATA_KEY) {
                 let symbols: Vec<&str> =
                     serde_json::from_str(j).map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                json!({
-                    "type": "enum",
-                    "name": name_gen.make_unique(field_name),
-                    "symbols": symbols
-                })
+                // Prefer avro.name/namespace when provided for enums
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("enum")),
+                    ("name".into(), json!(chosen_name)),
+                    ("symbols".into(), json!(symbols)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             } else {
                 process_datatype(
                     value.as_ref(),
@@ -1818,21 +1887,24 @@ mod tests {
             }))
         );
         let codec = AvroField::try_from(&schema).unwrap();
-        assert_eq!(
-            codec.field(),
-            arrow_schema::Field::new(
-                "topLevelRecord",
-                DataType::Struct(Fields::from(vec![
-                    arrow_schema::Field::new("id", DataType::Int32, true),
-                    arrow_schema::Field::new(
-                        "timestamp_col",
-                        DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
-                        true
-                    ),
-                ])),
-                false
-            )
-        );
+        let expected_arrow_field = arrow_schema::Field::new(
+            "topLevelRecord",
+            DataType::Struct(Fields::from(vec![
+                arrow_schema::Field::new("id", DataType::Int32, true),
+                arrow_schema::Field::new(
+                    "timestamp_col",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                    true,
+                ),
+            ])),
+            false,
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            "topLevelRecord".to_string(),
+        )]));
+
+        assert_eq!(codec.field(), expected_arrow_field);
 
         let schema: Schema = serde_json::from_str(
             r#"{
@@ -2534,7 +2606,6 @@ mod tests {
                 {"name": "u", "type": ["int", "null"], "default": 42}
             ]
         }"#;
-
         let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
         match &schema {
             Schema::Complex(ComplexType::Record(_)) => {}
@@ -2544,7 +2615,6 @@ mod tests {
         let field = crate::codec::AvroField::try_from(&schema)
             .expect("Avro->Arrow conversion should succeed");
         let arrow_field = field.field();
-
         // Build expected Arrow field
         let expected_list_item = ArrowField::new(
             arrow_schema::Field::LIST_FIELD_DEFAULT_NAME,
@@ -2564,7 +2634,8 @@ mod tests {
         );
         let expected_c =
             ArrowField::new("c", DataType::Map(Arc::new(expected_entries), false), false);
-
+        let mut inner_md = std::collections::HashMap::new();
+        inner_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "Inner".to_string());
         let expected_inner = ArrowField::new(
             "inner",
             DataType::Struct(Fields::from(vec![
@@ -2572,8 +2643,10 @@ mod tests {
                 ArrowField::new("name", DataType::Utf8, false),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(inner_md);
+        let mut root_md = std::collections::HashMap::new();
+        root_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "R".to_string());
         let expected = ArrowField::new(
             "R",
             DataType::Struct(Fields::from(vec![
@@ -2584,8 +2657,8 @@ mod tests {
                 ArrowField::new("u", DataType::Int32, true),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(root_md);
         assert_eq!(arrow_field, expected);
     }
 

@@ -1268,14 +1268,15 @@ mod test {
     use crate::reader::{Decoder, Reader, ReaderBuilder};
     use crate::schema::{
         AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, SchemaStore,
-        AVRO_ENUM_SYMBOLS_METADATA_KEY, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+        AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AVRO_NAME_METADATA_KEY,
+        CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
     };
     use crate::test_util::arrow_test_data;
     use crate::writer::AvroWriter;
     use arrow::array::ArrayDataBuilder;
     use arrow_array::builder::{
         ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
-        ListBuilder, MapBuilder, StringBuilder, StructBuilder,
+        ListBuilder, MapBuilder, MapFieldNames, StringBuilder, StructBuilder,
     };
     use arrow_array::cast::AsArray;
     #[cfg(not(feature = "avro_custom_types"))]
@@ -2059,6 +2060,7 @@ mod test {
         let reader_schema = make_reader_schema_with_enum_remap(&file, &remap);
         let actual = read_alltypes_with_reader_schema(&file, reader_schema);
         let dict_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        // f1
         let f1_keys = Int32Array::from(vec![3, 2, 1, 0]);
         let f1_vals = StringArray::from(vec!["d", "c", "b", "a"]);
         let f1 = DictionaryArray::<Int32Type>::try_new(f1_keys, Arc::new(f1_vals)).unwrap();
@@ -2067,7 +2069,11 @@ mod test {
             AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
             r#"["d","c","b","a"]"#.to_string(),
         );
+        // New named-type metadata
+        md_f1.insert("avro.name".to_string(), "enum1".to_string());
+        md_f1.insert("avro.namespace".to_string(), "ns1".to_string());
         let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
+        // f2
         let f2_keys = Int32Array::from(vec![1, 0, 3, 2]);
         let f2_vals = StringArray::from(vec!["h", "g", "f", "e"]);
         let f2 = DictionaryArray::<Int32Type>::try_new(f2_keys, Arc::new(f2_vals)).unwrap();
@@ -2076,7 +2082,11 @@ mod test {
             AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
             r#"["h","g","f","e"]"#.to_string(),
         );
+        // New named-type metadata
+        md_f2.insert("avro.name".to_string(), "enum2".to_string());
+        md_f2.insert("avro.namespace".to_string(), "ns2".to_string());
         let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
+        // f3
         let f3_keys = Int32Array::from(vec![Some(2), Some(0), None, Some(1)]);
         let f3_vals = StringArray::from(vec!["k", "i", "j"]);
         let f3 = DictionaryArray::<Int32Type>::try_new(f3_keys, Arc::new(f3_vals)).unwrap();
@@ -2085,6 +2095,9 @@ mod test {
             AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
             r#"["k","i","j"]"#.to_string(),
         );
+        // New named-type metadata
+        md_f3.insert("avro.name".to_string(), "enum3".to_string());
+        md_f3.insert("avro.namespace".to_string(), "ns1".to_string());
         let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
         let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
         let expected = RecordBatch::try_new(
@@ -2748,6 +2761,31 @@ mod test {
             fields_json.len(),
             "full read column count vs writer fields"
         );
+        fn rebuild_list_array_with_element(
+            col: &ArrayRef,
+            new_elem: Arc<Field>,
+            is_large: bool,
+        ) -> ArrayRef {
+            if is_large {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<LargeListArray>()
+                    .expect("expected LargeListArray");
+                let offsets = list.offsets().clone();
+                let values = list.values().clone();
+                let validity = list.nulls().cloned();
+                Arc::new(LargeListArray::try_new(new_elem, offsets, values, validity).unwrap())
+            } else {
+                let list = col
+                    .as_any()
+                    .downcast_ref::<ListArray>()
+                    .expect("expected ListArray");
+                let offsets = list.offsets().clone();
+                let values = list.values().clone();
+                let validity = list.nulls().cloned();
+                Arc::new(ListArray::try_new(new_elem, offsets, values, validity).unwrap())
+            }
+        }
         for (idx, f) in fields_json.iter().enumerate() {
             let name = f
                 .get("name")
@@ -2765,12 +2803,46 @@ mod test {
                 num_rows,
                 "row count mismatch for projected column '{name}'"
             );
-            let field = schema_full.field(idx).clone();
-            let col = full.column(idx).clone();
-            let expected =
-                RecordBatch::try_new(Arc::new(Schema::new(vec![field])), vec![col]).unwrap();
-            // Equality means: (1) read the right column values; and (2) all other
-            // writer fields were skipped correctly for this projection (no misalignment).
+            let col_full = full.column(idx).clone();
+            let full_field = schema_full.field(idx).as_ref().clone();
+            let proj_field_ref = projected.schema().field(0).clone();
+            let proj_field = proj_field_ref.as_ref();
+            let top_meta = proj_field.metadata().clone();
+            let (expected_field_ref, expected_col): (Arc<Field>, ArrayRef) =
+                match (full_field.data_type(), proj_field.data_type()) {
+                    (&DataType::List(_), DataType::List(ref proj_elem)) => {
+                        let new_col =
+                            rebuild_list_array_with_element(&col_full, proj_elem.clone(), false);
+                        let nf = Field::new(
+                            full_field.name().clone(),
+                            proj_field.data_type().clone(),
+                            full_field.is_nullable(),
+                        )
+                        .with_metadata(top_meta);
+                        (Arc::new(nf), new_col)
+                    }
+                    (&DataType::LargeList(_), DataType::LargeList(ref proj_elem)) => {
+                        let new_col =
+                            rebuild_list_array_with_element(&col_full, proj_elem.clone(), true);
+                        let nf = Field::new(
+                            full_field.name().clone(),
+                            proj_field.data_type().clone(),
+                            full_field.is_nullable(),
+                        )
+                        .with_metadata(top_meta);
+                        (Arc::new(nf), new_col)
+                    }
+                    _ => {
+                        let nf = full_field.with_metadata(top_meta);
+                        (Arc::new(nf), col_full)
+                    }
+                };
+
+            let expected = RecordBatch::try_new(
+                Arc::new(Schema::new(vec![expected_field_ref])),
+                vec![expected_col],
+            )
+            .unwrap();
             assert_eq!(
                 projected, expected,
                 "projected column '{name}' mismatch vs full read column"
@@ -3546,7 +3618,7 @@ mod test {
                     return tid;
                 }
             }
-            panic!("no union child matches predicate")
+            panic!("no union child matches predicate");
         }
 
         fn uuid16_from_str(s: &str) -> [u8; 16] {
@@ -3791,6 +3863,14 @@ mod test {
         {
             let (uf, mode) = get_union("union_prim");
             assert!(matches!(mode, UnionMode::Dense));
+            let generated_names: Vec<&str> = uf.iter().map(|(_, f)| f.name().as_str()).collect();
+            let expected_names = vec![
+                "boolean", "int", "long", "float", "double", "bytes", "string",
+            ];
+            assert_eq!(
+                generated_names, expected_names,
+                "Field names for union_prim are incorrect"
+            );
             let tids = vec![
                 tid_by_name(&uf, "long"),
                 tid_by_name(&uf, "int"),
@@ -3877,6 +3957,12 @@ mod test {
                 }
                 _ => None,
             });
+            let generated_names: Vec<&str> = uf.iter().map(|(_, f)| f.name().as_str()).collect();
+            let expected_names = vec!["Fx8", "Dur12", "DecFix16"];
+            assert_eq!(
+                generated_names, expected_names,
+                "Data type names were not generated correctly for union_fixed_dur_decfix"
+            );
             expected_cols.push(arr);
         }
         // 6) union_enum_records_array_map: [enum ColorU, record RecA, record RecB, array<long>, map<string>]
@@ -4638,58 +4724,140 @@ mod test {
         // With `small_decimals` enabled, Decimal32/Decimal64 are used where their
         // precision allows; otherwise, those cases resolve to Decimal128.
         #[cfg(feature = "small_decimals")]
-        let files: [(&str, DataType); 8] = [
+        let files: [(&str, DataType, HashMap<String, String>); 8] = [
             (
                 "avro/fixed_length_decimal.avro",
                 DataType::Decimal128(25, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
             (
                 "avro/fixed_length_decimal_legacy.avro",
                 DataType::Decimal64(13, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
-            ("avro/int32_decimal.avro", DataType::Decimal32(4, 2)),
-            ("avro/int64_decimal.avro", DataType::Decimal64(10, 2)),
+            (
+                "avro/int32_decimal.avro",
+                DataType::Decimal32(4, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
+            (
+                "avro/int64_decimal.avro",
+                DataType::Decimal64(10, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
             (
                 "test/data/int256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::new(),
             ),
             (
                 "test/data/fixed256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::from([("avro.name".to_string(), "Decimal256Fixed".to_string())]),
             ),
             (
                 "test/data/fixed_length_decimal_legacy_32.avro",
                 DataType::Decimal32(9, 2),
+                HashMap::from([("avro.name".to_string(), "Decimal32FixedLegacy".to_string())]),
             ),
-            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
+            (
+                "test/data/int128_decimal.avro",
+                DataType::Decimal128(38, 2),
+                HashMap::new(),
+            ),
         ];
         #[cfg(not(feature = "small_decimals"))]
-        let files: [(&str, DataType); 8] = [
+        let files: [(&str, DataType, HashMap<String, String>); 8] = [
             (
                 "avro/fixed_length_decimal.avro",
                 DataType::Decimal128(25, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
             (
                 "avro/fixed_length_decimal_legacy.avro",
                 DataType::Decimal128(13, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
             ),
-            ("avro/int32_decimal.avro", DataType::Decimal128(4, 2)),
-            ("avro/int64_decimal.avro", DataType::Decimal128(10, 2)),
+            (
+                "avro/int32_decimal.avro",
+                DataType::Decimal128(4, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
+            (
+                "avro/int64_decimal.avro",
+                DataType::Decimal128(10, 2),
+                HashMap::from([
+                    (
+                        "avro.namespace".to_string(),
+                        "topLevelRecord.value".to_string(),
+                    ),
+                    ("avro.name".to_string(), "fixed".to_string()),
+                ]),
+            ),
             (
                 "test/data/int256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::new(),
             ),
             (
                 "test/data/fixed256_decimal.avro",
                 DataType::Decimal256(76, 10),
+                HashMap::from([("avro.name".to_string(), "Decimal256Fixed".to_string())]),
             ),
             (
                 "test/data/fixed_length_decimal_legacy_32.avro",
                 DataType::Decimal128(9, 2),
+                HashMap::from([("avro.name".to_string(), "Decimal32FixedLegacy".to_string())]),
             ),
-            ("test/data/int128_decimal.avro", DataType::Decimal128(38, 2)),
+            (
+                "test/data/int128_decimal.avro",
+                DataType::Decimal128(38, 2),
+                HashMap::new(),
+            ),
         ];
-        for (file, expected_dt) in files {
+        for (file, expected_dt, mut metadata) in files {
             let (precision, scale) = match expected_dt {
                 DataType::Decimal32(p, s)
                 | DataType::Decimal64(p, s)
@@ -4751,11 +4919,10 @@ mod test {
             let actual_batch = read_file(&file_path, 8, false);
             let actual_nullable = actual_batch.schema().field(0).is_nullable();
             let expected_array = build_expected(&expected_dt, &values_i128);
-            let mut meta = HashMap::new();
-            meta.insert("precision".to_string(), precision.to_string());
-            meta.insert("scale".to_string(), scale.to_string());
+            metadata.insert("precision".to_string(), precision.to_string());
+            metadata.insert("scale".to_string(), scale.to_string());
             let field =
-                Field::new("value", expected_dt.clone(), actual_nullable).with_metadata(meta);
+                Field::new("value", expected_dt.clone(), actual_nullable).with_metadata(metadata);
             let expected_schema = Arc::new(Schema::new(vec![field]));
             let expected_batch =
                 RecordBatch::try_new(expected_schema.clone(), vec![expected_array]).unwrap();
@@ -4783,7 +4950,6 @@ mod test {
         let expected_batch = {
             #[cfg(feature = "avro_custom_types")]
             {
-                println!("Testing with 'avro_custom_types' feature ENABLED");
                 let schema = Arc::new(Schema::new(vec![
                     Field::new(
                         "duration_time_nanos",
@@ -5048,18 +5214,24 @@ mod test {
                 AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["a","b","c","d"]"#.to_string(),
             );
+            md_f1.insert(AVRO_NAME_METADATA_KEY.to_string(), "enum1".to_string());
+            md_f1.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns1".to_string());
             let f1_field = Field::new("f1", dict_type.clone(), false).with_metadata(md_f1);
             let mut md_f2 = HashMap::new();
             md_f2.insert(
                 AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["e","f","g","h"]"#.to_string(),
             );
+            md_f2.insert(AVRO_NAME_METADATA_KEY.to_string(), "enum2".to_string());
+            md_f2.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns2".to_string());
             let f2_field = Field::new("f2", dict_type.clone(), false).with_metadata(md_f2);
             let mut md_f3 = HashMap::new();
             md_f3.insert(
                 AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 r#"["i","j","k"]"#.to_string(),
             );
+            md_f3.insert(AVRO_NAME_METADATA_KEY.to_string(), "enum3".to_string());
+            md_f3.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns1".to_string());
             let f3_field = Field::new("f3", dict_type.clone(), true).with_metadata(md_f3);
             let expected_schema = Arc::new(Schema::new(vec![f1_field, f2_field, f3_field]));
             RecordBatch::try_new(
@@ -5084,11 +5256,44 @@ mod test {
                 6,
             )
             .unwrap();
+
+            // Add Avro named-type metadata for fixed fields
+            let mut md_f1 = HashMap::new();
+            md_f1.insert(
+                crate::schema::AVRO_NAME_METADATA_KEY.to_string(),
+                "fixed1".to_string(),
+            );
+            md_f1.insert(
+                crate::schema::AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "ns1".to_string(),
+            );
+
+            let mut md_f2 = HashMap::new();
+            md_f2.insert(
+                crate::schema::AVRO_NAME_METADATA_KEY.to_string(),
+                "fixed2".to_string(),
+            );
+            md_f2.insert(
+                crate::schema::AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "ns2".to_string(),
+            );
+
+            let mut md_f3 = HashMap::new();
+            md_f3.insert(
+                crate::schema::AVRO_NAME_METADATA_KEY.to_string(),
+                "fixed3".to_string(),
+            );
+            md_f3.insert(
+                crate::schema::AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "ns1".to_string(),
+            );
+
             let expected_schema = Arc::new(Schema::new(vec![
-                Field::new("f1", DataType::FixedSizeBinary(5), false),
-                Field::new("f2", DataType::FixedSizeBinary(10), false),
-                Field::new("f3", DataType::FixedSizeBinary(6), true),
+                Field::new("f1", DataType::FixedSizeBinary(5), false).with_metadata(md_f1),
+                Field::new("f2", DataType::FixedSizeBinary(10), false).with_metadata(md_f2),
+                Field::new("f3", DataType::FixedSizeBinary(6), true).with_metadata(md_f3),
             ]));
+
             RecordBatch::try_new(
                 expected_schema,
                 vec![
@@ -5241,6 +5446,10 @@ mod test {
             Arc::new(Field::new("f1_3_1", DataType::Float64, false)),
             Arc::new(f1_f1_3_1) as Arc<dyn Array>,
         )]);
+        // Add Avro named-type metadata to nested field f1_3 (ns3.record3)
+        let mut f1_3_md: HashMap<String, String> = HashMap::new();
+        f1_3_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns3".to_string());
+        f1_3_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record3".to_string());
         let f1_expected = StructArray::from(vec![
             (
                 Arc::new(Field::new("f1_1", DataType::Utf8, false)),
@@ -5251,19 +5460,21 @@ mod test {
                 Arc::new(f1_f1_2) as Arc<dyn Array>,
             ),
             (
-                Arc::new(Field::new(
-                    "f1_3",
-                    DataType::Struct(Fields::from(vec![Field::new(
-                        "f1_3_1",
-                        DataType::Float64,
+                Arc::new(
+                    Field::new(
+                        "f1_3",
+                        DataType::Struct(Fields::from(vec![Field::new(
+                            "f1_3_1",
+                            DataType::Float64,
+                            false,
+                        )])),
                         false,
-                    )])),
-                    false,
-                )),
+                    )
+                    .with_metadata(f1_3_md),
+                ),
                 Arc::new(f1_f1_3) as Arc<dyn Array>,
             ),
         ]);
-
         let f2_fields = vec![
             Field::new("f2_1", DataType::Boolean, false),
             Field::new("f2_2", DataType::Float32, false),
@@ -5316,14 +5527,19 @@ mod test {
         }
 
         let list_array_with_nullable_items = f2_list_builder.finish();
-
-        let item_field = Arc::new(Field::new(
-            "item",
-            list_array_with_nullable_items.values().data_type().clone(),
-            false,
-        ));
+        // Add Avro named-type metadata to f2's list item (ns4.record4)
+        let mut f2_item_md: HashMap<String, String> = HashMap::new();
+        f2_item_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record4".to_string());
+        f2_item_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns4".to_string());
+        let item_field = Arc::new(
+            Field::new(
+                "item",
+                list_array_with_nullable_items.values().data_type().clone(),
+                false, // items are non-nullable for f2
+            )
+            .with_metadata(f2_item_md),
+        );
         let list_data_type = DataType::List(item_field);
-
         let f2_array_data = list_array_with_nullable_items
             .to_data()
             .into_builder()
@@ -5331,7 +5547,6 @@ mod test {
             .build()
             .unwrap();
         let f2_expected = ListArray::from(f2_array_data);
-
         let mut f3_struct_builder = StructBuilder::new(
             vec![Arc::new(Field::new("f3_1", DataType::Utf8, false))],
             vec![Box::new(StringBuilder::new()) as Box<dyn ArrayBuilder>],
@@ -5385,15 +5600,45 @@ mod test {
             f4_list_builder.append(true);
         }
         let f4_expected = f4_list_builder.finish();
-
-        let expected = RecordBatch::try_from_iter_with_nullable([
-            ("f1", Arc::new(f1_expected) as Arc<dyn Array>, false),
-            ("f2", Arc::new(f2_expected) as Arc<dyn Array>, false),
-            ("f3", Arc::new(f3_expected) as Arc<dyn Array>, true),
-            ("f4", Arc::new(f4_expected) as Arc<dyn Array>, false),
-        ])
+        // Add Avro named-type metadata to f4's list item (ns6.record6), item is nullable
+        let mut f4_item_md: HashMap<String, String> = HashMap::new();
+        f4_item_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns6".to_string());
+        f4_item_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record6".to_string());
+        let f4_item_field = Arc::new(
+            Field::new("item", f4_expected.values().data_type().clone(), true)
+                .with_metadata(f4_item_md),
+        );
+        let f4_list_data_type = DataType::List(f4_item_field);
+        let f4_array_data = f4_expected
+            .to_data()
+            .into_builder()
+            .data_type(f4_list_data_type)
+            .build()
+            .unwrap();
+        let f4_expected = ListArray::from(f4_array_data);
+        // Build Schema with Avro named-type metadata on the top-level f1 and f3 fields
+        let mut f1_md: HashMap<String, String> = HashMap::new();
+        f1_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record2".to_string());
+        f1_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns2".to_string());
+        let mut f3_md: HashMap<String, String> = HashMap::new();
+        f3_md.insert(AVRO_NAMESPACE_METADATA_KEY.to_string(), "ns5".to_string());
+        f3_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "record5".to_string());
+        let expected_schema = Schema::new(vec![
+            Field::new("f1", f1_expected.data_type().clone(), false).with_metadata(f1_md),
+            Field::new("f2", f2_expected.data_type().clone(), false),
+            Field::new("f3", f3_expected.data_type().clone(), true).with_metadata(f3_md),
+            Field::new("f4", f4_expected.data_type().clone(), false),
+        ]);
+        let expected = RecordBatch::try_new(
+            Arc::new(expected_schema),
+            vec![
+                Arc::new(f1_expected) as Arc<dyn Array>,
+                Arc::new(f2_expected) as Arc<dyn Array>,
+                Arc::new(f3_expected) as Arc<dyn Array>,
+                Arc::new(f4_expected) as Arc<dyn Array>,
+            ],
+        )
         .unwrap();
-
         let file = arrow_test_data("avro/nested_records.avro");
         let batch_large = read_file(&file, 8, false);
         assert_eq!(
@@ -5411,10 +5656,9 @@ mod test {
     fn test_repeated_no_annotation() {
         let file = arrow_test_data("avro/repeated_no_annotation.avro");
         let batch_large = read_file(&file, 8, false);
-        use arrow_array::{Int32Array, Int64Array, ListArray, StringArray, StructArray};
-        use arrow_buffer::Buffer;
-        use arrow_schema::{DataType, Field, Fields};
+        // id column
         let id_array = Int32Array::from(vec![1, 2, 3, 4, 5, 6]);
+        // Build the inner Struct<number:int64, kind:utf8>
         let number_array = Int64Array::from(vec![
             Some(5555555555),
             Some(1111111111),
@@ -5434,9 +5678,18 @@ mod test {
             .build()
             .unwrap();
         let phone_struct_array = StructArray::from(phone_struct_data);
-        let phone_list_offsets = Buffer::from_slice_ref([0, 0, 0, 0, 1, 2, 5]);
+        // Build List<item: Struct<...>> with Avro named-type metadata on the *element* field
+        let phone_list_offsets = Buffer::from_slice_ref([0i32, 0, 0, 0, 1, 2, 5]);
         let phone_list_validity = Buffer::from_iter([false, false, true, true, true, true]);
-        let phone_item_field = Field::new("item", phone_struct_array.data_type().clone(), true);
+        // The Avro schema names this inner record "phone" in namespace "topLevelRecord.phoneNumbers"
+        let mut phone_item_md = HashMap::new();
+        phone_item_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "phone".to_string());
+        phone_item_md.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "topLevelRecord.phoneNumbers".to_string(),
+        );
+        let phone_item_field = Field::new("item", phone_struct_array.data_type().clone(), true)
+            .with_metadata(phone_item_md);
         let phone_list_data = ArrayDataBuilder::new(DataType::List(Arc::new(phone_item_field)))
             .len(6)
             .add_buffer(phone_list_offsets)
@@ -5445,6 +5698,7 @@ mod test {
             .build()
             .unwrap();
         let phone_list_array = ListArray::from(phone_list_data);
+        // Wrap in Struct { phone: List<...> }
         let phone_numbers_validity = Buffer::from_iter([false, false, true, true, true, true]);
         let phone_numbers_field = Field::new("phone", phone_list_array.data_type().clone(), true);
         let phone_numbers_struct_data =
@@ -5455,14 +5709,32 @@ mod test {
                 .build()
                 .unwrap();
         let phone_numbers_struct_array = StructArray::from(phone_numbers_struct_data);
-        let expected = arrow_array::RecordBatch::try_from_iter_with_nullable([
-            ("id", Arc::new(id_array) as _, true),
-            (
-                "phoneNumbers",
+        // Build the expected Schema, annotating the top-level "phoneNumbers" field with Avro name/namespace
+        let mut phone_numbers_md = HashMap::new();
+        phone_numbers_md.insert(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            "phoneNumbers".to_string(),
+        );
+        phone_numbers_md.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "topLevelRecord".to_string(),
+        );
+        let id_field = Field::new("id", DataType::Int32, true);
+        let phone_numbers_schema_field = Field::new(
+            "phoneNumbers",
+            phone_numbers_struct_array.data_type().clone(),
+            true,
+        )
+        .with_metadata(phone_numbers_md);
+        let expected_schema = Schema::new(vec![id_field, phone_numbers_schema_field]);
+        // Final expected RecordBatch (arrays already carry matching list-element metadata)
+        let expected = RecordBatch::try_new(
+            Arc::new(expected_schema),
+            vec![
+                Arc::new(id_array) as _,
                 Arc::new(phone_numbers_struct_array) as _,
-                true,
-            ),
-        ])
+            ],
+        )
         .unwrap();
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
         let batch_small = read_file(&file, 3, false);
@@ -5493,7 +5765,6 @@ mod test {
         }
         iaa_builder.append(true);
         let int_array_array = iaa_builder.finish();
-        use arrow_array::builder::MapFieldNames;
         let field_names = MapFieldNames {
             entry: "entries".to_string(),
             key: "key".to_string(),
@@ -5532,106 +5803,119 @@ mod test {
         }
         ima_builder.append(true);
         let int_map_array_ = ima_builder.finish();
+        // Helper metadata maps
+        let meta_nested_struct: HashMap<String, String> = [
+            ("avro.name", "nested_Struct"),
+            ("avro.namespace", "topLevelRecord"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_c: HashMap<String, String> = [
+            ("avro.name", "c"),
+            ("avro.namespace", "topLevelRecord.nested_Struct"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_d_item_struct: HashMap<String, String> = [
+            ("avro.name", "D"),
+            ("avro.namespace", "topLevelRecord.nested_Struct.c"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_g_value: HashMap<String, String> = [
+            ("avro.name", "G"),
+            ("avro.namespace", "topLevelRecord.nested_Struct"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let meta_h: HashMap<String, String> = [
+            ("avro.name", "h"),
+            ("avro.namespace", "topLevelRecord.nested_Struct.G"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        // Types used multiple times below
+        let ef_struct_field = Arc::new(
+            Field::new(
+                "item",
+                DataType::Struct(
+                    vec![
+                        Field::new("e", DataType::Int32, true),
+                        Field::new("f", DataType::Utf8, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            )
+            .with_metadata(meta_d_item_struct.clone()),
+        );
+        let d_inner_list_field = Arc::new(Field::new(
+            "item",
+            DataType::List(ef_struct_field.clone()),
+            true,
+        ));
+        let d_field = Field::new("D", DataType::List(d_inner_list_field.clone()), true);
+        // G.value.h.i : List<Float64>
+        let i_list_field = Arc::new(Field::new("item", DataType::Float64, true));
+        let i_field = Field::new("i", DataType::List(i_list_field.clone()), true);
+        // G.value.h : Struct<{ i: List<Float64> }> with metadata (h)
+        let h_field = Field::new("h", DataType::Struct(vec![i_field.clone()].into()), true)
+            .with_metadata(meta_h.clone());
+        // G.value : Struct<{ h: ... }> with metadata (G)
+        let g_value_struct_field = Field::new(
+            "value",
+            DataType::Struct(vec![h_field.clone()].into()),
+            true,
+        )
+        .with_metadata(meta_g_value.clone());
+        // entries struct for Map G
+        let entries_struct_field = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    g_value_struct_field.clone(),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        // Top-level nested_Struct fields (include metadata on "c")
+        let a_field = Arc::new(Field::new("a", DataType::Int32, true));
+        let b_field = Arc::new(Field::new(
+            "B",
+            DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+            true,
+        ));
+        let c_field = Arc::new(
+            Field::new("c", DataType::Struct(vec![d_field.clone()].into()), true)
+                .with_metadata(meta_c.clone()),
+        );
+        let g_field = Arc::new(Field::new(
+            "G",
+            DataType::Map(Arc::new(entries_struct_field.clone()), false),
+            true,
+        ));
+        // Now create builders that match these exact field types (so nested types carry metadata)
         let mut nested_sb = StructBuilder::new(
             vec![
-                Arc::new(Field::new("a", DataType::Int32, true)),
-                Arc::new(Field::new(
-                    "B",
-                    DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
-                    true,
-                )),
-                Arc::new(Field::new(
-                    "c",
-                    DataType::Struct(
-                        vec![Field::new(
-                            "D",
-                            DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::List(Arc::new(Field::new(
-                                    "item",
-                                    DataType::Struct(
-                                        vec![
-                                            Field::new("e", DataType::Int32, true),
-                                            Field::new("f", DataType::Utf8, true),
-                                        ]
-                                        .into(),
-                                    ),
-                                    true,
-                                ))),
-                                true,
-                            ))),
-                            true,
-                        )]
-                        .into(),
-                    ),
-                    true,
-                )),
-                Arc::new(Field::new(
-                    "G",
-                    DataType::Map(
-                        Arc::new(Field::new(
-                            "entries",
-                            DataType::Struct(
-                                vec![
-                                    Field::new("key", DataType::Utf8, false),
-                                    Field::new(
-                                        "value",
-                                        DataType::Struct(
-                                            vec![Field::new(
-                                                "h",
-                                                DataType::Struct(
-                                                    vec![Field::new(
-                                                        "i",
-                                                        DataType::List(Arc::new(Field::new(
-                                                            "item",
-                                                            DataType::Float64,
-                                                            true,
-                                                        ))),
-                                                        true,
-                                                    )]
-                                                    .into(),
-                                                ),
-                                                true,
-                                            )]
-                                            .into(),
-                                        ),
-                                        true,
-                                    ),
-                                ]
-                                .into(),
-                            ),
-                            false,
-                        )),
-                        false,
-                    ),
-                    true,
-                )),
+                a_field.clone(),
+                b_field.clone(),
+                c_field.clone(),
+                g_field.clone(),
             ],
             vec![
                 Box::new(Int32Builder::new()),
                 Box::new(ListBuilder::new(Int32Builder::new())),
                 {
-                    let d_field = Field::new(
-                        "D",
-                        DataType::List(Arc::new(Field::new(
-                            "item",
-                            DataType::List(Arc::new(Field::new(
-                                "item",
-                                DataType::Struct(
-                                    vec![
-                                        Field::new("e", DataType::Int32, true),
-                                        Field::new("f", DataType::Utf8, true),
-                                    ]
-                                    .into(),
-                                ),
-                                true,
-                            ))),
-                            true,
-                        ))),
-                        true,
-                    );
+                    // builder for "c" with correctly typed "D" including metadata on inner list item
                     Box::new(StructBuilder::new(
-                        vec![Arc::new(d_field)],
+                        vec![Arc::new(d_field.clone())],
                         vec![Box::new({
                             let ef_struct_builder = StructBuilder::new(
                                 vec![
@@ -5643,7 +5927,10 @@ mod test {
                                     Box::new(StringBuilder::new()),
                                 ],
                             );
-                            let list_of_ef = ListBuilder::new(ef_struct_builder);
+                            // Inner list that holds Struct<e,f> with Avro named-type metadata ("D")
+                            let list_of_ef = ListBuilder::new(ef_struct_builder)
+                                .with_field(ef_struct_field.clone());
+                            // Outer list for "D"
                             ListBuilder::new(list_of_ef)
                         })],
                     ))
@@ -5655,38 +5942,37 @@ mod test {
                         value: "value".to_string(),
                     };
                     let i_list_builder = ListBuilder::new(Float64Builder::new());
-                    let h_struct = StructBuilder::new(
+                    let h_struct_builder = StructBuilder::new(
                         vec![Arc::new(Field::new(
                             "i",
-                            DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
+                            DataType::List(i_list_field.clone()),
                             true,
                         ))],
                         vec![Box::new(i_list_builder)],
                     );
                     let g_value_builder = StructBuilder::new(
-                        vec![Arc::new(Field::new(
-                            "h",
-                            DataType::Struct(
-                                vec![Field::new(
-                                    "i",
-                                    DataType::List(Arc::new(Field::new(
-                                        "item",
-                                        DataType::Float64,
-                                        true,
-                                    ))),
-                                    true,
-                                )]
-                                .into(),
-                            ),
-                            true,
-                        ))],
-                        vec![Box::new(h_struct)],
+                        vec![Arc::new(
+                            Field::new("h", DataType::Struct(vec![i_field.clone()].into()), true)
+                                .with_metadata(meta_h.clone()),
+                        )],
+                        vec![Box::new(h_struct_builder)],
                     );
-                    Box::new(MapBuilder::new(
+                    // Use with_values_field to attach metadata to "value" field in the map's entries
+                    let map_builder = MapBuilder::new(
                         Some(map_field_names),
                         StringBuilder::new(),
                         g_value_builder,
-                    ))
+                    )
+                    .with_values_field(Arc::new(
+                        Field::new(
+                            "value",
+                            DataType::Struct(vec![h_field.clone()].into()),
+                            true,
+                        )
+                        .with_metadata(meta_g_value.clone()),
+                    ));
+
+                    Box::new(map_builder)
                 },
             ],
         );
@@ -5734,14 +6020,26 @@ mod test {
             g_map_builder.append(true).unwrap();
         }
         let nested_struct = nested_sb.finish();
-        let expected = RecordBatch::try_from_iter_with_nullable([
-            ("ID", Arc::new(id) as Arc<dyn Array>, true),
-            ("Int_Array", Arc::new(int_array), true),
-            ("int_array_array", Arc::new(int_array_array), true),
-            ("Int_Map", Arc::new(int_map), true),
-            ("int_map_array", Arc::new(int_map_array_), true),
-            ("nested_Struct", Arc::new(nested_struct), true),
-        ])
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            Field::new("ID", id.data_type().clone(), true),
+            Field::new("Int_Array", int_array.data_type().clone(), true),
+            Field::new("int_array_array", int_array_array.data_type().clone(), true),
+            Field::new("Int_Map", int_map.data_type().clone(), true),
+            Field::new("int_map_array", int_map_array_.data_type().clone(), true),
+            Field::new("nested_Struct", nested_struct.data_type().clone(), true)
+                .with_metadata(meta_nested_struct.clone()),
+        ]));
+        let expected = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(id) as Arc<dyn Array>,
+                Arc::new(int_array),
+                Arc::new(int_array_array),
+                Arc::new(int_map),
+                Arc::new(int_map_array_),
+                Arc::new(nested_struct),
+            ],
+        )
         .unwrap();
         let batch_large = read_file(&file, 8, false);
         assert_eq!(batch_large, expected, "Mismatch for batch_size=8");
@@ -7497,14 +7795,20 @@ mod test {
             ])),
             false,
         ));
-        let enum_md_color = {
+        // Enum metadata for Color (now includes name/namespace)
+        let mut enum_md_color = {
             let mut m = HashMap::<String, String>::new();
             m.insert(
-                AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
+                crate::schema::AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
                 serde_json::to_string(&vec!["RED", "GREEN", "BLUE"]).unwrap(),
             );
             m
         };
+        enum_md_color.insert(AVRO_NAME_METADATA_KEY.to_string(), "Color".to_string());
+        enum_md_color.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "org.apache.arrow.avrotests.v1.types".to_string(),
+        );
         let union_rec_a_fields = Fields::from(vec![
             Field::new("a", DataType::Int32, false),
             Field::new("b", DataType::Utf8, false),
@@ -7521,6 +7825,24 @@ mod test {
             ])),
             false,
         ));
+        let rec_a_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "RecA".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let rec_b_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "RecB".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
         let uf_union_big = UnionFields::new(
             vec![0, 1, 2, 3, 4],
             vec![
@@ -7535,45 +7857,85 @@ mod test {
                     false,
                 ),
                 Field::new(
-                    "record",
+                    "org.apache.arrow.avrotests.v1.types.RecB",
                     DataType::Struct(union_rec_b_fields.clone()),
                     false,
-                ),
+                )
+                .with_metadata(rec_b_md.clone()),
                 Field::new(
-                    "record",
+                    "org.apache.arrow.avrotests.v1.types.RecA",
                     DataType::Struct(union_rec_a_fields.clone()),
                     false,
-                ),
+                )
+                .with_metadata(rec_a_md.clone()),
                 Field::new(
-                    "enum",
+                    "org.apache.arrow.avrotests.v1.types.Color",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     false,
                 )
                 .with_metadata(enum_md_color.clone()),
             ],
         );
+        let fx4_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx4".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1".to_string(),
+            );
+            m
+        };
         let uf_date_fixed4 = UnionFields::new(
             vec![0, 1],
             vec![
-                Field::new("fixed", DataType::FixedSizeBinary(4), false),
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.Fx4",
+                    DataType::FixedSizeBinary(4),
+                    false,
+                )
+                .with_metadata(fx4_md.clone()),
                 Field::new("date", DataType::Date32, false),
             ],
         );
+        let dur12u_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Dur12U".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1".to_string(),
+            );
+            m
+        };
         let uf_dur_or_str = UnionFields::new(
             vec![0, 1],
             vec![
                 Field::new("string", DataType::Utf8, false),
                 Field::new(
-                    "duration",
+                    "org.apache.arrow.avrotests.v1.Dur12U",
                     DataType::Interval(arrow_schema::IntervalUnit::MonthDayNano),
                     false,
-                ),
+                )
+                .with_metadata(dur12u_md.clone()),
             ],
         );
+        let fx10_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx10".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1".to_string(),
+            );
+            m
+        };
         let uf_uuid_or_fx10 = UnionFields::new(
             vec![0, 1],
             vec![
-                Field::new("fixed", DataType::FixedSizeBinary(10), false),
+                Field::new(
+                    "org.apache.arrow.avrotests.v1.Fx10",
+                    DataType::FixedSizeBinary(10),
+                    false,
+                )
+                .with_metadata(fx10_md.clone()),
                 add_uuid_ext_union(Field::new("uuid", DataType::FixedSizeBinary(16), false)),
             ],
         );
@@ -7617,8 +7979,7 @@ mod test {
                 Field::new("map", DataType::Map(map_int_entries.clone(), false), false),
             ],
         );
-        // Metadata & decimal types used within the fields vector
-        let enum_md_status = {
+        let mut enum_md_status = {
             let mut m = HashMap::<String, String>::new();
             m.insert(
                 crate::schema::AVRO_ENUM_SYMBOLS_METADATA_KEY.to_string(),
@@ -7626,12 +7987,40 @@ mod test {
             );
             m
         };
+        enum_md_status.insert(AVRO_NAME_METADATA_KEY.to_string(), "Status".to_string());
+        enum_md_status.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "org.apache.arrow.avrotests.v1.types".to_string(),
+        );
         let mut dec20_md = HashMap::<String, String>::new();
         dec20_md.insert("precision".to_string(), "20".to_string());
         dec20_md.insert("scale".to_string(), "4".to_string());
+        dec20_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "DecFix20".to_string());
+        dec20_md.insert(
+            AVRO_NAMESPACE_METADATA_KEY.to_string(),
+            "org.apache.arrow.avrotests.v1.types".to_string(),
+        );
         let mut dec10_md = HashMap::<String, String>::new();
         dec10_md.insert("precision".to_string(), "10".to_string());
         dec10_md.insert("scale".to_string(), "2".to_string());
+        let fx16_top_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx16".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
+        let dur12_top_md = {
+            let mut m = HashMap::<String, String>::new();
+            m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Dur12".to_string());
+            m.insert(
+                AVRO_NAMESPACE_METADATA_KEY.to_string(),
+                "org.apache.arrow.avrotests.v1.types".to_string(),
+            );
+            m
+        };
         #[cfg(feature = "small_decimals")]
         let dec20_dt = DataType::Decimal128(20, 4);
         #[cfg(not(feature = "small_decimals"))]
@@ -7715,11 +8104,14 @@ mod test {
                 )
                 .with_metadata(enum_md_status.clone()),
             ),
-            Arc::new(Field::new(
-                "interval_mdn",
-                DataType::Interval(IntervalUnit::MonthDayNano),
-                false,
-            )),
+            Arc::new(
+                Field::new(
+                    "interval_mdn",
+                    DataType::Interval(IntervalUnit::MonthDayNano),
+                    false,
+                )
+                .with_metadata(dur12_top_md.clone()),
+            ),
             Arc::new(Field::new(
                 "ts_micros_local",
                 DataType::Timestamp(arrow_schema::TimeUnit::Microsecond, None),
@@ -7760,11 +8152,10 @@ mod test {
             Arc::new(
                 Field::new("dec_bytes_s10_2", dec10_dt, false).with_metadata(dec10_md.clone()),
             ),
-            Arc::new(Field::new(
-                "fx16_plain",
-                DataType::FixedSizeBinary(16),
-                false,
-            )),
+            Arc::new(
+                Field::new("fx16_plain", DataType::FixedSizeBinary(16), false)
+                    .with_metadata(fx16_top_md.clone()),
+            ),
             Arc::new(Field::new("raw_bytes", DataType::Binary, false)),
             Arc::new(Field::new("str_utf8", DataType::Utf8, false)),
             Arc::new(Field::new(
