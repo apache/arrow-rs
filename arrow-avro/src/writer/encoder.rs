@@ -210,7 +210,7 @@ enum NullState {
 /// Arrow to Avro FieldEncoder:
 /// - Holds the inner `Encoder` (by value)
 /// - Carries the per-site nullability **state** as a single enum that enforces invariants
-pub struct FieldEncoder<'a> {
+pub(crate) struct FieldEncoder<'a> {
     encoder: Encoder<'a>,
     null_state: NullState,
 }
@@ -551,7 +551,7 @@ impl<'a> RecordEncoderBuilder<'a> {
 
     /// Build the `RecordEncoder` by walking the Avro **record** root in Avro order,
     /// resolving each field to an Arrow index by name.
-    pub fn build(self) -> Result<RecordEncoder, ArrowError> {
+    pub(crate) fn build(self) -> Result<RecordEncoder, ArrowError> {
         let avro_root_dt = self.avro_root.data_type();
         let Codec::Struct(root_fields) = avro_root_dt.codec() else {
             return Err(ArrowError::SchemaError(
@@ -586,7 +586,7 @@ impl<'a> RecordEncoderBuilder<'a> {
 /// top-level Avro fields to Arrow columns and contains a nested encoding plan
 /// for each column.
 #[derive(Debug, Clone)]
-pub struct RecordEncoder {
+pub(crate) struct RecordEncoder {
     columns: Vec<FieldBinding>,
     /// Optional pre-built, variable-length prefix written before each record.
     prefix: Option<Prefix>,
@@ -621,7 +621,11 @@ impl RecordEncoder {
     /// Encode a `RecordBatch` using this encoder plan.
     ///
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
-    pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
+    pub(crate) fn encode<W: Write>(
+        &self,
+        out: &mut W,
+        batch: &RecordBatch,
+    ) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         let n = batch.num_rows();
         match self.prefix {
