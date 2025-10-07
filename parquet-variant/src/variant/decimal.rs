@@ -44,6 +44,8 @@ pub trait VariantDecimalType: Into<super::Variant<'static, 'static>> {
 
     /// Maximum number of significant digits this decimal type can represent (9, 18, or 38)
     const MAX_PRECISION: u8;
+    /// The largest positive unscaled value that fits in [`Self::MAX_PRECISION`] digits.
+    const MAX_UNSCALED_VALUE: Self::Native;
 
     /// True if the given precision and scale are valid for this variant decimal type.
     ///
@@ -108,8 +110,8 @@ pub trait VariantDecimalType: Into<super::Variant<'static, 'static>> {
 macro_rules! impl_variant_decimal {
     ($struct_name:ident, $native:ty) => {
         impl $struct_name {
-            /// Attempts to create a new instance of this decimal type, failing if the value or
-            /// scale is too large.
+            /// Attempts to create a new instance of this decimal type, failing if the value is too
+            /// wide or the scale is too large.
             pub fn try_new(integer: $native, scale: u8) -> Result<Self, ArrowError> {
                 let max_precision = Self::MAX_PRECISION;
                 if scale > max_precision {
@@ -117,9 +119,7 @@ macro_rules! impl_variant_decimal {
                         "Scale {scale} is larger than max precision {max_precision}",
                     )));
                 }
-
-                // Validate that the integer value fits within the decimal's maximum precision
-                if integer.unsigned_abs() > Self::MAX_UNSCALED_VALUE {
+                if !(-Self::MAX_UNSCALED_VALUE..=Self::MAX_UNSCALED_VALUE).contains(&integer) {
                     return Err(ArrowError::InvalidArgumentError(format!(
                         "{integer} is wider than max precision {max_precision}",
                     )));
@@ -128,7 +128,7 @@ macro_rules! impl_variant_decimal {
                 Ok(Self { integer, scale })
             }
 
-            /// Returns the underlying value of the decimal.
+            /// Returns the unscaled integer value of the decimal.
             ///
             /// For example, if the decimal is `123.45`, this will return `12345`.
             pub fn integer(&self) -> $native {
@@ -146,6 +146,7 @@ macro_rules! impl_variant_decimal {
         impl VariantDecimalType for $struct_name {
             type Native = $native;
             const MAX_PRECISION: u8 = Self::MAX_PRECISION;
+            const MAX_UNSCALED_VALUE: $native = <$native>::pow(10, Self::MAX_PRECISION as u32) - 1;
 
             fn try_new(integer: $native, scale: u8) -> Result<Self, ArrowError> {
                 Self::try_new(integer, scale)
@@ -223,8 +224,6 @@ pub struct VariantDecimal4 {
 impl VariantDecimal4 {
     /// Maximum number of significant digits (9 for 4-byte decimals)
     pub const MAX_PRECISION: u8 = arrow_schema::DECIMAL32_MAX_PRECISION;
-    /// The largest unscaled value that fits in [`Self::MAX_PRECISION`] digits.
-    pub const MAX_UNSCALED_VALUE: u32 = u32::pow(10, Self::MAX_PRECISION as u32) - 1;
 }
 
 impl_variant_decimal!(VariantDecimal4, i32);
@@ -253,8 +252,6 @@ pub struct VariantDecimal8 {
 impl VariantDecimal8 {
     /// Maximum number of significant digits (18 for 8-byte decimals)
     pub const MAX_PRECISION: u8 = arrow_schema::DECIMAL64_MAX_PRECISION;
-    /// The largest unscaled value that fits in [`Self::MAX_PRECISION`] digits.
-    pub const MAX_UNSCALED_VALUE: u64 = u64::pow(10, Self::MAX_PRECISION as u32) - 1;
 }
 
 impl_variant_decimal!(VariantDecimal8, i64);
@@ -283,8 +280,6 @@ pub struct VariantDecimal16 {
 impl VariantDecimal16 {
     /// Maximum number of significant digits (38 for 16-byte decimals)
     pub const MAX_PRECISION: u8 = arrow_schema::DECIMAL128_MAX_PRECISION;
-    /// The largest unscaled value that fits in [`Self::MAX_PRECISION`] digits.
-    pub const MAX_UNSCALED_VALUE: u128 = u128::pow(10, Self::MAX_PRECISION as u32) - 1;
 }
 
 impl_variant_decimal!(VariantDecimal16, i128);
