@@ -106,36 +106,39 @@ impl GeoStatsAccumulator for ParquetGeoStatsAccumulator {
 
         use crate::geospatial::bounding_box::BoundingBox;
 
-        if self.invalid || self.bounder.x().is_empty() || self.bounder.y().is_empty() {
+        if self.invalid {
             // Reset
             self.invalid = false;
             self.bounder = parquet_geospatial::bounding::GeometryBounder::empty();
             return None;
         }
 
-        let mut bbox = BoundingBox::new(
-            self.bounder.x().lo(),
-            self.bounder.x().hi(),
-            self.bounder.y().lo(),
-            self.bounder.y().hi(),
-        );
+        let bbox = if self.bounder.x().is_empty() || self.bounder.y().is_empty() {
+            None
+        } else {
+            let mut bbox = BoundingBox::new(
+                self.bounder.x().lo(),
+                self.bounder.x().hi(),
+                self.bounder.y().lo(),
+                self.bounder.y().hi(),
+            );
 
-        if !self.bounder.z().is_empty() {
-            bbox = bbox.with_zrange(self.bounder.z().lo(), self.bounder.z().hi());
-        }
+            if !self.bounder.z().is_empty() {
+                bbox = bbox.with_zrange(self.bounder.z().lo(), self.bounder.z().hi());
+            }
 
-        if !self.bounder.m().is_empty() {
-            bbox = bbox.with_mrange(self.bounder.m().lo(), self.bounder.m().hi());
-        }
+            if !self.bounder.m().is_empty() {
+                bbox = bbox.with_mrange(self.bounder.m().lo(), self.bounder.m().hi());
+            }
+
+            Some(bbox)
+        };
 
         let geometry_types = Some(self.bounder.geometry_types());
 
         // Reset
         self.bounder = parquet_geospatial::bounding::GeometryBounder::empty();
 
-        Some(Box::new(GeospatialStatistics::new(
-            Some(bbox),
-            geometry_types,
-        )))
+        Some(Box::new(GeospatialStatistics::new(bbox, geometry_types)))
     }
 }

@@ -25,6 +25,7 @@ mod test {
     use parquet::{
         arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
         basic::LogicalType,
+        column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
             properties::{EnabledStatistics, WriterProperties},
@@ -35,14 +36,13 @@ mod test {
         schema::types::{SchemaDescriptor, Type},
     };
 
-    fn read_geo_statistics(buf: Vec<u8>) -> Vec<Option<GeospatialStatistics>> {
-        let b = Bytes::from(buf);
+    fn read_geo_statistics(b: Bytes, column: usize) -> Vec<Option<GeospatialStatistics>> {
         let reader = SerializedFileReader::new(b).unwrap();
         reader
             .metadata()
             .row_groups()
             .iter()
-            .map(|row_group| row_group.column(0).geo_statistics().cloned())
+            .map(|row_group| row_group.column(column).geo_statistics().cloned())
             .collect()
     }
 
@@ -68,19 +68,8 @@ mod test {
             None,
         ];
 
-        let root = Type::group_type_builder("root")
-            .with_fields(vec![Type::primitive_type_builder(
-                "geo",
-                parquet::basic::Type::BYTE_ARRAY,
-            )
-            .with_logical_type(Some(LogicalType::Geometry))
-            .build()
-            .unwrap()
-            .into()])
-            .build()
-            .unwrap();
+        let root = parquet_schema_geometry();
         let schema = SchemaDescriptor::new(root.into());
-
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::Chunk)
             .build();
@@ -102,7 +91,7 @@ mod test {
         writer.close().unwrap();
 
         // Check statistics on file read
-        let all_geo_stats = read_geo_statistics(buf);
+        let all_geo_stats = read_geo_statistics(buf.into(), 0);
         assert_eq!(all_geo_stats.len(), column_values.len());
         assert_eq!(expected_geometry_types.len(), column_values.len());
         assert_eq!(expected_bounding_box.len(), column_values.len());
@@ -147,17 +136,7 @@ mod test {
             None,
         ];
 
-        let root = Type::group_type_builder("root")
-            .with_fields(vec![Type::primitive_type_builder(
-                "geo",
-                parquet::basic::Type::BYTE_ARRAY,
-            )
-            .with_logical_type(Some(LogicalType::Geometry))
-            .build()
-            .unwrap()
-            .into()])
-            .build()
-            .unwrap();
+        let root = parquet_schema_geometry();
         let schema = SchemaDescriptor::new(root.into());
 
         let props = WriterProperties::builder()
@@ -177,11 +156,10 @@ mod test {
             file_writer.flush().unwrap();
         }
 
-        file_writer.finish().unwrap();
-        drop(file_writer);
+        file_writer.close().unwrap();
 
         // Check statistics on file read
-        let all_geo_stats = read_geo_statistics(buf);
+        let all_geo_stats = read_geo_statistics(buf.into(), 0);
         assert_eq!(all_geo_stats.len(), column_values.len());
 
         for i in 0..column_values.len() {
@@ -193,6 +171,79 @@ mod test {
                 assert!(expected_bounding_box[i].is_none());
             }
         }
+    }
+
+    #[test]
+    fn test_roundtrip_statistics() {
+        let path = format!(
+            "{}/geospatial/geospatial.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+
+        let file_bytes = Bytes::from(std::fs::read(&path).unwrap());
+
+        let reader = SerializedFileReader::new(file_bytes.clone()).unwrap();
+        let mut values = Vec::new();
+        let mut def_levels = Vec::new();
+
+        let root = parquet_schema_geometry();
+        let schema = SchemaDescriptor::new(root.into());
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            SerializedFileWriter::new(&mut buf, schema.root_schema_ptr(), Arc::new(props)).unwrap();
+
+        for i in 0..reader.num_row_groups() {
+            let row_group = reader.get_row_group(i).unwrap();
+            values.truncate(0);
+            def_levels.truncate(0);
+
+            let mut row_group_out = writer.next_row_group().unwrap();
+
+            if let ColumnReader::ByteArrayColumnReader(mut reader) =
+                row_group.get_column_reader(2).unwrap()
+            {
+                reader
+                    .read_records(1000000, Some(&mut def_levels), None, &mut values)
+                    .unwrap();
+
+                let mut col = row_group_out.next_column().unwrap().unwrap();
+                col.typed::<ByteArrayType>()
+                    .write_batch(&values, Some(&def_levels), None)
+                    .unwrap();
+                col.close().unwrap();
+                row_group_out.close().unwrap();
+            } else {
+                panic!("Unexpected geometry column type");
+            }
+        }
+
+        writer.close().unwrap();
+
+        let actual_stats = read_geo_statistics(buf.into(), 0);
+        let expected_stats = read_geo_statistics(file_bytes.clone(), 2);
+
+        assert_eq!(actual_stats.len(), expected_stats.len());
+        for i in 0..expected_stats.len() {
+            assert_eq!(actual_stats[i], expected_stats[i], "Row group {i}");
+        }
+    }
+
+    fn parquet_schema_geometry() -> Type {
+        Type::group_type_builder("root")
+            .with_fields(vec![Type::primitive_type_builder(
+                "geo",
+                parquet::basic::Type::BYTE_ARRAY,
+            )
+            .with_logical_type(Some(LogicalType::Geometry))
+            .build()
+            .unwrap()
+            .into()])
+            .build()
+            .unwrap()
     }
 
     fn wkb_array_xy(coords: impl IntoIterator<Item = Option<(f64, f64)>>) -> ArrayRef {
