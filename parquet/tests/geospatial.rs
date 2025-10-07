@@ -98,8 +98,11 @@ mod test {
 
         for i in 0..column_values.len() {
             if let Some(geo_stats) = all_geo_stats[i].as_ref() {
-                assert_eq!(geo_stats.geospatial_types, expected_geometry_types[i]);
-                assert_eq!(geo_stats.bbox, expected_bounding_box[i]);
+                assert_eq!(
+                    geo_stats.geospatial_types(),
+                    expected_geometry_types[i].as_ref()
+                );
+                assert_eq!(geo_stats.bounding_box(), expected_bounding_box[i].as_ref());
             } else {
                 assert!(expected_geometry_types[i].is_none());
                 assert!(expected_bounding_box[i].is_none());
@@ -164,8 +167,11 @@ mod test {
 
         for i in 0..column_values.len() {
             if let Some(geo_stats) = all_geo_stats[i].as_ref() {
-                assert_eq!(geo_stats.geospatial_types, expected_geometry_types[i]);
-                assert_eq!(geo_stats.bbox, expected_bounding_box[i]);
+                assert_eq!(
+                    geo_stats.geospatial_types(),
+                    expected_geometry_types[i].as_ref()
+                );
+                assert_eq!(geo_stats.bounding_box(), expected_bounding_box[i].as_ref());
             } else {
                 assert!(expected_geometry_types[i].is_none());
                 assert!(expected_bounding_box[i].is_none());
