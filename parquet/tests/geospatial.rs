@@ -35,7 +35,7 @@ mod test {
         geospatial::{bounding_box::BoundingBox, statistics::GeospatialStatistics},
         schema::types::{SchemaDescriptor, Type},
     };
-    use parquet_geospatial::testing::wkb_item_xy;
+    use parquet_geospatial::testing::wkb_point_xy;
 
     fn read_geo_statistics(b: Bytes, column: usize) -> Vec<Option<GeospatialStatistics>> {
         let reader = SerializedFileReader::new(b).unwrap();
@@ -52,9 +52,9 @@ mod test {
         // Four row groups: one all non-null, one with a null, one with all nulls,
         // one with invalid WKB
         let column_values = vec![
-            [wkb_item_xy(1.0, 2.0), wkb_item_xy(11.0, 12.0)].map(ByteArray::from),
-            ["this is not valid wkb".into(), wkb_item_xy(31.0, 32.0)].map(ByteArray::from),
-            [wkb_item_xy(21.0, 22.0), vec![]].map(ByteArray::from),
+            [wkb_point_xy(1.0, 2.0), wkb_point_xy(11.0, 12.0)].map(ByteArray::from),
+            ["this is not valid wkb".into(), wkb_point_xy(31.0, 32.0)].map(ByteArray::from),
+            [wkb_point_xy(21.0, 22.0), vec![]].map(ByteArray::from),
             [ByteArray::new(), ByteArray::new()],
         ];
         let def_levels = [[1, 1], [1, 1], [1, 0], [0, 0]];
@@ -126,7 +126,10 @@ mod test {
             wkb_array_xy([Some((1.0, 2.0)), Some((11.0, 12.0))]),
             create_array!(
                 Binary,
-                ["this is not valid wkb".as_bytes(), &wkb_item_xy(31.0, 32.0)]
+                [
+                    "this is not valid wkb".as_bytes(),
+                    &wkb_point_xy(31.0, 32.0)
+                ]
             ),
             wkb_array_xy([Some((21.0, 22.0)), None]),
             wkb_array_xy([None, None]),
@@ -281,7 +284,7 @@ mod test {
         let array = BinaryArray::from_iter(
             coords
                 .into_iter()
-                .map(|maybe_xy| maybe_xy.map(|(x, y)| wkb_item_xy(x, y))),
+                .map(|maybe_xy| maybe_xy.map(|(x, y)| wkb_point_xy(x, y))),
         );
         Arc::new(array)
     }

@@ -195,7 +195,7 @@ mod test {
     fn test_default_accumulator_geospatial_factory() {
         use std::sync::Arc;
 
-        use parquet_geospatial::testing::wkb_item_xy;
+        use parquet_geospatial::testing::wkb_point_xy;
 
         use crate::{
             basic::LogicalType,
@@ -214,8 +214,8 @@ mod test {
             DefaultGeoStatsAccumulatorFactory::default().new_accumulator(&Arc::new(column_descr));
 
         assert!(accumulator.is_valid());
-        accumulator.update_wkb(&wkb_item_xy(1.0, 2.0));
-        accumulator.update_wkb(&wkb_item_xy(11.0, 12.0));
+        accumulator.update_wkb(&wkb_point_xy(1.0, 2.0));
+        accumulator.update_wkb(&wkb_point_xy(11.0, 12.0));
         let stats = accumulator.finish().unwrap();
         assert_eq!(
             stats.bounding_box().unwrap(),
@@ -239,7 +239,7 @@ mod test {
     #[cfg(feature = "geospatial")]
     #[test]
     fn test_geometry_accumulator() {
-        use parquet_geospatial::testing::{wkb_item_xy, wkb_item_xyzm};
+        use parquet_geospatial::testing::{wkb_point_xy, wkb_point_xyzm};
 
         use crate::geospatial::bounding_box::BoundingBox;
 
@@ -247,8 +247,8 @@ mod test {
 
         // A fresh instance should be able to bound input
         assert!(accumulator.is_valid());
-        accumulator.update_wkb(&wkb_item_xy(1.0, 2.0));
-        accumulator.update_wkb(&wkb_item_xy(11.0, 12.0));
+        accumulator.update_wkb(&wkb_point_xy(1.0, 2.0));
+        accumulator.update_wkb(&wkb_point_xy(11.0, 12.0));
         let stats = accumulator.finish().unwrap();
         assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
         assert_eq!(
@@ -259,8 +259,8 @@ mod test {
         // finish() should have reset the bounder such that the first values
         // aren't when computing the next bound of statistics.
         assert!(accumulator.is_valid());
-        accumulator.update_wkb(&wkb_item_xy(21.0, 22.0));
-        accumulator.update_wkb(&wkb_item_xy(31.0, 32.0));
+        accumulator.update_wkb(&wkb_point_xy(21.0, 22.0));
+        accumulator.update_wkb(&wkb_point_xy(31.0, 32.0));
         let stats = accumulator.finish().unwrap();
         assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
         assert_eq!(
@@ -271,15 +271,15 @@ mod test {
         // When an accumulator encounters invalid input, it reports is_valid() false
         // and does not compute subsequent statistics
         assert!(accumulator.is_valid());
-        accumulator.update_wkb(&wkb_item_xy(41.0, 42.0));
+        accumulator.update_wkb(&wkb_point_xy(41.0, 42.0));
         accumulator.update_wkb("these bytes are not WKB".as_bytes());
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
 
         // Subsequent rounds of accumulation should work as expected
         assert!(accumulator.is_valid());
-        accumulator.update_wkb(&wkb_item_xy(41.0, 42.0));
-        accumulator.update_wkb(&wkb_item_xy(51.0, 52.0));
+        accumulator.update_wkb(&wkb_point_xy(41.0, 42.0));
+        accumulator.update_wkb(&wkb_point_xy(51.0, 52.0));
         let stats = accumulator.finish().unwrap();
         assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
         assert_eq!(
@@ -300,15 +300,15 @@ mod test {
         // coordinates), there should be statistics with geometry types but no
         // bounding box.
         assert!(accumulator.is_valid());
-        accumulator.update_wkb(&wkb_item_xy(f64::NAN, f64::NAN));
+        accumulator.update_wkb(&wkb_point_xy(f64::NAN, f64::NAN));
         let stats = accumulator.finish().unwrap();
         assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
         assert!(stats.bounding_box().is_none());
 
         // If Z and/or M are present, they should be reported in the bounding box
         assert!(accumulator.is_valid());
-        accumulator.update_wkb(&wkb_item_xyzm(1.0, 2.0, 3.0, 4.0));
-        accumulator.update_wkb(&wkb_item_xyzm(5.0, 6.0, 7.0, 8.0));
+        accumulator.update_wkb(&wkb_point_xyzm(1.0, 2.0, 3.0, 4.0));
+        accumulator.update_wkb(&wkb_point_xyzm(5.0, 6.0, 7.0, 8.0));
         let stats = accumulator.finish().unwrap();
         assert_eq!(stats.geospatial_types().unwrap(), &vec![3001]);
         assert_eq!(

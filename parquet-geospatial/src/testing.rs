@@ -18,7 +18,7 @@
 //! Testing utilities for geospatial Parquet types
 
 /// Build well-known binary representing a point with the given XY coordinate
-pub fn wkb_item_xy(x: f64, y: f64) -> Vec<u8> {
+pub fn wkb_point_xy(x: f64, y: f64) -> Vec<u8> {
     let mut item: [u8; 21] = [0; 21];
     item[0] = 0x01;
     item[1] = 0x01;
@@ -28,7 +28,7 @@ pub fn wkb_item_xy(x: f64, y: f64) -> Vec<u8> {
 }
 
 /// Build well-known binary representing a point with the given XYZM coordinate
-pub fn wkb_item_xyzm(x: f64, y: f64, z: f64, m: f64) -> Vec<u8> {
+pub fn wkb_point_xyzm(x: f64, y: f64, z: f64, m: f64) -> Vec<u8> {
     let mut item: [u8; 37] = [0; 37];
     item[0] = 0x01;
     item[1..5].copy_from_slice(3001_u32.to_le_bytes().as_slice());
@@ -48,7 +48,7 @@ mod test {
 
     #[test]
     fn test_wkb_item() {
-        let bytes = wkb_item_xy(1.0, 2.0);
+        let bytes = wkb_point_xy(1.0, 2.0);
         let geometry = Wkb::try_new(&bytes).unwrap();
         let mut wkt = String::new();
         wkt::to_wkt::write_geometry(&mut wkt, &geometry).unwrap();
@@ -57,7 +57,7 @@ mod test {
 
     #[test]
     fn test_wkb_point_xyzm() {
-        let bytes = wkb_item_xyzm(1.0, 2.0, 3.0, 4.0);
+        let bytes = wkb_point_xyzm(1.0, 2.0, 3.0, 4.0);
         let geometry = Wkb::try_new(&bytes).unwrap();
         let mut wkt = String::new();
         wkt::to_wkt::write_geometry(&mut wkt, &geometry).unwrap();
