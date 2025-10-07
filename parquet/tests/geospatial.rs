@@ -174,13 +174,37 @@ mod test {
     }
 
     #[test]
-    fn test_roundtrip_statistics() {
+    fn test_roundtrip_statistics_geospatial() {
         let path = format!(
             "{}/geospatial/geospatial.parquet",
             arrow::util::test_util::parquet_test_data(),
         );
 
-        let file_bytes = Bytes::from(std::fs::read(&path).unwrap());
+        test_roundtrip_statistics(&path, 2);
+    }
+
+    #[test]
+    fn test_roundtrip_geospatial_with_nan() {
+        let path = format!(
+            "{}/geospatial/geospatial-with-nan.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+
+        test_roundtrip_statistics(&path, 0);
+    }
+
+    #[test]
+    fn test_roundtrip_statistics_crs() {
+        let path = format!(
+            "{}/geospatial/crs-default.parquet",
+            arrow::util::test_util::parquet_test_data(),
+        );
+
+        test_roundtrip_statistics(&path, 0);
+    }
+
+    fn test_roundtrip_statistics(path: &str, column: usize) {
+        let file_bytes = Bytes::from(std::fs::read(path).unwrap());
 
         let reader = SerializedFileReader::new(file_bytes.clone()).unwrap();
         let mut values = Vec::new();
@@ -204,7 +228,7 @@ mod test {
             let mut row_group_out = writer.next_row_group().unwrap();
 
             if let ColumnReader::ByteArrayColumnReader(mut reader) =
-                row_group.get_column_reader(2).unwrap()
+                row_group.get_column_reader(column).unwrap()
             {
                 reader
                     .read_records(1000000, Some(&mut def_levels), None, &mut values)
@@ -224,7 +248,7 @@ mod test {
         writer.close().unwrap();
 
         let actual_stats = read_geo_statistics(buf.into(), 0);
-        let expected_stats = read_geo_statistics(file_bytes.clone(), 2);
+        let expected_stats = read_geo_statistics(file_bytes.clone(), column);
 
         assert_eq!(actual_stats.len(), expected_stats.len());
         for i in 0..expected_stats.len() {
