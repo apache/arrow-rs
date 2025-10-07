@@ -1219,7 +1219,7 @@ impl<'a> UnionEncoder<'a> {
         let encoder = self
             .encoders
             .get_mut(branch_index)
-            .ok_or_else(|| ArrowError::SchemaError(format!("Invalid type_id {}", type_id)))?;
+            .ok_or_else(|| ArrowError::SchemaError(format!("Invalid type_id {type_id}")))?;
 
         encoder.encode(out, child_row)
     }
