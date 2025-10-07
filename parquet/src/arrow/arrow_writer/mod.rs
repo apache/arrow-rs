@@ -501,6 +501,10 @@ impl ArrowWriterOptions {
     }
 
     /// Explicitly specify the Parquet schema to be used
+    ///
+    /// If omitted (the default), the [ArrowSchemaConverter] is used to compute the
+    /// Parquet [SchemaDescriptor]. This may be used When the [SchemaDescriptor] is
+    /// already known or must be calculated using custom logic.
     pub fn with_parquet_schema(self, schema_descr: SchemaDescriptor) -> Self {
         Self {
             schema_descr: Some(schema_descr),
