@@ -568,7 +568,6 @@ where
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
     if encoder.statistics_enabled != EnabledStatistics::None {
-        // TODO ensure Converted interval types have no stats written for them?
         if let Some(accumulator) = encoder.geo_stats_accumulator.as_mut() {
             update_geo_stats_accumulator(accumulator.as_mut(), values, indices.iter().cloned());
         } else if let Some((min, max)) = compute_min_max(values, indices.iter().cloned()) {
