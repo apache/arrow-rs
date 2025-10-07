@@ -498,7 +498,7 @@ impl BooleanArray {
     ///
     /// The iterator must be [`TrustedLen`](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html).
     /// I.e. that `size_hint().1` correctly reports its length. Note that this is a stronger
-    /// guarantee that `ExactSizeIterator` provides which could still report a wrong length.
+    /// guarantee than `ExactSizeIterator` provides, which could still report a wrong length.
     ///
     /// # Panics
     ///
