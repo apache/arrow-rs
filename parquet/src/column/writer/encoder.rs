@@ -126,6 +126,8 @@ pub trait ColumnValueEncoder {
     /// near the end of encoding.
     fn flush_bloom_filter(&mut self) -> Option<Sbbf>;
 
+    /// Computes [GeospatialStatistics], if any, and resets internal state such that any internal
+    /// accumulator is prepared to accumulate statistics for the next column chunk.
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
