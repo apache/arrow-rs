@@ -543,12 +543,20 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use chrono::NaiveDate;
     ///
     /// // you can extract a DateTime<Utc> from a UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap().and_utc();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap()
+    ///     .and_utc();
     /// let v1 = Variant::from(datetime);
     /// assert_eq!(v1.as_timestamp_micros(), Some(datetime));
     ///
     /// // but not for other variants.
-    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap().and_utc();
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 33, 54, 123456789)
+    ///     .unwrap()
+    ///     .and_utc();
     /// let v2 = Variant::from(datetime_nanos);
     /// assert_eq!(v2.as_timestamp_micros(), None);
     /// ```
@@ -571,12 +579,18 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use chrono::NaiveDate;
     ///
     /// // you can extract a NaiveDateTime from a non-UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 34, 56, 780)
+    ///     .unwrap();
     /// let v1 = Variant::from(datetime);
     /// assert_eq!(v1.as_timestamp_ntz_micros(), Some(datetime));
     ///
     /// // but not for other variants.
-    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap();
+    /// let datetime_nanos = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 33, 54, 123456789)
+    ///     .unwrap();
     /// let v2 = Variant::from(datetime_nanos);
     /// assert_eq!(v2.as_timestamp_micros(), None);
     /// ```
@@ -589,7 +603,7 @@ impl<'m, 'v> Variant<'m, 'v> {
 
     /// Converts this variant to a `DateTime<Utc>` if possible.
     ///
-    /// Returns `Some(DateTime<Utc>)` for [`Variant::TimestampNanos`] variants,
+    /// Returns `Some(DateTime<Utc>)` for timestamp variants,
     /// `None` for other variants.
     ///
     /// # Examples
@@ -598,27 +612,39 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use parquet_variant::Variant;
     /// use chrono::NaiveDate;
     ///
-    /// // you can extract a DateTime<Utc> from a UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_nano_opt(12, 34, 56, 789123456).unwrap().and_utc();
+    /// // you can extract a DateTime<Utc> from a UTC-adjusted nanosecond-precision variant
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 789123456)
+    ///     .unwrap()
+    ///     .and_utc();
     /// let v1 = Variant::from(datetime);
     /// assert_eq!(v1.as_timestamp_nanos(), Some(datetime));
     ///
-    /// // but not for other variants.
-    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap().and_hms_milli_opt(12, 33, 54, 123).unwrap().and_utc();
+    /// // or from UTC-adjusted microsecond-precision variant
+    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 33, 54, 123)
+    ///     .unwrap()
+    ///     .and_utc();
     /// // this will convert to `Variant::TimestampMicros`.
     /// let v2 = Variant::from(datetime_micros);
-    /// assert_eq!(v2.as_timestamp_nanos(), None);
+    /// assert_eq!(v2.as_timestamp_nanos(), Some(datetime_micros));
+    ///
+    /// // but not for other variants.
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_timestamp_nanos(), None);
     /// ```
     pub fn as_timestamp_nanos(&self) -> Option<DateTime<Utc>> {
         match *self {
-            Variant::TimestampNanos(d) => Some(d),
+            Variant::TimestampNanos(d) | Variant::TimestampMicros(d) => Some(d),
             _ => None,
         }
     }
 
     /// Converts this variant to a `NaiveDateTime` if possible.
     ///
-    /// Returns `Some(NaiveDateTime)` for [`Variant::TimestampNtzNanos`] variants,
+    /// Returns `Some(NaiveDateTime)` for timestamp variants,
     /// `None` for other variants.
     ///
     /// # Examples
@@ -628,19 +654,29 @@ impl<'m, 'v> Variant<'m, 'v> {
     /// use chrono::NaiveDate;
     ///
     /// // you can extract a NaiveDateTime from a non-UTC-adjusted variant
-    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_nano_opt(12, 34, 56, 789123456).unwrap();
+    /// let datetime = NaiveDate::from_ymd_opt(2025, 4, 16)
+    ///     .unwrap()
+    ///     .and_hms_nano_opt(12, 34, 56, 789123456)
+    ///     .unwrap();
     /// let v1 = Variant::from(datetime);
     /// assert_eq!(v1.as_timestamp_ntz_nanos(), Some(datetime));
     ///
-    /// // but not for other variants.
-    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14).unwrap().and_hms_milli_opt(12, 33, 54, 123).unwrap();
+    /// // or from a microsecond-precision non-UTC-adjusted variant
+    /// let datetime_micros = NaiveDate::from_ymd_opt(2025, 8, 14)
+    ///     .unwrap()
+    ///     .and_hms_milli_opt(12, 33, 54, 123)
+    ///     .unwrap();
     /// // this will convert to `Variant::TimestampMicros`.
     /// let v2 = Variant::from(datetime_micros);
-    /// assert_eq!(v2.as_timestamp_ntz_nanos(), None);
+    /// assert_eq!(v2.as_timestamp_ntz_nanos(), Some(datetime_micros));
+    ///
+    /// // but not for other variants.
+    /// let v3 = Variant::from("hello!");
+    /// assert_eq!(v3.as_timestamp_ntz_nanos(), None);
     /// ```
     pub fn as_timestamp_ntz_nanos(&self) -> Option<NaiveDateTime> {
         match *self {
-            Variant::TimestampNtzNanos(d) => Some(d),
+            Variant::TimestampNtzNanos(d) | Variant::TimestampNtzMicros(d) => Some(d),
             _ => None,
         }
     }

@@ -40,8 +40,8 @@ pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
 }
 
 /// Extension trait for Arrow timestamp types that can extract their native value from a Variant
-/// We can't use [`PrimitiveFromVariant`] directly because we might need to use methods that
-/// are only available on [`ArrowTimestampType`] (such as with_timezone_opt)
+/// We can't use [`PrimitiveFromVariant`] directly because we need _two_ implementations for each
+/// timestamp type -- the `NTZ` param here.
 pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
