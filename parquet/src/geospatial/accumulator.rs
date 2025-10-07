@@ -20,24 +20,50 @@
 use crate::{geospatial::statistics::GeospatialStatistics, schema::types::ColumnDescPtr};
 
 /// Factory for [GeospatialStatistics] accumulators
-pub trait GeoStatsAccumulatorFactory {
-    /// Create a new accumulator
+///
+/// The GeoStatsAccumulatorFactory is a trait implemented by the global factory that
+/// generates new instances of a [GeoStatsAccumulator] when constructing new
+/// encoders for a Geometry or Geography logical type.
+pub trait GeoStatsAccumulatorFactory: Send + Sync {
+    /// Create a new [GeoStatsAccumulator] appropriate for the logical type of a given
+    /// [ColumnDescPtr]
     fn new_accumulator(&self, descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator>;
 }
 
-/// Dynamic geospatial accumulator
+/// Dynamic [GeospatialStatistics] accumulator
+///
+/// The GeoStatsAccumulator is a trait whose implementors can ingest the (non-null)
+/// elements of a column and return compliant [GeospatialStatistics] (or `None`).
+/// When built with geospatial support this will usually be the
+/// [ParquetGeoStatsAccumulator]
 pub trait GeoStatsAccumulator: Send {
-    /// Returns true if this accumulator has any plans to actually return statistics
+    /// Returns true if this instance can return [GeospatialStatistics] from
+    /// [GeoStatsAccumulator::finish].
+    ///
+    /// This method returns false when this crate was built without geospatial support
+    /// (i.e., from the [VoidGeoStatsAccumulator]) or if the accumulator encountered
+    /// invalid or unsupported elements for which it cannot compute valid statistics.
     fn is_valid(&self) -> bool;
 
-    /// Update with a single slice of possibly wkb-encoded values
+    /// Update with a single slice of WKB-encoded values
+    ///
+    /// This method is infallible; however, in the event of improperly encoded values,
+    /// implementations must ensure that [GeoStatsAccumulator::finish] returns `None`.
     fn update_wkb(&mut self, wkb: &[u8]);
 
-    /// Compute the final statistics from internal state
+    /// Compute the final statistics and reset internal state
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
-/// Default accumulator for [GeospatialStatistics] reflecting the build-time features of this build
+/// Default accumulator for [GeospatialStatistics]
+///
+/// When this crate was built with geospatial support, this factory constructs a
+/// [ParquetGeoStatsAccumulator] that ensures Geometry columns are written with
+/// statistics when statistics for that column are enabled. Otherwise, this factory
+/// returns a [VoidGeoStatsAccumulator] that never adds any geospatial statistics.
+///
+/// Bounding for geography columns is not currently implemented and will always
+/// return a [VoidGeoStatsAccumulator]
 #[derive(Debug, Default)]
 pub struct DefaultGeoStatsAccumulatorFactory {}
 
@@ -47,19 +73,19 @@ impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
         if let Some(crate::basic::LogicalType::Geometry) = _descr.logical_type() {
             Box::new(ParquetGeoStatsAccumulator::default())
         } else {
-            Box::new(VoidGeospatialStatisticsAccumulator::default())
+            Box::new(VoidGeoStatsAccumulator::default())
         }
 
         #[cfg(not(feature = "geospatial"))]
-        return Box::new(VoidGeospatialStatisticsAccumulator::default());
+        return Box::new(VoidGeoStatsAccumulator::default());
     }
 }
 
 /// A [GeoStatsAccumulator] that never computes any [GeospatialStatistics]
 #[derive(Debug, Default)]
-pub struct VoidGeospatialStatisticsAccumulator {}
+pub struct VoidGeoStatsAccumulator {}
 
-impl GeoStatsAccumulator for VoidGeospatialStatisticsAccumulator {
+impl GeoStatsAccumulator for VoidGeoStatsAccumulator {
     fn is_valid(&self) -> bool {
         false
     }
@@ -71,7 +97,11 @@ impl GeoStatsAccumulator for VoidGeospatialStatisticsAccumulator {
     }
 }
 
-/// A [GeoStatsAccumulator] that uses the parquet-geospatial crate to compute statistics
+/// A [GeoStatsAccumulator] that uses the parquet-geospatial crate to compute Geometry statistics
+///
+/// Note that this accumulator only supports Geometry types and will return invalid statistics for
+/// non-point Geography input ([GeoStatsAccumulatorFactory::new_accumulator] is responsible
+/// for ensuring an appropriate accumulator based on the logical type).
 #[cfg(feature = "geospatial")]
 #[derive(Debug)]
 pub struct ParquetGeoStatsAccumulator {
