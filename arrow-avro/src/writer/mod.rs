@@ -1238,7 +1238,6 @@ mod tests {
             .build(BufReader::new(rdr_file))
             .expect("build reader for union_fields.avro");
         let schema = reader.schema();
-        println!("schema: {:?}", schema);
         let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
         let original =
             arrow::compute::concat_batches(&schema, &input_batches).expect("concat input");
