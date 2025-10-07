@@ -23,9 +23,7 @@ use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
-use crate::geospatial::accumulator::{
-    DefaultGeoStatsAccumulatorFactory, GeoStatsAccumulator, GeoStatsAccumulatorFactory,
-};
+use crate::geospatial::accumulator::{new_geo_stats_accumulator, GeoStatsAccumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
@@ -456,7 +454,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
             descr.logical_type(),
             Some(LogicalType::Geometry) | Some(LogicalType::Geography)
         ) {
-            Some(DefaultGeoStatsAccumulatorFactory::default().new_accumulator(descr))
+            Some(new_geo_stats_accumulator(descr))
         } else {
             None
         };

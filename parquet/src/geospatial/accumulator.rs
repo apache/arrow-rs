@@ -17,7 +17,40 @@
 
 //! This module provides implementations and traits for building [GeospatialStatistics]
 
-use crate::{geospatial::statistics::GeospatialStatistics, schema::types::ColumnDescPtr};
+use std::sync::{Arc, OnceLock};
+
+use crate::{
+    errors::ParquetError, geospatial::statistics::GeospatialStatistics,
+    schema::types::ColumnDescPtr,
+};
+
+/// Create a new [GeoStatsAccumulator] instance
+pub fn new_geo_stats_accumulator(descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
+    ACCUMULATOR_FACTORY
+        .get_or_init(|| Arc::new(DefaultGeoStatsAccumulatorFactory::default()))
+        .new_accumulator(descr)
+}
+
+/// Initialize the global [GeoStatsAccumulatorFactory]
+///
+/// This may only be done once before any calls to [new_geo_stats_accumulator].
+/// Clients may use this to implement support for builds of the Parquet crate without
+/// geospatial support or to implement support for Geography bounding using external
+/// dependencies.
+pub fn init_geo_stats_accumulator_factory(
+    factory: Arc<dyn GeoStatsAccumulatorFactory>,
+) -> Result<(), ParquetError> {
+    if ACCUMULATOR_FACTORY.set(factory).is_err() {
+        Err(ParquetError::General(
+            "Global GeoStatsAccumulatorFactory already set".to_string(),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Global accumulator factory instance
+static ACCUMULATOR_FACTORY: OnceLock<Arc<dyn GeoStatsAccumulatorFactory>> = OnceLock::new();
 
 /// Factory for [GeospatialStatistics] accumulators
 ///
@@ -210,8 +243,7 @@ mod test {
             .unwrap();
         let column_descr =
             ColumnDescriptor::new(Arc::new(parquet_type), 0, 0, ColumnPath::new(vec![]));
-        let mut accumulator =
-            DefaultGeoStatsAccumulatorFactory::default().new_accumulator(&Arc::new(column_descr));
+        let mut accumulator = new_geo_stats_accumulator(&Arc::new(column_descr));
 
         assert!(accumulator.is_valid());
         accumulator.update_wkb(&wkb_point_xy(1.0, 2.0));
@@ -229,11 +261,17 @@ mod test {
             .unwrap();
         let column_descr =
             ColumnDescriptor::new(Arc::new(parquet_type), 0, 0, ColumnPath::new(vec![]));
-        let mut accumulator =
-            DefaultGeoStatsAccumulatorFactory::default().new_accumulator(&Arc::new(column_descr));
+        let mut accumulator = new_geo_stats_accumulator(&Arc::new(column_descr));
 
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
+
+        // We should not be able to initialize a global accumulator after we've initialized at least
+        // one accumulator
+        assert!(init_geo_stats_accumulator_factory(Arc::new(
+            DefaultGeoStatsAccumulatorFactory::default()
+        ))
+        .is_err())
     }
 
     #[cfg(feature = "geospatial")]
