@@ -107,6 +107,9 @@ impl GeoStatsAccumulator for ParquetGeoStatsAccumulator {
         use crate::geospatial::bounding_box::BoundingBox;
 
         if self.invalid || self.bounder.x().is_empty() || self.bounder.y().is_empty() {
+            // Reset
+            self.invalid = false;
+            self.bounder = parquet_geospatial::bounding::GeometryBounder::empty();
             return None;
         }
 

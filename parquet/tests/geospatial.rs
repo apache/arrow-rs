@@ -19,7 +19,7 @@
 mod test {
     use std::{iter::zip, sync::Arc};
 
-    use arrow_array::{ArrayRef, BinaryArray, RecordBatch};
+    use arrow_array::{create_array, ArrayRef, BinaryArray, RecordBatch};
     use arrow_schema::{DataType, Field, Schema};
     use bytes::Bytes;
     use parquet::{
@@ -47,72 +47,25 @@ mod test {
     }
 
     #[test]
-    fn test_write_statistics_arrow() {
-        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
-            "geom",
-            DataType::Binary,
-            true,
-        )]));
-        let batch = RecordBatch::try_new(
-            arrow_schema.clone(),
-            vec![wkb_array_xy([(1.0, 2.0), (11.0, 12.0)])],
-        )
-        .unwrap();
-        let expected_geometry_types = vec![1];
-        let expected_bounding_box = BoundingBox::new(1.0, 11.0, 2.0, 12.0);
-
-        let root = Type::group_type_builder("root")
-            .with_fields(vec![Type::primitive_type_builder(
-                "geo",
-                parquet::basic::Type::BYTE_ARRAY,
-            )
-            .with_logical_type(Some(LogicalType::Geometry))
-            .build()
-            .unwrap()
-            .into()])
-            .build()
-            .unwrap();
-        let schema = SchemaDescriptor::new(root.into());
-
-        let props = WriterProperties::builder()
-            .set_statistics_enabled(EnabledStatistics::Chunk)
-            .build();
-        let options = ArrowWriterOptions::new()
-            .with_parquet_schema(schema)
-            .with_properties(props);
-
-        let mut buf = Vec::with_capacity(1024);
-        let mut file_writer =
-            ArrowWriter::try_new_with_options(&mut buf, arrow_schema.clone(), options).unwrap();
-        file_writer.write(&batch).unwrap();
-
-        file_writer.finish().unwrap();
-        drop(file_writer);
-
-        // Check statistics on file read
-        let all_geo_stats = read_geo_statistics(buf);
-        assert_eq!(all_geo_stats.len(), 1);
-        let geo_stats = all_geo_stats[0].as_ref().unwrap();
-
-        assert_eq!(
-            geo_stats.geospatial_types.as_ref().unwrap(),
-            &expected_geometry_types
-        );
-        assert_eq!(geo_stats.bbox.as_ref().unwrap(), &expected_bounding_box);
-    }
-
-    #[test]
     fn test_write_statistics_not_arrow() {
+        // Four row groups: one all non-null, one with a null, one with all nulls,
+        // one with invalid WKB
         let column_values = vec![
             [wkb_item_xy(1.0, 2.0), wkb_item_xy(11.0, 12.0)].map(ByteArray::from),
-            [wkb_item_xy(21.0, 22.0), wkb_item_xy(31.0, 32.0)].map(ByteArray::from),
+            ["this is not valid wkb".into(), wkb_item_xy(31.0, 32.0)].map(ByteArray::from),
+            [wkb_item_xy(21.0, 22.0), vec![]].map(ByteArray::from),
+            [ByteArray::new(), ByteArray::new()],
         ];
-        let def_levels = [[1, 1], [1, 1]];
+        let def_levels = [[1, 1], [1, 1], [1, 0], [0, 0]];
 
-        let expected_geometry_types = [Some(vec![1]), Some(vec![1])];
+        // Ensure that nulls are omitted, that completely empty stats are omitted,
+        // and that invalid WKB results in empty stats
+        let expected_geometry_types = [Some(vec![1]), None, Some(vec![1]), None];
         let expected_bounding_box = [
             Some(BoundingBox::new(1.0, 11.0, 2.0, 12.0)),
-            Some(BoundingBox::new(21.0, 31.0, 22.0, 32.0)),
+            None,
+            Some(BoundingBox::new(21.0, 21.0, 22.0, 22.0)),
+            None,
         ];
 
         let root = Type::group_type_builder("root")
@@ -165,9 +118,89 @@ mod test {
         }
     }
 
-    fn wkb_array_xy(coords: impl IntoIterator<Item = (f64, f64)>) -> ArrayRef {
-        let array =
-            BinaryArray::from_iter_values(coords.into_iter().map(|(x, y)| wkb_item_xy(x, y)));
+    #[test]
+    fn test_write_statistics_arrow() {
+        let arrow_schema = Arc::new(Schema::new(vec![Field::new(
+            "geom",
+            DataType::Binary,
+            true,
+        )]));
+
+        // Check the same cases as for the non-arrow writer. These need checking again because
+        // the arrow writer uses a different encoder where the code path for skipping nulls
+        // is independent.
+        let column_values = [
+            wkb_array_xy([Some((1.0, 2.0)), Some((11.0, 12.0))]),
+            create_array!(
+                Binary,
+                ["this is not valid wkb".as_bytes(), &wkb_item_xy(31.0, 32.0)]
+            ),
+            wkb_array_xy([Some((21.0, 22.0)), None]),
+            wkb_array_xy([None, None]),
+        ];
+
+        let expected_geometry_types = [Some(vec![1]), None, Some(vec![1]), None];
+        let expected_bounding_box = [
+            Some(BoundingBox::new(1.0, 11.0, 2.0, 12.0)),
+            None,
+            Some(BoundingBox::new(21.0, 21.0, 22.0, 22.0)),
+            None,
+        ];
+
+        let root = Type::group_type_builder("root")
+            .with_fields(vec![Type::primitive_type_builder(
+                "geo",
+                parquet::basic::Type::BYTE_ARRAY,
+            )
+            .with_logical_type(Some(LogicalType::Geometry))
+            .build()
+            .unwrap()
+            .into()])
+            .build()
+            .unwrap();
+        let schema = SchemaDescriptor::new(root.into());
+
+        let props = WriterProperties::builder()
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let options = ArrowWriterOptions::new()
+            .with_parquet_schema(schema)
+            .with_properties(props);
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut file_writer =
+            ArrowWriter::try_new_with_options(&mut buf, arrow_schema.clone(), options).unwrap();
+
+        for values in &column_values {
+            let batch = RecordBatch::try_new(arrow_schema.clone(), vec![values.clone()]).unwrap();
+            file_writer.write(&batch).unwrap();
+            file_writer.flush().unwrap();
+        }
+
+        file_writer.finish().unwrap();
+        drop(file_writer);
+
+        // Check statistics on file read
+        let all_geo_stats = read_geo_statistics(buf);
+        assert_eq!(all_geo_stats.len(), column_values.len());
+
+        for i in 0..column_values.len() {
+            if let Some(geo_stats) = all_geo_stats[i].as_ref() {
+                assert_eq!(geo_stats.geospatial_types, expected_geometry_types[i]);
+                assert_eq!(geo_stats.bbox, expected_bounding_box[i]);
+            } else {
+                assert!(expected_geometry_types[i].is_none());
+                assert!(expected_bounding_box[i].is_none());
+            }
+        }
+    }
+
+    fn wkb_array_xy(coords: impl IntoIterator<Item = Option<(f64, f64)>>) -> ArrayRef {
+        let array = BinaryArray::from_iter(
+            coords
+                .into_iter()
+                .map(|maybe_xy| maybe_xy.map(|(x, y)| wkb_item_xy(x, y))),
+        );
         Arc::new(array)
     }
 
