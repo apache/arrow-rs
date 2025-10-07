@@ -620,8 +620,6 @@ where
 }
 
 /// Updates geospatial statistics for the provided array and indices
-///
-/// This is a free function so it can be used with `downcast_op!`
 fn update_geo_stats_accumulator<T>(
     bounder: &mut dyn GeoStatsAccumulator,
     array: T,
