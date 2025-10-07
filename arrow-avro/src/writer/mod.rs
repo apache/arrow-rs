@@ -1126,7 +1126,7 @@ mod tests {
         );
 
         for i in 0..expected.num_columns() {
-            let context = format!("Column {}", i);
+            let context = format!("Column {i}");
             let expected_col = expected.column(i);
             let actual_col = actual.column(i);
             assert_array_data_is_identical(expected_col, actual_col, &context);
