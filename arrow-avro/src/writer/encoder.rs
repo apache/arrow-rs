@@ -34,7 +34,6 @@ use arrow_array::{
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::NullBuffer;
 use arrow_schema::{ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit};
-use serde::Serialize;
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -43,7 +42,7 @@ use uuid::Uuid;
 ///
 /// Spec: <https://avro.apache.org/docs/1.11.1/specification/#binary-encoding>
 #[inline]
-pub fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(), ArrowError> {
+pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(), ArrowError> {
     let mut zz = ((value << 1) ^ (value >> 63)) as u64;
     // At most 10 bytes for 64-bit varint
     let mut buf = [0u8; 10];
@@ -211,7 +210,7 @@ enum NullState {
 /// Arrow to Avro FieldEncoder:
 /// - Holds the inner `Encoder` (by value)
 /// - Carries the per-site nullability **state** as a single enum that enforces invariants
-pub struct FieldEncoder<'a> {
+pub(crate) struct FieldEncoder<'a> {
     encoder: Encoder<'a>,
     null_state: NullState,
 }
@@ -244,7 +243,7 @@ impl<'a> FieldEncoder<'a> {
                 DataType::LargeBinary => {
                     Encoder::LargeBinary(BinaryEncoder(array.as_binary::<i64>()))
                 }
-                DataType::FixedSizeBinary(len) => {
+                DataType::FixedSizeBinary(_len) => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<FixedSizeBinaryArray>()
@@ -430,11 +429,6 @@ impl<'a> FieldEncoder<'a> {
                     )))
                 }
             }
-            other => {
-                return Err(ArrowError::NotYetImplemented(format!(
-                    "Avro writer: {other:?} not yet supported",
-                )));
-            }
         };
         // Compute the effective null state from writer-declared nullability and data nulls.
         let null_state = match (nullability, array.null_count() > 0) {
@@ -532,7 +526,7 @@ struct FieldBinding {
 
 /// Builder for `RecordEncoder` write plan
 #[derive(Debug)]
-pub struct RecordEncoderBuilder<'a> {
+pub(crate) struct RecordEncoderBuilder<'a> {
     avro_root: &'a AvroField,
     arrow_schema: &'a ArrowSchema,
     fingerprint: Option<Fingerprint>,
@@ -540,7 +534,7 @@ pub struct RecordEncoderBuilder<'a> {
 
 impl<'a> RecordEncoderBuilder<'a> {
     /// Create a new builder from the Avro root and Arrow schema.
-    pub fn new(avro_root: &'a AvroField, arrow_schema: &'a ArrowSchema) -> Self {
+    pub(crate) fn new(avro_root: &'a AvroField, arrow_schema: &'a ArrowSchema) -> Self {
         Self {
             avro_root,
             arrow_schema,
@@ -555,7 +549,7 @@ impl<'a> RecordEncoderBuilder<'a> {
 
     /// Build the `RecordEncoder` by walking the Avro **record** root in Avro order,
     /// resolving each field to an Arrow index by name.
-    pub fn build(self) -> Result<RecordEncoder, ArrowError> {
+    pub(crate) fn build(self) -> Result<RecordEncoder, ArrowError> {
         let avro_root_dt = self.avro_root.data_type();
         let Codec::Struct(root_fields) = avro_root_dt.codec() else {
             return Err(ArrowError::SchemaError(
@@ -590,7 +584,7 @@ impl<'a> RecordEncoderBuilder<'a> {
 /// top-level Avro fields to Arrow columns and contains a nested encoding plan
 /// for each column.
 #[derive(Debug, Clone)]
-pub struct RecordEncoder {
+pub(crate) struct RecordEncoder {
     columns: Vec<FieldBinding>,
     /// Optional pre-built, variable-length prefix written before each record.
     prefix: Option<Prefix>,
@@ -625,7 +619,11 @@ impl RecordEncoder {
     /// Encode a `RecordBatch` using this encoder plan.
     ///
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
-    pub fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<(), ArrowError> {
+    pub(crate) fn encode<W: Write>(
+        &self,
+        out: &mut W,
+        batch: &RecordBatch,
+    ) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         let n = batch.num_rows();
         match self.prefix {
@@ -1048,12 +1046,10 @@ impl<'a> MapEncoder<'a> {
         let offsets = self.map.offsets();
         let start = offsets[idx] as usize;
         let end = offsets[idx + 1] as usize;
-
-        let mut write_item = |out: &mut W, j: usize| {
+        let write_item = |out: &mut W, j: usize| {
             let j_val = j.saturating_sub(self.values_offset);
             self.values.encode(out, j_val)
         };
-
         match self.keys {
             KeyKind::Utf8(arr) => MapEncoder::<'a>::encode_map_entries(
                 out,
@@ -1425,7 +1421,6 @@ mod tests {
     use arrow_array::{
         Array, ArrayRef, BinaryArray, BooleanArray, Float32Array, Float64Array, Int32Array,
         Int64Array, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray, StringArray,
-        TimestampMicrosecondArray,
     };
     use arrow_schema::{DataType, Field, Fields};
 
