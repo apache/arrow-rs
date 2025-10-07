@@ -227,7 +227,7 @@ impl<'a> FieldEncoder<'a> {
     ) -> Result<Self, ArrowError> {
         let encoder = match plan {
             FieldPlan::Scalar => match array.data_type() {
-                DataType::Null => Encoder::Null(NullEncoder),
+                DataType::Null => Encoder::Null,
                 DataType::Boolean => Encoder::Boolean(BooleanEncoder(array.as_boolean())),
                 DataType::Utf8 => {
                     Encoder::Utf8(Utf8GenericEncoder::<i32>(array.as_string::<i32>()))
@@ -934,7 +934,7 @@ enum Encoder<'a> {
     Enum(EnumEncoder<'a>),
     Map(Box<MapEncoder<'a>>),
     Union(Box<UnionEncoder<'a>>),
-    Null(NullEncoder),
+    Null,
 }
 
 impl<'a> Encoder<'a> {
@@ -976,7 +976,7 @@ impl<'a> Encoder<'a> {
             Encoder::Map(e) => (e).encode(out, idx),
             Encoder::Enum(e) => (e).encode(out, idx),
             Encoder::Union(e) => (e).encode(out, idx),
-            Encoder::Null(e) => (e).encode(out, idx),
+            Encoder::Null => Ok(()),
         }
     }
 }
@@ -1261,15 +1261,6 @@ impl<'a> StructEncoder<'a> {
         for encoder in self.encoders.iter_mut() {
             encoder.encode(out, idx)?;
         }
-        Ok(())
-    }
-}
-
-struct NullEncoder;
-
-impl NullEncoder {
-    // Noop encoder path for Null branches in a union.
-    fn encode<W: Write + ?Sized>(&mut self, _out: &mut W, _idx: usize) -> Result<(), ArrowError> {
         Ok(())
     }
 }
