@@ -29,7 +29,7 @@ use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use chrono::DateTime;
 use parquet_variant::{
-    Uuid, Variant, is_valid_variant_decimal4, is_valid_variant_decimal8, is_valid_variant_decimal16,
+    Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
 };
 
 use std::borrow::Cow;
@@ -969,13 +969,17 @@ fn canonicalize_and_verify_data_type(
         //
         // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
         // requires using the narrowest decimal type for a given precision. Fix those up first.
-        Decimal64(p, s) | Decimal128(p, s) if is_valid_variant_decimal4(p, s) => {
+        Decimal64(p, s) | Decimal128(p, s)
+            if VariantDecimal4::is_valid_precision_and_scale(p, s) =>
+        {
             Cow::Owned(Decimal32(*p, *s))
         }
-        Decimal128(p, s) if is_valid_variant_decimal8(p, s) => Cow::Owned(Decimal64(*p, *s)),
-        Decimal32(p, s) if is_valid_variant_decimal4(p, s) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal8(p, s) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal16(p, s) => borrow!(),
+        Decimal128(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
+            Cow::Owned(Decimal64(*p, *s))
+        }
+        Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed

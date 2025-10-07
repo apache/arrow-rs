@@ -17,50 +17,6 @@
 use arrow_schema::ArrowError;
 use std::fmt;
 
-/// True if the given precision and scale are valid for a variant decimal type with the given
-/// maximum precision.
-///
-/// NOTE: By a strict reading of the "decimal table" in the [variant spec], one might conclude that
-/// each decimal type has both lower and upper bounds on precision (i.e. Decimal16 with precision 5
-/// is invalid because Decimal4 "covers" it). But the variant shredding integration tests
-/// specifically expect such cases to succeed, so we only enforce the upper bound here.
-///
-/// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
-///
-/// # Example
-/// ```
-/// # use parquet_variant::{is_valid_variant_decimal, VariantDecimal4};
-/// #
-/// assert!(is_valid_variant_decimal(&5, &2, VariantDecimal4::MAX_PRECISION));
-/// assert!(!is_valid_variant_decimal(&10, &2, VariantDecimal4::MAX_PRECISION)); // too wide
-/// assert!(!is_valid_variant_decimal(&5, &-1, VariantDecimal4::MAX_PRECISION)); // negative scale
-/// assert!(!is_valid_variant_decimal(&5, &7, VariantDecimal4::MAX_PRECISION)); // scale too big
-/// ```
-pub fn is_valid_variant_decimal(precision: &u8, scale: &i8, max_precision: u8) -> bool {
-    (1..=max_precision).contains(precision) && (0..=*precision as i8).contains(scale)
-}
-
-/// True if the given precision and scale are valid for a variant Decimal4 (max precision 9).
-///
-/// See [`is_valid_variant_decimal`] for details.
-pub fn is_valid_variant_decimal4(precision: &u8, scale: &i8) -> bool {
-    is_valid_variant_decimal(precision, scale, VariantDecimal4::MAX_PRECISION)
-}
-
-/// True if the given precision and scale are valid for a variant Decimal8 (max precision 18).
-///
-/// See [`is_valid_variant_decimal`] for details.
-pub fn is_valid_variant_decimal8(precision: &u8, scale: &i8) -> bool {
-    is_valid_variant_decimal(precision, scale, VariantDecimal8::MAX_PRECISION)
-}
-
-/// True if the given precision and scale are valid for a variant Decimal16 (max precision 38).
-///
-/// See [`is_valid_variant_decimal`] for details.
-pub fn is_valid_variant_decimal16(precision: &u8, scale: &i8) -> bool {
-    is_valid_variant_decimal(precision, scale, VariantDecimal16::MAX_PRECISION)
-}
-
 /// Trait for variant decimal types, enabling generic code across Decimal4/8/16
 ///
 /// This trait provides a common interface for the three variant decimal types,
@@ -88,6 +44,28 @@ pub trait VariantDecimalType: Into<super::Variant<'static, 'static>> {
 
     /// Maximum number of significant digits this decimal type can represent (9, 18, or 38)
     const MAX_PRECISION: u8;
+
+    /// True if the given precision and scale are valid for this variant decimal type.
+    ///
+    /// NOTE: By a strict reading of the "decimal table" in the [variant spec], one might conclude that
+    /// each decimal type has both lower and upper bounds on precision (i.e. Decimal16 with precision 5
+    /// is invalid because Decimal4 "covers" it). But the variant shredding integration tests
+    /// specifically expect such cases to succeed, so we only enforce the upper bound here.
+    ///
+    /// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{VariantDecimal4, VariantDecimalType};
+    /// #
+    /// assert!(VariantDecimal4::is_valid_precision_and_scale(&5, &2));
+    /// assert!(!VariantDecimal4::is_valid_precision_and_scale(&10, &2)); // too wide
+    /// assert!(!VariantDecimal4::is_valid_precision_and_scale(&5, &-1)); // negative scale
+    /// assert!(!VariantDecimal4::is_valid_precision_and_scale(&5, &7)); // scale too big
+    /// ```
+    fn is_valid_precision_and_scale(precision: &u8, scale: &i8) -> bool {
+        (1..=Self::MAX_PRECISION).contains(precision) && (0..=*precision as i8).contains(scale)
+    }
 
     /// Creates a new decimal value from the given unscaled integer and scale, failing if the
     /// integer's width, or the requested scale, exceeds `MAX_PRECISION`.

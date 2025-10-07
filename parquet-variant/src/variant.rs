@@ -15,11 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-pub use self::decimal::{
-    is_valid_variant_decimal, is_valid_variant_decimal16, is_valid_variant_decimal4,
-    is_valid_variant_decimal8, VariantDecimal16, VariantDecimal4, VariantDecimal8,
-    VariantDecimalType,
-};
+pub use self::decimal::{VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantDecimalType};
 pub use self::list::VariantList;
 pub use self::metadata::{VariantMetadata, EMPTY_VARIANT_METADATA, EMPTY_VARIANT_METADATA_BYTES};
 pub use self::object::VariantObject;

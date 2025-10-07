@@ -35,8 +35,7 @@ use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
     ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
-    VariantDecimal16, VariantDecimalType, VariantMetadata, is_valid_variant_decimal4,
-    is_valid_variant_decimal8, is_valid_variant_decimal16,
+    VariantDecimal16, VariantDecimalType, VariantMetadata,
 };
 use std::marker::PhantomData;
 use uuid::Uuid;
@@ -187,15 +186,15 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Int64 => primitive_builder!(PrimitiveInt64, as_primitive),
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
-            DataType::Decimal32(p, s) if is_valid_variant_decimal4(p, s) => Self::Decimal32(
-                DecimalUnshredRowBuilder::new(value, typed_value.as_primitive(), *s as _),
-            ),
-            DataType::Decimal64(p, s) if is_valid_variant_decimal8(p, s) => Self::Decimal64(
-                DecimalUnshredRowBuilder::new(value, typed_value.as_primitive(), *s as _),
-            ),
-            DataType::Decimal128(p, s) if is_valid_variant_decimal16(p, s) => Self::Decimal128(
-                DecimalUnshredRowBuilder::new(value, typed_value.as_primitive(), *s as _),
-            ),
+            DataType::Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => {
+                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+            }
+            DataType::Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
+                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+            }
+            DataType::Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => {
+                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+            }
             DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
             | DataType::Decimal128(_, _)
@@ -214,20 +213,12 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                     "Time64({time_unit}) is not a valid variant shredding type",
                 )));
             }
-            DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
-                Self::TimestampMicrosecond(TimestampUnshredRowBuilder::new(
-                    value,
-                    typed_value.as_primitive(),
-                    timezone.is_some(),
-                ))
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
-                Self::TimestampNanosecond(TimestampUnshredRowBuilder::new(
-                    value,
-                    typed_value.as_primitive(),
-                    timezone.is_some(),
-                ))
-            }
+            DataType::Timestamp(TimeUnit::Microsecond, timezone) => Self::TimestampMicrosecond(
+                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
+            ),
+            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => Self::TimestampNanosecond(
+                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
+            ),
             DataType::Timestamp(time_unit, _) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Timestamp({time_unit}) is not a valid variant shredding type",
@@ -474,12 +465,12 @@ struct TimestampUnshredRowBuilder<'a, T: TimestampType> {
 impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
     fn new(
         value: Option<&'a BinaryViewArray>,
-        typed_value: &'a PrimitiveArray<T>,
+        typed_value: &'a dyn Array,
         has_timezone: bool,
     ) -> Self {
         Self {
             value,
-            typed_value,
+            typed_value: typed_value.as_primitive(),
             has_timezone,
         }
     }
@@ -521,14 +512,10 @@ where
     A: DecimalType,
     V: VariantDecimalType<Native = A::Native>,
 {
-    fn new(
-        value: Option<&'a BinaryViewArray>,
-        typed_value: &'a PrimitiveArray<A>,
-        scale: i8,
-    ) -> Self {
+    fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a dyn Array, scale: i8) -> Self {
         Self {
             value,
-            typed_value,
+            typed_value: typed_value.as_primitive(),
             scale,
             _phantom: PhantomData,
         }
