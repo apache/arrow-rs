@@ -62,8 +62,8 @@ pub trait GeoStatsAccumulator: Send {
 /// statistics when statistics for that column are enabled. Otherwise, this factory
 /// returns a [VoidGeoStatsAccumulator] that never adds any geospatial statistics.
 ///
-/// Bounding for geography columns is not currently implemented and will always
-/// return a [VoidGeoStatsAccumulator]
+/// Bounding for Geography columns is not currently implemented by parquet-geospatial
+/// and this factory will always return a [VoidGeoStatsAccumulator].
 #[derive(Debug, Default)]
 pub struct DefaultGeoStatsAccumulatorFactory {}
 
@@ -164,11 +164,158 @@ impl GeoStatsAccumulator for ParquetGeoStatsAccumulator {
             Some(bbox)
         };
 
-        let geometry_types = Some(self.bounder.geometry_types());
+        let bounder_geometry_types = self.bounder.geometry_types();
+        let geometry_types = if bounder_geometry_types.is_empty() {
+            None
+        } else {
+            Some(bounder_geometry_types)
+        };
 
         // Reset
         self.bounder = parquet_geospatial::bounding::GeometryBounder::empty();
 
         Some(Box::new(GeospatialStatistics::new(bbox, geometry_types)))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_void_accumulator() {
+        let mut accumulator = VoidGeoStatsAccumulator {};
+        assert!(!accumulator.is_valid());
+        accumulator.update_wkb(&[0x01, 0x02, 0x03]);
+        assert!(accumulator.finish().is_none());
+    }
+
+    #[cfg(feature = "geospatial")]
+    #[test]
+    fn test_default_accumulator_geospatial_factory() {
+        use std::sync::Arc;
+
+        use parquet_geospatial::testing::wkb_item_xy;
+
+        use crate::{
+            basic::LogicalType,
+            geospatial::bounding_box::BoundingBox,
+            schema::types::{ColumnDescriptor, ColumnPath, Type},
+        };
+
+        // Check that we have a working accumulator for Geometry
+        let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::Geometry))
+            .build()
+            .unwrap();
+        let column_descr =
+            ColumnDescriptor::new(Arc::new(parquet_type), 0, 0, ColumnPath::new(vec![]));
+        let mut accumulator =
+            DefaultGeoStatsAccumulatorFactory::default().new_accumulator(&Arc::new(column_descr));
+
+        assert!(accumulator.is_valid());
+        accumulator.update_wkb(&wkb_item_xy(1.0, 2.0));
+        accumulator.update_wkb(&wkb_item_xy(11.0, 12.0));
+        let stats = accumulator.finish().unwrap();
+        assert_eq!(
+            stats.bounding_box().unwrap(),
+            &BoundingBox::new(1.0, 11.0, 2.0, 12.0)
+        );
+
+        // Check that we have a void accumulator for Geography
+        let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::Geography))
+            .build()
+            .unwrap();
+        let column_descr =
+            ColumnDescriptor::new(Arc::new(parquet_type), 0, 0, ColumnPath::new(vec![]));
+        let mut accumulator =
+            DefaultGeoStatsAccumulatorFactory::default().new_accumulator(&Arc::new(column_descr));
+
+        assert!(!accumulator.is_valid());
+        assert!(accumulator.finish().is_none());
+    }
+
+    #[cfg(feature = "geospatial")]
+    #[test]
+    fn test_geometry_accumulator() {
+        use parquet_geospatial::testing::{wkb_item_xy, wkb_item_xyzm};
+
+        use crate::geospatial::bounding_box::BoundingBox;
+
+        let mut accumulator = ParquetGeoStatsAccumulator::default();
+
+        // A fresh instance should be able to bound input
+        assert!(accumulator.is_valid());
+        accumulator.update_wkb(&wkb_item_xy(1.0, 2.0));
+        accumulator.update_wkb(&wkb_item_xy(11.0, 12.0));
+        let stats = accumulator.finish().unwrap();
+        assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
+        assert_eq!(
+            stats.bounding_box().unwrap(),
+            &BoundingBox::new(1.0, 11.0, 2.0, 12.0)
+        );
+
+        // finish() should have reset the bounder such that the first values
+        // aren't when computing the next bound of statistics.
+        assert!(accumulator.is_valid());
+        accumulator.update_wkb(&wkb_item_xy(21.0, 22.0));
+        accumulator.update_wkb(&wkb_item_xy(31.0, 32.0));
+        let stats = accumulator.finish().unwrap();
+        assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
+        assert_eq!(
+            stats.bounding_box().unwrap(),
+            &BoundingBox::new(21.0, 31.0, 22.0, 32.0)
+        );
+
+        // When an accumulator encounters invalid input, it reports is_valid() false
+        // and does not compute subsequent statistics
+        assert!(accumulator.is_valid());
+        accumulator.update_wkb(&wkb_item_xy(41.0, 42.0));
+        accumulator.update_wkb("these bytes are not WKB".as_bytes());
+        assert!(!accumulator.is_valid());
+        assert!(accumulator.finish().is_none());
+
+        // Subsequent rounds of accumulation should work as expected
+        assert!(accumulator.is_valid());
+        accumulator.update_wkb(&wkb_item_xy(41.0, 42.0));
+        accumulator.update_wkb(&wkb_item_xy(51.0, 52.0));
+        let stats = accumulator.finish().unwrap();
+        assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
+        assert_eq!(
+            stats.bounding_box().unwrap(),
+            &BoundingBox::new(41.0, 51.0, 42.0, 52.0)
+        );
+
+        // When there was no input at all (occurs in the all null case), both geometry
+        // types and bounding box will be None. This is because Parquet Thrift statistics
+        // have no mechanism to communicate "empty". (The all null situation may be determined
+        // from the null count in this case).
+        assert!(accumulator.is_valid());
+        let stats = accumulator.finish().unwrap();
+        assert!(stats.geospatial_types().is_none());
+        assert!(stats.bounding_box().is_none());
+
+        // When there was 100% "empty" input (i.e., non-null geometries without
+        // coordinates), there should be statistics with geometry types but no
+        // bounding box.
+        assert!(accumulator.is_valid());
+        accumulator.update_wkb(&wkb_item_xy(f64::NAN, f64::NAN));
+        let stats = accumulator.finish().unwrap();
+        assert_eq!(stats.geospatial_types().unwrap(), &vec![1]);
+        assert!(stats.bounding_box().is_none());
+
+        // If Z and/or M are present, they should be reported in the bounding box
+        assert!(accumulator.is_valid());
+        accumulator.update_wkb(&wkb_item_xyzm(1.0, 2.0, 3.0, 4.0));
+        accumulator.update_wkb(&wkb_item_xyzm(5.0, 6.0, 7.0, 8.0));
+        let stats = accumulator.finish().unwrap();
+        assert_eq!(stats.geospatial_types().unwrap(), &vec![3001]);
+        assert_eq!(
+            stats.bounding_box().unwrap(),
+            &BoundingBox::new(1.0, 5.0, 2.0, 6.0)
+                .with_zrange(3.0, 7.0)
+                .with_mrange(4.0, 8.0)
+        );
     }
 }

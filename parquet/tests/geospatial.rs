@@ -35,6 +35,7 @@ mod test {
         geospatial::{bounding_box::BoundingBox, statistics::GeospatialStatistics},
         schema::types::{SchemaDescriptor, Type},
     };
+    use parquet_geospatial::testing::wkb_item_xy;
 
     fn read_geo_statistics(b: Bytes, column: usize) -> Vec<Option<GeospatialStatistics>> {
         let reader = SerializedFileReader::new(b).unwrap();
@@ -283,14 +284,5 @@ mod test {
                 .map(|maybe_xy| maybe_xy.map(|(x, y)| wkb_item_xy(x, y))),
         );
         Arc::new(array)
-    }
-
-    fn wkb_item_xy(x: f64, y: f64) -> Vec<u8> {
-        let mut item: [u8; 21] = [0; 21];
-        item[0] = 0x01;
-        item[1] = 0x01;
-        item[5..13].copy_from_slice(x.to_le_bytes().as_slice());
-        item[13..21].copy_from_slice(y.to_le_bytes().as_slice());
-        item.to_vec()
     }
 }
