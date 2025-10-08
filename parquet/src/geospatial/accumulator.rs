@@ -48,7 +48,7 @@ pub fn try_new_geo_stats_accumulator(
 
 /// Initialize the global [`GeoStatsAccumulatorFactory`]
 ///
-/// This may only be done once before any calls to [`new_geo_stats_accumulator`].
+/// This may only be done once before any calls to [`try_new_geo_stats_accumulator`].
 /// Clients may use this to implement support for builds of the Parquet crate without
 /// geospatial support or to implement support for Geography bounding using external
 /// dependencies.
