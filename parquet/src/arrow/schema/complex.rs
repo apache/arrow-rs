@@ -75,7 +75,9 @@ impl ParquetField {
     /// Converts `self` into an arrow list, with its current type as the field type
     /// accept an optional `list_data_type` to specify the type of list to create
     ///
-    /// This is used to convert deprecated repeated columns (not in a list), into their arrow representation
+    /// This is used to convert [deprecated repeated columns] (not in a list), into their arrow representation
+    ///
+    /// [deprecated repeated columns]: https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/LogicalTypes.md?plain=1#L649-L650
     fn into_list_with_arrow_list_hint(
         self,
         parquet_field_type: &Type,
@@ -85,9 +87,9 @@ impl ParquetField {
             Some(DataType::List(field_hint))
             | Some(DataType::LargeList(field_hint))
             | Some(DataType::FixedSizeList(field_hint, _)) => Some(field_hint.as_ref()),
-            Some(_) => unreachable!(
-                "should be validated earlier that list_data_type is only a type of list"
-            ),
+            Some(_) => return Err(general_err!(
+                "Internal error: should be validated earlier that list_data_type is only a type of list"
+            )),
             None => None,
         };
 
