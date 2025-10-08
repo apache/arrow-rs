@@ -8715,7 +8715,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Utf8) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Utf8) }, true) not supported"#
+            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Utf8), unsorted) to Map("entries": Struct("key": Utf8, "value": Utf8), sorted) not supported"#
         );
     }
 
@@ -8766,7 +8766,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Duration(s)) }, true) not supported"#
+            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Interval(DayTime)), unsorted) to Map("entries": Struct("key": Utf8, "value": Duration(s)), sorted) not supported"#
         );
     }
 
