@@ -1148,7 +1148,7 @@ mod tests {
     use std::collections::{HashMap, VecDeque};
     use std::fmt::Formatter;
     use std::fs::File;
-    use std::io::{Seek, Write};
+    use std::io::Seek;
     use std::path::PathBuf;
     use std::sync::Arc;
 
@@ -1160,7 +1160,7 @@ mod tests {
         Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, OffsetBuffer};
+    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime, NullBuffer};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
@@ -1173,9 +1173,8 @@ mod tests {
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
-        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
-        RowSelector,
+        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
