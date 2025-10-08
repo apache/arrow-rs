@@ -101,6 +101,8 @@ use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
+#[cfg(feature = "encryption")]
+use crate::file::metadata::thrift_gen::EncryptionAlgorithm;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
@@ -194,7 +196,7 @@ pub struct ParquetMetaData {
     offset_index: Option<ParquetOffsetIndex>,
     /// Optional file decryptor
     #[cfg(feature = "encryption")]
-    file_decryptor: Option<FileDecryptor>,
+    file_decryptor: Option<Box<FileDecryptor>>,
 }
 
 impl ParquetMetaData {
@@ -215,7 +217,7 @@ impl ParquetMetaData {
     /// encrypted data.
     #[cfg(feature = "encryption")]
     pub(crate) fn with_file_decryptor(&mut self, file_decryptor: Option<FileDecryptor>) {
-        self.file_decryptor = file_decryptor;
+        self.file_decryptor = file_decryptor.map(Box::new);
     }
 
     /// Convert this ParquetMetaData into a [`ParquetMetaDataBuilder`]
@@ -231,7 +233,7 @@ impl ParquetMetaData {
     /// Returns file decryptor as reference.
     #[cfg(feature = "encryption")]
     pub(crate) fn file_decryptor(&self) -> Option<&FileDecryptor> {
-        self.file_decryptor.as_ref()
+        self.file_decryptor.as_deref()
     }
 
     /// Returns number of row groups in this file.
@@ -411,6 +413,13 @@ impl ParquetMetaDataBuilder {
         self.0.offset_index.as_ref()
     }
 
+    /// Sets the file decryptor needed to decrypt this metadata.
+    #[cfg(feature = "encryption")]
+    pub(crate) fn set_file_decryptor(mut self, file_decryptor: Option<FileDecryptor>) -> Self {
+        self.0.with_file_decryptor(file_decryptor);
+        self
+    }
+
     /// Creates a new ParquetMetaData from the builder
     pub fn build(self) -> ParquetMetaData {
         let Self(metadata) = self;
@@ -468,6 +477,10 @@ pub struct FileMetaData {
     key_value_metadata: Option<Vec<KeyValue>>,
     schema_descr: SchemaDescPtr,
     column_orders: Option<Vec<ColumnOrder>>,
+    #[cfg(feature = "encryption")]
+    encryption_algorithm: Option<Box<EncryptionAlgorithm>>,
+    #[cfg(feature = "encryption")]
+    footer_signing_key_metadata: Option<Vec<u8>>,
 }
 
 impl FileMetaData {
@@ -487,7 +500,29 @@ impl FileMetaData {
             key_value_metadata,
             schema_descr,
             column_orders,
+            #[cfg(feature = "encryption")]
+            encryption_algorithm: None,
+            #[cfg(feature = "encryption")]
+            footer_signing_key_metadata: None,
         }
+    }
+
+    #[cfg(feature = "encryption")]
+    pub(crate) fn with_encryption_algorithm(
+        mut self,
+        encryption_algorithm: Option<EncryptionAlgorithm>,
+    ) -> Self {
+        self.encryption_algorithm = encryption_algorithm.map(Box::new);
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    pub(crate) fn with_footer_signing_key_metadata(
+        mut self,
+        footer_signing_key_metadata: Option<Vec<u8>>,
+    ) -> Self {
+        self.footer_signing_key_metadata = footer_signing_key_metadata;
+        self
     }
 
     /// Returns version of this file.
@@ -776,7 +811,7 @@ pub struct ColumnChunkMetaData {
     repetition_level_histogram: Option<LevelHistogram>,
     definition_level_histogram: Option<LevelHistogram>,
     #[cfg(feature = "encryption")]
-    column_crypto_metadata: Option<ColumnCryptoMetaData>,
+    column_crypto_metadata: Option<Box<ColumnCryptoMetaData>>,
     #[cfg(feature = "encryption")]
     encrypted_column_metadata: Option<Vec<u8>>,
 }
@@ -1077,7 +1112,7 @@ impl ColumnChunkMetaData {
     /// Returns the encryption metadata for this column chunk.
     #[cfg(feature = "encryption")]
     pub fn crypto_metadata(&self) -> Option<&ColumnCryptoMetaData> {
-        self.column_crypto_metadata.as_ref()
+        self.column_crypto_metadata.as_deref()
     }
 
     /// Converts this [`ColumnChunkMetaData`] into a [`ColumnChunkMetaDataBuilder`]
@@ -1283,7 +1318,14 @@ impl ColumnChunkMetaDataBuilder {
     #[cfg(feature = "encryption")]
     /// Set the encryption metadata for an encrypted column
     pub fn set_column_crypto_metadata(mut self, value: Option<ColumnCryptoMetaData>) -> Self {
-        self.0.column_crypto_metadata = value;
+        self.0.column_crypto_metadata = value.map(Box::new);
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the encryption metadata for an encrypted column
+    pub fn set_encrypted_column_metadata(mut self, value: Option<Vec<u8>>) -> Self {
+        self.0.encrypted_column_metadata = value;
         self
     }
 
@@ -1818,7 +1860,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let base_expected_size = 2312;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2744;
+        let base_expected_size = 2480;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1849,7 +1891,7 @@ mod tests {
         #[cfg(not(feature = "encryption"))]
         let bigger_expected_size = 2738;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3170;
+        let bigger_expected_size = 2906;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

@@ -20,7 +20,7 @@
 //! This module provides functionality for working with geospatial statistics in Parquet files.
 //! It includes support for bounding boxes and geospatial statistics in column chunk metadata.
 
-use crate::geospatial::bounding_box::BoundingBox;
+use crate::{file::metadata::HeapSize, geospatial::bounding_box::BoundingBox};
 
 // ----------------------------------------------------------------------
 // Geospatial Statistics
@@ -66,6 +66,12 @@ impl GeospatialStatistics {
     /// Optional list of geometry type identifiers, where `None` represents a lack of information.
     pub fn geospatial_types(&self) -> Option<&Vec<i32>> {
         self.geospatial_types.as_ref()
+    }
+}
+
+impl HeapSize for GeospatialStatistics {
+    fn heap_size(&self) -> usize {
+        self.bbox.heap_size() + self.geospatial_types.heap_size()
     }
 }
 

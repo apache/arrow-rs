@@ -56,6 +56,12 @@ impl<T: HeapSize> HeapSize for Arc<T> {
     }
 }
 
+impl<T: HeapSize> HeapSize for Box<T> {
+    fn heap_size(&self) -> usize {
+        self.as_ref().heap_size()
+    }
+}
+
 impl<T: HeapSize> HeapSize for Option<T> {
     fn heap_size(&self) -> usize {
         self.as_ref().map(|inner| inner.heap_size()).unwrap_or(0)
@@ -70,10 +76,17 @@ impl HeapSize for String {
 
 impl HeapSize for FileMetaData {
     fn heap_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_heap_size =
+            self.encryption_algorithm.heap_size() + self.footer_signing_key_metadata.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_heap_size = 0;
+
         self.created_by.heap_size()
             + self.key_value_metadata.heap_size()
             + self.schema_descr.heap_size()
             + self.column_orders.heap_size()
+            + encryption_heap_size
     }
 }
 
@@ -109,6 +122,7 @@ impl HeapSize for ColumnChunkMetaData {
             + self.unencoded_byte_array_data_bytes.heap_size()
             + self.repetition_level_histogram.heap_size()
             + self.definition_level_histogram.heap_size()
+            + self.geo_statistics.heap_size()
             + encryption_heap_size
     }
 }
@@ -141,6 +155,7 @@ impl HeapSize for PageType {
         0 // no heap allocations
     }
 }
+
 impl HeapSize for Statistics {
     fn heap_size(&self) -> usize {
         match self {
