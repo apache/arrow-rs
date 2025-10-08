@@ -22,21 +22,21 @@ extern crate criterion;
 extern crate once_cell;
 
 use arrow_array::{
+    ArrayRef, BinaryArray, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array,
+    Decimal256Array, FixedSizeBinaryArray, Float32Array, Float64Array, ListArray, PrimitiveArray,
+    RecordBatch, StringArray, StructArray,
     builder::{ListBuilder, StringBuilder},
     types::{Int32Type, Int64Type, IntervalMonthDayNanoType, TimestampMicrosecondType},
-    ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array,
-    Decimal64Array, FixedSizeBinaryArray, Float32Array, Float64Array, ListArray, PrimitiveArray,
-    RecordBatch, StringArray, StructArray,
 };
 use arrow_avro::writer::AvroWriter;
-use arrow_buffer::{i256, Buffer};
+use arrow_buffer::{Buffer, i256};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use once_cell::sync::Lazy;
 use rand::{
+    Rng, SeedableRng,
     distr::uniform::{SampleRange, SampleUniform},
     rngs::StdRng,
-    Rng, SeedableRng,
 };
 use std::collections::HashMap;
 use std::io::Cursor;

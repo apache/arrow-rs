@@ -477,8 +477,8 @@
 use crate::codec::AvroFieldBuilder;
 use crate::reader::header::read_header;
 use crate::schema::{
-    AvroSchema, Fingerprint, FingerprintAlgorithm, Schema, SchemaStore, CONFLUENT_MAGIC,
-    SINGLE_OBJECT_MAGIC,
+    AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC, Schema,
+    SchemaStore,
 };
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, SchemaRef};
@@ -695,7 +695,7 @@ impl Decoder {
                 None => {
                     return Err(ArrowError::ParseError(
                         "Missing magic bytes and fingerprint".to_string(),
-                    ))
+                    ));
                 }
             }
         }
@@ -1267,9 +1267,9 @@ mod test {
     use crate::reader::record::RecordDecoder;
     use crate::reader::{Decoder, Reader, ReaderBuilder};
     use crate::schema::{
-        AvroSchema, Fingerprint, FingerprintAlgorithm, PrimitiveType, SchemaStore,
-        AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AVRO_NAME_METADATA_KEY,
-        CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC,
+        AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_NAME_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY,
+        AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, PrimitiveType,
+        SINGLE_OBJECT_MAGIC, SchemaStore,
     };
     use crate::test_util::arrow_test_data;
     use crate::writer::AvroWriter;
@@ -1289,7 +1289,7 @@ mod test {
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
     use arrow_buffer::{
-        i256, Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer,
+        Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer, i256,
     };
     #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{
@@ -1302,8 +1302,8 @@ mod test {
     };
     use bytes::Bytes;
     use futures::executor::block_on;
-    use futures::{stream, Stream, StreamExt, TryStreamExt};
-    use serde_json::{json, Value};
+    use futures::{Stream, StreamExt, TryStreamExt, stream};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::fs::File;
     use std::io::{BufReader, Cursor};
@@ -2810,7 +2810,7 @@ mod test {
             let top_meta = proj_field.metadata().clone();
             let (expected_field_ref, expected_col): (Arc<Field>, ArrayRef) =
                 match (full_field.data_type(), proj_field.data_type()) {
-                    (&DataType::List(_), DataType::List(ref proj_elem)) => {
+                    (&DataType::List(_), DataType::List(proj_elem)) => {
                         let new_col =
                             rebuild_list_array_with_element(&col_full, proj_elem.clone(), false);
                         let nf = Field::new(
@@ -2821,7 +2821,7 @@ mod test {
                         .with_metadata(top_meta);
                         (Arc::new(nf), new_col)
                     }
-                    (&DataType::LargeList(_), DataType::LargeList(ref proj_elem)) => {
+                    (&DataType::LargeList(_), DataType::LargeList(proj_elem)) => {
                         let new_col =
                             rebuild_list_array_with_element(&col_full, proj_elem.clone(), true);
                         let nf = Field::new(
