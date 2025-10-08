@@ -18,7 +18,6 @@
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
 use arrow::datatypes::{self, ArrowPrimitiveType, ArrowTimestampType, Date32Type};
-use chrono::{DateTime, Utc};
 use parquet_variant::Variant;
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
@@ -45,15 +44,6 @@ pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
 pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
-
-/// Extension trait that `ArrowTimestampType` handle `DateTime<Utc>` like `NaiveDateTime`
-trait MakeValueTz: ArrowTimestampType {
-    fn make_value_tz(timestamp: DateTime<Utc>) -> Option<i64> {
-        Self::make_value(timestamp.naive_utc())
-    }
-}
-
-impl<T: ArrowTimestampType> MakeValueTz for T {}
 
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
 macro_rules! impl_primitive_from_variant {
@@ -104,7 +94,7 @@ impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_micros,
     ntz = false,
-    Self::make_value_tz
+    |timestamp| Self::make_value(timestamp.naive_utc())
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
@@ -116,7 +106,7 @@ impl_timestamp_from_variant!(
     datatypes::TimestampNanosecondType,
     as_timestamp_nanos,
     ntz = false,
-    Self::make_value_tz
+    |timestamp| Self::make_value(timestamp.naive_utc())
 );
 
 /// Convert the value at a specific index in the given array into a `Variant`.
