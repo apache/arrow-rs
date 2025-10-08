@@ -125,6 +125,11 @@ fn test_read_geospatial_statistics() {
 
 #[cfg(all(feature = "arrow", feature = "geospatial"))]
 mod test {
+    //! Tests for Geometry and Geography logical types that require the arrow
+    //! and/or geospatial features enabled
+
+    use super::*;
+
     use std::{iter::zip, sync::Arc};
 
     use arrow_array::{create_array, ArrayRef, BinaryArray, RecordBatch};
@@ -132,15 +137,14 @@ mod test {
     use bytes::Bytes;
     use parquet::{
         arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
-        basic::LogicalType,
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
             properties::{EnabledStatistics, WriterProperties},
-            reader::{FileReader, SerializedFileReader},
+            reader::FileReader,
             writer::SerializedFileWriter,
         },
-        geospatial::{bounding_box::BoundingBox, statistics::GeospatialStatistics},
+        geospatial::statistics::GeospatialStatistics,
         schema::types::{SchemaDescriptor, Type},
     };
     use parquet_geospatial::testing::wkb_point_xy;
