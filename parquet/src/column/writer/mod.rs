@@ -21,11 +21,14 @@ use bytes::Bytes;
 use half::f16;
 
 use crate::bloom_filter::Sbbf;
-use crate::format::{BoundaryOrder, ColumnIndex, OffsetIndex};
+use crate::file::page_index::column_index::ColumnIndexMetaData;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
-use crate::basic::{Compression, ConvertedType, Encoding, LogicalType, PageType, Type};
+use crate::basic::{
+    BoundaryOrder, Compression, ConvertedType, Encoding, LogicalType, PageType, Type,
+};
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
 use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
@@ -37,9 +40,8 @@ use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
     ColumnChunkMetaData, ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram,
-    OffsetIndexBuilder,
+    OffsetIndexBuilder, PageEncodingStats,
 };
-use crate::file::page_encoding_stats::PageEncodingStats;
 use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
 };
@@ -189,9 +191,9 @@ pub struct ColumnCloseResult {
     /// Optional bloom filter for this column
     pub bloom_filter: Option<Sbbf>,
     /// Optional column index, for filtering
-    pub column_index: Option<ColumnIndex>,
+    pub column_index: Option<ColumnIndexMetaData>,
     /// Optional offset index, identifying page locations
-    pub offset_index: Option<OffsetIndex>,
+    pub offset_index: Option<OffsetIndexMetaData>,
 }
 
 // Metrics per page
@@ -388,7 +390,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         }
 
         // Disable column_index_builder if not collecting page statistics.
-        let mut column_index_builder = ColumnIndexBuilder::new();
+        let mut column_index_builder = ColumnIndexBuilder::new(descr.physical_type());
         if statistics_enabled != EnabledStatistics::Page {
             column_index_builder.to_invalid()
         }
@@ -619,12 +621,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         };
         self.column_index_builder.set_boundary_order(boundary_order);
 
-        let column_index = self
-            .column_index_builder
-            .valid()
-            .then(|| self.column_index_builder.build_to_thrift());
+        let column_index = match self.column_index_builder.valid() {
+            true => Some(self.column_index_builder.build()?),
+            false => None,
+        };
 
-        let offset_index = self.offset_index_builder.map(|b| b.build_to_thrift());
+        let offset_index = self.offset_index_builder.map(|b| b.build());
 
         Ok(ColumnCloseResult {
             bytes_written: self.column_metrics.total_bytes_written,
@@ -2266,6 +2268,7 @@ mod tests {
 
         let props = ReaderProperties::builder()
             .set_backward_compatible_lz4(false)
+            .set_read_page_statistics(true)
             .build();
         let reader = SerializedPageReader::new_with_properties(
             Arc::new(Bytes::from(buf)),
@@ -2955,19 +2958,23 @@ mod tests {
         let r = writer.close().unwrap();
         assert!(r.column_index.is_some());
         let col_idx = r.column_index.unwrap();
+        let col_idx = match col_idx {
+            ColumnIndexMetaData::INT32(col_idx) => col_idx,
+            _ => panic!("wrong stats type"),
+        };
         // null_pages should be true for page 0
-        assert!(col_idx.null_pages[0]);
+        assert!(col_idx.is_null_page(0));
         // min and max should be empty byte arrays
-        assert_eq!(col_idx.min_values[0].len(), 0);
-        assert_eq!(col_idx.max_values[0].len(), 0);
+        assert!(col_idx.min_value(0).is_none());
+        assert!(col_idx.max_value(0).is_none());
         // null_counts should be defined and be 4 for page 0
-        assert!(col_idx.null_counts.is_some());
-        assert_eq!(col_idx.null_counts.as_ref().unwrap()[0], 4);
+        assert!(col_idx.null_count(0).is_some());
+        assert_eq!(col_idx.null_count(0), Some(4));
         // there is no repetition so rep histogram should be absent
-        assert!(col_idx.repetition_level_histograms.is_none());
+        assert!(col_idx.repetition_level_histogram(0).is_none());
         // definition_level_histogram should be present and should be 0:4, 1:0
-        assert!(col_idx.definition_level_histograms.is_some());
-        assert_eq!(col_idx.definition_level_histograms.unwrap(), &[4, 0]);
+        assert!(col_idx.definition_level_histogram(0).is_some());
+        assert_eq!(col_idx.definition_level_histogram(0).unwrap(), &[4, 0]);
     }
 
     #[test]
@@ -2990,12 +2997,16 @@ mod tests {
         assert_eq!(8, r.rows_written);
 
         // column index
-        assert_eq!(2, column_index.null_pages.len());
+        let column_index = match column_index {
+            ColumnIndexMetaData::INT32(column_index) => column_index,
+            _ => panic!("wrong stats type"),
+        };
+        assert_eq!(2, column_index.num_pages());
         assert_eq!(2, offset_index.page_locations.len());
         assert_eq!(BoundaryOrder::UNORDERED, column_index.boundary_order);
         for idx in 0..2 {
-            assert!(!column_index.null_pages[idx]);
-            assert_eq!(0, column_index.null_counts.as_ref().unwrap()[idx]);
+            assert!(!column_index.is_null_page(idx));
+            assert_eq!(0, column_index.null_count(0).unwrap());
         }
 
         if let Some(stats) = r.metadata.statistics() {
@@ -3005,14 +3016,8 @@ mod tests {
                 // first page is [1,2,3,4]
                 // second page is [-5,2,4,8]
                 // note that we don't increment here, as this is a non BinaryArray type.
-                assert_eq!(
-                    stats.min_bytes_opt(),
-                    Some(column_index.min_values[1].as_slice())
-                );
-                assert_eq!(
-                    stats.max_bytes_opt(),
-                    column_index.max_values.get(1).map(Vec::as_slice)
-                );
+                assert_eq!(stats.min_opt(), column_index.min_value(1));
+                assert_eq!(stats.max_opt(), column_index.max_value(1));
             } else {
                 panic!("expecting Statistics::Int32");
             }
@@ -3052,37 +3057,36 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
+        let column_index = match column_index {
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            _ => panic!("wrong stats type"),
+        };
+
         assert_eq!(3, r.rows_written);
 
         // column index
-        assert_eq!(1, column_index.null_pages.len());
+        assert_eq!(1, column_index.num_pages());
         assert_eq!(1, offset_index.page_locations.len());
         assert_eq!(BoundaryOrder::ASCENDING, column_index.boundary_order);
-        assert!(!column_index.null_pages[0]);
-        assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
+        assert!(!column_index.is_null_page(0));
+        assert_eq!(Some(0), column_index.null_count(0));
 
         if let Some(stats) = r.metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::FixedLenByteArray(stats) = stats {
-                let column_index_min_value = &column_index.min_values[0];
-                let column_index_max_value = &column_index.max_values[0];
+                let column_index_min_value = column_index.min_value(0).unwrap();
+                let column_index_max_value = column_index.max_value(0).unwrap();
 
                 // Column index stats are truncated, while the column chunk's aren't.
-                assert_ne!(
-                    stats.min_bytes_opt(),
-                    Some(column_index_min_value.as_slice())
-                );
-                assert_ne!(
-                    stats.max_bytes_opt(),
-                    Some(column_index_max_value.as_slice())
-                );
+                assert_ne!(stats.min_bytes_opt().unwrap(), column_index_min_value);
+                assert_ne!(stats.max_bytes_opt().unwrap(), column_index_max_value);
 
                 assert_eq!(
                     column_index_min_value.len(),
                     DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
                 );
-                assert_eq!(column_index_min_value.as_slice(), &[97_u8; 64]);
+                assert_eq!(column_index_min_value, &[97_u8; 64]);
                 assert_eq!(
                     column_index_max_value.len(),
                     DEFAULT_COLUMN_INDEX_TRUNCATE_LENGTH.unwrap()
@@ -3124,27 +3128,32 @@ mod tests {
         let column_index = r.column_index.unwrap();
         let offset_index = r.offset_index.unwrap();
 
+        let column_index = match column_index {
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            _ => panic!("wrong stats type"),
+        };
+
         assert_eq!(1, r.rows_written);
 
         // column index
-        assert_eq!(1, column_index.null_pages.len());
+        assert_eq!(1, column_index.num_pages());
         assert_eq!(1, offset_index.page_locations.len());
         assert_eq!(BoundaryOrder::ASCENDING, column_index.boundary_order);
-        assert!(!column_index.null_pages[0]);
-        assert_eq!(0, column_index.null_counts.as_ref().unwrap()[0]);
+        assert!(!column_index.is_null_page(0));
+        assert_eq!(Some(0), column_index.null_count(0));
 
         if let Some(stats) = r.metadata.statistics() {
             assert_eq!(stats.null_count_opt(), Some(0));
             assert_eq!(stats.distinct_count_opt(), None);
             if let Statistics::FixedLenByteArray(_stats) = stats {
-                let column_index_min_value = &column_index.min_values[0];
-                let column_index_max_value = &column_index.max_values[0];
+                let column_index_min_value = column_index.min_value(0).unwrap();
+                let column_index_max_value = column_index.max_value(0).unwrap();
 
                 assert_eq!(column_index_min_value.len(), 1);
                 assert_eq!(column_index_max_value.len(), 1);
 
-                assert_eq!("B".as_bytes(), column_index_min_value.as_slice());
-                assert_eq!("C".as_bytes(), column_index_max_value.as_slice());
+                assert_eq!("B".as_bytes(), column_index_min_value);
+                assert_eq!("C".as_bytes(), column_index_max_value);
 
                 assert_ne!(column_index_min_value, stats.min_bytes_opt().unwrap());
                 assert_ne!(column_index_max_value, stats.max_bytes_opt().unwrap());
@@ -3174,8 +3183,12 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index_min_bytes = column_index.min_values[0].as_slice();
-        let column_index_max_bytes = column_index.max_values[0].as_slice();
+        let column_index = match column_index {
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            _ => panic!("wrong stats type"),
+        };
+        let column_index_min_bytes = column_index.min_value(0).unwrap();
+        let column_index_max_bytes = column_index.max_value(0).unwrap();
         assert_eq!(expected_value, column_index_min_bytes);
         assert_eq!(expected_value, column_index_max_bytes);
 
@@ -3213,8 +3226,12 @@ mod tests {
         // stats should still be written
         // ensure bytes weren't truncated for column index
         let column_index = r.column_index.unwrap();
-        let column_index_min_bytes = column_index.min_values[0].as_slice();
-        let column_index_max_bytes = column_index.max_values[0].as_slice();
+        let column_index = match column_index {
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(column_index) => column_index,
+            _ => panic!("wrong stats type"),
+        };
+        let column_index_min_bytes = column_index.min_value(0).unwrap();
+        let column_index_max_bytes = column_index.max_value(0).unwrap();
         assert_eq!(expected_value, column_index_min_bytes);
         assert_eq!(expected_value, column_index_max_bytes);
 
@@ -3585,19 +3602,12 @@ mod tests {
         col_writer.close().unwrap();
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
-        let stats = file_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap()
-            .statistics
-            .as_ref()
-            .unwrap();
-        assert!(!stats.is_max_value_exact.unwrap());
+        let stats = file_metadata.row_group(0).column(0).statistics().unwrap();
+        assert!(!stats.max_is_exact());
         // Truncation of invalid UTF-8 should fall back to binary truncation, so last byte should
         // be incremented by 1.
         assert_eq!(
-            stats.max_value,
+            stats.max_bytes_opt().map(|v| v.to_vec()),
             Some([128, 128, 128, 128, 128, 128, 128, 129].to_vec())
         );
     }
@@ -3694,8 +3704,11 @@ mod tests {
                 &[Some(-5), Some(11)],
             ],
         )?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::ASCENDING));
 
         // min max both descending
         let column_close_result = write_multiple_pages::<Int32Type>(
@@ -3707,34 +3720,49 @@ mod tests {
                 &[Some(-5), Some(0)],
             ],
         )?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::DESCENDING);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::DESCENDING));
 
         // min max both equal
         let column_close_result = write_multiple_pages::<Int32Type>(
             &descr,
             &[&[Some(10), Some(11)], &[None], &[Some(10), Some(11)]],
         )?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::ASCENDING));
 
         // only nulls
         let column_close_result =
             write_multiple_pages::<Int32Type>(&descr, &[&[None], &[None], &[None]])?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::ASCENDING));
 
         // one page
         let column_close_result =
             write_multiple_pages::<Int32Type>(&descr, &[&[Some(-10), Some(10)]])?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::ASCENDING));
 
         // one non-null page
         let column_close_result =
             write_multiple_pages::<Int32Type>(&descr, &[&[Some(-10), Some(10)], &[None]])?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::ASCENDING);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::ASCENDING));
 
         // min max both unordered
         let column_close_result = write_multiple_pages::<Int32Type>(
@@ -3746,8 +3774,11 @@ mod tests {
                 &[Some(-5), Some(0)],
             ],
         )?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::UNORDERED);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::UNORDERED));
 
         // min max both ordered in different orders
         let column_close_result = write_multiple_pages::<Int32Type>(
@@ -3759,8 +3790,11 @@ mod tests {
                 &[Some(3), Some(7)],
             ],
         )?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::UNORDERED);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::UNORDERED));
 
         Ok(())
     }
@@ -3797,14 +3831,20 @@ mod tests {
         // f16 descending
         let column_close_result =
             write_multiple_pages::<FixedLenByteArrayType>(&f16_descr, values)?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::DESCENDING);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::DESCENDING));
 
         // same bytes, but fba unordered
         let column_close_result =
             write_multiple_pages::<FixedLenByteArrayType>(&fba_descr, values)?;
-        let boundary_order = column_close_result.column_index.unwrap().boundary_order;
-        assert_eq!(boundary_order, BoundaryOrder::UNORDERED);
+        let boundary_order = column_close_result
+            .column_index
+            .unwrap()
+            .get_boundary_order();
+        assert_eq!(boundary_order, Some(BoundaryOrder::UNORDERED));
 
         Ok(())
     }

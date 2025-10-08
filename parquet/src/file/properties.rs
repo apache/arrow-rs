@@ -20,8 +20,7 @@ use crate::basic::{Compression, Encoding};
 use crate::compression::{CodecOptions, CodecOptionsBuilder};
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptionProperties;
-use crate::file::metadata::KeyValue;
-use crate::format::SortingColumn;
+use crate::file::metadata::{KeyValue, SortingColumn};
 use crate::schema::types::ColumnPath;
 use std::str::FromStr;
 use std::{collections::HashMap, sync::Arc};
@@ -640,7 +639,7 @@ impl WriterPropertiesBuilder {
     /// * If `Some`, must be greater than 0, otherwise will panic
     /// * If `None`, there's no effective limit.
     ///
-    /// [`Index`]: crate::file::page_index::index::Index
+    /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
             assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
@@ -1192,6 +1191,7 @@ impl ColumnProperties {
 pub type ReaderPropertiesPtr = Arc<ReaderProperties>;
 
 const DEFAULT_READ_BLOOM_FILTER: bool = false;
+const DEFAULT_READ_PAGE_STATS: bool = false;
 
 /// Configuration settings for reading parquet files.
 ///
@@ -1214,6 +1214,7 @@ const DEFAULT_READ_BLOOM_FILTER: bool = false;
 pub struct ReaderProperties {
     codec_options: CodecOptions,
     read_bloom_filter: bool,
+    read_page_stats: bool,
 }
 
 impl ReaderProperties {
@@ -1231,6 +1232,11 @@ impl ReaderProperties {
     pub(crate) fn read_bloom_filter(&self) -> bool {
         self.read_bloom_filter
     }
+
+    /// Returns whether to read page level statistics
+    pub(crate) fn read_page_stats(&self) -> bool {
+        self.read_page_stats
+    }
 }
 
 /// Builder for parquet file reader configuration. See example on
@@ -1238,6 +1244,7 @@ impl ReaderProperties {
 pub struct ReaderPropertiesBuilder {
     codec_options_builder: CodecOptionsBuilder,
     read_bloom_filter: Option<bool>,
+    read_page_stats: Option<bool>,
 }
 
 /// Reader properties builder.
@@ -1247,6 +1254,7 @@ impl ReaderPropertiesBuilder {
         Self {
             codec_options_builder: CodecOptionsBuilder::default(),
             read_bloom_filter: None,
+            read_page_stats: None,
         }
     }
 
@@ -1255,6 +1263,7 @@ impl ReaderPropertiesBuilder {
         ReaderProperties {
             codec_options: self.codec_options_builder.build(),
             read_bloom_filter: self.read_bloom_filter.unwrap_or(DEFAULT_READ_BLOOM_FILTER),
+            read_page_stats: self.read_page_stats.unwrap_or(DEFAULT_READ_PAGE_STATS),
         }
     }
 
@@ -1281,6 +1290,20 @@ impl ReaderPropertiesBuilder {
     /// By default bloom filter is set to be read.
     pub fn set_read_bloom_filter(mut self, value: bool) -> Self {
         self.read_bloom_filter = Some(value);
+        self
+    }
+
+    /// Enable/disable reading page-level statistics
+    ///
+    /// If set to `true`, then the reader will decode and populate the [`Statistics`] for
+    /// each page, if present.
+    /// If set to `false`, then the reader will skip decoding the statistics.
+    ///
+    /// By default statistics will not be decoded.
+    ///
+    /// [`Statistics`]: crate::file::statistics::Statistics
+    pub fn set_read_page_statistics(mut self, value: bool) -> Self {
+        self.read_page_stats = Some(value);
         self
     }
 }
