@@ -63,14 +63,14 @@ pub trait GeoStatsAccumulatorFactory: Send + Sync {
     fn new_accumulator(&self, descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator>;
 }
 
-/// Dynamic [GeospatialStatistics] accumulator
+/// Dynamic [`GeospatialStatistics``] accumulator
 ///
 /// The GeoStatsAccumulator is a trait whose implementors can ingest the (non-null)
-/// elements of a column and return compliant [GeospatialStatistics] (or `None`).
+/// elements of a column and return compliant [`GeospatialStatistics`] (or `None`).
 /// When built with geospatial support this will usually be the
 /// [ParquetGeoStatsAccumulator]
 pub trait GeoStatsAccumulator: Send {
-    /// Returns true if this instance can return [GeospatialStatistics] from
+    /// Returns true if this instance can return [`GeospatialStatistics`] from
     /// [GeoStatsAccumulator::finish].
     ///
     /// This method returns false when this crate was built without geospatial support
@@ -88,15 +88,15 @@ pub trait GeoStatsAccumulator: Send {
     fn finish(&mut self) -> Option<Box<GeospatialStatistics>>;
 }
 
-/// Default accumulator for [GeospatialStatistics]
+/// Default accumulator for [`GeospatialStatistics`]
 ///
 /// When this crate was built with geospatial support, this factory constructs a
 /// [ParquetGeoStatsAccumulator] that ensures Geometry columns are written with
 /// statistics when statistics for that column are enabled. Otherwise, this factory
-/// returns a [VoidGeoStatsAccumulator] that never adds any geospatial statistics.
+/// returns a [`VoidGeoStatsAccumulator`] that never adds any geospatial statistics.
 ///
 /// Bounding for Geography columns is not currently implemented by parquet-geospatial
-/// and this factory will always return a [VoidGeoStatsAccumulator].
+/// and this factory will always return a [`VoidGeoStatsAccumulator`].
 #[derive(Debug, Default)]
 pub struct DefaultGeoStatsAccumulatorFactory {}
 
@@ -114,7 +114,7 @@ impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
     }
 }
 
-/// A [GeoStatsAccumulator] that never computes any [GeospatialStatistics]
+/// A [`GeoStatsAccumulator`] that never computes any [`GeospatialStatistics`]
 #[derive(Debug, Default)]
 pub struct VoidGeoStatsAccumulator {}
 
@@ -133,7 +133,7 @@ impl GeoStatsAccumulator for VoidGeoStatsAccumulator {
 /// A [GeoStatsAccumulator] that uses the parquet-geospatial crate to compute Geometry statistics
 ///
 /// Note that this accumulator only supports Geometry types and will return invalid statistics for
-/// non-point Geography input ([GeoStatsAccumulatorFactory::new_accumulator] is responsible
+/// non-point Geography input ([`GeoStatsAccumulatorFactory::new_accumulator`] is responsible
 /// for ensuring an appropriate accumulator based on the logical type).
 #[cfg(feature = "geospatial")]
 #[derive(Debug)]
