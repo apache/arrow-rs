@@ -178,9 +178,9 @@ fn parse_timeunit(
     value
         .ok_or_else(|| general_err!(not_found_msg))
         .and_then(|v| match v.to_uppercase().as_str() {
-            "MILLIS" => Ok(TimeUnit::MILLIS(Default::default())),
-            "MICROS" => Ok(TimeUnit::MICROS(Default::default())),
-            "NANOS" => Ok(TimeUnit::NANOS(Default::default())),
+            "MILLIS" => Ok(TimeUnit::MILLIS),
+            "MICROS" => Ok(TimeUnit::MICROS),
+            "NANOS" => Ok(TimeUnit::NANOS),
             _ => Err(general_err!(parse_fail_msg)),
         })
 }
@@ -1076,7 +1076,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_6", PhysicalType::INT32)
                     .with_logical_type(Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }))
                     .build()
@@ -1085,7 +1085,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_7", PhysicalType::INT64)
                     .with_logical_type(Some(LogicalType::Time {
-                        unit: TimeUnit::MICROS(Default::default()),
+                        unit: TimeUnit::MICROS,
                         is_adjusted_to_u_t_c: true,
                     }))
                     .build()
@@ -1094,7 +1094,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_8", PhysicalType::INT64)
                     .with_logical_type(Some(LogicalType::Timestamp {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: true,
                     }))
                     .build()
@@ -1103,7 +1103,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_9", PhysicalType::INT64)
                     .with_logical_type(Some(LogicalType::Timestamp {
-                        unit: TimeUnit::NANOS(Default::default()),
+                        unit: TimeUnit::NANOS,
                         is_adjusted_to_u_t_c: false,
                     }))
                     .build()

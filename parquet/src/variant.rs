@@ -22,14 +22,11 @@
 //! Note: Requires the `variant_experimental` feature of the `parquet` crate to be enabled.
 //!
 //! # Features
-//! * [`Variant`] represents variant value, which can be an object, list, or primitive.
-//! * [`VariantBuilder`] for building `Variant` values.
-//! * [`VariantArray`] for representing a column of Variant values.
-//! * [`json_to_variant`] and [`variant_to_json`] for converting to/from JSON.
-//! * [`cast_to_variant()`] for casting other Arrow arrays to `VariantArray`.
-//! * [`VariantType`] Arrow ExtensionType for Parquet Variant logical type.
-//!   [`variant_get`] to extracting a value by path and functions to convert
-//!   between `Variant` and JSON.
+//! * Representation of [`Variant`], and [`VariantArray`] for working with
+//!   Variant values (see [`parquet_variant`] for more details)
+//! * Kernels for working with arrays of Variant values
+//!   such as conversion between `Variant` and JSON, and shredding/unshredding
+//!   (see [`parquet_variant_compute`] for more details)
 //!
 //! # Example: Writing a Parquet file with Variant column
 //! ```rust
@@ -202,7 +199,9 @@ mod tests {
         // data should have been written with the Variant logical type
         assert_eq!(
             field.get_basic_info().logical_type(),
-            Some(crate::basic::LogicalType::Variant)
+            Some(crate::basic::LogicalType::Variant {
+                specification_version: None
+            })
         );
     }
 

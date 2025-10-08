@@ -113,7 +113,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 /// Defines a an item with an experimental public API
 ///
@@ -190,6 +190,8 @@ pub mod file;
 pub mod record;
 pub mod schema;
 
+mod parquet_macros;
+mod parquet_thrift;
 pub mod thrift;
 /// What data is needed to read the next item from a decoder.
 ///

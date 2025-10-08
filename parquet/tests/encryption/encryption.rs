@@ -988,23 +988,17 @@ pub fn test_retrieve_row_group_statistics_after_encrypted_write() {
     }
     let file_metadata = writer.close().unwrap();
 
-    assert_eq!(file_metadata.row_groups.len(), 1);
-    let row_group = &file_metadata.row_groups[0];
-    assert_eq!(row_group.columns.len(), 1);
-    let column = &row_group.columns[0];
-    let column_stats = column
-        .meta_data
-        .as_ref()
-        .unwrap()
-        .statistics
-        .as_ref()
-        .unwrap();
+    assert_eq!(file_metadata.num_row_groups(), 1);
+    let row_group = file_metadata.row_group(0);
+    assert_eq!(row_group.num_columns(), 1);
+    let column = row_group.column(0);
+    let column_stats = column.statistics().unwrap();
     assert_eq!(
-        column_stats.min_value.as_deref(),
+        column_stats.min_bytes_opt(),
         Some(3i32.to_le_bytes().as_slice())
     );
     assert_eq!(
-        column_stats.max_value.as_deref(),
+        column_stats.max_bytes_opt(),
         Some(19i32.to_le_bytes().as_slice())
     );
 }

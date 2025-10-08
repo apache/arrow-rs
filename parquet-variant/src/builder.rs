@@ -16,7 +16,7 @@
 // under the License.
 use crate::decoder::{VariantBasicType, VariantPrimitiveType};
 use crate::{
-    ShortString, Variant, VariantDecimal16, VariantDecimal4, VariantDecimal8, VariantList,
+    ShortString, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantList,
     VariantMetadata, VariantObject,
 };
 use arrow_schema::ArrowError;
@@ -498,7 +498,7 @@ impl MetadataBuilder for WritableMetadataBuilder {
 /// time `finish` is called, a different trait impl will be needed.
 #[derive(Debug)]
 pub struct ReadOnlyMetadataBuilder<'m> {
-    metadata: VariantMetadata<'m>,
+    metadata: &'m VariantMetadata<'m>,
     // A cache that tracks field names this builder has already seen, because finding the field id
     // for a given field name is expensive -- O(n) for a large and unsorted metadata dictionary.
     known_field_names: HashMap<&'m str, u32>,
@@ -506,7 +506,7 @@ pub struct ReadOnlyMetadataBuilder<'m> {
 
 impl<'m> ReadOnlyMetadataBuilder<'m> {
     /// Creates a new read-only metadata builder from the given metadata dictionary.
-    pub fn new(metadata: VariantMetadata<'m>) -> Self {
+    pub fn new(metadata: &'m VariantMetadata<'m>) -> Self {
         Self {
             metadata,
             known_field_names: HashMap::new(),
@@ -3357,7 +3357,7 @@ mod tests {
 
         // Use the metadata to build new variant values
         let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
         let mut value_builder = ValueBuilder::new();
 
         {
@@ -3390,7 +3390,7 @@ mod tests {
 
         // Use the metadata to build new variant values
         let metadata = VariantMetadata::try_new(&metadata_bytes).unwrap();
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata);
+        let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
         let mut value_builder = ValueBuilder::new();
 
         {
@@ -3403,10 +3403,12 @@ mod tests {
             // This should fail because "unknown_field" is not in the metadata
             let result = obj.try_insert("unknown_field", "value");
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Field name 'unknown_field' not found"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Field name 'unknown_field' not found")
+            );
         }
     }
 
@@ -3438,7 +3440,7 @@ mod tests {
 
         // Copy using the new bytes API
         let metadata = VariantMetadata::new(&metadata);
-        let mut metadata = ReadOnlyMetadataBuilder::new(metadata);
+        let mut metadata = ReadOnlyMetadataBuilder::new(&metadata);
         let mut builder2 = ValueBuilder::new();
         let state = ParentState::variant(&mut builder2, &mut metadata);
         ValueBuilder::append_variant_bytes(state, variant1);
@@ -3466,7 +3468,7 @@ mod tests {
 
         // Create a new object copying subset of fields interleaved with new ones
         let metadata2 = VariantMetadata::new(&metadata1);
-        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(&metadata2);
         let mut builder2 = ValueBuilder::new();
         let state = ParentState::variant(&mut builder2, &mut metadata2);
         {
@@ -3530,7 +3532,7 @@ mod tests {
 
         // Create a new list copying subset of elements interleaved with new ones
         let metadata2 = VariantMetadata::new(&metadata1);
-        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(&metadata2);
         let mut builder2 = ValueBuilder::new();
         let state = ParentState::variant(&mut builder2, &mut metadata2);
         {
@@ -3626,7 +3628,7 @@ mod tests {
 
         // Create filtered/modified version: only copy active users and inject new data
         let metadata2 = VariantMetadata::new(&metadata1);
-        let mut metadata2 = ReadOnlyMetadataBuilder::new(metadata2);
+        let mut metadata2 = ReadOnlyMetadataBuilder::new(&metadata2);
         let mut builder2 = ValueBuilder::new();
         let state = ParentState::variant(&mut builder2, &mut metadata2);
         {

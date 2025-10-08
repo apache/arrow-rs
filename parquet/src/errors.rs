@@ -19,6 +19,7 @@
 
 use core::num::TryFromIntError;
 use std::error::Error;
+use std::string::FromUtf8Error;
 use std::{cell, io, result, str};
 
 #[cfg(feature = "arrow")]
@@ -124,6 +125,13 @@ impl From<str::Utf8Error> for ParquetError {
         ParquetError::External(Box::new(e))
     }
 }
+
+impl From<FromUtf8Error> for ParquetError {
+    fn from(e: FromUtf8Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
 #[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {

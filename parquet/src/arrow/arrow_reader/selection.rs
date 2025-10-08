@@ -21,6 +21,8 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
+use crate::file::page_index::offset_index::PageLocation;
+
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
 /// scanning a parquet file
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -95,7 +97,7 @@ impl RowSelector {
 /// * It contains no [`RowSelector`] of 0 rows
 /// * Consecutive [`RowSelector`]s alternate skipping or selecting rows
 ///
-/// [`PageIndex`]: crate::file::page_index::index::PageIndex
+/// [`PageIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct RowSelection {
     selectors: Vec<RowSelector>,
@@ -162,7 +164,7 @@ impl RowSelection {
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
-    pub fn scan_ranges(&self, page_locations: &[crate::format::PageLocation]) -> Vec<Range<u64>> {
+    pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         let mut ranges: Vec<Range<u64>> = vec![];
         let mut row_offset = 0;
 
@@ -693,7 +695,6 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::PageLocation;
     use rand::{Rng, rng};
 
     #[test]
