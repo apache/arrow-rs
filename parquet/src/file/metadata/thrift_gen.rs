@@ -1154,7 +1154,6 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
             }
             2 => {
                 // read schema and convert to SchemaDescriptor for use when reading row groups
-                // and
                 let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
                 let val = parquet_schema_from_array(val)?;
                 schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
@@ -1232,6 +1231,7 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
         return Err(general_err!("Column order length mismatch"));
     }
     // replace default type defined column orders with ones having the correct sort order
+    // TODO(ets): this could instead be done above when decoding
     let column_orders = column_orders.map(|mut cos| {
         for (i, column) in schema_descr.columns().iter().enumerate() {
             if let ColumnOrder::TYPE_DEFINED_ORDER(_) = cos[i] {
