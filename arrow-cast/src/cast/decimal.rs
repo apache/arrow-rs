@@ -142,11 +142,11 @@ impl DecimalCast for i256 {
 /// Build a rescale function from (input_precision, input_scale) to (output_precision, output_scale)
 /// returning a closure `Fn(I::Native) -> Option<O::Native>` that performs the conversion.
 pub(crate) fn rescale_decimal<I, O>(
-    _input_precision: u8,
+    input_precision: u8,
     input_scale: i8,
-    _output_precision: u8,
+    output_precision: u8,
     output_scale: i8,
-) -> impl Fn(I::Native) -> Option<O::Native>
+) -> impl Fn(I::Native) -> Result<O::Native, ArrowError>
 where
     I: DecimalType,
     O: DecimalType,
@@ -154,54 +154,83 @@ where
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let delta_scale = output_scale - input_scale;
+    let input_precision_i8 = input_precision as i8;
+    let output_precision_i8 = output_precision as i8;
 
-    // Precompute parameters and capture them in a single closure type
-    let mul_opt = if delta_scale > 0 {
-        O::Native::from_decimal(10_i128)
-            .and_then(|t| t.pow_checked(delta_scale as u32).ok())
+    // Determine if the cast is infallible based on precision/scale math
+    let is_infallible_cast = input_precision_i8 + delta_scale < output_precision_i8;
+
+    // Build a single mode once and use a thin closure that calls into it
+    enum RescaleMode<I, O> {
+        SameScale,
+        Up { mul: O },
+        Down { div: I, half: I, half_neg: I },
+        Invalid,
+    }
+
+    let mode = if delta_scale == 0 {
+        RescaleMode::SameScale
+    } else if delta_scale > 0 {
+        match O::Native::from_decimal(10_i128).and_then(|t| t.pow_checked(delta_scale as u32).ok())
+        {
+            Some(mul) => RescaleMode::Up { mul },
+            None => RescaleMode::Invalid,
+        }
     } else {
-        None
+        // delta_scale < 0
+        match I::Native::from_decimal(10_i128)
+            .and_then(|t| t.pow_checked(delta_scale.unsigned_abs() as u32).ok())
+        {
+            Some(div) => {
+                let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+                let half_neg = half.neg_wrapping();
+                RescaleMode::Down {
+                    div,
+                    half,
+                    half_neg,
+                }
+            }
+            None => RescaleMode::Invalid,
+        }
     };
 
-    let (div_opt, half_opt, half_neg_opt) = if delta_scale < 0 {
-        let div = I::Native::from_decimal(10_i128)
-            .and_then(|t| t.pow_checked(delta_scale.unsigned_abs() as u32).ok());
-        if let Some(div) = div {
-            let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
-            let half_neg = half.neg_wrapping();
-            (Some(div), Some(half), Some(half_neg))
+    let f = move |x: I::Native| {
+        match &mode {
+            RescaleMode::SameScale => O::Native::from_decimal(x),
+            RescaleMode::Up { mul } => {
+                O::Native::from_decimal(x).and_then(|x| x.mul_checked(*mul).ok())
+            }
+            RescaleMode::Down {
+                div,
+                half,
+                half_neg,
+            } => {
+                // div is >= 10 and so this cannot overflow
+                let d = x.div_wrapping(*div);
+                let r = x.mod_wrapping(*div);
+
+                // Round result
+                let adjusted = match x >= I::Native::ZERO {
+                    true if r >= *half => d.add_wrapping(I::Native::ONE),
+                    false if r <= *half_neg => d.sub_wrapping(I::Native::ONE),
+                    _ => d,
+                };
+                O::Native::from_decimal(adjusted)
+            }
+            RescaleMode::Invalid => None,
+        }
+    };
+
+    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+
+    move |x| {
+        if is_infallible_cast {
+            f(x).ok_or_else(|| error(x))
         } else {
-            (None, None, None)
+            f(x).ok_or_else(|| error(x)).and_then(|v| {
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+            })
         }
-    } else {
-        (None, None, None)
-    };
-
-    move |x: I::Native| {
-        if delta_scale == 0 {
-            return O::Native::from_decimal(x);
-        }
-
-        if let Some(mul) = mul_opt {
-            return O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
-        }
-
-        // Decrease scale path
-        let div = div_opt.unwrap();
-        let half = half_opt.unwrap();
-        let half_neg = half_neg_opt.unwrap();
-
-        // div is >= 10 and so this cannot overflow
-        let d = x.div_wrapping(div);
-        let r = x.mod_wrapping(div);
-
-        // Round result
-        let adjusted = match x >= I::Native::ZERO {
-            true if r >= half => d.add_wrapping(I::Native::ONE),
-            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
-            _ => d,
-        };
-        O::Native::from_decimal(adjusted)
     }
 }
 
@@ -240,7 +269,8 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    // make sure we don't perform calculations that don't make sense w/o validation
+    validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
     let delta_scale = input_scale - output_scale;
     // if the reduction of the input number through scaling (dividing) is greater
     // than a possible precision loss (plus potential increase via rounding)
@@ -254,27 +284,15 @@ where
     // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
     let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
 
-    let f = rescale_decimal::<I, O>(
-        input_precision,
-        input_scale,
-        output_precision,
-        output_scale,
-    );
+    let f = rescale_decimal::<I, O>(input_precision, input_scale, output_precision, output_scale);
 
     Ok(if is_infallible_cast {
-        // make sure we don't perform calculations that don't make sense w/o validation
-        validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
-        let g = |x: I::Native| f(x).unwrap(); // unwrapping is safe since the result is guaranteed
-        // to fit into the target type
-        array.unary(g)
+        // unwrapping is safe since the result is guaranteed to fit into the target type
+        array.unary(|x| f(x).unwrap())
     } else if cast_options.safe {
-        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+        array.unary_opt(|x| f(x).ok())
     } else {
-        array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
-            })
-        })?
+        array.try_unary(|x| f(x))?
     })
 }
 
@@ -292,7 +310,8 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+    // make sure we don't perform calculations that don't make sense w/o validation
+    validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
     let delta_scale = output_scale - input_scale;
 
     // if the gain in precision (digits) is greater than the multiplication due to scaling
@@ -302,27 +321,15 @@ where
     // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
     // needs to provide at least 8 digits precision
     let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
-    let f = rescale_decimal::<I, O>(
-        input_precision,
-        input_scale,
-        output_precision,
-        output_scale,
-    );
+    let f = rescale_decimal::<I, O>(input_precision, input_scale, output_precision, output_scale);
 
     Ok(if is_infallible_cast {
-        // make sure we don't perform calculations that don't make sense w/o validation
-        validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
         // unwrapping is safe since the result is guaranteed to fit into the target type
-        let f = |x: I::Native| f(x).unwrap();
-        array.unary(f)
+        array.unary(|x| f(x).unwrap())
     } else if cast_options.safe {
-        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+        array.unary_opt(|x| f(x).ok())
     } else {
-        array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
-            })
-        })?
+        array.try_unary(|x| f(x))?
     })
 }
 
