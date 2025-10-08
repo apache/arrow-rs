@@ -2693,6 +2693,7 @@ mod test {
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 3).unwrap())); // 1.234
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 0).unwrap())); // 1234
         builder.append_null();
+        builder.append_variant(Variant::from(VariantDecimal8::try_new((VariantDecimal4::MAX_UNSCALED_VALUE as i64)+1, 3).unwrap())); // should fit into Decimal32
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal32(9, 2), true);
@@ -2706,28 +2707,35 @@ mod test {
         assert_eq!(result.value(1), 123);
         assert_eq!(result.value(2), 123400);
         assert!(result.is_null(3));
+        assert!(result.is_null(4)); // should not be null as the final result fits into Decimal32
     }
 
     #[test]
     fn get_decimal32_unshredded_scale_down_rounding() {
         let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 0).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1245, 0).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1235, 0).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1245, 0).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 2).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 3).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1245, 3).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1235, 3).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1245, 3).unwrap()));
+        builder.append_variant(Variant::from(VariantDecimal4::try_new(5235, 3).unwrap()));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
-        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let field = Field::new("result", DataType::Decimal32(9, -1), true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
 
         assert_eq!(result.precision(), 9);
-        assert_eq!(result.scale(), 2);
+        assert_eq!(result.scale(), -1);
         assert_eq!(result.value(0), 124);
         assert_eq!(result.value(1), 125);
         assert_eq!(result.value(2), -124);
         assert_eq!(result.value(3), -125);
+        assert_eq!(result.value(4), 1);
+        assert_eq!(result.value(5), 0);
+        assert_eq!(result.value(6), 1);
     }
 
     #[test]
@@ -2737,14 +2745,18 @@ mod test {
         builder.append_variant(Variant::from(
             VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
         ));
+        builder.append_variant(Variant::from(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 9).unwrap(),
+        )); // integer value round up overflows
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
-        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let field = Field::new("result", DataType::Decimal32(2, 2), true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&variant_array, options).unwrap();
         let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
 
         assert!(result.is_null(0));
+        assert_eq!(result.value(1), 0); // should overflow because 1.00 does not fit into precision (2)
     }
 
     #[test]
