@@ -150,15 +150,14 @@ pub(crate) fn rescale_decimal<I, O>(
 where
     I: DecimalType,
     O: DecimalType,
-    I::Native: DecimalCast + ArrowNativeTypeOp,
-    O::Native: DecimalCast + ArrowNativeTypeOp,
+    I::Native: DecimalCast,
+    O::Native: DecimalCast,
 {
     let delta_scale = output_scale - input_scale;
-    let input_precision_i8 = input_precision as i8;
-    let output_precision_i8 = output_precision as i8;
 
     // Determine if the cast is infallible based on precision/scale math
-    let is_infallible_cast = input_precision_i8 + delta_scale < output_precision_i8;
+    let is_infallible_cast =
+        is_infallible_decimal_cast(input_precision, input_scale, output_precision, output_scale);
 
     // Build a single mode once and use a thin closure that calls into it
     enum RescaleMode<I, O> {
@@ -177,7 +176,6 @@ where
             None => RescaleMode::Invalid,
         }
     } else {
-        // delta_scale < 0
         match I::Native::from_decimal(10_i128)
             .and_then(|t| t.pow_checked(delta_scale.unsigned_abs() as u32).ok())
         {
@@ -234,6 +232,40 @@ where
     }
 }
 
+/// Returns true if casting from (input_precision, input_scale) to
+/// (output_precision, output_scale) is infallible based on precision/scale math.
+fn is_infallible_decimal_cast(
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+) -> bool {
+    let delta_scale = output_scale - input_scale;
+    let input_precision_i8 = input_precision as i8;
+    let output_precision_i8 = output_precision as i8;
+    if delta_scale >= 0 {
+        // if the gain in precision (digits) is greater than the multiplication due to scaling
+        // every number will fit into the output type
+        // Example: If we are starting with any number of precision 5 [xxxxx],
+        // then an increase of scale by 3 will have the following effect on the representation:
+        // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
+        // needs to provide at least 8 digits precision
+        input_precision_i8 + delta_scale <= output_precision_i8
+    } else {
+        // if the reduction of the input number through scaling (dividing) is greater
+        // than a possible precision loss (plus potential increase via rounding)
+        // every input number will fit into the output type
+        // Example: If we are starting with any number of precision 5 [xxxxx],
+        // then and decrease the scale by 3 will have the following effect on the representation:
+        // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
+        // The rounding may add an additional digit, so the cast to be infallible,
+        // the output type needs to have at least 3 digits of precision.
+        // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
+        // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
+        input_precision_i8 + delta_scale < output_precision_i8
+    }
+}
+
 pub(crate) fn cast_decimal_to_decimal_error<I, O>(
     output_precision: u8,
     output_scale: i8,
@@ -271,18 +303,8 @@ where
 {
     // make sure we don't perform calculations that don't make sense w/o validation
     validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
-    let delta_scale = input_scale - output_scale;
-    // if the reduction of the input number through scaling (dividing) is greater
-    // than a possible precision loss (plus potential increase via rounding)
-    // every input number will fit into the output type
-    // Example: If we are starting with any number of precision 5 [xxxxx],
-    // then and decrease the scale by 3 will have the following effect on the representation:
-    // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
-    // The rounding may add an additional digit, so the cast to be infallible,
-    // the output type needs to have at least 3 digits of precision.
-    // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
-    // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
-    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
+    let is_infallible_cast =
+        is_infallible_decimal_cast(input_precision, input_scale, output_precision, output_scale);
 
     let f = rescale_decimal::<I, O>(input_precision, input_scale, output_precision, output_scale);
 
@@ -312,15 +334,9 @@ where
 {
     // make sure we don't perform calculations that don't make sense w/o validation
     validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
-    let delta_scale = output_scale - input_scale;
 
-    // if the gain in precision (digits) is greater than the multiplication due to scaling
-    // every number will fit into the output type
-    // Example: If we are starting with any number of precision 5 [xxxxx],
-    // then an increase of scale by 3 will have the following effect on the representation:
-    // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
-    // needs to provide at least 8 digits precision
-    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
+    let is_infallible_cast =
+        is_infallible_decimal_cast(input_precision, input_scale, output_precision, output_scale);
     let f = rescale_decimal::<I, O>(input_precision, input_scale, output_precision, output_scale);
 
     Ok(if is_infallible_cast {
