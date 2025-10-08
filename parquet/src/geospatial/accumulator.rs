@@ -20,15 +20,30 @@
 use std::sync::{Arc, OnceLock};
 
 use crate::{
-    errors::ParquetError, geospatial::statistics::GeospatialStatistics,
+    basic::LogicalType, errors::ParquetError, geospatial::statistics::GeospatialStatistics,
     schema::types::ColumnDescPtr,
 };
 
-/// Create a new [GeoStatsAccumulator] instance
-pub fn new_geo_stats_accumulator(descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
-    ACCUMULATOR_FACTORY
-        .get_or_init(|| Arc::new(DefaultGeoStatsAccumulatorFactory::default()))
-        .new_accumulator(descr)
+/// Create a new [`GeoStatsAccumulator`] instance if `descr` represents a Geometry or
+/// Geography [`LogicalType`]
+///
+/// Returns a suitable [`GeoStatsAccumulator`] if `descr` represents a non-geospatial type
+/// or `None` otherwise.
+pub fn try_new_geo_stats_accumulator(
+    descr: &ColumnDescPtr,
+) -> Option<Box<dyn GeoStatsAccumulator>> {
+    if !matches!(
+        descr.logical_type(),
+        Some(LogicalType::Geometry) | Some(LogicalType::Geography)
+    ) {
+        return None;
+    }
+
+    Some(
+        ACCUMULATOR_FACTORY
+            .get_or_init(|| Arc::new(DefaultGeoStatsAccumulatorFactory::default()))
+            .new_accumulator(descr),
+    )
 }
 
 /// Initialize the global [`GeoStatsAccumulatorFactory`]
@@ -243,7 +258,7 @@ mod test {
             .unwrap();
         let column_descr =
             ColumnDescriptor::new(Arc::new(parquet_type), 0, 0, ColumnPath::new(vec![]));
-        let mut accumulator = new_geo_stats_accumulator(&Arc::new(column_descr));
+        let mut accumulator = try_new_geo_stats_accumulator(&Arc::new(column_descr)).unwrap();
 
         assert!(accumulator.is_valid());
         accumulator.update_wkb(&wkb_point_xy(1.0, 2.0));
@@ -261,10 +276,18 @@ mod test {
             .unwrap();
         let column_descr =
             ColumnDescriptor::new(Arc::new(parquet_type), 0, 0, ColumnPath::new(vec![]));
-        let mut accumulator = new_geo_stats_accumulator(&Arc::new(column_descr));
+        let mut accumulator = try_new_geo_stats_accumulator(&Arc::new(column_descr)).unwrap();
 
         assert!(!accumulator.is_valid());
         assert!(accumulator.finish().is_none());
+
+        // Check that we return None if the type is not geometry or goegraphy
+        let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
+            .build()
+            .unwrap();
+        let column_descr =
+            ColumnDescriptor::new(Arc::new(parquet_type), 0, 0, ColumnPath::new(vec![]));
+        assert!(try_new_geo_stats_accumulator(&Arc::new(column_descr)).is_none());
 
         // We should not be able to initialize a global accumulator after we've initialized at least
         // one accumulator

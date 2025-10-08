@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::basic::{Encoding, LogicalType};
+use crate::basic::Encoding;
 use crate::bloom_filter::Sbbf;
 use crate::column::writer::encoder::{ColumnValueEncoder, DataPageValues, DictionaryPage};
 use crate::data_type::{AsBytes, ByteArray, Int32Type};
@@ -23,7 +23,7 @@ use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
-use crate::geospatial::accumulator::{new_geo_stats_accumulator, GeoStatsAccumulator};
+use crate::geospatial::accumulator::{try_new_geo_stats_accumulator, GeoStatsAccumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
@@ -450,14 +450,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
 
         let statistics_enabled = props.statistics_enabled(descr.path());
 
-        let geo_stats_accumulator = if matches!(
-            descr.logical_type(),
-            Some(LogicalType::Geometry) | Some(LogicalType::Geography)
-        ) {
-            Some(new_geo_stats_accumulator(descr))
-        } else {
-            None
-        };
+        let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
         Ok(Self {
             fallback,

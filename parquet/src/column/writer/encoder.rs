@@ -28,7 +28,7 @@ use crate::data_type::DataType;
 use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
-use crate::geospatial::accumulator::{new_geo_stats_accumulator, GeoStatsAccumulator};
+use crate::geospatial::accumulator::{try_new_geo_stats_accumulator, GeoStatsAccumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 
@@ -210,14 +210,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
             .map(|props| Sbbf::new_with_ndv_fpp(props.ndv, props.fpp))
             .transpose()?;
 
-        let geo_stats_accumulator = if matches!(
-            descr.logical_type(),
-            Some(LogicalType::Geometry) | Some(LogicalType::Geography)
-        ) {
-            Some(new_geo_stats_accumulator(descr))
-        } else {
-            None
-        };
+        let geo_stats_accumulator = try_new_geo_stats_accumulator(descr);
 
         Ok(Self {
             encoder,
