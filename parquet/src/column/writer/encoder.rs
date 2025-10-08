@@ -396,11 +396,9 @@ where
     T: ParquetValueType + 'a,
     I: Iterator<Item = &'a T>,
 {
-    if !bounder.is_valid() {
-        return;
-    }
-
-    for val in iter {
-        bounder.update_wkb(val.as_bytes());
+    if bounder.is_valid() {
+        for val in iter {
+            bounder.update_wkb(val.as_bytes());
+        }
     }
 }

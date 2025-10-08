@@ -624,12 +624,10 @@ fn update_geo_stats_accumulator<T>(
     T: ArrayAccessor,
     T::Item: Copy + Ord + AsRef<[u8]>,
 {
-    if !bounder.is_valid() {
-        return;
-    }
-
-    for idx in valid {
-        let val = array.value(idx);
-        bounder.update_wkb(val.as_ref());
+    if bounder.is_valid() {
+        for idx in valid {
+            let val = array.value(idx);
+            bounder.update_wkb(val.as_ref());
+        }
     }
 }
