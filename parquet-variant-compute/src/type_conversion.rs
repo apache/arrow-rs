@@ -17,8 +17,8 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::datatypes::{self, ArrowPrimitiveType};
-use parquet_variant::Variant;
+use arrow::datatypes::{self, ArrowPrimitiveType, Decimal32Type, DecimalType, MAX_DECIMAL32_FOR_EACH_PRECISION};
+use parquet_variant::{Variant, VariantDecimal4};
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,6 +99,53 @@ macro_rules! scale_variant_decimal {
     }};
 }
 pub(crate) use scale_variant_decimal;
+
+fn variant_to_unscaled_decimal32(
+    variant: Variant<'_, '_>,
+    precision: u8,
+    scale: i8,
+) -> Option<i32> {
+    match variant {
+        Variant::Int32(i) => scale_variant_decimal_new::<Decimal32Type, Decimal32Type>(i, VariantDecimal4::MAX_PRECISION, 0, precision, scale),
+        Variant::Decimal4(d) => scale_variant_decimal_new::<Decimal32Type, Decimal32Type>(d.integer(), VariantDecimal4::MAX_PRECISION, d.scale() as i8, precision, scale),
+        _ => None,
+    }
+}
+
+// fn rescale_variant(integer: i32, input_precision: u8, input_scale: i8, output_precision: u8, output_scale: i8) -> Option<i32> {
+//     let input_precision = input_precision as i8;
+//     let output_precision = output_precision as i8;
+//     let mut input_integer_digits =  input_precision - input_scale;
+//     let output_integer_digits = output_precision - output_scale;
+
+//     // 
+//     if input_integer_digits > output_integer_digits {
+//         if !Decimal32Type::is_valid_decimal_precision(integer, (output_integer_digits + input_scale) as u8) {
+//             return None;
+//         }
+//         input_integer_digits = output_integer_digits;
+//     }
+
+//     if input_integer_digits == output_integer_digits {
+//         let rescaled =
+//     }
+// }
+
+
+
+fn scale_variant_decimal_new<I, O>(
+    integer: I::Native,
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+) -> Option<O::Native>
+where
+    I: DecimalType,
+    O: DecimalType,
+{
+    return None;
+}
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {

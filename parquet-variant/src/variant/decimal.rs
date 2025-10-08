@@ -86,7 +86,7 @@ pub struct VariantDecimal4 {
 }
 
 impl VariantDecimal4 {
-    pub(crate) const MAX_PRECISION: u8 = 9;
+    pub const MAX_PRECISION: u8 = 9;
     pub const MAX_UNSCALED_VALUE: u32 = u32::pow(10, Self::MAX_PRECISION as u32) - 1;
 
     pub fn try_new(integer: i32, scale: u8) -> Result<Self, ArrowError> {
@@ -136,7 +136,7 @@ pub struct VariantDecimal8 {
 }
 
 impl VariantDecimal8 {
-    pub(crate) const MAX_PRECISION: u8 = 18;
+    pub const MAX_PRECISION: u8 = 18;
     pub const MAX_UNSCALED_VALUE: u64 = u64::pow(10, Self::MAX_PRECISION as u32) - 1;
 
     pub fn try_new(integer: i64, scale: u8) -> Result<Self, ArrowError> {
@@ -186,7 +186,7 @@ pub struct VariantDecimal16 {
 }
 
 impl VariantDecimal16 {
-    const MAX_PRECISION: u8 = 38;
+    pub const MAX_PRECISION: u8 = 38;
     pub const MAX_UNSCALED_VALUE: u128 = u128::pow(10, Self::MAX_PRECISION as u32) - 1;
 
     pub fn try_new(integer: i128, scale: u8) -> Result<Self, ArrowError> {
