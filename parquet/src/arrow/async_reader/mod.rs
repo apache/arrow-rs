@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 
 use bytes::{Buf, Bytes};
-use futures::future::{BoxFuture, FutureExt};
+use futures::future::FutureExt;
 use futures::ready;
 use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
@@ -56,6 +56,7 @@ use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataRea
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
+use crate::future::BoxedFuture;
 
 mod metadata;
 pub use metadata::*;
@@ -84,11 +85,11 @@ pub use store::*;
 /// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
 pub trait AsyncFileReader: Send {
     /// Retrieve the bytes in `range`
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>>;
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>>;
 
     /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
-        async move {
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxedFuture<'_, Result<Vec<Bytes>>> {
+        Box::pin(async move {
             let mut result = Vec::with_capacity(ranges.len());
 
             for range in ranges.into_iter() {
@@ -97,8 +98,7 @@ pub trait AsyncFileReader: Send {
             }
 
             Ok(result)
-        }
-        .boxed()
+        })
     }
 
     /// Return a future which results in the [`ParquetMetaData`] for this Parquet file.
@@ -120,42 +120,41 @@ pub trait AsyncFileReader: Send {
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>>;
+    ) -> BoxedFuture<'a, Result<Arc<ParquetMetaData>>>;
 }
 
 /// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
 impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
         self.as_mut().get_bytes(range)
     }
 
-    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxFuture<'_, Result<Vec<Bytes>>> {
+    fn get_byte_ranges(&mut self, ranges: Vec<Range<u64>>) -> BoxedFuture<'_, Result<Vec<Bytes>>> {
         self.as_mut().get_byte_ranges(ranges)
     }
 
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+    ) -> BoxedFuture<'a, Result<Arc<ParquetMetaData>>> {
         self.as_mut().get_metadata(options)
     }
 }
 
 impl<T: AsyncFileReader + MetadataFetch + AsyncRead + AsyncSeek + Unpin> MetadataSuffixFetch for T {
-    fn fetch_suffix(&mut self, suffix: usize) -> BoxFuture<'_, Result<Bytes>> {
-        async move {
+    fn fetch_suffix(&mut self, suffix: usize) -> BoxedFuture<'_, Result<Bytes>> {
+        Box::pin(async move {
             self.seek(SeekFrom::End(-(suffix as i64))).await?;
             let mut buf = Vec::with_capacity(suffix);
             self.take(suffix as _).read_to_end(&mut buf).await?;
             Ok(buf.into())
-        }
-        .boxed()
+        })
     }
 }
 
 impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
-    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
-        async move {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
+        Box::pin(async move {
             self.seek(SeekFrom::Start(range.start)).await?;
 
             let to_read = range.end - range.start;
@@ -166,15 +165,14 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
             }
 
             Ok(buffer.into())
-        }
-        .boxed()
+        })
     }
 
     fn get_metadata<'a>(
         &'a mut self,
         options: Option<&'a ArrowReaderOptions>,
-    ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-        async move {
+    ) -> BoxedFuture<'a, Result<Arc<ParquetMetaData>>> {
+        Box::pin(async move {
             let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
                 PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
             );
@@ -186,8 +184,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
 
             let parquet_metadata = metadata_reader.load_via_suffix_and_finish(self).await?;
             Ok(Arc::new(parquet_metadata))
-        }
-        .boxed()
+        })
     }
 }
 
@@ -767,7 +764,7 @@ enum StreamState<T> {
     /// Decoding a batch
     Decoding(ParquetRecordBatchReader),
     /// Reading data from input
-    Reading(BoxFuture<'static, ReadResult<T>>),
+    Reading(BoxedFuture<'static, ReadResult<T>>),
     /// Error
     Error,
 }
@@ -935,14 +932,12 @@ where
 
                     let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
 
-                    let fut = reader
-                        .read_row_group(
-                            row_group_idx,
-                            selection,
-                            self.projection.clone(),
-                            self.batch_size,
-                        )
-                        .boxed();
+                    let fut = Box::pin(reader.read_row_group(
+                        row_group_idx,
+                        selection,
+                        self.projection.clone(),
+                        self.batch_size,
+                    ));
 
                     self.state = StreamState::Reading(fut)
                 }
@@ -1251,29 +1246,32 @@ mod tests {
     }
 
     impl AsyncFileReader for TestReader {
-        fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes>> {
+        fn get_bytes(&mut self, range: Range<u64>) -> BoxedFuture<'_, Result<Bytes>> {
             let range = range.clone();
             self.requests
                 .lock()
                 .unwrap()
                 .push(range.start as usize..range.end as usize);
-            futures::future::ready(Ok(self
+            Box::pin(futures::future::ready(Ok(self
                 .data
-                .slice(range.start as usize..range.end as usize)))
-            .boxed()
+                .slice(range.start as usize..range.end as usize))))
         }
 
         fn get_metadata<'a>(
             &'a mut self,
             options: Option<&'a ArrowReaderOptions>,
-        ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
+        ) -> BoxedFuture<'a, Result<Arc<ParquetMetaData>>> {
             let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
                 PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
             );
             self.metadata = Some(Arc::new(
                 metadata_reader.parse_and_finish(&self.data).unwrap(),
             ));
-            futures::future::ready(Ok(self.metadata.clone().unwrap().clone())).boxed()
+            Box::pin(futures::future::ready(Ok(self
+                .metadata
+                .clone()
+                .unwrap()
+                .clone())))
         }
     }
 
@@ -2061,6 +2059,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn test_parquet_record_batch_stream_schema() {
         fn get_all_field_names(schema: &Schema) -> Vec<&String> {
             schema.flattened_fields().iter().map(|f| f.name()).collect()
@@ -2219,6 +2218,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn test_nested_skip() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("col_1", DataType::UInt64, false),
@@ -2466,6 +2466,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(deprecated)]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2492,6 +2493,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(deprecated)]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn non_empty_offset_index_doesnt_panic_in_read_row_group() {
         use tokio::fs::File;
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -2517,6 +2519,7 @@ mod tests {
 
     #[tokio::test]
     #[allow(deprecated)]
+    #[cfg(not(target_arch = "wasm32"))]
     async fn empty_offset_index_doesnt_panic_in_column_chunks() {
         use tempfile::TempDir;
         use tokio::fs::File;

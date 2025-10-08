@@ -172,7 +172,7 @@ pub use self::encodings::{decoding, encoding};
 
 experimental!(#[macro_use] mod util);
 
-pub use util::utf8;
+pub use util::{future, utf8};
 
 #[cfg(feature = "arrow")]
 pub mod arrow;
