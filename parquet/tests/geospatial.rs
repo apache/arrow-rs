@@ -380,7 +380,7 @@ mod test {
                 "geo",
                 parquet::basic::Type::BYTE_ARRAY,
             )
-            .with_logical_type(Some(LogicalType::Geometry))
+            .with_logical_type(Some(LogicalType::Geometry { crs: None }))
             .build()
             .unwrap()
             .into()])

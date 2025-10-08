@@ -34,7 +34,7 @@ pub fn try_new_geo_stats_accumulator(
 ) -> Option<Box<dyn GeoStatsAccumulator>> {
     if !matches!(
         descr.logical_type(),
-        Some(LogicalType::Geometry) | Some(LogicalType::Geography)
+        Some(LogicalType::Geometry { .. }) | Some(LogicalType::Geography { .. })
     ) {
         return None;
     }
@@ -118,7 +118,7 @@ pub struct DefaultGeoStatsAccumulatorFactory {}
 impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
     fn new_accumulator(&self, _descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
         #[cfg(feature = "geospatial")]
-        if let Some(crate::basic::LogicalType::Geometry) = _descr.logical_type() {
+        if let Some(crate::basic::LogicalType::Geometry { .. }) = _descr.logical_type() {
             Box::new(ParquetGeoStatsAccumulator::default())
         } else {
             Box::new(VoidGeoStatsAccumulator::default())
@@ -253,7 +253,7 @@ mod test {
 
         // Check that we have a working accumulator for Geometry
         let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
-            .with_logical_type(Some(LogicalType::Geometry))
+            .with_logical_type(Some(LogicalType::Geometry { crs: None }))
             .build()
             .unwrap();
         let column_descr =
@@ -271,7 +271,10 @@ mod test {
 
         // Check that we have a void accumulator for Geography
         let parquet_type = Type::primitive_type_builder("geom", crate::basic::Type::BYTE_ARRAY)
-            .with_logical_type(Some(LogicalType::Geography))
+            .with_logical_type(Some(LogicalType::Geography {
+                crs: None,
+                algorithm: None,
+            }))
             .build()
             .unwrap();
         let column_descr =

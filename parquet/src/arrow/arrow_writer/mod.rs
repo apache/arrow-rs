@@ -1532,11 +1532,8 @@ mod tests {
     use crate::file::metadata::thrift_gen::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
-    use crate::format::PageHeader;
-    use crate::schema::types::{ColumnPath, Type};
-    use crate::thrift::TCompactSliceInputProtocol;
     use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
-    use crate::schema::types::ColumnPath;
+    use crate::schema::types::{ColumnPath, Type};
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
