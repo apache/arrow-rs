@@ -19,17 +19,23 @@ use crate::cast::*;
 
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
-pub(crate) trait DecimalCast: Sized {
+pub trait DecimalCast: Sized {
+    /// Convert the decimal to an i32
     fn to_i32(self) -> Option<i32>;
 
+    /// Convert the decimal to an i64
     fn to_i64(self) -> Option<i64>;
 
+    /// Convert the decimal to an i128
     fn to_i128(self) -> Option<i128>;
 
+    /// Convert the decimal to an i256
     fn to_i256(self) -> Option<i256>;
 
+    /// Convert a decimal from a decimal
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self>;
 
+    /// Convert a decimal from a f64
     fn from_f64(n: f64) -> Option<Self>;
 }
 
@@ -141,7 +147,7 @@ impl DecimalCast for i256 {
 
 /// Build a rescale function from (input_precision, input_scale) to (output_precision, output_scale)
 /// returning a closure `Fn(I::Native) -> Option<O::Native>` that performs the conversion.
-pub(crate) fn rescale_decimal<I, O>(
+pub fn rescale_decimal<I, O>(
     input_precision: u8,
     input_scale: i8,
     output_precision: u8,

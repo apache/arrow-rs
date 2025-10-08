@@ -17,8 +17,14 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::datatypes::{self, ArrowPrimitiveType, Decimal32Type, DecimalType, MAX_DECIMAL32_FOR_EACH_PRECISION};
-use parquet_variant::{Variant, VariantDecimal4};
+use arrow::{
+    compute::{DecimalCast, rescale_decimal},
+    datatypes::{
+        self, ArrowPrimitiveType, Decimal32Type, Decimal64Type, Decimal128Type, DecimalType,
+    },
+};
+use arrow_schema::ArrowError;
+use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,90 +67,61 @@ impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
 impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
 impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
 
-macro_rules! scale_variant_decimal {
-    ($variant:expr, $variant_method:ident, $to_int_ty:expr, $output_scale:expr, $precision:expr, $validate:path) => {{
-        let variant = $variant.$variant_method()?;
-        let input_scale = variant.scale() as i8;
-        let variant = $to_int_ty(variant.integer());
-        let ten = $to_int_ty(10);
-
-        let scaled = if input_scale == $output_scale {
-            Some(variant)
-        } else if input_scale < $output_scale {
-            // scale_up means output has more fractional digits than input
-            // multiply integer by 10^(output_scale - input_scale)
-            let delta = ($output_scale - input_scale) as u32;
-            let mul = ten.checked_pow(delta)?;
-            variant.checked_mul(mul)
-        } else {
-            // scale_down means output has fewer fractional digits than input
-            // divide by 10^(input_scale - output_scale) with rounding
-            let delta = (input_scale - $output_scale) as u32;
-            let div = ten.checked_pow(delta)?;
-            let d = variant.checked_div(div)?;
-            let r = variant % div;
-
-            // rounding in the same way as convert_to_smaller_scale_decimal in arrow-cast
-            let half = div.checked_div($to_int_ty(2))?;
-            let half_neg = half.checked_neg()?;
-            let adjusted = match variant >= $to_int_ty(0) {
-                true if r >= half => d.checked_add($to_int_ty(1))?,
-                false if r <= half_neg => d.checked_sub($to_int_ty(1))?,
-                _ => d,
-            };
-            Some(adjusted)
-        };
-
-        scaled.filter(|v| $validate(*v, $precision))
-    }};
-}
-pub(crate) use scale_variant_decimal;
-
-fn variant_to_unscaled_decimal32(
-    variant: Variant<'_, '_>,
+pub(crate) fn variant_to_unscaled_decimal<O>(
+    variant: &Variant<'_, '_>,
     precision: u8,
     scale: i8,
-) -> Option<i32> {
-    match variant {
-        Variant::Int32(i) => scale_variant_decimal_new::<Decimal32Type, Decimal32Type>(i, VariantDecimal4::MAX_PRECISION, 0, precision, scale),
-        Variant::Decimal4(d) => scale_variant_decimal_new::<Decimal32Type, Decimal32Type>(d.integer(), VariantDecimal4::MAX_PRECISION, d.scale() as i8, precision, scale),
-        _ => None,
-    }
-}
-
-// fn rescale_variant(integer: i32, input_precision: u8, input_scale: i8, output_precision: u8, output_scale: i8) -> Option<i32> {
-//     let input_precision = input_precision as i8;
-//     let output_precision = output_precision as i8;
-//     let mut input_integer_digits =  input_precision - input_scale;
-//     let output_integer_digits = output_precision - output_scale;
-
-//     // 
-//     if input_integer_digits > output_integer_digits {
-//         if !Decimal32Type::is_valid_decimal_precision(integer, (output_integer_digits + input_scale) as u8) {
-//             return None;
-//         }
-//         input_integer_digits = output_integer_digits;
-//     }
-
-//     if input_integer_digits == output_integer_digits {
-//         let rescaled =
-//     }
-// }
-
-
-
-fn scale_variant_decimal_new<I, O>(
-    integer: I::Native,
-    input_precision: u8,
-    input_scale: i8,
-    output_precision: u8,
-    output_scale: i8,
 ) -> Option<O::Native>
 where
-    I: DecimalType,
     O: DecimalType,
+    O::Native: DecimalCast,
 {
-    return None;
+    let maybe_rescaled = match variant {
+        Variant::Int8(i) => {
+            rescale_decimal::<Decimal32Type, O>(VariantDecimal4::MAX_PRECISION, 0, precision, scale)(
+                *i as i32,
+            )
+        }
+        Variant::Int16(i) => {
+            rescale_decimal::<Decimal32Type, O>(VariantDecimal4::MAX_PRECISION, 0, precision, scale)(
+                *i as i32,
+            )
+        }
+        Variant::Int32(i) => {
+            rescale_decimal::<Decimal32Type, O>(VariantDecimal4::MAX_PRECISION, 0, precision, scale)(
+                *i,
+            )
+        }
+        Variant::Int64(i) => {
+            rescale_decimal::<Decimal64Type, O>(VariantDecimal8::MAX_PRECISION, 0, precision, scale)(
+                *i,
+            )
+        }
+        Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
+            VariantDecimal4::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        )(d.integer()),
+        Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, O>(
+            VariantDecimal8::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        )(d.integer()),
+        Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, O>(
+            VariantDecimal16::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        )(d.integer()),
+        _ => Err(ArrowError::InvalidArgumentError(format!(
+            "Invalid variant type: {:?}",
+            variant
+        ))),
+    };
+
+    maybe_rescaled.ok()
 }
 
 /// Convert the value at a specific index in the given array into a `Variant`.
