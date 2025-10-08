@@ -320,7 +320,7 @@ where
     } else if cast_options.safe {
         array.unary_opt(|x| f(x).ok())
     } else {
-        array.try_unary(|x| f(x))?
+        array.try_unary(f)?
     })
 }
 
@@ -351,7 +351,7 @@ where
     } else if cast_options.safe {
         array.unary_opt(|x| f(x).ok())
     } else {
-        array.try_unary(|x| f(x))?
+        array.try_unary(f)?
     })
 }
 
