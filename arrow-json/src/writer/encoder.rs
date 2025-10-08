@@ -37,6 +37,16 @@ pub struct EncoderOptions {
     struct_mode: StructMode,
     /// An optional hook for customizing encoding behavior.
     encoder_factory: Option<Arc<dyn EncoderFactory>>,
+    /// Optional date format for date arrays
+    date_format: Option<String>,
+    /// Optional datetime format for datetime arrays
+    datetime_format: Option<String>,
+    /// Optional timestamp format for timestamp arrays
+    timestamp_format: Option<String>,
+    /// Optional timestamp format for timestamp with timezone arrays
+    timestamp_tz_format: Option<String>,
+    /// Optional time format for time arrays
+    time_format: Option<String>,
 }
 
 impl EncoderOptions {
@@ -71,6 +81,61 @@ impl EncoderOptions {
     /// Get the optional hook for customizing encoding behavior.
     pub fn encoder_factory(&self) -> Option<&Arc<dyn EncoderFactory>> {
         self.encoder_factory.as_ref()
+    }
+
+    /// Set the JSON file's date format
+    pub fn with_date_format(mut self, format: String) -> Self {
+        self.date_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's date format if set, defaults to RFC3339
+    pub fn date_format(&self) -> Option<&str> {
+        self.date_format.as_deref()
+    }
+
+    /// Set the JSON file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.datetime_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's datetime format if set, defaults to RFC3339
+    pub fn datetime_format(&self) -> Option<&str> {
+        self.datetime_format.as_deref()
+    }
+
+    /// Set the JSON file's time format
+    pub fn with_time_format(mut self, format: String) -> Self {
+        self.time_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's datetime time if set, defaults to RFC3339
+    pub fn time_format(&self) -> Option<&str> {
+        self.time_format.as_deref()
+    }
+
+    /// Set the JSON file's timestamp format
+    pub fn with_timestamp_format(mut self, format: String) -> Self {
+        self.timestamp_format = Some(format);
+        self
+    }
+
+    /// Get the JSON file's timestamp format if set, defaults to RFC3339
+    pub fn timestamp_format(&self) -> Option<&str> {
+        self.timestamp_format.as_deref()
+    }
+
+    /// Set the JSON file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.timestamp_tz_format = Some(tz_format);
+        self
+    }
+
+    /// Get the JSON file's timestamp tz format if set, defaults to RFC3339
+    pub fn timestamp_tz_format(&self) -> Option<&str> {
+        self.timestamp_tz_format.as_deref()
     }
 }
 
@@ -350,8 +415,14 @@ pub fn make_encoder<'a>(
                 // characters that would need to be escaped within a JSON string, e.g. `'"'`.
                 // If support for user-provided format specifications is added, this assumption
                 // may need to be revisited
-                let options = FormatOptions::new().with_display_error(true);
-                let formatter = ArrayFormatter::try_new(array, &options)?;
+                let fops = FormatOptions::new().with_display_error(true)
+                .with_date_format(options.date_format.as_deref())
+                .with_datetime_format(options.datetime_format.as_deref())
+                .with_timestamp_format(options.timestamp_format.as_deref())
+                .with_timestamp_tz_format(options.timestamp_tz_format.as_deref())
+                .with_time_format(options.time_format.as_deref());
+
+                let formatter = ArrayFormatter::try_new(array, &fops)?;
                 let formatter = JsonArrayFormatter::new(formatter);
                 NullableEncoder::new(Box::new(formatter) as Box<dyn Encoder + 'a>, nulls)
             }

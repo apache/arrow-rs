@@ -44,7 +44,7 @@ pub(crate) fn try_add_extension_type(
     };
     match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
-        LogicalType::Variant => {
+        LogicalType::Variant { .. } => {
             arrow_field.try_with_extension_type(parquet_variant_compute::VariantType)?;
         }
         #[cfg(feature = "arrow_canonical_extension_types")]
@@ -70,7 +70,7 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
     };
     match parquet_logical_type {
         #[cfg(feature = "variant_experimental")]
-        LogicalType::Variant => true,
+        LogicalType::Variant { .. } => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Uuid => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
@@ -89,7 +89,9 @@ pub(crate) fn logical_type_for_struct(field: &Field) -> Option<LogicalType> {
         return None;
     }
     match field.try_extension_type::<VariantType>() {
-        Ok(VariantType) => Some(LogicalType::Variant),
+        Ok(VariantType) => Some(LogicalType::Variant {
+            specification_version: None,
+        }),
         // Given check above, this should not error, but if it does ignore
         Err(_e) => None,
     }

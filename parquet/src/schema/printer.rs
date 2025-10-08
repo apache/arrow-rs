@@ -277,9 +277,9 @@ impl<'a> Printer<'a> {
 #[inline]
 fn print_timeunit(unit: &TimeUnit) -> &str {
     match unit {
-        TimeUnit::MILLIS(_) => "MILLIS",
-        TimeUnit::MICROS(_) => "MICROS",
-        TimeUnit::NANOS(_) => "NANOS",
+        TimeUnit::MILLIS => "MILLIS",
+        TimeUnit::MICROS => "MICROS",
+        TimeUnit::NANOS => "NANOS",
     }
 }
 
@@ -326,10 +326,26 @@ fn print_logical_and_converted(
             LogicalType::List => "LIST".to_string(),
             LogicalType::Map => "MAP".to_string(),
             LogicalType::Float16 => "FLOAT16".to_string(),
-            LogicalType::Variant => "VARIANT".to_string(),
-            LogicalType::Geometry => "GEOMETRY".to_string(),
-            LogicalType::Geography => "GEOGRAPHY".to_string(),
+            LogicalType::Variant {
+                specification_version,
+            } => format!("VARIANT({specification_version:?})"),
+            LogicalType::Geometry { crs } => {
+                if let Some(crs) = crs {
+                    format!("GEOMETRY({crs})")
+                } else {
+                    "GEOMETRY".to_string()
+                }
+            }
+            LogicalType::Geography { crs, algorithm } => {
+                let algorithm = algorithm.unwrap_or_default();
+                if let Some(crs) = crs {
+                    format!("GEOGRAPHY({algorithm}, {crs})")
+                } else {
+                    format!("GEOGRAPHY({algorithm})")
+                }
+            }
             LogicalType::Unknown => "UNKNOWN".to_string(),
+            LogicalType::_Unknown { field_id } => format!("_Unknown({field_id})"),
         },
         None => {
             // Also print converted type if it is available
@@ -449,7 +465,7 @@ mod tests {
 
     use std::sync::Arc;
 
-    use crate::basic::{Repetition, Type as PhysicalType};
+    use crate::basic::{EdgeInterpolationAlgorithm, Repetition, Type as PhysicalType};
     use crate::errors::Result;
     use crate::schema::parser::parse_message_type;
 
@@ -645,7 +661,7 @@ mod tests {
                     PhysicalType::INT64,
                     Some(LogicalType::Timestamp {
                         is_adjusted_to_u_t_c: true,
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                     }),
                     ConvertedType::NONE,
                     Repetition::REQUIRED,
@@ -671,7 +687,7 @@ mod tests {
                     None,
                     PhysicalType::INT32,
                     Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }),
                     ConvertedType::TIME_MILLIS,
@@ -686,7 +702,7 @@ mod tests {
                     Some(42),
                     PhysicalType::INT32,
                     Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }),
                     ConvertedType::TIME_MILLIS,
@@ -778,6 +794,62 @@ mod tests {
                 )
                 .unwrap(),
                 "REQUIRED BYTE_ARRAY field [42] (STRING);",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::Geometry { crs: None }),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOMETRY);",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::Geometry {
+                        crs: Some("non-missing CRS".to_string()),
+                    }),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOMETRY(non-missing CRS));",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::Geography {
+                        crs: None,
+                        algorithm: Some(EdgeInterpolationAlgorithm::default()),
+                    }),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL));",
+            ),
+            (
+                build_primitive_type(
+                    "field",
+                    None,
+                    PhysicalType::BYTE_ARRAY,
+                    Some(LogicalType::Geography {
+                        crs: Some("non-missing CRS".to_string()),
+                        algorithm: Some(EdgeInterpolationAlgorithm::default()),
+                    }),
+                    ConvertedType::NONE,
+                    Repetition::REQUIRED,
+                )
+                .unwrap(),
+                "REQUIRED BYTE_ARRAY field (GEOGRAPHY(SPHERICAL, non-missing CRS));",
             ),
         ];
 

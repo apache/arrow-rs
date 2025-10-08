@@ -17,10 +17,31 @@
 
 //! Decoder for [`Header`]
 
-use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
+use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
 use crate::reader::vlq::VLQDecoder;
-use crate::schema::{Schema, SCHEMA_METADATA_KEY};
+use crate::schema::{SCHEMA_METADATA_KEY, Schema};
 use arrow_schema::ArrowError;
+use std::io::BufRead;
+
+/// Read the Avro file header (magic, metadata, sync marker) from `reader`.
+pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
+    let mut decoder = HeaderDecoder::default();
+    loop {
+        let buf = reader.fill_buf()?;
+        if buf.is_empty() {
+            break;
+        }
+        let read = buf.len();
+        let decoded = decoder.decode(buf)?;
+        reader.consume(decoded);
+        if decoded != read {
+            break;
+        }
+    }
+    decoder.flush().ok_or_else(|| {
+        ArrowError::ParseError("Unexpected EOF while reading Avro header".to_string())
+    })
+}
 
 #[derive(Debug)]
 enum HeaderDecoderState {
@@ -91,7 +112,7 @@ impl Header {
         }
     }
 
-    /// Returns the [`Schema`] if any
+    /// Returns the `Schema` if any
     pub(crate) fn schema(&self) -> Result<Option<Schema<'_>>, ArrowError> {
         self.get(SCHEMA_METADATA_KEY)
             .map(|x| {
@@ -265,13 +286,16 @@ impl HeaderDecoder {
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField};
+    use crate::codec::AvroField;
     use crate::reader::read_header;
-    use crate::schema::SCHEMA_METADATA_KEY;
+    use crate::schema::{
+        AVRO_NAME_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME, SCHEMA_METADATA_KEY,
+    };
     use crate::test_util::arrow_test_data;
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
+    use std::collections::HashMap;
     use std::fs::File;
-    use std::io::{BufRead, BufReader};
+    use std::io::BufReader;
 
     #[test]
     fn test_header_decode() {
@@ -291,7 +315,7 @@ mod test {
 
     fn decode_file(file: &str) -> Header {
         let file = File::open(file).unwrap();
-        read_header(BufReader::with_capacity(100, file)).unwrap()
+        read_header(BufReader::with_capacity(1000, file)).unwrap()
     }
 
     #[test]
@@ -326,6 +350,10 @@ mod test {
                 ])),
                 false
             )
+            .with_metadata(HashMap::from([(
+                AVRO_NAME_METADATA_KEY.to_string(),
+                AVRO_ROOT_RECORD_DEFAULT_NAME.to_string()
+            )]))
         );
 
         assert_eq!(

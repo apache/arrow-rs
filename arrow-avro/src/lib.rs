@@ -205,15 +205,33 @@
 //! - [`reader`]: read Avro (OCF, SOE, Confluent) into Arrow `RecordBatch`es.
 //! - [`writer`]: write Arrow `RecordBatch`es as Avro (OCF, SOE, Confluent).
 //! - [`schema`]: Avro schema parsing / fingerprints / registries.
-//! - [`compression`]: codecs used for OCF blocks (i.e., Deflate, Snappy, Zstandard).
-//! - [`codec`]: internal Avro↔Arrow type conversion and row decode/encode plans.
+//! - [`compression`]: codecs used for **OCF block compression** (i.e., Deflate, Snappy, Zstandard, BZip2, and XZ).
+//! - [`codec`]: internal Avro-Arrow type conversion and row decode/encode plans.
 //!
 //! ### Features
 //!
-//! - `md5`: enables dependency `md5` for md5 fingerprint hashing
-//! - `sha256`: enables dependency `sha2` for sha256 fingerprint hashing
-//! - `small_decimals`: enables support for small decimal types
-//! - `avro_custom_types`: Enables custom logic that interprets an annotated Avro long with logicalType values of `arrow.duration-nanos`, `arrow.duration-micros`, `arrow.duration-millis`, or `arrow.duration-seconds` as a more descriptive Arrow Duration(TimeUnit) type.
+//! **OCF compression (enabled by default)**
+//! - `deflate` — enable DEFLATE block compression (via `flate2`).
+//! - `snappy` — enable Snappy block compression with 4‑byte BE CRC32 (per Avro).
+//! - `zstd` — enable Zstandard block compression.
+//! - `bzip2` — enable BZip2 block compression.
+//! - `xz` — enable XZ/LZMA block compression.
+//!
+//! **Schema fingerprints & helpers (opt‑in)**
+//! - `md5` — enable MD5 writer‑schema fingerprints.
+//! - `sha256` — enable SHA‑256 writer‑schema fingerprints.
+//! - `small_decimals` — support for compact Arrow representations of small Avro decimals (`Decimal32` and `Decimal64`).
+//! - `avro_custom_types` — interpret Avro fields annotated with Arrow‑specific logical
+//!   types such as `arrow.duration-nanos`, `arrow.duration-micros`,
+//!   `arrow.duration-millis`, or `arrow.duration-seconds` as Arrow `Duration(TimeUnit)`.
+//! - `canonical_extension_types` — enable support for Arrow [canonical extension types]
+//!   from `arrow-schema` so `arrow-avro` can respect them during Avro↔Arrow mapping.
+//!
+//! **Notes**
+//! - OCF compression codecs apply only to **Object Container Files**; they do not affect Avro
+//!   single object encodings.
+//!
+//! [canonical extension types]: https://arrow.apache.org/docs/format/CanonicalExtensions.html
 //!
 //! [Apache Arrow]: https://arrow.apache.org/
 //! [Apache Avro]: https://avro.apache.org/
@@ -224,7 +242,6 @@
 )]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
-#![allow(unused)] // Temporary
 
 /// Core functionality for reading Avro data into Arrow arrays
 ///
