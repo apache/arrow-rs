@@ -152,11 +152,11 @@ impl<T: DataType> ColumnValueEncoderImpl<T> {
 
     fn write_slice(&mut self, slice: &[T::T]) -> Result<()> {
         if self.statistics_enabled != EnabledStatistics::None
-            // INTERVAL, Geometry, and Geography have undefined sort order,so don't write min/max stats for them
+            // INTERVAL, Geometry, and Geography have undefined sort order, so don't write min/max stats for them
             && self.descr.converted_type() != ConvertedType::INTERVAL
         {
-            if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
-                update_geo_stats_accumulator(accumulator.as_mut(), slice.iter());
+            if let Some(accumulator) = self.geo_stats_accumulator.as_deref_mut() {
+                update_geo_stats_accumulator(accumulator, slice.iter());
             } else if let Some((min, max)) = self.min_max(slice, None) {
                 update_min(&self.descr, &min, &mut self.min_value);
                 update_max(&self.descr, &max, &mut self.max_value);
@@ -328,11 +328,7 @@ impl<T: DataType> ColumnValueEncoder for ColumnValueEncoderImpl<T> {
     }
 
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
-        if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
-            accumulator.finish()
-        } else {
-            None
-        }
+        self.geo_stats_accumulator.as_mut().map(|a| a.finish())?
     }
 }
 

@@ -551,11 +551,7 @@ impl ColumnValueEncoder for ByteArrayEncoder {
     }
 
     fn flush_geospatial_statistics(&mut self) -> Option<Box<GeospatialStatistics>> {
-        if let Some(accumulator) = self.geo_stats_accumulator.as_mut() {
-            accumulator.finish()
-        } else {
-            None
-        }
+        self.geo_stats_accumulator.as_mut().map(|a| a.finish())?
     }
 }
 

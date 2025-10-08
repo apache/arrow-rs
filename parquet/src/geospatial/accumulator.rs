@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! This module provides implementations and traits for building [GeospatialStatistics]
+//! This module provides implementations and traits for building [`GeospatialStatistics`]
 
 use std::sync::{Arc, OnceLock};
 
@@ -31,9 +31,9 @@ pub fn new_geo_stats_accumulator(descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccum
         .new_accumulator(descr)
 }
 
-/// Initialize the global [GeoStatsAccumulatorFactory]
+/// Initialize the global [`GeoStatsAccumulatorFactory`]
 ///
-/// This may only be done once before any calls to [new_geo_stats_accumulator].
+/// This may only be done once before any calls to [`new_geo_stats_accumulator`].
 /// Clients may use this to implement support for builds of the Parquet crate without
 /// geospatial support or to implement support for Geography bounding using external
 /// dependencies.
@@ -52,7 +52,7 @@ pub fn init_geo_stats_accumulator_factory(
 /// Global accumulator factory instance
 static ACCUMULATOR_FACTORY: OnceLock<Arc<dyn GeoStatsAccumulatorFactory>> = OnceLock::new();
 
-/// Factory for [GeospatialStatistics] accumulators
+/// Factory for [`GeospatialStatistics`] accumulators
 ///
 /// The GeoStatsAccumulatorFactory is a trait implemented by the global factory that
 /// generates new instances of a [GeoStatsAccumulator] when constructing new
