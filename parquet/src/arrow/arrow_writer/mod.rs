@@ -685,6 +685,8 @@ impl ArrowColumnChunk {
 
 /// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
 ///
+/// `ArrowColumnWriter` instances can be created using an [`ArrowRowGroupWriterFactory`];
+///
 /// Note: This is a low-level interface for applications that require
 /// fine-grained control of encoding (e.g. encoding using multiple threads),
 /// see [`ArrowWriter`] for a higher-level interface
@@ -696,7 +698,7 @@ impl ArrowColumnChunk {
 /// # use arrow_array::*;
 /// # use arrow_schema::*;
 /// # use parquet::arrow::ArrowSchemaConverter;
-/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers, ArrowColumnChunk};
+/// # use parquet::arrow::arrow_writer::{compute_leaves, ArrowColumnChunk, ArrowLeafColumn, ArrowRowGroupWriterFactory};
 /// # use parquet::file::properties::WriterProperties;
 /// # use parquet::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 /// #
@@ -712,8 +714,17 @@ impl ArrowColumnChunk {
 ///   .convert(&schema)
 ///   .unwrap();
 ///
-/// // Create writers for each of the leaf columns
-/// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();
+/// // Create parquet writer
+/// let root_schema = parquet_schema.root_schema_ptr();
+/// // write to memory in the example, but this could be a File
+/// let mut out = Vec::with_capacity(1024);
+/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone())
+///   .unwrap();
+///
+/// // Create a factory for building Arrow column writers
+/// let row_group_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+/// // Create column writers for the 0th row group
+/// let col_writers = row_group_factory.create_column_writers(0).unwrap();
 ///
 /// // Spawn a worker thread for each column
 /// //
@@ -735,13 +746,6 @@ impl ArrowColumnChunk {
 ///         (handle, send)
 ///     })
 ///     .collect();
-///
-/// // Create parquet writer
-/// let root_schema = parquet_schema.root_schema_ptr();
-/// // write to memory in the example, but this could be a File
-/// let mut out = Vec::with_capacity(1024);
-/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone())
-///   .unwrap();
 ///
 /// // Start row group
 /// let mut row_group_writer: SerializedRowGroupWriter<'_, _> = writer
