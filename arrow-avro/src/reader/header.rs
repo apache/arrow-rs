@@ -17,9 +17,9 @@
 
 //! Decoder for [`Header`]
 
-use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
+use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
 use crate::reader::vlq::VLQDecoder;
-use crate::schema::{Schema, SCHEMA_METADATA_KEY};
+use crate::schema::{SCHEMA_METADATA_KEY, Schema};
 use arrow_schema::ArrowError;
 use std::io::BufRead;
 
@@ -288,9 +288,12 @@ mod test {
     use super::*;
     use crate::codec::AvroField;
     use crate::reader::read_header;
-    use crate::schema::SCHEMA_METADATA_KEY;
+    use crate::schema::{
+        AVRO_NAME_METADATA_KEY, AVRO_ROOT_RECORD_DEFAULT_NAME, SCHEMA_METADATA_KEY,
+    };
     use crate::test_util::arrow_test_data;
     use arrow_schema::{DataType, Field, Fields, TimeUnit};
+    use std::collections::HashMap;
     use std::fs::File;
     use std::io::BufReader;
 
@@ -347,6 +350,10 @@ mod test {
                 ])),
                 false
             )
+            .with_metadata(HashMap::from([(
+                AVRO_NAME_METADATA_KEY.to_string(),
+                AVRO_ROOT_RECORD_DEFAULT_NAME.to_string()
+            )]))
         );
 
         assert_eq!(

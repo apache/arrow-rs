@@ -300,15 +300,16 @@ mod test {
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Decimal32Array, Decimal64Array,
-        Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array, Int16Array,
-        Int32Array, Int64Array, StringArray, StructArray,
+        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
+        Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
+        Int16Array, Int32Array, Int64Array, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
-    use arrow_schema::{DataType, Field, FieldRef, Fields};
+    use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
+    use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{
         EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
@@ -705,7 +706,7 @@ mod test {
     }
 
     macro_rules! perfectly_shredded_to_arrow_primitive_test {
-        ($name:ident, $primitive_type:ident, $perfectly_shredded_array_gen_fun:ident, $expected_array:expr) => {
+        ($name:ident, $primitive_type:expr, $perfectly_shredded_array_gen_fun:ident, $expected_array:expr) => {
             #[test]
             fn $name() {
                 let array = $perfectly_shredded_array_gen_fun();
@@ -717,6 +718,13 @@ mod test {
             }
         };
     }
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_int18_as_int8,
+        Int8,
+        perfectly_shredded_int8_variant_array,
+        Int8Array::from(vec![Some(1), Some(2), Some(3)])
+    );
 
     perfectly_shredded_to_arrow_primitive_test!(
         get_variant_perfectly_shredded_int16_as_int16,
@@ -739,6 +747,54 @@ mod test {
         Int64Array::from(vec![Some(1), Some(2), Some(3)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_float32_as_float32,
+        Float32,
+        perfectly_shredded_float32_variant_array,
+        Float32Array::from(vec![Some(1.0), Some(2.0), Some(3.0)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_float64_as_float64,
+        Float64,
+        perfectly_shredded_float64_variant_array,
+        Float64Array::from(vec![Some(1.0), Some(2.0), Some(3.0)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_boolean_as_boolean,
+        Boolean,
+        perfectly_shredded_bool_variant_array,
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    );
+
+    macro_rules! perfectly_shredded_variant_array_fn {
+        ($func:ident, $typed_value_gen:expr) => {
+            fn $func() -> ArrayRef {
+                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
+                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                    EMPTY_VARIANT_METADATA_BYTES,
+                    3,
+                ));
+                let typed_value = $typed_value_gen();
+
+                let struct_array = StructArrayBuilder::new()
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
+                    .build();
+
+                VariantArray::try_new(&struct_array)
+                    .expect("should create variant array")
+                    .into()
+            }
+        };
+    }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    });
+
     /// Return a VariantArray that represents a perfectly "shredded" variant
     /// for the given typed value.
     ///
@@ -752,28 +808,13 @@ mod test {
     /// ```
     macro_rules! numeric_perfectly_shredded_variant_array_fn {
         ($func:ident, $array_type:ident, $primitive_type:ty) => {
-            fn $func() -> ArrayRef {
-                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
-                    EMPTY_VARIANT_METADATA_BYTES,
-                    3,
-                ));
-                let typed_value = $array_type::from(vec![
+            perfectly_shredded_variant_array_fn!($func, || {
+                $array_type::from(vec![
                     Some(<$primitive_type>::try_from(1u8).unwrap()),
                     Some(<$primitive_type>::try_from(2u8).unwrap()),
                     Some(<$primitive_type>::try_from(3u8).unwrap()),
-                ]);
-
-                let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata), false)
-                    .with_field("typed_value", Arc::new(typed_value), true)
-                    .build();
-
-                VariantArray::try_new(&struct_array)
-                    .expect("should create variant array")
-                    .into()
-            }
+                ])
+            });
         };
     }
 
@@ -806,6 +847,128 @@ mod test {
         perfectly_shredded_float64_variant_array,
         Float64Array,
         f64
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(-456000),
+                Some(1758602096000001),
+                Some(1758602096000002),
+            ])
+        }
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_timestamp_micro_ntz,
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+    );
+
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_nano_ntz,
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_timestamp_micro_variant_array, || {
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_timestamp_micro,
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array,
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+        .with_timezone("+00:00")
+    );
+
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_nano,
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_nano_ntz_variant_array,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(-4999999561),
+                Some(1758602096000000001),
+                Some(1758602096000000002),
+            ])
+        }
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_nano_ntz,
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        perfectly_shredded_timestamp_nano_ntz_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_timestamp_nano_variant_array, || {
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_as_timestamp_nano,
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_nano_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_date_variant_array, || {
+        Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_date_as_date,
+        DataType::Date32,
+        perfectly_shredded_date_variant_array,
+        Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
     );
 
     macro_rules! assert_variant_get_as_variant_array_with_default_option {

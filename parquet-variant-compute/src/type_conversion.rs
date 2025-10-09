@@ -20,7 +20,8 @@
 use arrow::{
     compute::{DecimalCast, rescale_decimal},
     datatypes::{
-        self, ArrowPrimitiveType, Decimal32Type, Decimal64Type, Decimal128Type, DecimalType,
+        self, ArrowPrimitiveType, ArrowTimestampType, Date32Type, Decimal32Type, Decimal64Type,
+        Decimal128Type, DecimalType,
     },
 };
 use arrow_schema::ArrowError;
@@ -44,12 +45,31 @@ pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
 
+/// Extension trait for Arrow timestamp types that can extract their native value from a Variant
+/// We can't use [`PrimitiveFromVariant`] directly because we need _two_ implementations for each
+/// timestamp type -- the `NTZ` param here.
+pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
+    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
+}
+
 /// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
 macro_rules! impl_primitive_from_variant {
-    ($arrow_type:ty, $variant_method:ident) => {
+    ($arrow_type:ty, $variant_method:ident $(, $cast_fn:expr)?) => {
         impl PrimitiveFromVariant for $arrow_type {
             fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
-                variant.$variant_method()
+                let value = variant.$variant_method();
+                $( let value = value.map($cast_fn); )?
+                value
+            }
+        }
+    };
+}
+
+macro_rules! impl_timestamp_from_variant {
+    ($timestamp_type:ty, $variant_method:ident, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
+        impl TimestampFromVariant<{ $ntz }> for $timestamp_type {
+            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
+                variant.$variant_method().and_then($cast_fn)
             }
         }
     };
@@ -66,6 +86,35 @@ impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
 impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
 impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
 impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
+impl_primitive_from_variant!(
+    datatypes::Date32Type,
+    as_naive_date,
+    Date32Type::from_naive_date
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampMicrosecondType,
+    as_timestamp_ntz_micros,
+    ntz = true,
+    Self::make_value,
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampMicrosecondType,
+    as_timestamp_micros,
+    ntz = false,
+    |timestamp| Self::make_value(timestamp.naive_utc())
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampNanosecondType,
+    as_timestamp_ntz_nanos,
+    ntz = true,
+    Self::make_value
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampNanosecondType,
+    as_timestamp_nanos,
+    ntz = false,
+    |timestamp| Self::make_value(timestamp.naive_utc())
+);
 
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
