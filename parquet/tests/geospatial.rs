@@ -140,6 +140,7 @@ mod test {
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
+            metadata::RowGroupMetaData,
             properties::{EnabledStatistics, WriterProperties},
             reader::FileReader,
             writer::SerializedFileWriter,
@@ -149,11 +150,13 @@ mod test {
     };
     use parquet_geospatial::testing::wkb_point_xy;
 
-    fn read_geo_statistics(b: Bytes, column: usize) -> Vec<Option<GeospatialStatistics>> {
+    fn read_row_group_metadata(b: Bytes) -> Vec<RowGroupMetaData> {
         let reader = SerializedFileReader::new(b).unwrap();
-        reader
-            .metadata()
-            .row_groups()
+        reader.metadata().row_groups().to_vec()
+    }
+
+    fn read_geo_statistics(b: Bytes, column: usize) -> Vec<Option<GeospatialStatistics>> {
+        read_row_group_metadata(b)
             .iter()
             .map(|row_group| row_group.column(column).geo_statistics().cloned())
             .collect()
@@ -203,8 +206,9 @@ mod test {
 
         writer.close().unwrap();
 
-        // Check statistics on file read
-        let all_geo_stats = read_geo_statistics(buf.into(), 0);
+        // Check geospatial statistics on file read
+        let buf_bytes = Bytes::from(buf);
+        let all_geo_stats = read_geo_statistics(buf_bytes.clone(), 0);
         assert_eq!(all_geo_stats.len(), column_values.len());
         assert_eq!(expected_geometry_types.len(), column_values.len());
         assert_eq!(expected_bounding_box.len(), column_values.len());
@@ -220,6 +224,17 @@ mod test {
                 assert!(expected_geometry_types[i].is_none());
                 assert!(expected_bounding_box[i].is_none());
             }
+        }
+
+        for (i, rg) in read_row_group_metadata(buf_bytes).iter().enumerate() {
+            // We should have written Statistics with a null_count
+            let stats = rg.column(0).statistics().unwrap();
+            let expected_null_count: u64 = def_levels[i].iter().map(|l| (*l == 0) as u64).sum();
+            assert_eq!(stats.null_count_opt(), Some(expected_null_count));
+
+            // ...but there should be no min or max value
+            assert!(stats.min_bytes_opt().is_none());
+            assert!(stats.max_bytes_opt().is_none());
         }
     }
 
@@ -278,7 +293,8 @@ mod test {
         file_writer.close().unwrap();
 
         // Check statistics on file read
-        let all_geo_stats = read_geo_statistics(buf.into(), 0);
+        let buf_bytes = Bytes::from(buf);
+        let all_geo_stats = read_geo_statistics(buf_bytes.clone(), 0);
         assert_eq!(all_geo_stats.len(), column_values.len());
 
         for i in 0..column_values.len() {
@@ -292,6 +308,17 @@ mod test {
                 assert!(expected_geometry_types[i].is_none());
                 assert!(expected_bounding_box[i].is_none());
             }
+        }
+
+        for (i, rg) in read_row_group_metadata(buf_bytes).iter().enumerate() {
+            // We should have written Statistics with a null_count
+            let stats = rg.column(0).statistics().unwrap();
+            let expected_null_count = column_values[i].null_count();
+            assert_eq!(stats.null_count_opt(), Some(expected_null_count as u64));
+
+            // ...but there should be no min or max value
+            assert!(stats.min_bytes_opt().is_none());
+            assert!(stats.max_bytes_opt().is_none());
         }
     }
 
