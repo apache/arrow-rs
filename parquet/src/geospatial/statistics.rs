@@ -66,3 +66,9 @@ impl GeospatialStatistics {
         self.bbox.as_ref()
     }
 }
+
+impl HeapSize for GeospatialStatistics {
+    fn heap_size(&self) -> usize {
+        self.bbox.heap_size() + self.geospatial_types.heap_size()
+    }
+}
