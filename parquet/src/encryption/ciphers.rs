@@ -18,7 +18,7 @@
 use crate::errors::ParquetError;
 use crate::errors::ParquetError::General;
 use crate::errors::Result;
-use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
+use ring::aead::{AES_128_GCM, Aad, LessSafeKey, NonceSequence, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
 

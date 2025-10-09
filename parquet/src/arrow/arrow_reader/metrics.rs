@@ -17,8 +17,8 @@
 
 //! [ArrowReaderMetrics] for collecting metrics about the Arrow reader
 
-use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
+use std::sync::atomic::AtomicUsize;
 
 /// This enum represents the state of Arrow reader metrics collection.
 ///

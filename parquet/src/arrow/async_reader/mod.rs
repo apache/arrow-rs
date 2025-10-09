@@ -38,6 +38,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
+use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{
     ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache, RowGroups,
 };
@@ -45,17 +46,16 @@ use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection,
 };
-use crate::arrow::ProjectionMask;
 
+use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
-    chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
+    SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
-use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 
 mod metadata;
 pub use metadata::*;
@@ -63,8 +63,8 @@ pub use metadata::*;
 #[cfg(feature = "object_store")]
 mod store;
 
-use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::ReadPlanBuilder;
+use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
@@ -450,17 +450,17 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
-            BloomFilterAlgorithm::BLOCK(_) => {
+            BloomFilterAlgorithm::BLOCK => {
                 // this match exists to future proof the singleton algorithm enum
             }
         }
         match header.compression {
-            BloomFilterCompression::UNCOMPRESSED(_) => {
+            BloomFilterCompression::UNCOMPRESSED => {
                 // this match exists to future proof the singleton compression enum
             }
         }
         match header.hash {
-            BloomFilterHash::XXHASH(_) => {
+            BloomFilterHash::XXHASH => {
                 // this match exists to future proof the singleton hash enum
             }
         }
@@ -864,7 +864,7 @@ where
                 StreamState::Decoding(_) | StreamState::Reading(_) => {
                     return Err(ParquetError::General(
                         "Cannot combine the use of next_row_group with the Stream API".to_string(),
-                    ))
+                    ));
                 }
                 StreamState::Init => {
                     let row_group_idx = match self.row_groups.pop_front() {
@@ -1209,12 +1209,12 @@ impl PageIterator for ColumnChunkIterator {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
-    use crate::arrow::ArrowWriter;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
@@ -1223,12 +1223,12 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Int32Array, Int8Array, RecordBatchReader, Scalar, StringArray,
+        Array, ArrayRef, Int8Array, Int32Array, RecordBatchReader, Scalar, StringArray,
         StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
     use futures::{StreamExt, TryStreamExt};
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
     use tempfile::tempfile;

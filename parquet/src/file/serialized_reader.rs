@@ -18,31 +18,30 @@
 //! Contains implementations of the reader traits FileReader, RowGroupReader and PageReader
 //! Also contains implementations of the ChunkReader for files (with buffering) and byte arrays (RAM)
 
-use crate::basic::{Encoding, Type};
+use crate::basic::{PageType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
-use crate::compression::{create_codec, Codec};
+use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
-use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
+use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
+use crate::file::statistics;
 use crate::file::{
     metadata::*,
     properties::{ReaderProperties, ReaderPropertiesPtr},
     reader::*,
-    statistics,
 };
-use crate::format::{PageHeader, PageLocation, PageType};
-use crate::record::reader::RowIter;
-use crate::record::Row;
-use crate::schema::types::Type as SchemaType;
 #[cfg(feature = "encryption")]
-use crate::thrift::TCompactSliceInputProtocol;
-use crate::thrift::TSerializable;
+use crate::parquet_thrift::ThriftSliceInputProtocol;
+use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
+use crate::record::Row;
+use crate::record::reader::RowIter;
+use crate::schema::types::Type as SchemaType;
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
-use thrift::protocol::TCompactInputProtocol;
 
 impl TryFrom<File> for SerializedFileReader<File> {
     type Error = ParquetError;
@@ -414,7 +413,7 @@ pub(crate) fn decode_page(
         _ => buffer,
     };
 
-    let result = match page_header.type_ {
+    let result = match page_header.r#type {
         PageType::DICTIONARY_PAGE => {
             let dict_header = page_header.dictionary_page_header.as_ref().ok_or_else(|| {
                 ParquetError::General("Missing dictionary page header".to_string())
@@ -423,7 +422,7 @@ pub(crate) fn decode_page(
             Page::DictionaryPage {
                 buf: buffer,
                 num_values: dict_header.num_values.try_into()?,
-                encoding: Encoding::try_from(dict_header.encoding)?,
+                encoding: dict_header.encoding,
                 is_sorted,
             }
         }
@@ -434,10 +433,10 @@ pub(crate) fn decode_page(
             Page::DataPage {
                 buf: buffer,
                 num_values: header.num_values.try_into()?,
-                encoding: Encoding::try_from(header.encoding)?,
-                def_level_encoding: Encoding::try_from(header.definition_level_encoding)?,
-                rep_level_encoding: Encoding::try_from(header.repetition_level_encoding)?,
-                statistics: statistics::from_thrift(physical_type, header.statistics)?,
+                encoding: header.encoding,
+                def_level_encoding: header.definition_level_encoding,
+                rep_level_encoding: header.repetition_level_encoding,
+                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
         PageType::DATA_PAGE_V2 => {
@@ -448,18 +447,18 @@ pub(crate) fn decode_page(
             Page::DataPageV2 {
                 buf: buffer,
                 num_values: header.num_values.try_into()?,
-                encoding: Encoding::try_from(header.encoding)?,
+                encoding: header.encoding,
                 num_nulls: header.num_nulls.try_into()?,
                 num_rows: header.num_rows.try_into()?,
                 def_levels_byte_len: header.definition_levels_byte_length.try_into()?,
                 rep_levels_byte_len: header.repetition_levels_byte_length.try_into()?,
                 is_compressed,
-                statistics: statistics::from_thrift(physical_type, header.statistics)?,
+                statistics: statistics::from_thrift_page_stats(physical_type, header.statistics)?,
             }
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            unimplemented!("Page type {:?} is not supported", page_header.type_)
+            unimplemented!("Page type {:?} is not supported", page_header.r#type)
         }
     };
 
@@ -499,6 +498,8 @@ enum SerializedPageReaderState {
 
 #[derive(Default)]
 struct SerializedPageReaderContext {
+    /// Controls decoding of page-level statistics
+    read_stats: bool,
     /// Crypto context carrying objects required for decryption
     #[cfg(feature = "encryption")]
     crypto_context: Option<Arc<CryptoContext>>,
@@ -610,12 +611,16 @@ impl<R: ChunkReader> SerializedPageReader<R> {
                 require_dictionary: meta.dictionary_page_offset().is_some(),
             },
         };
+        let mut context = SerializedPageReaderContext::default();
+        if props.read_page_stats() {
+            context.read_stats = true;
+        }
         Ok(Self {
             reader,
             decompressor,
             state,
             physical_type: meta.column_type(),
-            context: Default::default(),
+            context,
         })
     }
 
@@ -732,8 +737,12 @@ impl SerializedPageReaderContext {
         _page_index: usize,
         _dictionary_page: bool,
     ) -> Result<PageHeader> {
-        let mut prot = TCompactInputProtocol::new(input);
-        Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+        let mut prot = ThriftReadInputProtocol::new(input);
+        if self.read_stats {
+            Ok(PageHeader::read_thrift(&mut prot)?)
+        } else {
+            Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+        }
     }
 
     fn decrypt_page_data<T>(
@@ -756,8 +765,14 @@ impl SerializedPageReaderContext {
     ) -> Result<PageHeader> {
         match self.page_crypto_context(page_index, dictionary_page) {
             None => {
-                let mut prot = TCompactInputProtocol::new(input);
-                Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+                let mut prot = ThriftReadInputProtocol::new(input);
+                if self.read_stats {
+                    Ok(PageHeader::read_thrift(&mut prot)?)
+                } else {
+                    use crate::file::metadata::thrift_gen::PageHeader;
+
+                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+                }
             }
             Some(page_crypto_context) => {
                 let data_decryptor = page_crypto_context.data_decryptor();
@@ -770,8 +785,12 @@ impl SerializedPageReaderContext {
                     ))
                 })?;
 
-                let mut prot = TCompactSliceInputProtocol::new(buf.as_slice());
-                Ok(PageHeader::read_from_in_protocol(&mut prot)?)
+                let mut prot = ThriftSliceInputProtocol::new(buf.as_slice());
+                if self.read_stats {
+                    Ok(PageHeader::read_thrift(&mut prot)?)
+                } else {
+                    Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
+                }
             }
         }
     }
@@ -875,7 +894,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                     *offset += data_len as u64;
                     *remaining -= data_len as u64;
 
-                    if header.type_ == PageType::INDEX_PAGE {
+                    if header.r#type == PageType::INDEX_PAGE {
                         continue;
                     }
 
@@ -1102,14 +1121,15 @@ mod tests {
 
     use bytes::Buf;
 
+    use crate::file::page_index::column_index::{
+        ByteArrayColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
+    };
     use crate::file::properties::{EnabledStatistics, WriterProperties};
-    use crate::format::BoundaryOrder;
 
-    use crate::basic::{self, ColumnOrder, SortOrder};
+    use crate::basic::{self, BoundaryOrder, ColumnOrder, Encoding, SortOrder};
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
-    use crate::file::page_index::index::{Index, NativeIndex};
     #[allow(deprecated)]
     use crate::file::page_index::index_reader::{read_columns_indexes, read_offset_indexes};
     use crate::file::writer::SerializedFileWriter;
@@ -1395,7 +1415,7 @@ mod tests {
                     assert_eq!(def_levels_byte_len, 2);
                     assert_eq!(rep_levels_byte_len, 0);
                     assert!(is_compressed);
-                    assert!(statistics.is_some());
+                    assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
                 _ => false,
@@ -1497,7 +1517,7 @@ mod tests {
                     assert_eq!(def_levels_byte_len, 2);
                     assert_eq!(rep_levels_byte_len, 0);
                     assert!(is_compressed);
-                    assert!(statistics.is_some());
+                    assert!(statistics.is_none()); // page stats are no longer read
                     true
                 }
                 _ => false,
@@ -1874,9 +1894,15 @@ mod tests {
             80, 65, 82, 49,
         ];
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
+        #[cfg(feature = "encryption")]
         assert_eq!(
             ret.err().unwrap().to_string(),
-            "Parquet error: Could not parse metadata: bad data"
+            "Parquet error: Could not parse metadata: Parquet error: Received empty union from remote ColumnOrder"
+        );
+        #[cfg(not(feature = "encryption"))]
+        assert_eq!(
+            ret.err().unwrap().to_string(),
+            "Parquet error: Received empty union from remote ColumnOrder"
         );
     }
 
@@ -1913,21 +1939,19 @@ mod tests {
 
         // only one row group
         assert_eq!(column_index.len(), 1);
-        let index = if let Index::BYTE_ARRAY(index) = &column_index[0][0] {
+        let index = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
             index
         } else {
             unreachable!()
         };
 
         assert_eq!(index.boundary_order, BoundaryOrder::ASCENDING);
-        let index_in_pages = &index.indexes;
 
         //only one page group
-        assert_eq!(index_in_pages.len(), 1);
+        assert_eq!(index.num_pages(), 1);
 
-        let page0 = &index_in_pages[0];
-        let min = page0.min.as_ref().unwrap();
-        let max = page0.max.as_ref().unwrap();
+        let min = index.min_value(0).unwrap();
+        let max = index.max_value(0).unwrap();
         assert_eq!(b"Hello", min.as_bytes());
         assert_eq!(b"today", max.as_bytes());
 
@@ -1992,7 +2016,7 @@ mod tests {
         let boundary_order = &column_index[0][0].get_boundary_order();
         assert!(boundary_order.is_some());
         matches!(boundary_order.unwrap(), BoundaryOrder::UNORDERED);
-        if let Index::INT32(index) = &column_index[0][0] {
+        if let ColumnIndexMetaData::INT32(index) = &column_index[0][0] {
             check_native_page_index(
                 index,
                 325,
@@ -2005,15 +2029,15 @@ mod tests {
         };
         //col1->bool_col:BOOLEAN UNCOMPRESSED DO:0 FPO:37329 SZ:3022/3022/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: false, max: true, num_nulls: 0]
         assert!(&column_index[0][1].is_sorted());
-        if let Index::BOOLEAN(index) = &column_index[0][1] {
-            assert_eq!(index.indexes.len(), 82);
+        if let ColumnIndexMetaData::BOOLEAN(index) = &column_index[0][1] {
+            assert_eq!(index.num_pages(), 82);
             assert_eq!(row_group_offset_indexes[1].page_locations.len(), 82);
         } else {
             unreachable!()
         };
         //col2->tinyint_col: INT32 UNCOMPRESSED DO:0 FPO:40351 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][2].is_sorted());
-        if let Index::INT32(index) = &column_index[0][2] {
+        if let ColumnIndexMetaData::INT32(index) = &column_index[0][2] {
             check_native_page_index(
                 index,
                 325,
@@ -2026,7 +2050,7 @@ mod tests {
         };
         //col4->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][3].is_sorted());
-        if let Index::INT32(index) = &column_index[0][3] {
+        if let ColumnIndexMetaData::INT32(index) = &column_index[0][3] {
             check_native_page_index(
                 index,
                 325,
@@ -2039,7 +2063,7 @@ mod tests {
         };
         //col5->smallint_col: INT32 UNCOMPRESSED DO:0 FPO:77676 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][4].is_sorted());
-        if let Index::INT32(index) = &column_index[0][4] {
+        if let ColumnIndexMetaData::INT32(index) = &column_index[0][4] {
             check_native_page_index(
                 index,
                 325,
@@ -2052,7 +2076,7 @@ mod tests {
         };
         //col6->bigint_col: INT64 UNCOMPRESSED DO:0 FPO:152326 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 90, num_nulls: 0]
         assert!(!&column_index[0][5].is_sorted());
-        if let Index::INT64(index) = &column_index[0][5] {
+        if let ColumnIndexMetaData::INT64(index) = &column_index[0][5] {
             check_native_page_index(
                 index,
                 528,
@@ -2065,7 +2089,7 @@ mod tests {
         };
         //col7->float_col: FLOAT UNCOMPRESSED DO:0 FPO:223924 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 9.9, num_nulls: 0]
         assert!(&column_index[0][6].is_sorted());
-        if let Index::FLOAT(index) = &column_index[0][6] {
+        if let ColumnIndexMetaData::FLOAT(index) = &column_index[0][6] {
             check_native_page_index(
                 index,
                 325,
@@ -2078,7 +2102,7 @@ mod tests {
         };
         //col8->double_col: DOUBLE UNCOMPRESSED DO:0 FPO:261249 SZ:71598/71598/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: -0.0, max: 90.89999999999999, num_nulls: 0]
         assert!(!&column_index[0][7].is_sorted());
-        if let Index::DOUBLE(index) = &column_index[0][7] {
+        if let ColumnIndexMetaData::DOUBLE(index) = &column_index[0][7] {
             check_native_page_index(
                 index,
                 528,
@@ -2091,8 +2115,8 @@ mod tests {
         };
         //col9->date_string_col: BINARY UNCOMPRESSED DO:0 FPO:332847 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 01/01/09, max: 12/31/10, num_nulls: 0]
         assert!(!&column_index[0][8].is_sorted());
-        if let Index::BYTE_ARRAY(index) = &column_index[0][8] {
-            check_native_page_index(
+        if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][8] {
+            check_byte_array_page_index(
                 index,
                 974,
                 get_row_group_min_max_bytes(row_group_metadata, 8),
@@ -2104,8 +2128,8 @@ mod tests {
         };
         //col10->string_col: BINARY UNCOMPRESSED DO:0 FPO:444795 SZ:45298/45298/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 9, num_nulls: 0]
         assert!(&column_index[0][9].is_sorted());
-        if let Index::BYTE_ARRAY(index) = &column_index[0][9] {
-            check_native_page_index(
+        if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][9] {
+            check_byte_array_page_index(
                 index,
                 352,
                 get_row_group_min_max_bytes(row_group_metadata, 9),
@@ -2118,14 +2142,14 @@ mod tests {
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         //Notice: min_max values for each page for this col not exits.
         assert!(!&column_index[0][10].is_sorted());
-        if let Index::NONE = &column_index[0][10] {
+        if let ColumnIndexMetaData::NONE = &column_index[0][10] {
             assert_eq!(row_group_offset_indexes[10].page_locations.len(), 974);
         } else {
             unreachable!()
         };
         //col12->year: INT32 UNCOMPRESSED DO:0 FPO:602041 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 2009, max: 2010, num_nulls: 0]
         assert!(&column_index[0][11].is_sorted());
-        if let Index::INT32(index) = &column_index[0][11] {
+        if let ColumnIndexMetaData::INT32(index) = &column_index[0][11] {
             check_native_page_index(
                 index,
                 325,
@@ -2138,7 +2162,7 @@ mod tests {
         };
         //col13->month: INT32 UNCOMPRESSED DO:0 FPO:639366 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 1, max: 12, num_nulls: 0]
         assert!(!&column_index[0][12].is_sorted());
-        if let Index::INT32(index) = &column_index[0][12] {
+        if let ColumnIndexMetaData::INT32(index) = &column_index[0][12] {
             check_native_page_index(
                 index,
                 325,
@@ -2152,17 +2176,31 @@ mod tests {
     }
 
     fn check_native_page_index<T: ParquetValueType>(
-        row_group_index: &NativeIndex<T>,
+        row_group_index: &PrimitiveColumnIndex<T>,
         page_size: usize,
         min_max: (&[u8], &[u8]),
         boundary_order: BoundaryOrder,
     ) {
-        assert_eq!(row_group_index.indexes.len(), page_size);
+        assert_eq!(row_group_index.num_pages() as usize, page_size);
         assert_eq!(row_group_index.boundary_order, boundary_order);
-        row_group_index.indexes.iter().all(|x| {
-            x.min.as_ref().unwrap() >= &T::try_from_le_slice(min_max.0).unwrap()
-                && x.max.as_ref().unwrap() <= &T::try_from_le_slice(min_max.1).unwrap()
-        });
+        assert!(row_group_index.min_values().iter().all(|x| {
+            x >= &T::try_from_le_slice(min_max.0).unwrap()
+                && x <= &T::try_from_le_slice(min_max.1).unwrap()
+        }));
+    }
+
+    fn check_byte_array_page_index(
+        row_group_index: &ByteArrayColumnIndex,
+        page_size: usize,
+        min_max: (&[u8], &[u8]),
+        boundary_order: BoundaryOrder,
+    ) {
+        assert_eq!(row_group_index.num_pages() as usize, page_size);
+        assert_eq!(row_group_index.boundary_order, boundary_order);
+        for i in 0..row_group_index.num_pages() as usize {
+            let x = row_group_index.min_value(i).unwrap();
+            assert!(x >= min_max.0 && x <= min_max.1);
+        }
     }
 
     fn get_row_group_min_max_bytes(r: &RowGroupMetaData, col_num: usize) -> (&[u8], &[u8]) {
@@ -2403,12 +2441,11 @@ mod tests {
         assert_eq!(c.len(), 1);
 
         match &c[0] {
-            Index::FIXED_LEN_BYTE_ARRAY(v) => {
-                assert_eq!(v.indexes.len(), 1);
-                let page_idx = &v.indexes[0];
-                assert_eq!(page_idx.null_count.unwrap(), 1);
-                assert_eq!(page_idx.min.as_ref().unwrap().as_ref(), &[0; 11]);
-                assert_eq!(page_idx.max.as_ref().unwrap().as_ref(), &[5; 11]);
+            ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v) => {
+                assert_eq!(v.num_pages(), 1);
+                assert_eq!(v.null_count(0).unwrap(), 1);
+                assert_eq!(v.min_value(0).unwrap(), &[0; 11]);
+                assert_eq!(v.max_value(0).unwrap(), &[5; 11]);
             }
             _ => unreachable!(),
         }
@@ -2509,8 +2546,8 @@ mod tests {
         }
         let file_metadata = file_writer.close().unwrap();
 
-        assert_eq!(file_metadata.num_rows, 25);
-        assert_eq!(file_metadata.row_groups.len(), 5);
+        assert_eq!(file_metadata.file_metadata().num_rows(), 25);
+        assert_eq!(file_metadata.num_row_groups(), 5);
 
         // read only the 3rd row group
         let read_options = ReadOptionsBuilder::new()
@@ -2539,11 +2576,11 @@ mod tests {
 
         // test that we got the index matching the row group
         match pg_idx {
-            Index::INT32(int_idx) => {
+            ColumnIndexMetaData::INT32(int_idx) => {
                 let min = col_stats.min_bytes_opt().unwrap().get_i32_le();
                 let max = col_stats.max_bytes_opt().unwrap().get_i32_le();
-                assert_eq!(int_idx.indexes[0].min(), Some(min).as_ref());
-                assert_eq!(int_idx.indexes[0].max(), Some(max).as_ref());
+                assert_eq!(int_idx.min_value(0), Some(min).as_ref());
+                assert_eq!(int_idx.max_value(0), Some(max).as_ref());
             }
             _ => panic!("wrong stats type"),
         }
@@ -2584,11 +2621,11 @@ mod tests {
 
             // test that we got the index matching the row group
             match pg_idx {
-                Index::INT32(int_idx) => {
+                ColumnIndexMetaData::INT32(int_idx) => {
                     let min = col_stats.min_bytes_opt().unwrap().get_i32_le();
                     let max = col_stats.max_bytes_opt().unwrap().get_i32_le();
-                    assert_eq!(int_idx.indexes[0].min(), Some(min).as_ref());
-                    assert_eq!(int_idx.indexes[0].max(), Some(max).as_ref());
+                    assert_eq!(int_idx.min_value(0), Some(min).as_ref());
+                    assert_eq!(int_idx.max_value(0), Some(max).as_ref());
                 }
                 _ => panic!("wrong stats type"),
             }
