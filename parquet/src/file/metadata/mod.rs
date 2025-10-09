@@ -287,11 +287,17 @@ impl ParquetMetaData {
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_size = self.file_decryptor.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_size = 0usize;
+
         std::mem::size_of::<Self>()
             + self.file_metadata.heap_size()
             + self.row_groups.heap_size()
             + self.column_index.heap_size()
             + self.offset_index.heap_size()
+            + encryption_size
     }
 
     /// Override the column index

@@ -28,6 +28,7 @@ use crate::file::page_index::column_index::{
 };
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics::{Statistics, ValueStatistics};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Trait for calculating the size of various containers
@@ -47,6 +48,16 @@ impl<T: HeapSize> HeapSize for Vec<T> {
         (self.capacity() * item_size) +
         // add any heap allocations by contents
         self.iter().map(|t| t.heap_size()).sum::<usize>()
+    }
+}
+
+impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
+    fn heap_size(&self) -> usize {
+        let key_size = std::mem::size_of::<K>();
+        let val_size = std::mem::size_of::<V>();
+        (self.capacity() * (key_size + val_size)) +
+        self.keys().map(|k| k.heap_size()).sum::<usize>() +
+        self.values().map(|v| v.heap_size()).sum::<usize>()
     }
 }
 

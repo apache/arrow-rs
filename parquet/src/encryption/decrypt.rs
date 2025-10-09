@@ -21,6 +21,7 @@ use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN}
 use crate::encryption::modules::{ModuleType, create_footer_aad, create_module_aad};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
+use crate::file::metadata::HeapSize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -271,6 +272,12 @@ struct ExplicitDecryptionKeys {
     column_keys: HashMap<String, Vec<u8>>,
 }
 
+impl HeapSize for ExplicitDecryptionKeys {
+    fn heap_size(&self) -> usize {
+        self.footer_key.heap_size() + self.column_keys.heap_size()
+    }
+}
+
 #[derive(Clone)]
 enum DecryptionKeys {
     Explicit(ExplicitDecryptionKeys),
@@ -286,6 +293,15 @@ impl PartialEq for DecryptionKeys {
             }
             (DecryptionKeys::ViaRetriever(_), DecryptionKeys::ViaRetriever(_)) => true,
             _ => false,
+        }
+    }
+}
+
+impl HeapSize for DecryptionKeys {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::Explicit(keys) => keys.heap_size(),
+            Self::ViaRetriever(_) => 0,  // FIXME(ets): how to deal with this???
         }
     }
 }
@@ -334,6 +350,11 @@ pub struct FileDecryptionProperties {
     footer_signature_verification: bool,
 }
 
+impl HeapSize for FileDecryptionProperties {
+    fn heap_size(&self) -> usize {
+        self.keys.heap_size() + self.aad_prefix.heap_size()
+    }
+}
 impl FileDecryptionProperties {
     /// Returns a new [`FileDecryptionProperties`] builder that will use the provided key to
     /// decrypt footer metadata.
@@ -544,6 +565,14 @@ pub(crate) struct FileDecryptor {
 impl PartialEq for FileDecryptor {
     fn eq(&self, other: &Self) -> bool {
         self.decryption_properties == other.decryption_properties && self.file_aad == other.file_aad
+    }
+}
+
+impl HeapSize for FileDecryptor {
+    fn heap_size(&self) -> usize {
+        self.decryption_properties.heap_size()
+            + self.footer_decryptor.heap_size()
+            + self.file_aad.heap_size()
     }
 }
 
