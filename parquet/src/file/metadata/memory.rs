@@ -58,7 +58,7 @@ impl<T: HeapSize> HeapSize for Arc<T> {
 
 impl<T: HeapSize> HeapSize for Box<T> {
     fn heap_size(&self) -> usize {
-        self.as_ref().heap_size()
+        std::mem::size_of::<T>() + self.as_ref().heap_size()
     }
 }
 
