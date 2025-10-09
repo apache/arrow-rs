@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::DecodeResult;
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::parser::{parse_column_index, parse_offset_index, MetadataParser};
+use crate::file::FOOTER_SIZE;
+use crate::file::metadata::parser::{MetadataParser, parse_column_index, parse_offset_index};
 use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData};
 use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
-use crate::file::FOOTER_SIZE;
-use crate::DecodeResult;
 use bytes::Bytes;
 use std::ops::Range;
 

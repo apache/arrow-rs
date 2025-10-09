@@ -1439,7 +1439,7 @@ impl str::FromStr for LogicalType {
 #[allow(deprecated)] // allow BIT_PACKED encoding for the whole test module
 mod tests {
     use super::*;
-    use crate::parquet_thrift::{tests::test_roundtrip, ThriftSliceInputProtocol};
+    use crate::parquet_thrift::{ThriftSliceInputProtocol, tests::test_roundtrip};
 
     #[test]
     fn test_display_type() {

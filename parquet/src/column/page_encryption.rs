@@ -18,8 +18,8 @@
 use crate::basic::PageType;
 use crate::column::page::CompressedPage;
 use crate::encryption::ciphers::BlockEncryptor;
-use crate::encryption::encrypt::{encrypt_thrift_object, FileEncryptor};
-use crate::encryption::modules::{create_module_aad, ModuleType};
+use crate::encryption::encrypt::{FileEncryptor, encrypt_thrift_object};
+use crate::encryption::modules::{ModuleType, create_module_aad};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::file::metadata::thrift_gen::PageHeader;
@@ -103,7 +103,7 @@ impl PageEncryptor {
                 return Err(general_err!(
                     "Unsupported page type for page header encryption: {:?}",
                     page_header.r#type
-                ))
+                ));
             }
         };
         let aad = create_module_aad(

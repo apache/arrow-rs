@@ -21,7 +21,7 @@ use super::rle::RleEncoder;
 
 use crate::basic::Encoding;
 use crate::data_type::AsBytes;
-use crate::util::bit_util::{ceil, num_required_bits, BitWriter};
+use crate::util::bit_util::{BitWriter, ceil, num_required_bits};
 
 /// Computes max buffer size for level encoder/decoder based on encoding, max
 /// repetition/definition level and number of total buffered values (includes null
