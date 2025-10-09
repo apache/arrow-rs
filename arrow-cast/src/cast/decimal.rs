@@ -247,8 +247,8 @@ fn is_infallible_decimal_cast(
     output_scale: i8,
 ) -> bool {
     let delta_scale = output_scale - input_scale;
-    let input_precision_i8 = input_precision as i8;
-    let output_precision_i8 = output_precision as i8;
+    let input_precision = input_precision as i8;
+    let output_precision = output_precision as i8;
     if delta_scale >= 0 {
         // if the gain in precision (digits) is greater than the multiplication due to scaling
         // every number will fit into the output type
@@ -256,7 +256,7 @@ fn is_infallible_decimal_cast(
         // then an increase of scale by 3 will have the following effect on the representation:
         // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
         // needs to provide at least 8 digits precision
-        input_precision_i8 + delta_scale <= output_precision_i8
+        input_precision + delta_scale <= output_precision
     } else {
         // if the reduction of the input number through scaling (dividing) is greater
         // than a possible precision loss (plus potential increase via rounding)
@@ -264,11 +264,11 @@ fn is_infallible_decimal_cast(
         // Example: If we are starting with any number of precision 5 [xxxxx],
         // then and decrease the scale by 3 will have the following effect on the representation:
         // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
-        // The rounding may add an additional digit, so the cast to be infallible,
+        // The rounding may add an additional digit, so for the cast to be infallible,
         // the output type needs to have at least 3 digits of precision.
         // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
         // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
-        input_precision_i8 + delta_scale < output_precision_i8
+        input_precision + delta_scale < output_precision
     }
 }
 

@@ -20,8 +20,8 @@
 use arrow::{
     compute::{DecimalCast, rescale_decimal},
     datatypes::{
-        self, ArrowPrimitiveType, ArrowTimestampType, Date32Type, Decimal32Type, Decimal64Type,
-        Decimal128Type, DecimalType,
+        self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
+        DecimalType,
     },
 };
 use arrow_schema::ArrowError;
@@ -89,7 +89,7 @@ impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
 impl_primitive_from_variant!(
     datatypes::Date32Type,
     as_naive_date,
-    Date32Type::from_naive_date
+    datatypes::Date32Type::from_naive_date
 );
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
