@@ -21,9 +21,9 @@
 use crate::basic::{PageType, Type};
 use crate::bloom_filter::Sbbf;
 use crate::column::page::{Page, PageMetadata, PageReader};
-use crate::compression::{create_codec, Codec};
+use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
-use crate::encryption::decrypt::{read_and_decrypt, CryptoContext};
+use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::thrift_gen::PageHeader;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
@@ -36,8 +36,8 @@ use crate::file::{
 #[cfg(feature = "encryption")]
 use crate::parquet_thrift::ThriftSliceInputProtocol;
 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
-use crate::record::reader::RowIter;
 use crate::record::Row;
+use crate::record::reader::RowIter;
 use crate::schema::types::Type as SchemaType;
 use bytes::Bytes;
 use std::collections::VecDeque;

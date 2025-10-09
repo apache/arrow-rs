@@ -20,8 +20,8 @@
 use std::vec::IntoIter;
 use std::{collections::HashMap, fmt, sync::Arc};
 
-use crate::file::metadata::thrift_gen::SchemaElement;
 use crate::file::metadata::HeapSize;
+use crate::file::metadata::thrift_gen::SchemaElement;
 
 use crate::basic::{
     ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit, Type as PhysicalType,
@@ -409,15 +409,14 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                     return Err(general_err!(
                         "UUID cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(16) field",
                         self.name
-                    ))
+                    ));
                 }
-                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY)
-                    if self.length == 2 => {}
+                (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) if self.length == 2 => {}
                 (LogicalType::Float16, PhysicalType::FIXED_LEN_BYTE_ARRAY) => {
                     return Err(general_err!(
                         "FLOAT16 cannot annotate field '{}' because it is not a FIXED_LEN_BYTE_ARRAY(2) field",
                         self.name
-                    ))
+                    ));
                 }
                 (a, b) => {
                     return Err(general_err!(
@@ -425,7 +424,7 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         a,
                         b,
                         self.name
-                    ))
+                    ));
                 }
             }
         }
@@ -985,7 +984,7 @@ impl ColumnDescriptor {
 ///   )
 /// );
 /// ```
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct SchemaDescriptor {
     /// The top-level logical schema (the "message" type).
     ///
@@ -1131,7 +1130,7 @@ pub(crate) fn num_nodes(tp: &TypePtr) -> Result<usize> {
 
 pub(crate) fn count_nodes(tp: &TypePtr, n_nodes: &mut usize) {
     *n_nodes += 1;
-    if let Type::GroupType { ref fields, .. } = tp.as_ref() {
+    if let Type::GroupType { fields, .. } = tp.as_ref() {
         for f in fields {
             count_nodes(f, n_nodes);
         }
@@ -1153,7 +1152,7 @@ fn num_leaves(tp: &TypePtr) -> Result<usize> {
 fn count_leaves(tp: &TypePtr, n_leaves: &mut usize) {
     match tp.as_ref() {
         Type::PrimitiveType { .. } => *n_leaves += 1,
-        Type::GroupType { ref fields, .. } => {
+        Type::GroupType { fields, .. } => {
             for f in fields {
                 count_leaves(f, n_leaves);
             }
@@ -1196,7 +1195,7 @@ fn build_tree<'a>(
             )));
             leaf_to_base.push(root_idx);
         }
-        Type::GroupType { ref fields, .. } => {
+        Type::GroupType { fields, .. } => {
             for f in fields {
                 build_tree(
                     f,
@@ -2036,9 +2035,11 @@ mod tests {
         let f2 = test_new_group_type(
             "f",
             Repetition::REPEATED,
-            vec![Type::primitive_type_builder("f2", PhysicalType::INT64)
-                .build()
-                .unwrap()],
+            vec![
+                Type::primitive_type_builder("f2", PhysicalType::INT64)
+                    .build()
+                    .unwrap(),
+            ],
         );
         assert!(f1.check_contains(&f2));
 
@@ -2101,9 +2102,11 @@ mod tests {
         let f2 = test_new_group_type(
             "f",
             Repetition::REPEATED,
-            vec![Type::primitive_type_builder("f3", PhysicalType::INT32)
-                .build()
-                .unwrap()],
+            vec![
+                Type::primitive_type_builder("f3", PhysicalType::INT32)
+                    .build()
+                    .unwrap(),
+            ],
         );
         assert!(!f1.check_contains(&f2));
     }
@@ -2122,9 +2125,11 @@ mod tests {
         let f1 = test_new_group_type(
             "f",
             Repetition::REPEATED,
-            vec![Type::primitive_type_builder("f1", PhysicalType::INT32)
-                .build()
-                .unwrap()],
+            vec![
+                Type::primitive_type_builder("f1", PhysicalType::INT32)
+                    .build()
+                    .unwrap(),
+            ],
         );
         let f2 = Type::primitive_type_builder("f1", PhysicalType::INT32)
             .build()
@@ -2140,9 +2145,11 @@ mod tests {
                 test_new_group_type(
                     "b",
                     Repetition::REPEATED,
-                    vec![Type::primitive_type_builder("c", PhysicalType::INT32)
-                        .build()
-                        .unwrap()],
+                    vec![
+                        Type::primitive_type_builder("c", PhysicalType::INT32)
+                            .build()
+                            .unwrap(),
+                    ],
                 ),
                 Type::primitive_type_builder("d", PhysicalType::INT64)
                     .build()
@@ -2158,9 +2165,11 @@ mod tests {
             vec![test_new_group_type(
                 "b",
                 Repetition::REPEATED,
-                vec![Type::primitive_type_builder("c", PhysicalType::INT32)
-                    .build()
-                    .unwrap()],
+                vec![
+                    Type::primitive_type_builder("c", PhysicalType::INT32)
+                        .build()
+                        .unwrap(),
+                ],
             )],
         );
         assert!(f1.check_contains(&f2)); // should match

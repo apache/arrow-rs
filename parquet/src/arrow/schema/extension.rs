@@ -26,8 +26,8 @@
 use crate::basic::LogicalType;
 use crate::errors::ParquetError;
 use crate::schema::types::Type;
-use arrow_schema::extension::ExtensionType;
 use arrow_schema::Field;
+use arrow_schema::extension::ExtensionType;
 
 /// Adds extension type metadata, if necessary, based on the Parquet field's
 /// [`LogicalType`]
