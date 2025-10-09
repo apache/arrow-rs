@@ -984,7 +984,7 @@ impl ColumnDescriptor {
 ///   )
 /// );
 /// ```
-#[derive(PartialEq)]
+#[derive(PartialEq, Clone)]
 pub struct SchemaDescriptor {
     /// The top-level logical schema (the "message" type).
     ///
