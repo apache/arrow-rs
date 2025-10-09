@@ -235,6 +235,10 @@ mod test {
             // ...but there should be no min or max value
             assert!(stats.min_bytes_opt().is_none());
             assert!(stats.max_bytes_opt().is_none());
+
+            // There should be no index for this column
+            assert!(rg.column(0).column_index_length().is_none());
+            assert!(rg.column(0).column_index_offset().is_none());
         }
     }
 
@@ -319,6 +323,10 @@ mod test {
             // ...but there should be no min or max value
             assert!(stats.min_bytes_opt().is_none());
             assert!(stats.max_bytes_opt().is_none());
+
+            // There should be no index for this column
+            assert!(rg.column(0).column_index_length().is_none());
+            assert!(rg.column(0).column_index_offset().is_none());
         }
     }
 
