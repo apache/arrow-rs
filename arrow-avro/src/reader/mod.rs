@@ -1281,11 +1281,12 @@ mod test {
     };
     use crate::test_util::arrow_test_data;
     use crate::writer::AvroWriter;
-    use arrow::array::ArrayDataBuilder;
     use arrow_array::builder::{
-        ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
-        ListBuilder, MapBuilder, MapFieldNames, StringBuilder, StructBuilder,
+        ArrayBuilder, BooleanBuilder, Float32Builder, Int32Builder, Int64Builder, ListBuilder,
+        MapBuilder, StringBuilder, StructBuilder,
     };
+    #[cfg(feature = "snappy")]
+    use arrow_array::builder::{Float64Builder, MapFieldNames};
     use arrow_array::cast::AsArray;
     #[cfg(not(feature = "avro_custom_types"))]
     use arrow_array::types::Int64Type;
@@ -1296,9 +1297,9 @@ mod test {
     };
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_buffer::{
-        Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer, i256,
-    };
+    #[cfg(feature = "snappy")]
+    use arrow_buffer::{Buffer, NullBuffer};
+    use arrow_buffer::{IntervalMonthDayNano, OffsetBuffer, ScalarBuffer, i256};
     #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{
         ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit, UnionFields,
@@ -1316,6 +1317,23 @@ mod test {
     use std::fs::File;
     use std::io::{BufReader, Cursor};
     use std::sync::Arc;
+
+    fn files() -> impl Iterator<Item = &'static str> {
+        [
+            // TODO: avoid requiring snappy for this file
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.avro",
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.snappy.avro",
+            #[cfg(feature = "zstd")]
+            "avro/alltypes_plain.zstandard.avro",
+            #[cfg(feature = "bzip2")]
+            "avro/alltypes_plain.bzip2.avro",
+            #[cfg(feature = "xz")]
+            "avro/alltypes_plain.xz.avro",
+        ]
+        .into_iter()
+    }
 
     fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
         let file = File::open(path).unwrap();
@@ -1740,14 +1758,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_mixed() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("id", "long");
@@ -1855,14 +1866,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_long_to_float_only() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("bigint_col", "float");
@@ -1959,14 +1963,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_bytes_to_string_only() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("date_string_col", "string");
@@ -2059,6 +2056,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_illegal_promotion_bool_to_double_errors() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let mut promotions: HashMap<&str, &str> = HashMap::new();
@@ -2751,6 +2750,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_skip_writer_fields_keep_double_only() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let reader_schema =
@@ -2768,6 +2769,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_skip_writer_fields_reorder_and_skip_many() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let reader_schema =
@@ -4530,14 +4533,6 @@ mod test {
 
     #[test]
     fn test_alltypes() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-
         let expected = RecordBatch::try_from_iter_with_nullable([
             (
                 "id",
@@ -4622,7 +4617,7 @@ mod test {
         ])
         .unwrap();
 
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
 
             assert_eq!(read_file(&file, 8, false), expected);
@@ -4631,6 +4626,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_dictionary() {
         let file = "avro/alltypes_dictionary.avro";
         let expected = RecordBatch::try_from_iter_with_nullable([
@@ -4753,6 +4750,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_binary() {
         let file = arrow_test_data("avro/binary.avro");
         let batch = read_file(&file, 8, false);
@@ -4779,6 +4778,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for these files
+    #[cfg(feature = "snappy")]
     fn test_decimal() {
         // Choose expected Arrow types depending on the `small_decimals` feature flag.
         // With `small_decimals` enabled, Decimal32/Decimal64 are used where their
@@ -5100,6 +5101,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_dict_pages_offset_zero() {
         let file = arrow_test_data("avro/dict-page-offset-zero.avro");
         let batch = read_file(&file, 32, false);
@@ -5115,6 +5118,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_list_columns() {
         let file = arrow_test_data("avro/list_columns.avro");
         let mut int64_list_builder = ListBuilder::new(Int64Builder::new());
@@ -5177,6 +5182,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_nested_lists() {
         use arrow_data::ArrayDataBuilder;
         let file = arrow_test_data("avro/nested_lists.snappy.avro");
@@ -5374,6 +5380,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_single_nan() {
         let file = arrow_test_data("avro/single_nan.avro");
         let actual = read_file(&file, 1, false);
@@ -5452,6 +5459,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_datapage_v2() {
         let file = arrow_test_data("avro/datapage_v2.snappy.avro");
         let batch = read_file(&file, 8, false);
@@ -5713,7 +5721,10 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_repeated_no_annotation() {
+        use arrow_data::ArrayDataBuilder;
         let file = arrow_test_data("avro/repeated_no_annotation.avro");
         let batch_large = read_file(&file, 8, false);
         // id column
@@ -5802,6 +5813,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nonnullable_impala() {
         let file = arrow_test_data("avro/nonnullable.impala.avro");
         let id = Int64Array::from(vec![Some(8)]);
@@ -6117,6 +6130,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nullable_impala() {
         let file = arrow_test_data("avro/nullable.impala.avro");
         let batch1 = read_file(&file, 3, false);

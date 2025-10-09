@@ -410,6 +410,23 @@ mod tests {
     use std::sync::Arc;
     use tempfile::NamedTempFile;
 
+    fn files() -> impl Iterator<Item = &'static str> {
+        [
+            // TODO: avoid requiring snappy for this file
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.avro",
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.snappy.avro",
+            #[cfg(feature = "zstd")]
+            "avro/alltypes_plain.zstandard.avro",
+            #[cfg(feature = "bzip2")]
+            "avro/alltypes_plain.bzip2.avro",
+            #[cfg(feature = "xz")]
+            "avro/alltypes_plain.xz.avro",
+        ]
+        .into_iter()
+    }
+
     fn make_schema() -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -591,14 +608,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_alltypes_roundtrip_writer() -> Result<(), ArrowError> {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for rel in files {
+        for rel in files() {
             let path = arrow_test_data(rel);
             let rdr_file = File::open(&path).expect("open input avro");
             let reader = ReaderBuilder::new()
@@ -679,6 +689,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_nested_lists_writer() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/nested_lists.snappy.avro");
         let rdr_file = File::open(&path).expect("open nested_lists.snappy.avro");
@@ -872,6 +883,8 @@ mod tests {
     // writes it back out with the writer (hitting Map encoding paths), then reads it
     // again and asserts exact Arrow equivalence.
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nonnullable_impala_roundtrip_writer() -> Result<(), ArrowError> {
         // Load source Avro with Map fields
         let path = arrow_test_data("avro/nonnullable.impala.avro");
@@ -917,6 +930,8 @@ mod tests {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for these files
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_decimals_via_writer() -> Result<(), ArrowError> {
         // (file, resolve via ARROW_TEST_DATA?)
         let files: [(&str, bool); 8] = [
