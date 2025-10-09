@@ -1160,7 +1160,7 @@ mod tests {
         Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer i256};
+    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, i256};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
