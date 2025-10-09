@@ -23,7 +23,7 @@ use crate::encodings::encoding::{DeltaBitPackEncoder, Encoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
-use crate::geospatial::accumulator::{try_new_geo_stats_accumulator, GeoStatsAccumulator};
+use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
