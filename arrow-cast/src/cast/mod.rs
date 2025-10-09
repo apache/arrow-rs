@@ -3143,7 +3143,7 @@ mod tests {
         let array = create_decimal64_array(array, 18, 3).unwrap();
 
         // Divide out all digits of precision -- rounding could still produce +/- 1
-        let output_type = DataType::Decimal64(9, -15);
+        let output_type = DataType::Decimal64(18, -15);
         assert!(can_cast_types(array.data_type(), &output_type));
         generate_cast_test_case!(
             &array,
@@ -3153,7 +3153,7 @@ mod tests {
         );
 
         // Divide out more digits than we have precision -- all-zero result
-        let output_type = DataType::Decimal64(9, -16);
+        let output_type = DataType::Decimal64(18, -16);
         assert!(can_cast_types(array.data_type(), &output_type));
         generate_cast_test_case!(
             &array,
