@@ -87,7 +87,7 @@ pub(crate) fn parse_string_view<P: Parser>(
 fn parse_string_iter<
     'a,
     P: Parser,
-    I: Iterator<Item = Option<&'a str>>,
+    I: ExactSizeIterator<Item = Option<&'a str>>,
     F: FnOnce() -> Option<NullBuffer>,
 >(
     iter: I,
@@ -156,7 +156,7 @@ pub(crate) fn cast_view_to_timestamp<T: ArrowTimestampType>(
 
 fn cast_string_to_timestamp_impl<
     'a,
-    I: Iterator<Item = Option<&'a str>>,
+    I: ExactSizeIterator<Item = Option<&'a str>>,
     T: ArrowTimestampType,
     Tz: TimeZone,
 >(
@@ -310,7 +310,7 @@ fn cast_string_to_interval_impl<'a, I, ArrowType, F>(
     parse_function: F,
 ) -> Result<ArrayRef, ArrowError>
 where
-    I: Iterator<Item = Option<&'a str>>,
+    I: ExactSizeIterator<Item = Option<&'a str>>,
     ArrowType: ArrowPrimitiveType,
     F: Fn(&str) -> Result<ArrowType::Native, ArrowError> + Copy,
 {
@@ -331,7 +331,7 @@ where
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(vec) }
+        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(vec.into_iter()) }
     };
     Ok(Arc::new(interval_array) as ArrayRef)
 }
