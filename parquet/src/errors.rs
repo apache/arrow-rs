@@ -68,7 +68,7 @@ impl std::fmt::Display for ParquetError {
             ParquetError::EOF(message) => write!(fmt, "EOF: {message}"),
             #[cfg(feature = "arrow")]
             ParquetError::ArrowError(message) => write!(fmt, "Arrow: {message}"),
-            ParquetError::IndexOutOfBound(index, ref bound) => {
+            ParquetError::IndexOutOfBound(index, bound) => {
                 write!(fmt, "Index {index} out of bound: {bound}")
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),

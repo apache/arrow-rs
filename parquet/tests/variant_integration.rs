@@ -26,7 +26,7 @@
 use arrow::util::test_util::parquet_test_data;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet_variant::{Variant, VariantMetadata};
-use parquet_variant_compute::{unshred_variant, VariantArray};
+use parquet_variant_compute::{VariantArray, unshred_variant};
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -293,7 +293,11 @@ impl VariantTestCase {
             let expected = expected.as_variant();
 
             // compare the variants (is this the right way to compare?)
-            assert_eq!(actual, expected, "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}", i);
+            assert_eq!(
+                actual, expected,
+                "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}",
+                i
+            );
         }
     }
 

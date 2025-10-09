@@ -695,7 +695,7 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_from_filters() {
