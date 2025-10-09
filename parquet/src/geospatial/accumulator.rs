@@ -70,33 +70,33 @@ static ACCUMULATOR_FACTORY: OnceLock<Arc<dyn GeoStatsAccumulatorFactory>> = Once
 /// Factory for [`GeospatialStatistics`] accumulators
 ///
 /// The GeoStatsAccumulatorFactory is a trait implemented by the global factory that
-/// generates new instances of a [GeoStatsAccumulator] when constructing new
+/// generates new instances of a [`GeoStatsAccumulator`] when constructing new
 /// encoders for a Geometry or Geography logical type.
 pub trait GeoStatsAccumulatorFactory: Send + Sync {
-    /// Create a new [GeoStatsAccumulator] appropriate for the logical type of a given
-    /// [ColumnDescPtr]
+    /// Create a new [`GeoStatsAccumulator`] appropriate for the logical type of a given
+    /// [`ColumnDescPtr`]
     fn new_accumulator(&self, descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator>;
 }
 
-/// Dynamic [`GeospatialStatistics``] accumulator
+/// Dynamic [`GeospatialStatistics`] accumulator
 ///
 /// The GeoStatsAccumulator is a trait whose implementors can ingest the (non-null)
 /// elements of a column and return compliant [`GeospatialStatistics`] (or `None`).
 /// When built with geospatial support this will usually be the
-/// [ParquetGeoStatsAccumulator]
+/// [`ParquetGeoStatsAccumulator`]
 pub trait GeoStatsAccumulator: Send {
     /// Returns true if this instance can return [`GeospatialStatistics`] from
-    /// [GeoStatsAccumulator::finish].
+    /// [`GeoStatsAccumulator::finish`].
     ///
-    /// This method returns false when this crate was built without geospatial support
-    /// (i.e., from the [VoidGeoStatsAccumulator]) or if the accumulator encountered
+    /// This method returns false when this crate is built without geospatial support
+    /// (i.e., from the [`VoidGeoStatsAccumulator`]) or if the accumulator encountered
     /// invalid or unsupported elements for which it cannot compute valid statistics.
     fn is_valid(&self) -> bool;
 
     /// Update with a single slice of WKB-encoded values
     ///
     /// This method is infallible; however, in the event of improperly encoded values,
-    /// implementations must ensure that [GeoStatsAccumulator::finish] returns `None`.
+    /// implementations must ensure that [`GeoStatsAccumulator::finish`] returns `None`.
     fn update_wkb(&mut self, wkb: &[u8]);
 
     /// Compute the final statistics and reset internal state
@@ -105,8 +105,8 @@ pub trait GeoStatsAccumulator: Send {
 
 /// Default accumulator for [`GeospatialStatistics`]
 ///
-/// When this crate was built with geospatial support, this factory constructs a
-/// [ParquetGeoStatsAccumulator] that ensures Geometry columns are written with
+/// When this crate is built with geospatial support, this factory constructs a
+/// [`ParquetGeoStatsAccumulator`] that ensures Geometry columns are written with
 /// statistics when statistics for that column are enabled. Otherwise, this factory
 /// returns a [`VoidGeoStatsAccumulator`] that never adds any geospatial statistics.
 ///
@@ -145,7 +145,7 @@ impl GeoStatsAccumulator for VoidGeoStatsAccumulator {
     }
 }
 
-/// A [GeoStatsAccumulator] that uses the parquet-geospatial crate to compute Geometry statistics
+/// A [`GeoStatsAccumulator`] that uses the parquet-geospatial crate to compute Geometry statistics
 ///
 /// Note that this accumulator only supports Geometry types and will return invalid statistics for
 /// non-point Geography input ([`GeoStatsAccumulatorFactory::new_accumulator`] is responsible
