@@ -158,7 +158,7 @@ decoder.push_ranges(vec![0..file_len], vec![prefetched_bytes]).unwrap();
         other => { panic!("expected DecodeResult::Data, got: {other:?}") }
     }
 # }
-/// ```
+```
 "##
 )]
 ///
