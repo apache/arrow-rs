@@ -294,10 +294,12 @@ mod test {
 
         // We should not be able to initialize a global accumulator after we've initialized at least
         // one accumulator
-        assert!(init_geo_stats_accumulator_factory(Arc::new(
-            DefaultGeoStatsAccumulatorFactory::default()
-        ))
-        .is_err())
+        assert!(
+            init_geo_stats_accumulator_factory(Arc::new(
+                DefaultGeoStatsAccumulatorFactory::default()
+            ))
+            .is_err()
+        )
     }
 
     #[cfg(feature = "geospatial")]
