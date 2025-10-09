@@ -48,7 +48,7 @@ use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
-use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
+use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 use levels::{ArrayLevels, calculate_array_levels};
 
 mod byte_array;
@@ -252,7 +252,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::clone(&props_ptr))?;
 
         let row_group_writer_factory =
-            ArrowRowGroupWriterFactory::new(&file_writer, schema, arrow_schema.clone(), props_ptr);
+            ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
 
         Ok(Self {
             writer: file_writer,
@@ -886,7 +886,7 @@ impl ArrowRowGroupWriter {
 
 /// Factory that creates new column writers for each row group in the Parquet file.
 pub struct ArrowRowGroupWriterFactory {
-    schema: SchemaDescriptor,
+    schema: SchemaDescPtr,
     arrow_schema: SchemaRef,
     props: WriterPropertiesPtr,
     #[cfg(feature = "encryption")]
@@ -894,32 +894,19 @@ pub struct ArrowRowGroupWriterFactory {
 }
 
 impl ArrowRowGroupWriterFactory {
-    #[cfg(feature = "encryption")]
-    fn new<W: Write + Send>(
+    /// Create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema
+    pub fn new<W: Write + Send>(
         file_writer: &SerializedFileWriter<W>,
-        schema: SchemaDescriptor,
         arrow_schema: SchemaRef,
-        props: WriterPropertiesPtr,
     ) -> Self {
+        let schema = Arc::clone(file_writer.schema_descr_ptr());
+        let props = Arc::clone(file_writer.properties());
         Self {
             schema,
             arrow_schema,
             props,
+            #[cfg(feature = "encryption")]
             file_encryptor: file_writer.file_encryptor(),
-        }
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn new<W: Write + Send>(
-        _file_writer: &SerializedFileWriter<W>,
-        schema: SchemaDescriptor,
-        arrow_schema: SchemaRef,
-        props: WriterPropertiesPtr,
-    ) -> Self {
-        Self {
-            schema,
-            arrow_schema,
-            props,
         }
     }
 
