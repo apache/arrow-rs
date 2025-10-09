@@ -545,7 +545,7 @@ pub enum FingerprintAlgorithm {
     Rabin,
     /// Represents a 32 bit fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
     Id,
-    /// Represents a 64 bit fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
+    /// Represents a 64 bit fingerprint not based on a hash algorithm, (e.g., a 64-bit Schema Registry ID.)
     Id64,
     #[cfg(feature = "md5")]
     /// 128-bit MD5 message digest.
