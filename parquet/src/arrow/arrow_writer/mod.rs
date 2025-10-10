@@ -348,6 +348,11 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.write_all(buf)
     }
 
+    /// Flushes underlying writer
+    pub fn sync(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+
     /// Flushes all buffered rows into a new row group
     pub fn flush(&mut self) -> Result<()> {
         let in_progress = match self.in_progress.take() {

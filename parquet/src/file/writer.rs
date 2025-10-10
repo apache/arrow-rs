@@ -414,6 +414,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.buf.write_all(buf)
     }
 
+    /// Flushes underlying writer
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.buf.flush()
+    }
+
     /// Returns a mutable reference to the underlying writer.
     ///
     /// **Warning**: if you write directly to this writer, you will skip
