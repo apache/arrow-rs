@@ -81,7 +81,7 @@ include = [
     "LICENSE.txt",
     "NOTICE.txt",
 ]
-edition = "2021"
+edition = "2024"
 rust-version = "1.85"
 
 [workspace.dependencies]

@@ -26,10 +26,10 @@ extern crate once_cell;
 extern crate uuid;
 
 use apache_avro::types::Value;
-use apache_avro::{to_avro_datum, Decimal, Schema as ApacheSchema};
-use arrow_avro::schema::{Fingerprint, FingerprintAlgorithm, CONFLUENT_MAGIC, SINGLE_OBJECT_MAGIC};
+use apache_avro::{Decimal, Schema as ApacheSchema, to_avro_datum};
+use arrow_avro::schema::{CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SINGLE_OBJECT_MAGIC};
 use arrow_avro::{reader::ReaderBuilder, schema::AvroSchema};
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use once_cell::sync::Lazy;
 use std::{hint::black_box, time::Duration};
 use uuid::Uuid;
@@ -44,6 +44,12 @@ fn make_prefix(fp: Fingerprint) -> Vec<u8> {
         }
         Fingerprint::Id(id) => {
             let mut buf = Vec::with_capacity(CONFLUENT_MAGIC.len() + size_of::<u32>());
+            buf.extend_from_slice(&CONFLUENT_MAGIC); // 00
+            buf.extend_from_slice(&id.to_be_bytes()); // big-endian
+            buf
+        }
+        Fingerprint::Id64(id) => {
+            let mut buf = Vec::with_capacity(CONFLUENT_MAGIC.len() + size_of::<u64>());
             buf.extend_from_slice(&CONFLUENT_MAGIC); // 00
             buf.extend_from_slice(&id.to_be_bytes()); // big-endian
             buf
@@ -366,7 +372,7 @@ fn new_decoder_id(
     id: u32,
 ) -> arrow_avro::reader::Decoder {
     let schema = AvroSchema::new(schema_json.parse().unwrap());
-    let mut store = arrow_avro::schema::SchemaStore::new_with_type(FingerprintAlgorithm::None);
+    let mut store = arrow_avro::schema::SchemaStore::new_with_type(FingerprintAlgorithm::Id);
     // Register the schema with a provided Confluent-style ID
     store
         .set(Fingerprint::Id(id), schema.clone())

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::Type as PhysicalType;
@@ -24,16 +24,16 @@ use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
+    ArrayRef, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
     builder::{
         TimestampMicrosecondBufferBuilder, TimestampMillisecondBufferBuilder,
         TimestampNanosecondBufferBuilder, TimestampSecondBufferBuilder,
     },
-    ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
 };
-use arrow_buffer::{i256, BooleanBuffer, Buffer};
+use arrow_buffer::{BooleanBuffer, Buffer, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
@@ -513,8 +513,8 @@ mod tests {
     use crate::data_type::{Int32Type, Int64Type};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
+    use crate::util::test_common::rand_gen::make_pages;
     use arrow::datatypes::ArrowPrimitiveType;
     use arrow_array::{Array, Date32Array, PrimitiveArray};
 

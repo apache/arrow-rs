@@ -20,7 +20,7 @@ extern crate criterion;
 use criterion::Criterion;
 use std::sync::Arc;
 extern crate arrow;
-use arrow::compute::kernels::sort::{lexsort, SortColumn};
+use arrow::compute::kernels::sort::{SortColumn, lexsort};
 use arrow::util::bench_util::*;
 use arrow::{
     array::*,

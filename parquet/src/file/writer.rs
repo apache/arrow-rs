@@ -18,31 +18,31 @@
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
-use crate::format as parquet;
-use crate::format::{ColumnIndex, OffsetIndex};
-use crate::thrift::TSerializable;
+use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::page_index::column_index::ColumnIndexMetaData;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
-use thrift::protocol::TCompactOutputProtocol;
 
 use crate::column::page_encryption::PageEncryptor;
-use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
+use crate::column::writer::{ColumnCloseResult, ColumnWriterImpl, get_typed_column_writer_mut};
 use crate::column::{
     page::{CompressedPage, PageWriteSpec, PageWriter},
-    writer::{get_column_writer, ColumnWriter},
+    writer::{ColumnWriter, get_column_writer},
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::{
-    get_column_crypto_metadata, FileEncryptionProperties, FileEncryptor,
+    FileEncryptionProperties, FileEncryptor, get_column_crypto_metadata,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
-use crate::file::reader::ChunkReader;
 #[cfg(feature = "encryption")]
 use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
-use crate::file::{metadata::*, PARQUET_MAGIC};
+use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
+use crate::file::reader::ChunkReader;
+use crate::file::{PARQUET_MAGIC, metadata::*};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -127,8 +127,8 @@ pub type OnCloseRowGroup<'a, W> = Box<
             &'a mut TrackedWrite<W>,
             RowGroupMetaData,
             Vec<Option<Sbbf>>,
-            Vec<Option<ColumnIndex>>,
-            Vec<Option<OffsetIndex>>,
+            Vec<Option<ColumnIndexMetaData>>,
+            Vec<Option<OffsetIndexMetaData>>,
         ) -> Result<()>
         + 'a
         + Send,
@@ -155,13 +155,12 @@ pub type OnCloseRowGroup<'a, W> = Box<
 /// - After all row groups have been written, close the file writer using `close` method.
 pub struct SerializedFileWriter<W: Write> {
     buf: TrackedWrite<W>,
-    schema: TypePtr,
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaData>,
     bloom_filters: Vec<Vec<Option<Sbbf>>>,
-    column_indexes: Vec<Vec<Option<ColumnIndex>>>,
-    offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
+    column_indexes: Vec<Vec<Option<ColumnIndexMetaData>>>,
+    offset_indexes: Vec<Vec<Option<OffsetIndexMetaData>>>,
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
@@ -195,7 +194,6 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,
-            schema,
             descr: Arc::new(schema_descriptor),
             props: properties,
             row_groups: vec![],
@@ -298,7 +296,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub fn finish(&mut self) -> Result<parquet::FileMetaData> {
+    pub fn finish(&mut self) -> Result<ParquetMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
         self.buf.flush()?;
@@ -306,7 +304,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Closes and finalises file writer, returning the file metadata.
-    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+    pub fn close(mut self) -> Result<ParquetMetaData> {
         self.finish()
     }
 
@@ -326,8 +324,9 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         Ok(())
     }
 
-    /// Assembles and writes metadata at the end of the file.
-    fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
+    /// Assembles and writes metadata at the end of the file. This will take ownership
+    /// of `row_groups` and the page index structures.
+    fn write_metadata(&mut self) -> Result<ParquetMetaData> {
         self.finished = true;
 
         // write out any remaining bloom filters after all row groups
@@ -341,15 +340,13 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
-        let row_groups = self
-            .row_groups
-            .iter()
-            .map(|v| v.to_thrift())
-            .collect::<Vec<_>>();
+        // take ownership of metadata
+        let row_groups = std::mem::take(&mut self.row_groups);
+        let column_indexes = std::mem::take(&mut self.column_indexes);
+        let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
-            &self.schema,
             &self.descr,
             row_groups,
             Some(self.props.created_by().to_string()),
@@ -364,8 +361,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
-        encoder = encoder.with_column_indexes(&self.column_indexes);
-        encoder = encoder.with_offset_indexes(&self.offset_indexes);
+
+        encoder = encoder.with_column_indexes(column_indexes);
+        if !self.props.offset_index_disabled() {
+            encoder = encoder.with_offset_indexes(offset_indexes);
+        }
         encoder.finish()
     }
 
@@ -513,8 +513,8 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
     bloom_filters: Vec<Option<Sbbf>>,
-    column_indexes: Vec<Option<ColumnIndex>>,
-    offset_indexes: Vec<Option<OffsetIndex>>,
+    column_indexes: Vec<Option<ColumnIndexMetaData>>,
+    offset_indexes: Vec<Option<OffsetIndexMetaData>>,
     row_group_index: i16,
     file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a, W>>,
@@ -728,6 +728,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
+        if let Some(geo_statistics) = metadata.geo_statistics() {
+            builder = builder.set_geo_statistics(Box::new(geo_statistics.clone()))
+        }
         if let Some(page_encoding_stats) = metadata.page_encoding_stats() {
             builder = builder.set_page_encoding_stats(page_encoding_stats.clone())
         }
@@ -923,15 +926,15 @@ impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Serializes page header into Thrift.
     /// Returns number of bytes that have been written into the sink.
     #[inline]
-    fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
+    fn serialize_page_header(&mut self, header: PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
         match self.page_encryptor_and_sink_mut() {
             Some((page_encryptor, sink)) => {
                 page_encryptor.encrypt_page_header(&header, sink)?;
             }
             None => {
-                let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-                header.write_to_out_protocol(&mut protocol)?;
+                let mut protocol = ThriftCompactOutputProtocol::new(&mut self.sink);
+                header.write_thrift(&mut protocol)?;
             }
         }
         Ok(self.sink.bytes_written() - start_pos)
@@ -1036,25 +1039,25 @@ mod tests {
     use std::fs::File;
 
     #[cfg(feature = "arrow")]
-    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    #[cfg(feature = "arrow")]
     use crate::arrow::ArrowWriter;
+    #[cfg(feature = "arrow")]
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
     };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
-    use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
+    use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type};
-    use crate::file::page_index::index::Index;
+    use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
+    use crate::file::statistics::{from_thrift_page_stats, page_stats_to_thrift};
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
-        statistics::{from_thrift, to_thrift, Statistics},
+        statistics::Statistics,
     };
-    use crate::format::SortingColumn;
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types;
@@ -1504,8 +1507,11 @@ mod tests {
                         encoding,
                         def_level_encoding,
                         rep_level_encoding,
-                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
-                            .unwrap(),
+                        statistics: from_thrift_page_stats(
+                            physical_type,
+                            page_stats_to_thrift(statistics.as_ref()),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DataPageV2 {
@@ -1534,8 +1540,11 @@ mod tests {
                         def_levels_byte_len,
                         rep_levels_byte_len,
                         is_compressed: compressor.is_some(),
-                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
-                            .unwrap(),
+                        statistics: from_thrift_page_stats(
+                            physical_type,
+                            page_stats_to_thrift(statistics.as_ref()),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DictionaryPage {
@@ -1587,6 +1596,7 @@ mod tests {
 
             let props = ReaderProperties::builder()
                 .set_backward_compatible_lz4(false)
+                .set_read_page_statistics(true)
                 .build();
             let mut page_reader = SerializedPageReader::new_with_properties(
                 Arc::new(reader),
@@ -1625,7 +1635,10 @@ mod tests {
         assert_eq!(&left.buffer(), &right.buffer());
         assert_eq!(left.num_values(), right.num_values());
         assert_eq!(left.encoding(), right.encoding());
-        assert_eq!(to_thrift(left.statistics()), to_thrift(right.statistics()));
+        assert_eq!(
+            page_stats_to_thrift(left.statistics()),
+            page_stats_to_thrift(right.statistics())
+        );
     }
 
     /// Tests roundtrip of i32 data written using `W` and read using `R`
@@ -1633,7 +1646,7 @@ mod tests {
         file: W,
         data: Vec<Vec<i32>>,
         compression: Compression,
-    ) -> crate::format::FileMetaData
+    ) -> ParquetMetaData
     where
         W: Write + Send,
         R: ChunkReader + From<W> + 'static,
@@ -1648,7 +1661,7 @@ mod tests {
         data: Vec<Vec<D::T>>,
         value: F,
         compression: Compression,
-    ) -> crate::format::FileMetaData
+    ) -> ParquetMetaData
     where
         W: Write + Send,
         R: ChunkReader + From<W> + 'static,
@@ -1719,7 +1732,7 @@ mod tests {
 
     /// File write-read roundtrip.
     /// `data` consists of arrays of values for each row group.
-    fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> crate::format::FileMetaData {
+    fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> ParquetMetaData {
         test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED)
     }
 
@@ -1794,13 +1807,12 @@ mod tests {
     fn test_column_offset_index_file() {
         let file = tempfile::tempfile().unwrap();
         let file_metadata = test_file_roundtrip(file, vec![vec![1, 2, 3, 4, 5]]);
-        file_metadata.row_groups.iter().for_each(|row_group| {
-            row_group.columns.iter().for_each(|column_chunk| {
-                assert_ne!(None, column_chunk.column_index_offset);
-                assert_ne!(None, column_chunk.column_index_length);
-
-                assert_ne!(None, column_chunk.offset_index_offset);
-                assert_ne!(None, column_chunk.offset_index_length);
+        file_metadata.row_groups().iter().for_each(|row_group| {
+            row_group.columns().iter().for_each(|column_chunk| {
+                assert!(column_chunk.column_index_offset().is_some());
+                assert!(column_chunk.column_index_length().is_some());
+                assert!(column_chunk.offset_index_offset().is_some());
+                assert!(column_chunk.offset_index_length().is_some());
             })
         });
     }
@@ -1893,29 +1905,22 @@ mod tests {
         let metadata = row_group_writer.close().unwrap();
         writer.close().unwrap();
 
-        let thrift = metadata.to_thrift();
-        let encoded_stats: Vec<_> = thrift
-            .columns
-            .into_iter()
-            .map(|x| x.meta_data.unwrap().statistics.unwrap())
-            .collect();
-
         // decimal
-        let s = &encoded_stats[0];
+        let s = page_stats_to_thrift(metadata.column(0).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // i32
-        let s = &encoded_stats[1];
+        let s = page_stats_to_thrift(metadata.column(1).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // u32
-        let s = &encoded_stats[2];
+        let s = page_stats_to_thrift(metadata.column(2).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), None);
         assert_eq!(s.max.as_deref(), None);
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
@@ -2041,15 +2046,15 @@ mod tests {
         row_group_writer.close().unwrap();
 
         let metadata = file_writer.finish().unwrap();
-        assert_eq!(metadata.row_groups.len(), 1);
-        let row_group = &metadata.row_groups[0];
-        assert_eq!(row_group.columns.len(), 2);
+        assert_eq!(metadata.num_row_groups(), 1);
+        let row_group = metadata.row_group(0);
+        assert_eq!(row_group.num_columns(), 2);
         // Column "a" has both offset and column index, as requested
-        assert!(row_group.columns[0].offset_index_offset.is_some());
-        assert!(row_group.columns[0].column_index_offset.is_some());
+        assert!(row_group.column(0).offset_index_offset().is_some());
+        assert!(row_group.column(0).column_index_offset().is_some());
         // Column "b" should only have offset index
-        assert!(row_group.columns[1].offset_index_offset.is_some());
-        assert!(row_group.columns[1].column_index_offset.is_none());
+        assert!(row_group.column(1).offset_index_offset().is_some());
+        assert!(row_group.column(1).column_index_offset().is_none());
 
         let err = file_writer.next_row_group().err().unwrap().to_string();
         assert_eq!(err, "Parquet error: SerializedFileWriter already finished");
@@ -2068,9 +2073,9 @@ mod tests {
         assert_eq!(column_index[0].len(), 2); // 2 column
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
+        assert!(matches!(a_idx, ColumnIndexMetaData::INT32(_)), "{a_idx:?}");
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
     }
 
     #[test]
@@ -2103,9 +2108,8 @@ mod tests {
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
 
-        assert_eq!(file_metadata.row_groups.len(), 1);
-        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        assert_eq!(file_metadata.num_row_groups(), 1);
+        assert_eq!(file_metadata.row_group(0).num_columns(), 1);
 
         let check_def_hist = |def_hist: &[i64]| {
             assert_eq!(def_hist.len(), 2);
@@ -2113,29 +2117,26 @@ mod tests {
             assert_eq!(def_hist[1], 7);
         };
 
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
-        let meta_data = file_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap();
-        assert!(meta_data.size_statistics.is_some());
-        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+        let meta_data = file_metadata.row_group(0).column(0);
 
-        assert!(size_stats.repetition_level_histogram.is_none());
-        assert!(size_stats.definition_level_histogram.is_some());
-        assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
+        assert!(meta_data.repetition_level_histogram().is_none());
+        assert!(meta_data.definition_level_histogram().is_some());
+        assert!(meta_data.unencoded_byte_array_data_bytes().is_some());
         assert_eq!(
             unenc_size,
-            size_stats.unencoded_byte_array_data_bytes.unwrap()
+            meta_data.unencoded_byte_array_data_bytes().unwrap()
         );
-        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
+        check_def_hist(meta_data.definition_level_histogram().unwrap().values());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rfile_metadata = reader.metadata().file_metadata();
-        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(
+            rfile_metadata.num_rows(),
+            file_metadata.file_metadata().num_rows()
+        );
         assert_eq!(reader.num_row_groups(), 1);
         let rowgroup = reader.get_row_group(0).unwrap();
         assert_eq!(rowgroup.num_columns(), 1);
@@ -2154,16 +2155,16 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Index::BYTE_ARRAY(index) = &column_index[0][0] {
-            assert_eq!(index.indexes.len(), 1);
-            &index.indexes[0]
+        let col_idx = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
+            assert_eq!(index.num_pages(), 1);
+            index
         } else {
             unreachable!()
         };
 
-        assert!(col_idx.repetition_level_histogram().is_none());
-        assert!(col_idx.definition_level_histogram().is_some());
-        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
+        assert!(col_idx.repetition_level_histogram(0).is_none());
+        assert!(col_idx.definition_level_histogram(0).is_some());
+        check_def_hist(col_idx.definition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
@@ -2255,9 +2256,8 @@ mod tests {
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
 
-        assert_eq!(file_metadata.row_groups.len(), 1);
-        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        assert_eq!(file_metadata.num_row_groups(), 1);
+        assert_eq!(file_metadata.row_group(0).num_columns(), 1);
 
         let check_def_hist = |def_hist: &[i64]| {
             assert_eq!(def_hist.len(), 4);
@@ -2275,25 +2275,22 @@ mod tests {
 
         // check that histograms are set properly in the write and read metadata
         // also check that unencoded_byte_array_data_bytes is not set
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
-        let meta_data = file_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap();
-        assert!(meta_data.size_statistics.is_some());
-        let size_stats = meta_data.size_statistics.as_ref().unwrap();
-        assert!(size_stats.repetition_level_histogram.is_some());
-        assert!(size_stats.definition_level_histogram.is_some());
-        assert!(size_stats.unencoded_byte_array_data_bytes.is_none());
-        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
-        check_rep_hist(size_stats.repetition_level_histogram.as_ref().unwrap());
+        let meta_data = file_metadata.row_group(0).column(0);
+        assert!(meta_data.repetition_level_histogram().is_some());
+        assert!(meta_data.definition_level_histogram().is_some());
+        assert!(meta_data.unencoded_byte_array_data_bytes().is_none());
+        check_def_hist(meta_data.definition_level_histogram().unwrap().values());
+        check_rep_hist(meta_data.repetition_level_histogram().unwrap().values());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rfile_metadata = reader.metadata().file_metadata();
-        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(
+            rfile_metadata.num_rows(),
+            file_metadata.file_metadata().num_rows()
+        );
         assert_eq!(reader.num_row_groups(), 1);
         let rowgroup = reader.get_row_group(0).unwrap();
         assert_eq!(rowgroup.num_columns(), 1);
@@ -2309,15 +2306,15 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Index::INT32(index) = &column_index[0][0] {
-            assert_eq!(index.indexes.len(), 1);
-            &index.indexes[0]
+        let col_idx = if let ColumnIndexMetaData::INT32(index) = &column_index[0][0] {
+            assert_eq!(index.num_pages(), 1);
+            index
         } else {
             unreachable!()
         };
 
-        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
-        check_rep_hist(col_idx.repetition_level_histogram().unwrap().values());
+        check_def_hist(col_idx.definition_level_histogram(0).unwrap());
+        check_rep_hist(col_idx.repetition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
@@ -2393,11 +2390,13 @@ mod tests {
 
         // Make sure byte_stream_split encoding was used
         let check_encoding = |x: usize, filemeta: &ParquetMetaData| {
-            assert!(filemeta
-                .row_group(0)
-                .column(x)
-                .encodings()
-                .contains(&Encoding::BYTE_STREAM_SPLIT));
+            assert!(
+                filemeta
+                    .row_group(0)
+                    .column(x)
+                    .encodings()
+                    .contains(&Encoding::BYTE_STREAM_SPLIT)
+            );
         };
 
         check_encoding(1, filemeta);

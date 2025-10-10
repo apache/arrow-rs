@@ -19,6 +19,9 @@ use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
 use crate::{ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit};
 
+/// Parses a DataType from a string representation
+///
+/// For example, the string "Int32" would be parsed into [`DataType::Int32`]
 pub(crate) fn parse_data_type(val: &str) -> ArrowResult<DataType> {
     Parser::new(val).parse()
 }
@@ -36,8 +39,8 @@ fn make_error_expected(val: &str, expected: &Token, actual: &Token) -> ArrowErro
     make_error(val, &format!("Expected '{expected}', got '{actual}'"))
 }
 
-#[derive(Debug)]
 /// Implementation of `parse_data_type`, modeled after <https://github.com/sqlparser-rs/sqlparser-rs>
+#[derive(Debug)]
 struct Parser<'a> {
     val: &'a str,
     tokenizer: Peekable<Tokenizer<'a>>,
@@ -199,9 +202,31 @@ impl<'a> Parser<'a> {
         let timezone;
         match self.next_token()? {
             Token::Comma => {
-                timezone = Some(self.parse_double_quoted_string("Timezone")?);
+                match self.next_token()? {
+                    // Support old style `Timestamp(Nanosecond, None)`
+                    Token::None => {
+                        timezone = None;
+                    }
+                    // Support old style `Timestamp(Nanosecond, Some("Timezone"))`
+                    Token::Some => {
+                        self.expect_token(Token::LParen)?;
+                        timezone = Some(self.parse_double_quoted_string("Timezone")?);
+                        self.expect_token(Token::RParen)?;
+                    }
+                    Token::DoubleQuotedString(tz) => {
+                        // Support new style `Timestamp(Nanosecond, "Timezone")`
+                        timezone = Some(tz);
+                    }
+                    tok => {
+                        return Err(make_error(
+                            self.val,
+                            &format!("Expected None, Some, or a timezone string, got {tok:?}"),
+                        ));
+                    }
+                };
                 self.expect_token(Token::RParen)?;
             }
+            // No timezone (e.g `Timestamp(ns)`)
             Token::RParen => {
                 timezone = None;
             }
@@ -680,7 +705,7 @@ mod test {
         }
     }
 
-    /// convert data_type to a string, and then parse it as a type
+    /// Ensure we converting data_type to a string, and then parse it as a type
     /// verifying it is the same
     fn round_trip(data_type: DataType) {
         let data_type_string = data_type.to_string();
@@ -831,9 +856,190 @@ mod test {
         ];
 
         for (data_type_string, expected_data_type) in cases {
-            println!("Parsing '{data_type_string}', expecting '{expected_data_type}'");
             let parsed_data_type = parse_data_type(data_type_string).unwrap();
-            assert_eq!(parsed_data_type, expected_data_type);
+            assert_eq!(
+                parsed_data_type, expected_data_type,
+                "Parsing '{data_type_string}', expecting '{expected_data_type}'"
+            );
+        }
+    }
+
+    /// Ensure that old style types can still be parsed
+    #[test]
+    fn test_parse_data_type_backwards_compatibility() {
+        use DataType::*;
+        use IntervalUnit::*;
+        use TimeUnit::*;
+        // List below created with:
+        // for t in list_datatypes() {
+        // println!(r#"("{t}", {t:?}),"#)
+        // }
+        // (string to parse, expected DataType)
+        let cases = [
+            ("Timestamp(Nanosecond, None)", Timestamp(Nanosecond, None)),
+            ("Timestamp(Microsecond, None)", Timestamp(Microsecond, None)),
+            ("Timestamp(Millisecond, None)", Timestamp(Millisecond, None)),
+            ("Timestamp(Second, None)", Timestamp(Second, None)),
+            ("Timestamp(Nanosecond, None)", Timestamp(Nanosecond, None)),
+            // Timezones
+            (
+                r#"Timestamp(Nanosecond, Some("+00:00"))"#,
+                Timestamp(Nanosecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(Microsecond, Some("+00:00"))"#,
+                Timestamp(Microsecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(Millisecond, Some("+00:00"))"#,
+                Timestamp(Millisecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(Second, Some("+00:00"))"#,
+                Timestamp(Second, Some("+00:00".into())),
+            ),
+            ("Null", Null),
+            ("Boolean", Boolean),
+            ("Int8", Int8),
+            ("Int16", Int16),
+            ("Int32", Int32),
+            ("Int64", Int64),
+            ("UInt8", UInt8),
+            ("UInt16", UInt16),
+            ("UInt32", UInt32),
+            ("UInt64", UInt64),
+            ("Float16", Float16),
+            ("Float32", Float32),
+            ("Float64", Float64),
+            ("Timestamp(s)", Timestamp(Second, None)),
+            ("Timestamp(ms)", Timestamp(Millisecond, None)),
+            ("Timestamp(µs)", Timestamp(Microsecond, None)),
+            ("Timestamp(ns)", Timestamp(Nanosecond, None)),
+            (
+                r#"Timestamp(ns, "+00:00")"#,
+                Timestamp(Nanosecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(µs, "+00:00")"#,
+                Timestamp(Microsecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(ms, "+00:00")"#,
+                Timestamp(Millisecond, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(s, "+00:00")"#,
+                Timestamp(Second, Some("+00:00".into())),
+            ),
+            (
+                r#"Timestamp(ns, "+08:00")"#,
+                Timestamp(Nanosecond, Some("+08:00".into())),
+            ),
+            (
+                r#"Timestamp(µs, "+08:00")"#,
+                Timestamp(Microsecond, Some("+08:00".into())),
+            ),
+            (
+                r#"Timestamp(ms, "+08:00")"#,
+                Timestamp(Millisecond, Some("+08:00".into())),
+            ),
+            (
+                r#"Timestamp(s, "+08:00")"#,
+                Timestamp(Second, Some("+08:00".into())),
+            ),
+            ("Date32", Date32),
+            ("Date64", Date64),
+            ("Time32(s)", Time32(Second)),
+            ("Time32(ms)", Time32(Millisecond)),
+            ("Time32(µs)", Time32(Microsecond)),
+            ("Time32(ns)", Time32(Nanosecond)),
+            ("Time64(s)", Time64(Second)),
+            ("Time64(ms)", Time64(Millisecond)),
+            ("Time64(µs)", Time64(Microsecond)),
+            ("Time64(ns)", Time64(Nanosecond)),
+            ("Duration(s)", Duration(Second)),
+            ("Duration(ms)", Duration(Millisecond)),
+            ("Duration(µs)", Duration(Microsecond)),
+            ("Duration(ns)", Duration(Nanosecond)),
+            ("Interval(YearMonth)", Interval(YearMonth)),
+            ("Interval(DayTime)", Interval(DayTime)),
+            ("Interval(MonthDayNano)", Interval(MonthDayNano)),
+            ("Binary", Binary),
+            ("BinaryView", BinaryView),
+            ("FixedSizeBinary(0)", FixedSizeBinary(0)),
+            ("FixedSizeBinary(1234)", FixedSizeBinary(1234)),
+            ("FixedSizeBinary(-432)", FixedSizeBinary(-432)),
+            ("LargeBinary", LargeBinary),
+            ("Utf8", Utf8),
+            ("Utf8View", Utf8View),
+            ("LargeUtf8", LargeUtf8),
+            ("Decimal32(7, 8)", Decimal32(7, 8)),
+            ("Decimal64(6, 9)", Decimal64(6, 9)),
+            ("Decimal128(7, 12)", Decimal128(7, 12)),
+            ("Decimal256(6, 13)", Decimal256(6, 13)),
+            (
+                "Dictionary(Int32, Utf8)",
+                Dictionary(Box::new(Int32), Box::new(Utf8)),
+            ),
+            (
+                "Dictionary(Int8, Utf8)",
+                Dictionary(Box::new(Int8), Box::new(Utf8)),
+            ),
+            (
+                "Dictionary(Int8, Timestamp(ns))",
+                Dictionary(Box::new(Int8), Box::new(Timestamp(Nanosecond, None))),
+            ),
+            (
+                "Dictionary(Int8, FixedSizeBinary(23))",
+                Dictionary(Box::new(Int8), Box::new(FixedSizeBinary(23))),
+            ),
+            (
+                "Dictionary(Int8, Dictionary(Int8, Utf8))",
+                Dictionary(
+                    Box::new(Int8),
+                    Box::new(Dictionary(Box::new(Int8), Box::new(Utf8))),
+                ),
+            ),
+            (
+                r#"Struct("f1": nullable Int64, "f2": nullable Float64, "f3": nullable Timestamp(s, "+08:00"), "f4": nullable Dictionary(Int8, FixedSizeBinary(23)))"#,
+                Struct(Fields::from(vec![
+                    Field::new("f1", Int64, true),
+                    Field::new("f2", Float64, true),
+                    Field::new("f3", Timestamp(Second, Some("+08:00".into())), true),
+                    Field::new(
+                        "f4",
+                        Dictionary(Box::new(Int8), Box::new(FixedSizeBinary(23))),
+                        true,
+                    ),
+                ])),
+            ),
+            (
+                r#"Struct("Int64": nullable Int64, "Float64": nullable Float64)"#,
+                Struct(Fields::from(vec![
+                    Field::new("Int64", Int64, true),
+                    Field::new("Float64", Float64, true),
+                ])),
+            ),
+            (
+                r#"Struct("f1": nullable Int64, "nested_struct": nullable Struct("n1": nullable Int64))"#,
+                Struct(Fields::from(vec![
+                    Field::new("f1", Int64, true),
+                    Field::new(
+                        "nested_struct",
+                        Struct(Fields::from(vec![Field::new("n1", Int64, true)])),
+                        true,
+                    ),
+                ])),
+            ),
+            (r#"Struct()"#, Struct(Fields::empty())),
+        ];
+
+        for (data_type_string, expected_data_type) in cases {
+            let parsed_data_type = parse_data_type(data_type_string).unwrap();
+            assert_eq!(
+                parsed_data_type, expected_data_type,
+                "Parsing '{data_type_string}', expecting '{expected_data_type}'"
+            );
         }
     }
 

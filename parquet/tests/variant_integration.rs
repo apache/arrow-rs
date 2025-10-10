@@ -26,7 +26,7 @@
 use arrow::util::test_util::parquet_test_data;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet_variant::{Variant, VariantMetadata};
-use parquet_variant_compute::{unshred_variant, VariantArray};
+use parquet_variant_compute::{VariantArray, unshred_variant};
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -86,31 +86,12 @@ variant_test_case!(20);
 variant_test_case!(21);
 variant_test_case!(22);
 variant_test_case!(23);
-// https://github.com/apache/arrow-rs/issues/8332
-variant_test_case!(
-    24,
-    "Unshredding not yet supported for type: Decimal128(9, 4)"
-);
-variant_test_case!(
-    25,
-    "Unshredding not yet supported for type: Decimal128(9, 4)"
-);
-variant_test_case!(
-    26,
-    "Unshredding not yet supported for type: Decimal128(18, 9)"
-);
-variant_test_case!(
-    27,
-    "Unshredding not yet supported for type: Decimal128(18, 9)"
-);
-variant_test_case!(
-    28,
-    "Unshredding not yet supported for type: Decimal128(38, 9)"
-);
-variant_test_case!(
-    29,
-    "Unshredding not yet supported for type: Decimal128(38, 9)"
-);
+variant_test_case!(24);
+variant_test_case!(25);
+variant_test_case!(26);
+variant_test_case!(27);
+variant_test_case!(28);
+variant_test_case!(29);
 variant_test_case!(30);
 variant_test_case!(31);
 variant_test_case!(32);
@@ -312,7 +293,11 @@ impl VariantTestCase {
             let expected = expected.as_variant();
 
             // compare the variants (is this the right way to compare?)
-            assert_eq!(actual, expected, "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}", i);
+            assert_eq!(
+                actual, expected,
+                "Variant data mismatch at index {}\n\nactual\n{actual:#?}\n\nexpected\n{expected:#?}",
+                i
+            );
         }
     }
 
