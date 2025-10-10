@@ -31,7 +31,7 @@ use crate::basic::{
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
-use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
+use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::encodings::levels::LevelEncoder;
@@ -1222,6 +1222,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 .set_definition_level_histogram(
                     self.column_metrics.definition_level_histogram.take(),
                 );
+
+            if let Some(geo_stats) = self.encoder.flush_geospatial_statistics() {
+                builder = builder.set_geo_statistics(geo_stats);
+            }
         }
 
         builder = self.set_column_chunk_encryption_properties(builder);
@@ -1612,7 +1616,7 @@ mod tests {
 
     use crate::column::{
         page::PageReader,
-        reader::{get_column_reader, get_typed_column_reader, ColumnReaderImpl},
+        reader::{ColumnReaderImpl, get_column_reader, get_typed_column_reader},
     };
     use crate::file::writer::TrackedWrite;
     use crate::file::{

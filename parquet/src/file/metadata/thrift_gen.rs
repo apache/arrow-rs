@@ -34,11 +34,11 @@ use crate::{
         statistics::ValueStatistics,
     },
     parquet_thrift::{
-        read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
-        ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
+        ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+        ThriftCompactOutputProtocol, WriteThrift, WriteThriftField, read_thrift_vec,
     },
     schema::types::{
-        num_nodes, parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor, TypePtr,
+        ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
     },
     thrift_struct, thrift_union,
     util::bit_util::FromBytes,
@@ -702,9 +702,9 @@ pub(crate) fn parquet_metadata_with_encryption(
             .unwrap_or(false);
             if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
                 return Err(general_err!(
-                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
+                    "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
                         but no AAD prefix was provided in the file decryption properties"
-                    ));
+                ));
             }
             let decryptor = get_file_decryptor(
                 t_file_crypto_metadata.encryption_algorithm,
@@ -1662,17 +1662,17 @@ impl WriteThriftField for crate::geospatial::bounding_box::BoundingBox {
 pub(crate) mod tests {
     use crate::errors::Result;
     use crate::file::metadata::thrift_gen::{
-        convert_column, convert_row_group, write_schema, BoundingBox, ColumnChunk, RowGroup,
-        SchemaElement,
+        BoundingBox, ColumnChunk, RowGroup, SchemaElement, convert_column, convert_row_group,
+        write_schema,
     };
     use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
     use crate::parquet_thrift::{
-        read_thrift_vec, ElementType, ReadThrift, ThriftCompactOutputProtocol,
-        ThriftSliceInputProtocol,
+        ElementType, ReadThrift, ThriftCompactOutputProtocol, ThriftSliceInputProtocol,
+        read_thrift_vec,
     };
     use crate::schema::types::{
-        num_nodes, parquet_schema_from_array, ColumnDescriptor, SchemaDescriptor, TypePtr,
+        ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
     };
     use std::sync::Arc;
 

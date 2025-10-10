@@ -22,8 +22,8 @@
 use std::io::Write;
 
 use crate::parquet_thrift::{
-    read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
-    ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    WriteThrift, WriteThriftField, read_thrift_vec,
 };
 use crate::{
     errors::{ParquetError, Result},

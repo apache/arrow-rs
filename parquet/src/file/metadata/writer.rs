@@ -27,8 +27,8 @@ use crate::{
 #[cfg(feature = "encryption")]
 use crate::{
     encryption::{
-        encrypt::{encrypt_thrift_object, write_signed_plaintext_thrift_object, FileEncryptor},
-        modules::{create_footer_aad, create_module_aad, ModuleType},
+        encrypt::{FileEncryptor, encrypt_thrift_object, write_signed_plaintext_thrift_object},
+        modules::{ModuleType, create_footer_aad, create_module_aad},
     },
     file::column_crypto_metadata::ColumnCryptoMetaData,
     file::metadata::thrift_gen::{AesGcmV1, FileCryptoMetaData},
@@ -36,7 +36,7 @@ use crate::{
 use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 
 use crate::{
-    file::writer::{get_file_magic, TrackedWrite},
+    file::writer::{TrackedWrite, get_file_magic},
     parquet_thrift::WriteThrift,
 };
 use crate::{
