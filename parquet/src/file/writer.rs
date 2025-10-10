@@ -706,7 +706,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
             .set_compression(metadata.compression())
-            .set_encodings(metadata.encodings().clone())
+            .set_encodings_mask(metadata.encodings_mask())
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())

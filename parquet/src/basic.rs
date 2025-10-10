@@ -724,6 +724,58 @@ impl FromStr for Encoding {
     }
 }
 
+const MAX_ENCODING: i32 = Encoding::BYTE_STREAM_SPLIT as i32;
+
+/// Given a Thrift input stream, read a vector of [`Encoding`] enums and convert to a bitmask.
+pub(super) fn thrift_encodings_to_mask<'a, R: ThriftCompactInputProtocol<'a>>(
+    prot: &mut R,
+) -> Result<i32> {
+    let mut mask = 0;
+
+    let list_ident = prot.read_list_begin()?;
+    for _ in 0..list_ident.size {
+        let val = i32::read_thrift(prot)?;
+        if (0..=MAX_ENCODING).contains(&val) {
+            mask |= 1 << val;
+        }
+    }
+    Ok(mask)
+}
+
+#[allow(deprecated)]
+fn i32_to_encoding(val: i32) -> Encoding {
+    match val {
+        0 => Encoding::PLAIN,
+        2 => Encoding::PLAIN_DICTIONARY,
+        3 => Encoding::RLE,
+        4 => Encoding::BIT_PACKED,
+        5 => Encoding::DELTA_BINARY_PACKED,
+        6 => Encoding::DELTA_LENGTH_BYTE_ARRAY,
+        7 => Encoding::DELTA_BYTE_ARRAY,
+        8 => Encoding::RLE_DICTIONARY,
+        9 => Encoding::BYTE_STREAM_SPLIT,
+        _ => panic!("Impossible encoding {val}"),
+    }
+}
+
+pub(super) fn encodings_to_mask<'a, I>(encodings: I) -> i32
+where
+    I: Iterator<Item = &'a Encoding>,
+{
+    let mut mask = 0;
+    for e in encodings {
+        mask |= 1 << (*e as i32);
+    }
+    mask
+}
+
+pub(super) fn mask_to_encodings_vec(mask: i32) -> Vec<Encoding> {
+    (0..=MAX_ENCODING)
+        .filter(|i| mask & (1 << i) != 0)
+        .map(i32_to_encoding)
+        .collect()
+}
+
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `CompressionCodec`
 

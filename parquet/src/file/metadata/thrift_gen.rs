@@ -27,6 +27,7 @@ use crate::file::{
 use crate::{
     basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, PageType, Repetition, Type,
+        thrift_encodings_to_mask,
     },
     data_type::{ByteArray, FixedLenByteArray, Int96},
     errors::{ParquetError, Result},
@@ -341,7 +342,7 @@ fn read_column_chunk<'a>(
     let mut encrypted_column_metadata: Option<&[u8]> = None;
 
     // ColumnMetaData
-    let mut encodings: Option<Vec<Encoding>> = None;
+    let mut encodings: Option<i32> = None;
     let mut codec: Option<Compression> = None;
     let mut num_values: Option<i64> = None;
     let mut total_uncompressed_size: Option<i64> = None;
@@ -410,8 +411,7 @@ fn read_column_chunk<'a>(
                     match field_ident.id {
                         // 1: type is never used, we can use the column descriptor
                         2 => {
-                            let val =
-                                read_thrift_vec::<Encoding, ThriftSliceInputProtocol>(&mut *prot)?;
+                            let val = thrift_encodings_to_mask(&mut *prot)?;
                             encodings = Some(val);
                         }
                         // 3: path_in_schema is redundant
@@ -1262,7 +1262,7 @@ pub(crate) fn serialize_column_meta_data<W: Write>(
     use crate::file::statistics::page_stats_to_thrift;
 
     column_chunk.column_type().write_thrift_field(w, 1, 0)?;
-    column_chunk.encodings.write_thrift_field(w, 2, 1)?;
+    column_chunk.encodings().write_thrift_field(w, 2, 1)?;
     let path = column_chunk.column_descr.path().parts();
     let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
     path.write_thrift_field(w, 3, 2)?;

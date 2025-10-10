@@ -97,7 +97,7 @@ pub(crate) mod reader;
 pub(crate) mod thrift_gen;
 mod writer;
 
-use crate::basic::PageType;
+use crate::basic::{PageType, encodings_to_mask, mask_to_encodings_vec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
@@ -790,7 +790,7 @@ impl RowGroupMetaDataBuilder {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnChunkMetaData {
     column_descr: ColumnDescPtr,
-    encodings: Vec<Encoding>,
+    encodings: i32,
     file_path: Option<String>,
     file_offset: i64,
     num_values: i64,
@@ -970,8 +970,13 @@ impl ColumnChunkMetaData {
     }
 
     /// All encodings used for this column.
-    pub fn encodings(&self) -> &Vec<Encoding> {
-        &self.encodings
+    pub fn encodings(&self) -> Vec<Encoding> {
+        mask_to_encodings_vec(self.encodings)
+    }
+
+    /// All encodings used for this column, returned as a bitmask.
+    pub fn encodings_mask(&self) -> i32 {
+        self.encodings
     }
 
     /// Total number of values in this column chunk.
@@ -1150,7 +1155,7 @@ impl ColumnChunkMetaDataBuilder {
     fn new(column_descr: ColumnDescPtr) -> Self {
         Self(ColumnChunkMetaData {
             column_descr,
-            encodings: Vec::new(),
+            encodings: 0,
             file_path: None,
             file_offset: 0,
             num_values: 0,
@@ -1181,6 +1186,12 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets list of encodings for this column chunk.
     pub fn set_encodings(mut self, encodings: Vec<Encoding>) -> Self {
+        self.0.encodings = encodings_to_mask(encodings.iter());
+        self
+    }
+
+    /// Sets the encodings mask for this column chunk.
+    pub fn set_encodings_mask(mut self, encodings: i32) -> Self {
         self.0.encodings = encodings;
         self
     }
@@ -1588,7 +1599,7 @@ impl OffsetIndexBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::{PageType, SortOrder};
+    use crate::basic::{PageType, SortOrder, encodings_to_mask};
     use crate::file::metadata::thrift_gen::tests::{read_column_chunk, read_row_group};
 
     #[test]
@@ -1706,9 +1717,8 @@ mod tests {
     #[test]
     fn test_column_chunk_metadata_thrift_conversion() {
         let column_descr = get_test_schema_descr().column(0);
-
         let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
-            .set_encodings(vec![Encoding::PLAIN, Encoding::RLE])
+            .set_encodings_mask(encodings_to_mask([Encoding::PLAIN, Encoding::RLE].iter()))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
             .set_compression(Compression::SNAPPY)
@@ -1860,9 +1870,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2312;
+        let base_expected_size = 2248;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2480;
+        let base_expected_size = 2416;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1891,9 +1901,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2738;
+        let bigger_expected_size = 2674;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 2906;
+        let bigger_expected_size = 2842;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
