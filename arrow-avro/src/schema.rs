@@ -367,16 +367,16 @@ impl AvroSchema {
     /// - `Fingerprint::MD5` for `FingerprintAlgorithm::MD5`
     /// - `Fingerprint::SHA256` for `FingerprintAlgorithm::SHA256`
     ///
-    /// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
+    /// Note: [`FingerprintAlgorithm::Id`] or [`FingerprintAlgorithm::Id64`] cannot be used to generate a fingerprint
     /// and will result in an error. If you intend to use a Schema Registry ID-based
-    /// wire format, load or set the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`]
-    /// or [`SchemaStore::set`].
+    /// wire format, either use [`SchemaStore::set`] or load the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`] or for
+    /// [`Fingerprint::Id64`] via [`Fingerprint::load_fingerprint_id64`].
     ///
     /// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
     ///
     /// # Errors
     /// Returns an error if deserializing the schema fails, if generating the
-    /// canonical form of the schema fails, or if `hash_type` is [`FingerprintAlgorithm::None`].
+    /// canonical form of the schema fails, or if `hash_type` is [`FingerprintAlgorithm::Id`].
     ///
     /// # Examples
     /// ```
@@ -400,8 +400,8 @@ impl AvroSchema {
             FingerprintAlgorithm::Rabin => {
                 Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
             }
-            FingerprintAlgorithm::None => Err(ArrowError::SchemaError(
-                "FingerprintAlgorithm of None cannot be used to generate a fingerprint; \
+            FingerprintAlgorithm::Id | FingerprintAlgorithm::Id64 => Err(ArrowError::SchemaError(
+                "FingerprintAlgorithm of Id or Id64 cannot be used to generate a fingerprint; \
                 if using Fingerprint::Id, pass the registry ID in instead using the set method."
                     .to_string(),
             )),
@@ -494,6 +494,8 @@ pub enum FingerprintStrategy {
     Rabin,
     /// Use a Confluent Schema Registry 32-bit ID.
     Id(u32),
+    /// Use an Apicurio Schema Registry 64-bit ID.
+    Id64(u64),
     #[cfg(feature = "md5")]
     /// Use the 128-bit MD5 fingerprint.
     MD5,
@@ -512,7 +514,8 @@ impl From<FingerprintAlgorithm> for FingerprintStrategy {
     fn from(f: FingerprintAlgorithm) -> Self {
         match f {
             FingerprintAlgorithm::Rabin => FingerprintStrategy::Rabin,
-            FingerprintAlgorithm::None => FingerprintStrategy::Id(0),
+            FingerprintAlgorithm::Id => FingerprintStrategy::Id(0),
+            FingerprintAlgorithm::Id64 => FingerprintStrategy::Id64(0),
             #[cfg(feature = "md5")]
             FingerprintAlgorithm::MD5 => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -526,6 +529,7 @@ impl From<&Fingerprint> for FingerprintStrategy {
         match f {
             Fingerprint::Rabin(_) => FingerprintStrategy::Rabin,
             Fingerprint::Id(_) => FingerprintStrategy::Id(0),
+            Fingerprint::Id64(_) => FingerprintStrategy::Id64(0),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -541,8 +545,10 @@ pub enum FingerprintAlgorithm {
     /// 64‑bit CRC‑64‑AVRO Rabin fingerprint.
     #[default]
     Rabin,
-    /// Represents a fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
-    None,
+    /// Represents a 32 bit fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
+    Id,
+    /// Represents a 64 bit fingerprint not based on a hash algorithm, (e.g., a 64-bit Schema Registry ID.)
+    Id64,
     #[cfg(feature = "md5")]
     /// 128-bit MD5 message digest.
     MD5,
@@ -556,7 +562,8 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
     fn from(fp: &Fingerprint) -> Self {
         match fp {
             Fingerprint::Rabin(_) => FingerprintAlgorithm::Rabin,
-            Fingerprint::Id(_) => FingerprintAlgorithm::None,
+            Fingerprint::Id(_) => FingerprintAlgorithm::Id,
+            Fingerprint::Id64(_) => FingerprintAlgorithm::Id64,
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintAlgorithm::MD5,
             #[cfg(feature = "sha256")]
@@ -575,7 +582,8 @@ impl From<&FingerprintStrategy> for FingerprintAlgorithm {
     fn from(s: &FingerprintStrategy) -> Self {
         match s {
             FingerprintStrategy::Rabin => FingerprintAlgorithm::Rabin,
-            FingerprintStrategy::Id(_) => FingerprintAlgorithm::None,
+            FingerprintStrategy::Id(_) => FingerprintAlgorithm::Id,
+            FingerprintStrategy::Id64(_) => FingerprintAlgorithm::Id64,
             #[cfg(feature = "md5")]
             FingerprintStrategy::MD5 => FingerprintAlgorithm::MD5,
             #[cfg(feature = "sha256")]
@@ -598,6 +606,8 @@ pub enum Fingerprint {
     Rabin(u64),
     /// A 32-bit Schema Registry ID.
     Id(u32),
+    /// A 64-bit Schema Registry ID.
+    Id64(u64),
     #[cfg(feature = "md5")]
     /// A 128-bit MD5 fingerprint.
     MD5([u8; 16]),
@@ -617,6 +627,7 @@ impl From<&FingerprintStrategy> for Fingerprint {
         match s {
             FingerprintStrategy::Rabin => Fingerprint::Rabin(0),
             FingerprintStrategy::Id(id) => Fingerprint::Id(*id),
+            FingerprintStrategy::Id64(id) => Fingerprint::Id64(*id),
             #[cfg(feature = "md5")]
             FingerprintStrategy::MD5 => Fingerprint::MD5([0; 16]),
             #[cfg(feature = "sha256")]
@@ -629,7 +640,8 @@ impl From<FingerprintAlgorithm> for Fingerprint {
     fn from(s: FingerprintAlgorithm) -> Self {
         match s {
             FingerprintAlgorithm::Rabin => Fingerprint::Rabin(0),
-            FingerprintAlgorithm::None => Fingerprint::Id(0),
+            FingerprintAlgorithm::Id => Fingerprint::Id(0),
+            FingerprintAlgorithm::Id64 => Fingerprint::Id64(0),
             #[cfg(feature = "md5")]
             FingerprintAlgorithm::MD5 => Fingerprint::MD5([0; 16]),
             #[cfg(feature = "sha256")]
@@ -650,11 +662,24 @@ impl Fingerprint {
         Fingerprint::Id(u32::from_be(id))
     }
 
+    /// Loads the 64-bit Schema Registry fingerprint (Apicurio Schema Registry ID).
+    ///
+    /// The provided `id` is in big-endian wire order; this converts it to host order
+    /// and returns `Fingerprint::Id64`.
+    ///
+    /// # Returns
+    /// A `Fingerprint::Id64` variant containing the 64-bit fingerprint.
+    pub fn load_fingerprint_id64(id: u64) -> Self {
+        Fingerprint::Id64(u64::from_be(id))
+    }
+
     /// Constructs a serialized prefix represented as a `Vec<u8>` based on the variant of the enum.
     ///
     /// This method serializes data in different formats depending on the variant of `self`:
     /// - **`Id(id)`**: Uses the Confluent wire format, which includes a predefined magic header (`CONFLUENT_MAGIC`)
     ///   followed by the big-endian byte representation of the `id`.
+    /// - **`Id64(id)`**: Uses the Apicurio wire format, which includes a predefined magic header (`CONFLUENT_MAGIC`)
+    ///   followed by the big-endian 8-byte representation of the `id`.
     /// - **`Rabin(val)`**: Uses the Avro single-object specification format. This includes a different magic header
     ///   (`SINGLE_OBJECT_MAGIC`) followed by the little-endian byte representation of the `val`.
     /// - **`MD5(bytes)`** (optional, `md5` feature enabled): A non-standard extension that adds the
@@ -675,6 +700,7 @@ impl Fingerprint {
         let mut buf = [0u8; MAX_PREFIX_LEN];
         let len = match self {
             Self::Id(val) => write_prefix(&mut buf, &CONFLUENT_MAGIC, &val.to_be_bytes()),
+            Self::Id64(val) => write_prefix(&mut buf, &CONFLUENT_MAGIC, &val.to_be_bytes()),
             Self::Rabin(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, &val.to_le_bytes()),
             #[cfg(feature = "md5")]
             Self::MD5(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, val),
@@ -800,7 +826,7 @@ impl SchemaStore {
     /// A fingerprint is calculated for the given schema using the store's configured
     /// hash type. If a schema with the same fingerprint does not already exist in the
     /// store, the new schema is inserted. If the fingerprint already exists, the
-    /// existing schema is not overwritten. If FingerprintAlgorithm is set to None, this
+    /// existing schema is not overwritten. If FingerprintAlgorithm is set to Id or Id64, this
     /// method will return an error. Confluent wire format implementations should leverage the
     /// set method instead.
     ///
@@ -813,7 +839,9 @@ impl SchemaStore {
     /// A `Result` containing the `Fingerprint` of the schema if successful,
     /// or an `ArrowError` on failure.
     pub fn register(&mut self, schema: AvroSchema) -> Result<Fingerprint, ArrowError> {
-        if self.fingerprint_algorithm == FingerprintAlgorithm::None {
+        if self.fingerprint_algorithm == FingerprintAlgorithm::Id
+            || self.fingerprint_algorithm == FingerprintAlgorithm::Id64
+        {
             return Err(ArrowError::SchemaError(
                 "Invalid FingerprintAlgorithm; unable to generate fingerprint. \
             Use the set method directly instead, providing a valid fingerprint"
@@ -2191,6 +2219,9 @@ mod tests {
             Fingerprint::Id(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
+            Fingerprint::Id64(_id) => {
+                unreachable!("This test should only generate Rabin fingerprints")
+            }
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
@@ -2212,6 +2243,39 @@ mod tests {
         assert_eq!(out_fp, fp);
         assert_eq!(store.lookup(&fp).cloned(), Some(schema.clone()));
         assert!(store.lookup(&Fingerprint::Id(id.wrapping_add(1))).is_none());
+    }
+
+    #[test]
+    fn test_set_and_lookup_id64() {
+        let mut store = SchemaStore::new();
+        let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let id64: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+        let fp = Fingerprint::Id64(id64);
+        let out_fp = store.set(fp, schema.clone()).unwrap();
+        assert_eq!(out_fp, fp, "set should return the same Id64 fingerprint");
+        assert_eq!(
+            store.lookup(&fp).cloned(),
+            Some(schema.clone()),
+            "lookup should find the schema by Id64"
+        );
+        assert!(
+            store
+                .lookup(&Fingerprint::Id64(id64.wrapping_add(1)))
+                .is_none(),
+            "lookup with a different Id64 must return None"
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_id64_conversions() {
+        let algo_from_fp = FingerprintAlgorithm::from(&Fingerprint::Id64(123));
+        assert_eq!(algo_from_fp, FingerprintAlgorithm::Id64);
+        let fp_from_algo = Fingerprint::from(FingerprintAlgorithm::Id64);
+        assert!(matches!(fp_from_algo, Fingerprint::Id64(0)));
+        let strategy_from_fp = FingerprintStrategy::from(Fingerprint::Id64(5));
+        assert!(matches!(strategy_from_fp, FingerprintStrategy::Id64(0)));
+        let algo_from_strategy = FingerprintAlgorithm::from(strategy_from_fp);
+        assert_eq!(algo_from_strategy, FingerprintAlgorithm::Id64);
     }
 
     #[test]

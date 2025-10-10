@@ -25,7 +25,7 @@ repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["parquet"]
 readme = "README.md"
-edition = "2024"
+edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
