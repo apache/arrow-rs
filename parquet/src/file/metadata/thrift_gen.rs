@@ -1262,7 +1262,10 @@ pub(crate) fn serialize_column_meta_data<W: Write>(
     use crate::file::statistics::page_stats_to_thrift;
 
     column_chunk.column_type().write_thrift_field(w, 1, 0)?;
-    column_chunk.encodings().write_thrift_field(w, 2, 1)?;
+    column_chunk
+        .encodings()
+        .collect::<Vec<_>>()
+        .write_thrift_field(w, 2, 1)?;
     let path = column_chunk.column_descr.path().parts();
     let path: Vec<&str> = path.iter().map(|v| v.as_str()).collect();
     path.write_thrift_field(w, 3, 2)?;

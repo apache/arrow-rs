@@ -769,11 +769,10 @@ where
     mask
 }
 
-pub(super) fn mask_to_encodings_vec(mask: i32) -> Vec<Encoding> {
+pub(super) fn mask_to_encodings_iter(mask: i32) -> impl Iterator<Item = Encoding> {
     (0..=MAX_ENCODING)
-        .filter(|i| mask & (1 << i) != 0)
+        .filter(move |i| mask & (1 << i) != 0)
         .map(i32_to_encoding)
-        .collect()
 }
 
 // ----------------------------------------------------------------------
@@ -2465,7 +2464,10 @@ mod tests {
     fn encodings_roundtrip(encodings: &mut [Encoding]) {
         encodings.sort();
         let mask = encodings_to_mask(encodings.iter());
-        assert_eq!(mask_to_encodings_vec(mask), encodings.to_vec());
+        assert_eq!(
+            mask_to_encodings_iter(mask).collect::<Vec<_>>(),
+            encodings.to_vec()
+        );
     }
 
     #[test]

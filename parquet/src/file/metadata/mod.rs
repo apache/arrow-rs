@@ -97,7 +97,7 @@ pub(crate) mod reader;
 pub(crate) mod thrift_gen;
 mod writer;
 
-use crate::basic::{PageType, encodings_to_mask, mask_to_encodings_vec};
+use crate::basic::{PageType, encodings_to_mask, mask_to_encodings_iter};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
@@ -970,8 +970,8 @@ impl ColumnChunkMetaData {
     }
 
     /// All encodings used for this column.
-    pub fn encodings(&self) -> Vec<Encoding> {
-        mask_to_encodings_vec(self.encodings)
+    pub fn encodings(&self) -> impl Iterator<Item = Encoding> {
+        mask_to_encodings_iter(self.encodings)
     }
 
     /// All encodings used for this column, returned as a bitmask.

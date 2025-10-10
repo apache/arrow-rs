@@ -1735,7 +1735,10 @@ mod tests {
         assert_eq!(r.rows_written, 4);
 
         let metadata = r.metadata;
-        assert_eq!(metadata.encodings(), vec![Encoding::PLAIN, Encoding::RLE]);
+        assert_eq!(
+            metadata.encodings().collect::<Vec<_>>(),
+            vec![Encoding::PLAIN, Encoding::RLE]
+        );
         assert_eq!(metadata.num_values(), 4); // just values
         assert_eq!(metadata.dictionary_page_offset(), None);
     }
@@ -2096,7 +2099,7 @@ mod tests {
 
         let metadata = r.metadata;
         assert_eq!(
-            metadata.encodings(),
+            metadata.encodings().collect::<Vec<_>>(),
             vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
@@ -2222,7 +2225,7 @@ mod tests {
 
         let metadata = r.metadata;
         assert_eq!(
-            metadata.encodings(),
+            metadata.encodings().collect::<Vec<_>>(),
             vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
@@ -4101,7 +4104,7 @@ mod tests {
             .build();
         let meta = column_write_and_get_metadata::<T>(props, data);
         assert_eq!(meta.dictionary_page_offset(), dictionary_page_offset);
-        assert_eq!(meta.encodings(), encodings);
+        assert_eq!(meta.encodings().collect::<Vec<_>>(), encodings);
         assert_eq!(meta.page_encoding_stats().unwrap(), page_encoding_stats);
     }
 

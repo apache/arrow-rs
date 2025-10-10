@@ -2390,6 +2390,7 @@ mod tests {
                     .row_group(0)
                     .column(x)
                     .encodings()
+                    .collect::<Vec<_>>()
                     .contains(&Encoding::BYTE_STREAM_SPLIT)
             );
         };
