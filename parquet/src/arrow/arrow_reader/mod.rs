@@ -1160,7 +1160,7 @@ mod tests {
         Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, i256};
+    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, i256};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
@@ -2352,6 +2352,63 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(read.len(), 1);
+        assert_eq!(&batch, &read[0])
+    }
+
+    #[test]
+    fn test_read_nullable_structs_with_binary_dict_as_first_child_column() {
+        // the `StructArrayReader` will check the definition and repetition levels of the first
+        // child column in the struct to determine nullability for the struct. If the first
+        // column's is being read by `ByteArrayDictionaryReader` we need to ensure that the
+        // nullability is interpreted  correctly from the rep/def level buffers managed by the
+        // buffers managed by this array reader.
+
+        let struct_fields = Fields::from(vec![
+            Field::new(
+                "city",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::UInt8),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("name", ArrowDataType::Utf8, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            ArrowDataType::Struct(struct_fields.clone()),
+            true,
+        )]));
+
+        let items_arr = StructArray::new(
+            struct_fields,
+            vec![
+                Arc::new(DictionaryArray::new(
+                    UInt8Array::from_iter_values(vec![0, 1, 1, 0, 2]),
+                    Arc::new(StringArray::from_iter_values(vec![
+                        "quebec",
+                        "fredericton",
+                        "halifax",
+                    ])),
+                )),
+                Arc::new(StringArray::from_iter_values(vec![
+                    "albert", "terry", "lance", "", "tim",
+                ])),
+            ],
+            Some(NullBuffer::from_iter(vec![true, true, true, false, true])),
+        );
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(items_arr)]).unwrap();
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 8)
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
