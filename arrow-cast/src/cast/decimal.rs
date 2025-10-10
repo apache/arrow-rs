@@ -188,11 +188,19 @@ where
     // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
     let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
 
-    let div = I::Native::from_decimal(10_i128)
-        .unwrap()
-        .pow_checked(delta_scale as u32)?;
+    // delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION. If so, the
+    // scale change divides out more digits than the input has precision and the result of the cast
+    // is always zero. For example, if we try to apply delta_scale=10 a decimal32 value, the largest
+    // possible result is 999999999/10000000000 = 0.0999999999, which rounds to zero. Smaller values
+    // (e.g. 1/10000000000) or larger delta_scale (e.g. 999999999/10000000000000) produce even
+    // smaller results, which also round to zero. In that case, just return an array of zeros.
+    let Some(max) = I::MAX_FOR_EACH_PRECISION.get(delta_scale as usize) else {
+        let zeros = vec![O::Native::ZERO; array.len()];
+        return Ok(PrimitiveArray::new(zeros.into(), array.nulls().cloned()));
+    };
 
-    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+    let div = max.add_wrapping(I::Native::ONE);
+    let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
     let half_neg = half.neg_wrapping();
 
     let f = |x: I::Native| {
