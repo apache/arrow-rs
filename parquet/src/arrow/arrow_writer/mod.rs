@@ -415,7 +415,10 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
-    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
+    #[deprecated(
+        since = "56.2.0",
+        note = "Use `ArrowRowGroupWriterFactory` instead, see `ArrowColumnWriter` for an example"
+    )]
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         self.flush()?;
         let in_progress = self
@@ -425,7 +428,10 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Append the given column chunks to the file as a new row group.
-    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
+    #[deprecated(
+        since = "56.2.0",
+        note = "Use `SerializedFileWriter` directly instead, see `ArrowColumnWriter` for an example"
+    )]
     pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
         let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
@@ -437,6 +443,10 @@ impl<W: Write + Send> ArrowWriter<W> {
 
     /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
     /// This can be useful to provide more control over how files are written.
+    #[deprecated(
+        since = "57.0.0",
+        note = "Construct a `SerializedFileWriter` and `ArrowRowGroupWriterFactory` directly instead"
+    )]
     pub fn into_serialized_writer(
         mut self,
     ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
@@ -948,6 +958,7 @@ impl ArrowRowGroupWriterFactory {
 }
 
 /// Returns [`ArrowColumnWriter`]s for each column in a given schema
+#[deprecated(since = "57.0.0", note = "Use `ArrowRowGroupWriterFactory` instead")]
 pub fn get_column_writers(
     parquet: &SchemaDescriptor,
     props: &WriterPropertiesPtr,
