@@ -19,8 +19,8 @@
 
 use arrow::array::ArrowNativeTypeOp;
 use arrow::datatypes::{
-    self, ArrowNativeType, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type,
-    Decimal128Type, DecimalType, i256,
+    self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
+    DecimalType, i256,
 };
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
@@ -278,7 +278,8 @@ where
 }
 
 /// Rescale a decimal from (input_precision, input_scale) to (output_precision, output_scale)
-/// and return the scaled value if it fits the output precision.
+/// and return the scaled value if it fits the output precision. Similar to the implementation in
+/// decimal.rs in arrow-cast.
 pub(crate) fn rescale_decimal<I, O>(
     value: I::Native,
     input_precision: u8,
@@ -305,8 +306,17 @@ where
             .and_then(|t| t.pow_checked(delta_scale as u32).ok())?;
         O::Native::from_decimal(value).and_then(|x| x.mul_checked(mul).ok())
     } else {
-        let div = I::Native::from_decimal(10_i128)
-            .and_then(|t| t.pow_checked(delta_scale.unsigned_abs() as u32).ok())?;
+        // delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION. If so, the
+        // scale change divides out more digits than the input has precision and the result of the cast
+        // is always zero. For example, if we try to apply delta_scale=10 a decimal32 value, the largest
+        // possible result is 999999999/10000000000 = 0.0999999999, which rounds to zero. Smaller values
+        // (e.g. 1/10000000000) or larger delta_scale (e.g. 999999999/10000000000000) produce even
+        // smaller results, which also round to zero. In that case, just return an array of zeros.
+        let delta_scale = delta_scale.unsigned_abs() as usize;
+        let Some(max) = I::MAX_FOR_EACH_PRECISION.get(delta_scale) else {
+            return Some(O::Native::ZERO);
+        };
+        let div = max.add_wrapping(I::Native::ONE);
         let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
         let half_neg = half.neg_wrapping();
 

@@ -2851,7 +2851,7 @@ mod test {
     #[test]
     fn get_decimal32_rescaled_to_scale2() {
         // Build unshredded variant values with different scales
-        let mut builder = crate::VariantArrayBuilder::new(4);
+        let mut builder = crate::VariantArrayBuilder::new(5);
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 2).unwrap())); // 12.34
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 3).unwrap())); // 1.234
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 0).unwrap())); // 1234
@@ -2880,7 +2880,7 @@ mod test {
 
     #[test]
     fn get_decimal32_scale_down_rounding() {
-        let mut builder = crate::VariantArrayBuilder::new(2);
+        let mut builder = crate::VariantArrayBuilder::new(7);
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal4::try_new(1245, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal4::try_new(-1235, 0).unwrap()));
@@ -2902,14 +2902,49 @@ mod test {
         assert_eq!(result.value(2), -124);
         assert_eq!(result.value(3), -125);
         assert_eq!(result.value(4), 1);
+        assert!(result.is_valid(5));
         assert_eq!(result.value(5), 0);
         assert_eq!(result.value(6), 1);
     }
 
     #[test]
+    fn get_decimal32_large_scale_reduction() {
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::from(
+            VariantDecimal4::try_new(-(VariantDecimal4::MAX_UNSCALED_VALUE as i32), 0).unwrap(),
+        ));
+        builder.append_variant(Variant::from(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
+        ));
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, -9), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), -9);
+        assert_eq!(result.value(0), -1);
+        assert_eq!(result.value(1), 1);
+
+        let field = Field::new("result", DataType::Decimal32(9, -10), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), -10);
+        assert!(result.is_valid(0));
+        assert_eq!(result.value(0), 0);
+        assert!(result.is_valid(1));
+        assert_eq!(result.value(1), 0);
+    }
+
+    #[test]
     fn get_decimal32_precision_overflow_safe() {
         // Exceed Decimal32 after scaling and rounding
-        let mut builder = crate::VariantArrayBuilder::new(1);
+        let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
             VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
         ));
@@ -2954,7 +2989,7 @@ mod test {
 
     #[test]
     fn get_decimal64_rescaled_to_scale2() {
-        let mut builder = crate::VariantArrayBuilder::new(4);
+        let mut builder = crate::VariantArrayBuilder::new(5);
         builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 2).unwrap())); // 12.34
         builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 3).unwrap())); // 1.234
         builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 0).unwrap())); // 1234
@@ -2984,7 +3019,7 @@ mod test {
 
     #[test]
     fn get_decimal64_scale_down_rounding() {
-        let mut builder = crate::VariantArrayBuilder::new(2);
+        let mut builder = crate::VariantArrayBuilder::new(7);
         builder.append_variant(Variant::from(VariantDecimal8::try_new(1235, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal8::try_new(1245, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal8::try_new(-1235, 0).unwrap()));
@@ -3006,14 +3041,49 @@ mod test {
         assert_eq!(result.value(2), -124);
         assert_eq!(result.value(3), -125);
         assert_eq!(result.value(4), 1);
+        assert!(result.is_valid(5));
         assert_eq!(result.value(5), 0);
         assert_eq!(result.value(6), 1);
     }
 
     #[test]
+    fn get_decimal64_large_scale_reduction() {
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(Variant::from(
+            VariantDecimal8::try_new(-(VariantDecimal8::MAX_UNSCALED_VALUE as i64), 0).unwrap(),
+        ));
+        builder.append_variant(Variant::from(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 0).unwrap(),
+        ));
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal64(18, -18), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
+
+        assert_eq!(result.precision(), 18);
+        assert_eq!(result.scale(), -18);
+        assert_eq!(result.value(0), -1);
+        assert_eq!(result.value(1), 1);
+
+        let field = Field::new("result", DataType::Decimal64(18, -19), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
+
+        assert_eq!(result.precision(), 18);
+        assert_eq!(result.scale(), -19);
+        assert!(result.is_valid(0));
+        assert_eq!(result.value(0), 0);
+        assert!(result.is_valid(1));
+        assert_eq!(result.value(1), 0);
+    }
+
+    #[test]
     fn get_decimal64_precision_overflow_safe() {
         // Exceed Decimal64 after scaling and rounding
-        let mut builder = crate::VariantArrayBuilder::new(1);
+        let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
             VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 0).unwrap(),
         ));
@@ -3080,7 +3150,7 @@ mod test {
 
     #[test]
     fn get_decimal128_scale_down_rounding() {
-        let mut builder = crate::VariantArrayBuilder::new(2);
+        let mut builder = crate::VariantArrayBuilder::new(7);
         builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal16::try_new(1245, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal16::try_new(-1235, 0).unwrap()));
@@ -3102,6 +3172,7 @@ mod test {
         assert_eq!(result.value(2), -124);
         assert_eq!(result.value(3), -125);
         assert_eq!(result.value(4), 1);
+        assert!(result.is_valid(5));
         assert_eq!(result.value(5), 0);
         assert_eq!(result.value(6), 1);
     }
@@ -3109,7 +3180,7 @@ mod test {
     #[test]
     fn get_decimal128_precision_overflow_safe() {
         // Exceed Decimal128 after scaling and rounding
-        let mut builder = crate::VariantArrayBuilder::new(1);
+        let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
             VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
         ));
@@ -3175,7 +3246,7 @@ mod test {
 
     #[test]
     fn get_decimal256_scale_down_rounding() {
-        let mut builder = crate::VariantArrayBuilder::new(2);
+        let mut builder = crate::VariantArrayBuilder::new(7);
         builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal16::try_new(1245, 0).unwrap()));
         builder.append_variant(Variant::from(VariantDecimal16::try_new(-1235, 0).unwrap()));
@@ -3197,6 +3268,7 @@ mod test {
         assert_eq!(result.value(2), i256::from_i128(-124));
         assert_eq!(result.value(3), i256::from_i128(-125));
         assert_eq!(result.value(4), i256::from_i128(1));
+        assert!(result.is_valid(5));
         assert_eq!(result.value(5), i256::from_i128(0));
         assert_eq!(result.value(6), i256::from_i128(1));
     }
