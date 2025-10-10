@@ -1896,7 +1896,7 @@ mod tests {
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
         assert_eq!(
             ret.err().unwrap().to_string(),
-            "Parquet error: Required field schema is missing"
+            "Parquet error: Received empty union from remote ColumnOrder"
         );
     }
 

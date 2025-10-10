@@ -1182,9 +1182,6 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 created_by = Some(<&str>::read_thrift(&mut prot)?);
             }
             7 => {
-                if schema_descr.is_none() {
-                    return Err(general_err!("Required field schema is missing"));
-                }
                 let val = read_thrift_vec::<ColumnOrder, ThriftSliceInputProtocol>(&mut prot)?;
                 column_orders = Some(val);
             }
