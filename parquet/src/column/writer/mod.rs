@@ -1222,6 +1222,10 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 .set_definition_level_histogram(
                     self.column_metrics.definition_level_histogram.take(),
                 );
+
+            if let Some(geo_stats) = self.encoder.flush_geospatial_statistics() {
+                builder = builder.set_geo_statistics(geo_stats);
+            }
         }
 
         builder = self.set_column_chunk_encryption_properties(builder);

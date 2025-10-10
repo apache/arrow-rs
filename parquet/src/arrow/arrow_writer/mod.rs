@@ -228,11 +228,18 @@ impl<W: Write + Send> ArrowWriter<W> {
         options: ArrowWriterOptions,
     ) -> Result<Self> {
         let mut props = options.properties;
-        let mut converter = ArrowSchemaConverter::new().with_coerce_types(props.coerce_types());
-        if let Some(schema_root) = &options.schema_root {
-            converter = converter.schema_root(schema_root);
-        }
-        let schema = converter.convert(&arrow_schema)?;
+
+        let schema = if let Some(parquet_schema) = options.schema_descr {
+            parquet_schema.clone()
+        } else {
+            let mut converter = ArrowSchemaConverter::new().with_coerce_types(props.coerce_types());
+            if let Some(schema_root) = &options.schema_root {
+                converter = converter.schema_root(schema_root);
+            }
+
+            converter.convert(&arrow_schema)?
+        };
+
         if !options.skip_arrow_metadata {
             // add serialized arrow schema
             add_encoded_arrow_schema_to_metadata(&arrow_schema, &mut props);
@@ -457,6 +464,7 @@ pub struct ArrowWriterOptions {
     properties: WriterProperties,
     skip_arrow_metadata: bool,
     schema_root: Option<String>,
+    schema_descr: Option<SchemaDescriptor>,
 }
 
 impl ArrowWriterOptions {
@@ -487,6 +495,18 @@ impl ArrowWriterOptions {
     pub fn with_schema_root(self, schema_root: String) -> Self {
         Self {
             schema_root: Some(schema_root),
+            ..self
+        }
+    }
+
+    /// Explicitly specify the Parquet schema to be used
+    ///
+    /// If omitted (the default), the [`ArrowSchemaConverter`] is used to compute the
+    /// Parquet [`SchemaDescriptor`]. This may be used When the [`SchemaDescriptor`] is
+    /// already known or must be calculated using custom logic.
+    pub fn with_parquet_schema(self, schema_descr: SchemaDescriptor) -> Self {
+        Self {
+            schema_descr: Some(schema_descr),
             ..self
         }
     }
@@ -1508,7 +1528,7 @@ mod tests {
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
     use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
-    use crate::schema::types::ColumnPath;
+    use crate::schema::types::{ColumnPath, Type};
     use arrow::datatypes::ToByteSlice;
     use arrow::datatypes::{DataType, Schema};
     use arrow::error::Result as ArrowResult;
@@ -4130,6 +4150,68 @@ mod tests {
                     .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY)
             );
         }
+    }
+
+    #[test]
+    fn test_arrow_writer_explicit_schema() {
+        // Write an int32 array using explicit int64 storage
+        let batch_schema = Arc::new(Schema::new(vec![Field::new(
+            "integers",
+            DataType::Int32,
+            true,
+        )]));
+        let parquet_schema = Type::group_type_builder("root")
+            .with_fields(vec![
+                Type::primitive_type_builder("integers", crate::basic::Type::INT64)
+                    .build()
+                    .unwrap()
+                    .into(),
+            ])
+            .build()
+            .unwrap();
+        let parquet_schema_descr = SchemaDescriptor::new(parquet_schema.into());
+
+        let batch = RecordBatch::try_new(
+            batch_schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+
+        let explicit_schema_options =
+            ArrowWriterOptions::new().with_parquet_schema(parquet_schema_descr);
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new_with_options(
+            &mut buf,
+            batch_schema.clone(),
+            explicit_schema_options,
+        )
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        let bytes = Bytes::from(buf);
+        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "integers",
+            DataType::Int64,
+            true,
+        )]));
+        assert_eq!(reader_builder.schema(), &expected_schema);
+
+        let batches = reader_builder
+            .build()
+            .unwrap()
+            .collect::<Result<Vec<_>, ArrowError>>()
+            .unwrap();
+        assert_eq!(batches.len(), 1);
+
+        let expected_batch = RecordBatch::try_new(
+            expected_schema.clone(),
+            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as _],
+        )
+        .unwrap();
+        assert_eq!(batches[0], expected_batch);
     }
 
     #[test]

@@ -133,6 +133,7 @@ impl WriterBuilder {
         let maybe_fingerprint = if F::NEEDS_PREFIX {
             match self.fingerprint_strategy {
                 Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
+                Some(FingerprintStrategy::Id64(id)) => Some(Fingerprint::Id64(id)),
                 Some(strategy) => {
                     Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
                 }
@@ -409,6 +410,23 @@ mod tests {
     use std::sync::Arc;
     use tempfile::NamedTempFile;
 
+    fn files() -> impl Iterator<Item = &'static str> {
+        [
+            // TODO: avoid requiring snappy for this file
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.avro",
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.snappy.avro",
+            #[cfg(feature = "zstd")]
+            "avro/alltypes_plain.zstandard.avro",
+            #[cfg(feature = "bzip2")]
+            "avro/alltypes_plain.bzip2.avro",
+            #[cfg(feature = "xz")]
+            "avro/alltypes_plain.xz.avro",
+        ]
+        .into_iter()
+    }
+
     fn make_schema() -> Schema {
         Schema::new(vec![
             Field::new("id", DataType::Int32, false),
@@ -471,9 +489,43 @@ mod tests {
             .build::<_, AvroBinaryFormat>(Vec::new())?;
         writer.write(&batch)?;
         let encoded = writer.into_inner();
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let avro_schema = AvroSchema::try_from(&schema)?;
         let _ = store.set(Fingerprint::Id(schema_id), avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _ = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 3);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_writer_with_id64_fingerprint_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let schema_id: u64 = 42;
+        let mut writer = WriterBuilder::new(schema.clone())
+            .with_fingerprint_strategy(FingerprintStrategy::Id64(schema_id))
+            .build::<_, AvroBinaryFormat>(Vec::new())?;
+        writer.write(&batch)?;
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _ = store.set(Fingerprint::Id64(schema_id), avro_schema)?;
         let mut decoder = ReaderBuilder::new()
             .with_writer_schema_store(store)
             .build_decoder()?;
@@ -556,14 +608,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_alltypes_roundtrip_writer() -> Result<(), ArrowError> {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for rel in files {
+        for rel in files() {
             let path = arrow_test_data(rel);
             let rdr_file = File::open(&path).expect("open input avro");
             let reader = ReaderBuilder::new()
@@ -644,6 +689,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_nested_lists_writer() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/nested_lists.snappy.avro");
         let rdr_file = File::open(&path).expect("open nested_lists.snappy.avro");
@@ -837,6 +883,8 @@ mod tests {
     // writes it back out with the writer (hitting Map encoding paths), then reads it
     // again and asserts exact Arrow equivalence.
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nonnullable_impala_roundtrip_writer() -> Result<(), ArrowError> {
         // Load source Avro with Map fields
         let path = arrow_test_data("avro/nonnullable.impala.avro");
@@ -882,6 +930,8 @@ mod tests {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for these files
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_decimals_via_writer() -> Result<(), ArrowError> {
         // (file, resolve via ARROW_TEST_DATA?)
         let files: [(&str, bool); 8] = [
