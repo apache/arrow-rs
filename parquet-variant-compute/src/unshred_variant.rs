@@ -496,9 +496,8 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
 }
 
 /// Generic builder for decimal unshredding
-struct DecimalUnshredRowBuilder<'a, A, V>
+struct DecimalUnshredRowBuilder<'a, A: DecimalType, V>
 where
-    A: DecimalType,
     V: VariantDecimalType<Native = A::Native>,
 {
     value: Option<&'a BinaryViewArray>,
@@ -507,9 +506,8 @@ where
     _phantom: PhantomData<V>,
 }
 
-impl<'a, A, V> DecimalUnshredRowBuilder<'a, A, V>
+impl<'a, A: DecimalType, V> DecimalUnshredRowBuilder<'a, A, V>
 where
-    A: DecimalType,
     V: VariantDecimalType<Native = A::Native>,
 {
     fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a dyn Array, scale: i8) -> Self {
