@@ -18,12 +18,14 @@
 use arrow::array::{
     ArrayRef, BinaryViewArray, BooleanBuilder, NullBufferBuilder, PrimitiveBuilder,
 };
-use arrow::compute::CastOptions;
+use arrow::compute::{CastOptions, DecimalCast};
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
-use crate::type_conversion::{PrimitiveFromVariant, TimestampFromVariant, variant_to_unscaled_decimal, DecimalCast};
+use crate::type_conversion::{
+    PrimitiveFromVariant, TimestampFromVariant, variant_to_unscaled_decimal,
+};
 use crate::{VariantArray, VariantValueArrayBuilder};
 
 use arrow_schema::TimeUnit;

@@ -18,9 +18,10 @@
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
 use arrow::array::ArrowNativeTypeOp;
+use arrow::compute::DecimalCast;
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
-    DecimalType, i256,
+    DecimalType,
 };
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
@@ -112,107 +113,6 @@ impl_timestamp_from_variant!(
     ntz = false,
     |timestamp| Self::make_value(timestamp.naive_utc())
 );
-
-/// A utility trait that provides checked conversions between decimal types
-pub(crate) trait DecimalCast: Sized {
-    fn to_i32(self) -> Option<i32>;
-
-    fn to_i64(self) -> Option<i64>;
-
-    fn to_i128(self) -> Option<i128>;
-
-    fn to_i256(self) -> Option<i256>;
-
-    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self>;
-}
-
-impl DecimalCast for i32 {
-    fn to_i32(self) -> Option<i32> {
-        Some(self)
-    }
-
-    fn to_i64(self) -> Option<i64> {
-        Some(self as i64)
-    }
-
-    fn to_i128(self) -> Option<i128> {
-        Some(self as i128)
-    }
-
-    fn to_i256(self) -> Option<i256> {
-        Some(i256::from_i128(self as i128))
-    }
-
-    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
-        n.to_i32()
-    }
-}
-
-impl DecimalCast for i64 {
-    fn to_i32(self) -> Option<i32> {
-        i32::try_from(self).ok()
-    }
-
-    fn to_i64(self) -> Option<i64> {
-        Some(self)
-    }
-
-    fn to_i128(self) -> Option<i128> {
-        Some(self as i128)
-    }
-
-    fn to_i256(self) -> Option<i256> {
-        Some(i256::from_i128(self as i128))
-    }
-
-    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
-        n.to_i64()
-    }
-}
-
-impl DecimalCast for i128 {
-    fn to_i32(self) -> Option<i32> {
-        i32::try_from(self).ok()
-    }
-
-    fn to_i64(self) -> Option<i64> {
-        i64::try_from(self).ok()
-    }
-
-    fn to_i128(self) -> Option<i128> {
-        Some(self)
-    }
-
-    fn to_i256(self) -> Option<i256> {
-        Some(i256::from_i128(self))
-    }
-
-    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
-        n.to_i128()
-    }
-}
-
-impl DecimalCast for i256 {
-    fn to_i32(self) -> Option<i32> {
-        self.to_i128().map(|x| i32::try_from(x).ok())?
-    }
-
-    fn to_i64(self) -> Option<i64> {
-        self.to_i128().map(|x| i64::try_from(x).ok())?
-    }
-
-    fn to_i128(self) -> Option<i128> {
-        self.to_i128()
-    }
-
-    fn to_i256(self) -> Option<i256> {
-        Some(self)
-    }
-
-    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
-        n.to_i256()
-    }
-}
 
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
