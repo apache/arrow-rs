@@ -62,7 +62,7 @@ use crate::compression::CompressionCodec;
 use crate::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
 };
-use crate::writer::encoder::{write_long, RecordEncoder, RecordEncoderBuilder};
+use crate::writer::encoder::{RecordEncoder, RecordEncoderBuilder, write_long};
 use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Schema};
@@ -133,6 +133,7 @@ impl WriterBuilder {
         let maybe_fingerprint = if F::NEEDS_PREFIX {
             match self.fingerprint_strategy {
                 Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
+                Some(FingerprintStrategy::Id64(id)) => Some(Fingerprint::Id64(id)),
                 Some(strategy) => {
                     Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
                 }
@@ -394,18 +395,37 @@ mod tests {
     use crate::reader::ReaderBuilder;
     use crate::schema::{AvroSchema, SchemaStore};
     use crate::test_util::arrow_test_data;
-    use arrow_array::{ArrayRef, BinaryArray, Int32Array, RecordBatch};
+    use arrow_array::{
+        Array, ArrayRef, BinaryArray, Int32Array, RecordBatch, StructArray, UnionArray,
+    };
     #[cfg(not(feature = "avro_custom_types"))]
     use arrow_schema::{DataType, Field, Schema};
     #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{DataType, Field, Schema, TimeUnit};
-    #[cfg(feature = "avro_custom_types")]
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs::File;
     use std::io::{BufReader, Cursor};
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
+
+    fn files() -> impl Iterator<Item = &'static str> {
+        [
+            // TODO: avoid requiring snappy for this file
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.avro",
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.snappy.avro",
+            #[cfg(feature = "zstd")]
+            "avro/alltypes_plain.zstandard.avro",
+            #[cfg(feature = "bzip2")]
+            "avro/alltypes_plain.bzip2.avro",
+            #[cfg(feature = "xz")]
+            "avro/alltypes_plain.xz.avro",
+        ]
+        .into_iter()
+    }
 
     fn make_schema() -> Schema {
         Schema::new(vec![
@@ -469,9 +489,43 @@ mod tests {
             .build::<_, AvroBinaryFormat>(Vec::new())?;
         writer.write(&batch)?;
         let encoded = writer.into_inner();
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let avro_schema = AvroSchema::try_from(&schema)?;
         let _ = store.set(Fingerprint::Id(schema_id), avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _ = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 3);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_writer_with_id64_fingerprint_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let schema_id: u64 = 42;
+        let mut writer = WriterBuilder::new(schema.clone())
+            .with_fingerprint_strategy(FingerprintStrategy::Id64(schema_id))
+            .build::<_, AvroBinaryFormat>(Vec::new())?;
+        writer.write(&batch)?;
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _ = store.set(Fingerprint::Id64(schema_id), avro_schema)?;
         let mut decoder = ReaderBuilder::new()
             .with_writer_schema_store(store)
             .build_decoder()?;
@@ -554,14 +608,7 @@ mod tests {
 
     #[test]
     fn test_roundtrip_alltypes_roundtrip_writer() -> Result<(), ArrowError> {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for rel in files {
+        for rel in files() {
             let path = arrow_test_data(rel);
             let rdr_file = File::open(&path).expect("open input avro");
             let reader = ReaderBuilder::new()
@@ -642,6 +689,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_nested_lists_writer() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/nested_lists.snappy.avro");
         let rdr_file = File::open(&path).expect("open nested_lists.snappy.avro");
@@ -835,6 +883,8 @@ mod tests {
     // writes it back out with the writer (hitting Map encoding paths), then reads it
     // again and asserts exact Arrow equivalence.
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nonnullable_impala_roundtrip_writer() -> Result<(), ArrowError> {
         // Load source Avro with Map fields
         let path = arrow_test_data("avro/nonnullable.impala.avro");
@@ -880,6 +930,8 @@ mod tests {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for these files
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_decimals_via_writer() -> Result<(), ArrowError> {
         // (file, resolve via ARROW_TEST_DATA?)
         let files: [(&str, bool); 8] = [
@@ -1014,6 +1066,248 @@ mod tests {
             "Avro complex named types round-trip mismatch"
         );
 
+        Ok(())
+    }
+
+    // Union Roundtrip Test Helpers
+
+    // Asserts that the `actual` schema is a semantically equivalent superset of the `expected` one.
+    // This allows the `actual` schema to contain additional metadata keys
+    // (`arrowUnionMode`, `arrowUnionTypeIds`, `avro.name`) that are added during an Arrow-to-Avro-to-Arrow
+    // roundtrip, while ensuring no other information was lost or changed.
+    fn assert_schema_is_semantically_equivalent(expected: &Schema, actual: &Schema) {
+        // Compare top-level schema metadata using the same superset logic.
+        assert_metadata_is_superset(expected.metadata(), actual.metadata(), "Schema");
+
+        // Compare fields.
+        assert_eq!(
+            expected.fields().len(),
+            actual.fields().len(),
+            "Schema must have the same number of fields"
+        );
+
+        for (expected_field, actual_field) in expected.fields().iter().zip(actual.fields().iter()) {
+            assert_field_is_semantically_equivalent(expected_field, actual_field);
+        }
+    }
+
+    fn assert_field_is_semantically_equivalent(expected: &Field, actual: &Field) {
+        let context = format!("Field '{}'", expected.name());
+
+        assert_eq!(
+            expected.name(),
+            actual.name(),
+            "{context}: names must match"
+        );
+        assert_eq!(
+            expected.is_nullable(),
+            actual.is_nullable(),
+            "{context}: nullability must match"
+        );
+
+        // Recursively check the data types.
+        assert_datatype_is_semantically_equivalent(
+            expected.data_type(),
+            actual.data_type(),
+            &context,
+        );
+
+        // Check that metadata is a valid superset.
+        assert_metadata_is_superset(expected.metadata(), actual.metadata(), &context);
+    }
+
+    fn assert_datatype_is_semantically_equivalent(
+        expected: &DataType,
+        actual: &DataType,
+        context: &str,
+    ) {
+        match (expected, actual) {
+            (DataType::List(expected_field), DataType::List(actual_field))
+            | (DataType::LargeList(expected_field), DataType::LargeList(actual_field))
+            | (DataType::Map(expected_field, _), DataType::Map(actual_field, _)) => {
+                assert_field_is_semantically_equivalent(expected_field, actual_field);
+            }
+            (DataType::Struct(expected_fields), DataType::Struct(actual_fields)) => {
+                assert_eq!(
+                    expected_fields.len(),
+                    actual_fields.len(),
+                    "{context}: struct must have same number of fields"
+                );
+                for (ef, af) in expected_fields.iter().zip(actual_fields.iter()) {
+                    assert_field_is_semantically_equivalent(ef, af);
+                }
+            }
+            (
+                DataType::Union(expected_fields, expected_mode),
+                DataType::Union(actual_fields, actual_mode),
+            ) => {
+                assert_eq!(
+                    expected_mode, actual_mode,
+                    "{context}: union mode must match"
+                );
+                assert_eq!(
+                    expected_fields.len(),
+                    actual_fields.len(),
+                    "{context}: union must have same number of variants"
+                );
+                for ((exp_id, exp_field), (act_id, act_field)) in
+                    expected_fields.iter().zip(actual_fields.iter())
+                {
+                    assert_eq!(exp_id, act_id, "{context}: union type ids must match");
+                    assert_field_is_semantically_equivalent(exp_field, act_field);
+                }
+            }
+            _ => {
+                assert_eq!(expected, actual, "{context}: data types must be identical");
+            }
+        }
+    }
+
+    fn assert_batch_data_is_identical(expected: &RecordBatch, actual: &RecordBatch) {
+        assert_eq!(
+            expected.num_columns(),
+            actual.num_columns(),
+            "RecordBatches must have the same number of columns"
+        );
+        assert_eq!(
+            expected.num_rows(),
+            actual.num_rows(),
+            "RecordBatches must have the same number of rows"
+        );
+
+        for i in 0..expected.num_columns() {
+            let context = format!("Column {i}");
+            let expected_col = expected.column(i);
+            let actual_col = actual.column(i);
+            assert_array_data_is_identical(expected_col, actual_col, &context);
+        }
+    }
+
+    /// Recursively asserts that the data content of two Arrays is identical.
+    fn assert_array_data_is_identical(expected: &dyn Array, actual: &dyn Array, context: &str) {
+        assert_eq!(
+            expected.nulls(),
+            actual.nulls(),
+            "{context}: null buffers must match"
+        );
+        assert_eq!(
+            expected.len(),
+            actual.len(),
+            "{context}: array lengths must match"
+        );
+
+        match (expected.data_type(), actual.data_type()) {
+            (DataType::Union(expected_fields, _), DataType::Union(..)) => {
+                let expected_union = expected.as_any().downcast_ref::<UnionArray>().unwrap();
+                let actual_union = actual.as_any().downcast_ref::<UnionArray>().unwrap();
+
+                // Compare the type_ids buffer (always the first buffer).
+                assert_eq!(
+                    &expected.to_data().buffers()[0],
+                    &actual.to_data().buffers()[0],
+                    "{context}: union type_ids buffer mismatch"
+                );
+
+                // For dense unions, compare the value_offsets buffer (the second buffer).
+                if expected.to_data().buffers().len() > 1 {
+                    assert_eq!(
+                        &expected.to_data().buffers()[1],
+                        &actual.to_data().buffers()[1],
+                        "{context}: union value_offsets buffer mismatch"
+                    );
+                }
+
+                // Recursively compare children based on the fields in the DataType.
+                for (type_id, _) in expected_fields.iter() {
+                    let child_context = format!("{context} -> child variant {type_id}");
+                    assert_array_data_is_identical(
+                        expected_union.child(type_id),
+                        actual_union.child(type_id),
+                        &child_context,
+                    );
+                }
+            }
+            (DataType::Struct(_), DataType::Struct(_)) => {
+                let expected_struct = expected.as_any().downcast_ref::<StructArray>().unwrap();
+                let actual_struct = actual.as_any().downcast_ref::<StructArray>().unwrap();
+                for i in 0..expected_struct.num_columns() {
+                    let child_context = format!("{context} -> struct child {i}");
+                    assert_array_data_is_identical(
+                        expected_struct.column(i),
+                        actual_struct.column(i),
+                        &child_context,
+                    );
+                }
+            }
+            // Fallback for primitive types and other types where buffer comparison is sufficient.
+            _ => {
+                assert_eq!(
+                    expected.to_data().buffers(),
+                    actual.to_data().buffers(),
+                    "{context}: data buffers must match"
+                );
+            }
+        }
+    }
+
+    /// Checks that `actual_meta` contains all of `expected_meta`, and any additional
+    /// keys in `actual_meta` are from a permitted set.
+    fn assert_metadata_is_superset(
+        expected_meta: &HashMap<String, String>,
+        actual_meta: &HashMap<String, String>,
+        context: &str,
+    ) {
+        let allowed_additions: HashSet<&str> =
+            vec!["arrowUnionMode", "arrowUnionTypeIds", "avro.name"]
+                .into_iter()
+                .collect();
+        for (key, expected_value) in expected_meta {
+            match actual_meta.get(key) {
+                Some(actual_value) => assert_eq!(
+                    expected_value, actual_value,
+                    "{context}: preserved metadata for key '{key}' must have the same value"
+                ),
+                None => panic!("{context}: metadata key '{key}' was lost during roundtrip"),
+            }
+        }
+        for key in actual_meta.keys() {
+            if !expected_meta.contains_key(key) && !allowed_additions.contains(key.as_str()) {
+                panic!("{context}: unexpected metadata key '{key}' was added during roundtrip");
+            }
+        }
+    }
+
+    #[test]
+    fn test_union_roundtrip() -> Result<(), ArrowError> {
+        let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test/data/union_fields.avro")
+            .to_string_lossy()
+            .into_owned();
+        let rdr_file = File::open(&file_path).expect("open avro/union_fields.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for union_fields.avro");
+        let schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&schema, &input_batches).expect("concat input");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+
+        // The nature of the crate is such that metadata gets appended during the roundtrip,
+        // so we can't compare the schemas directly. Instead, we semantically compare the schemas and data.
+        assert_schema_is_semantically_equivalent(&original.schema(), &round_trip.schema());
+
+        assert_batch_data_is_identical(&original, &round_trip);
         Ok(())
     }
 

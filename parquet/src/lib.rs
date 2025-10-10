@@ -142,7 +142,9 @@ macro_rules! experimental {
     feature = "flate2",
     not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backened"))
 ))]
-compile_error!("When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`.");
+compile_error!(
+    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`."
+);
 
 #[macro_use]
 pub mod errors;
@@ -188,6 +190,8 @@ pub mod file;
 pub mod record;
 pub mod schema;
 
+mod parquet_macros;
+mod parquet_thrift;
 pub mod thrift;
 /// What data is needed to read the next item from a decoder.
 ///

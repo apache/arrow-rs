@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+extern crate arrow;
 #[macro_use]
 extern crate criterion;
 
 use criterion::Criterion;
-
-extern crate arrow;
 
 use arrow::array::*;
 use arrow_buffer::i256;
@@ -235,6 +234,13 @@ fn from_iter_benchmark(c: &mut Criterion) {
     c.bench_function("BooleanArray::from_iter", |b| {
         let values = gen_option_vector(true, ITER_LEN);
         b.iter(|| hint::black_box(BooleanArray::from_iter(values.iter())));
+    });
+    c.bench_function("BooleanArray::from_trusted_len_iter", |b| {
+        let values = gen_option_vector(true, ITER_LEN);
+        b.iter(|| unsafe {
+            // SAFETY: values.iter() is a TrustedLenIterator
+            hint::black_box(BooleanArray::from_trusted_len_iter(values.iter()))
+        });
     });
 }
 

@@ -18,7 +18,7 @@
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
 use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN};
-use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
+use crate::encryption::modules::{ModuleType, create_footer_aad, create_module_aad};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 use std::borrow::Cow;
@@ -142,13 +142,13 @@ impl CryptoContext {
         column_ordinal: usize,
     ) -> Result<Self> {
         let (data_decryptor, metadata_decryptor) = match column_crypto_metadata {
-            ColumnCryptoMetaData::EncryptionWithFooterKey => {
+            ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY => {
                 // TODO: In GCM-CTR mode will this need to be a non-GCM decryptor?
                 let data_decryptor = file_decryptor.get_footer_decryptor()?;
                 let metadata_decryptor = file_decryptor.get_footer_decryptor()?;
                 (data_decryptor, metadata_decryptor)
             }
-            ColumnCryptoMetaData::EncryptionWithColumnKey(column_key_encryption) => {
+            ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(column_key_encryption) => {
                 let key_metadata = &column_key_encryption.key_metadata;
                 let full_column_name;
                 let column_name = if column_key_encryption.path_in_schema.len() == 1 {

@@ -19,7 +19,7 @@ use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use crate::util::utf8::check_valid_utf8;
-use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{ArrayRef, OffsetSizeTrait, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;

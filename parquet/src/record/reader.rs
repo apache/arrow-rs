@@ -24,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::{ParquetError, Result};
 use crate::file::reader::{FileReader, RowGroupReader};
 use crate::record::{
-    api::{make_list, make_map, Field, Row},
+    api::{Field, Row, make_list, make_map},
     triplet::TripletIter,
 };
 use crate::schema::types::{ColumnPath, SchemaDescPtr, SchemaDescriptor, Type, TypePtr};
@@ -522,7 +522,7 @@ impl Reader {
             Reader::PrimitiveReader(ref field, _) => field.name(),
             Reader::OptionReader(_, ref reader) => reader.field_name(),
             Reader::GroupReader(ref opt, ..) => match opt {
-                Some(ref field) => field.name(),
+                Some(field) => field.name(),
                 None => panic!("Field is None for group reader"),
             },
             Reader::RepeatedReader(ref field, ..) => field.name(),
@@ -536,7 +536,7 @@ impl Reader {
             Reader::PrimitiveReader(ref field, _) => field.get_basic_info().repetition(),
             Reader::OptionReader(_, ref reader) => reader.repetition(),
             Reader::GroupReader(ref opt, ..) => match opt {
-                Some(ref field) => field.get_basic_info().repetition(),
+                Some(field) => field.get_basic_info().repetition(),
                 None => panic!("Field is None for group reader"),
             },
             Reader::RepeatedReader(ref field, ..) => field.get_basic_info().repetition(),

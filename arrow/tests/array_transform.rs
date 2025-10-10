@@ -19,13 +19,13 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
     FixedSizeListBuilder, Int16Array, Int32Array, Int64Array, Int64Builder, ListArray, ListBuilder,
     MapBuilder, NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
-    UInt16Array, UInt16Builder, UInt8Array, UnionArray,
+    UInt8Array, UInt16Array, UInt16Builder, UnionArray,
 };
 use arrow::datatypes::Int16Type;
 use arrow_array::StringViewArray;
 use arrow_buffer::{Buffer, ScalarBuffer};
-use arrow_data::transform::MutableArrayData;
 use arrow_data::ArrayData;
+use arrow_data::transform::MutableArrayData;
 use arrow_schema::{DataType, Field, Fields, UnionFields};
 use std::sync::Arc;
 
