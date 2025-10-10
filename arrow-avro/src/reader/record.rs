@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Avro Decoder for Arrow types.
+
 use crate::codec::{
     AvroDataType, AvroField, AvroLiteral, Codec, Promotion, ResolutionInfo, ResolvedRecord,
     ResolvedUnion,
@@ -33,6 +35,8 @@ use arrow_schema::{
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
+#[cfg(feature = "avro_custom_types")]
+use arrow_select::take::{TakeOptions, take};
 use std::cmp::Ordering;
 use std::sync::Arc;
 use strum_macros::AsRefStr;
@@ -234,6 +238,8 @@ enum Decoder {
     Decimal64(usize, Option<usize>, Option<usize>, Decimal64Builder),
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
+    #[cfg(feature = "avro_custom_types")]
+    RunEndEncoded(u8, usize, Box<Decoder>),
     Union(UnionDecoder),
     Nullable(Nullability, NullBufferBuilder, Box<Decoder>, NullablePlan),
 }
@@ -474,6 +480,23 @@ impl Decoder {
                     "Sparse Arrow unions are not yet supported".to_string(),
                 ));
             }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::RunEndEncoded(values_dt, width_bits_or_bytes), _) => {
+                let inner = Self::try_new(values_dt)?;
+                let byte_width: u8 = match *width_bits_or_bytes {
+                    2 | 4 | 8 => *width_bits_or_bytes,
+                    16 => 2,
+                    32 => 4,
+                    64 => 8,
+                    other => {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Unsupported run-end width {other} for RunEndEncoded; \
+                             expected 16/32/64 bits or 2/4/8 bytes"
+                        )));
+                    }
+                };
+                Self::RunEndEncoded(byte_width, 0, Box::new(inner))
+            }
         };
         Ok(match data_type.nullability() {
             Some(nullability) => {
@@ -550,6 +573,11 @@ impl Decoder {
             Self::Decimal256(_, _, _, builder) => builder.append_value(i256::ZERO),
             Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(_, len, inner) => {
+                *len += 1;
+                inner.append_null()?;
+            }
             Self::Union(u) => u.append_null()?,
             Self::Nullable(_, null_buffer, inner, _) => {
                 null_buffer.append(false);
@@ -778,6 +806,11 @@ impl Decoder {
                     "Default for enum must be a symbol".to_string(),
                 )),
             },
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(_, len, inner) => {
+                *len += 1;
+                inner.append_default(lit)
+            }
             Self::Union(u) => u.append_default(lit),
             Self::Record(field_meta, decoders, projector) => match lit {
                 AvroLiteral::Map(entries) => {
@@ -918,6 +951,11 @@ impl Decoder {
                 let nanos = (millis as i64) * 1_000_000;
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(_, len, inner) => {
+                *len += 1;
+                inner.decode(buf)?;
+            }
             Self::Union(u) => u.decode(buf)?,
             Self::Nullable(order, nb, encoding, plan) => {
                 match *plan {
@@ -950,6 +988,12 @@ impl Decoder {
         buf: &mut AvroCursor<'_>,
         promotion: Promotion,
     ) -> Result<(), ArrowError> {
+        #[cfg(feature = "avro_custom_types")]
+        if let Self::RunEndEncoded(_, len, inner) = self {
+            *len += 1;
+            return inner.decode_with_promotion(buf, promotion);
+        }
+
         macro_rules! promote_numeric_to {
             ($variant:ident, $getter:ident, $to:ty) => {{
                 match self {
@@ -1157,6 +1201,73 @@ impl Decoder {
                 let vals = IntervalMonthDayNanoArray::try_new(vals, nulls)
                     .map_err(|e| ArrowError::ParseError(e.to_string()))?;
                 Arc::new(vals)
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(width, len, inner) => {
+                let values = inner.flush(nulls)?;
+                let n = *len;
+                let arr = values.as_ref();
+                let mut run_starts: Vec<usize> = Vec::with_capacity(n);
+                if n > 0 {
+                    run_starts.push(0);
+                    for i in 1..n {
+                        if !values_equal_at(arr, i - 1, i) {
+                            run_starts.push(i);
+                        }
+                    }
+                }
+                if n > (u32::MAX as usize) {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "RunEndEncoded length {} exceeds maximum supported by UInt32 indices for take",
+                        n
+                    )));
+                }
+                let run_count = run_starts.len();
+                let take_idx: PrimitiveArray<UInt32Type> =
+                    run_starts.iter().map(|&s| s as u32).collect();
+                let per_run_values = if run_count == 0 {
+                    values.slice(0, 0)
+                } else {
+                    take(arr, &take_idx, Option::from(TakeOptions::default())).map_err(|e| {
+                        ArrowError::ParseError(format!("take() for REE values failed: {e}"))
+                    })?
+                };
+
+                macro_rules! build_run_array {
+                    ($Native:ty, $ArrowTy:ty) => {{
+                        let mut ends: Vec<$Native> = Vec::with_capacity(run_count);
+                        for (idx, &_start) in run_starts.iter().enumerate() {
+                            let end = if idx + 1 < run_count {
+                                run_starts[idx + 1]
+                            } else {
+                                n
+                            };
+                            ends.push(end as $Native);
+                        }
+                        let ends: PrimitiveArray<$ArrowTy> = ends.into_iter().collect();
+                        let run_arr = RunArray::<$ArrowTy>::try_new(&ends, per_run_values.as_ref())
+                            .map_err(|e| ArrowError::ParseError(e.to_string()))?;
+                        Arc::new(run_arr) as ArrayRef
+                    }};
+                }
+                match *width {
+                    2 => {
+                        if n > i16::MAX as usize {
+                            return Err(ArrowError::InvalidArgumentError(format!(
+                                "RunEndEncoded length {} exceeds i16::MAX for run end width 2",
+                                n
+                            )));
+                        }
+                        build_run_array!(i16, Int16Type)
+                    }
+                    4 => build_run_array!(i32, Int32Type),
+                    8 => build_run_array!(i64, Int64Type),
+                    other => {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Unsupported run-end width {other} for RunEndEncoded"
+                        )));
+                    }
+                }
             }
             Self::Union(u) => u.flush(nulls)?,
         })
@@ -1705,6 +1816,20 @@ fn sign_cast_to<const N: usize>(raw: &[u8]) -> Result<[u8; N], ArrowError> {
     Ok(out)
 }
 
+#[cfg(feature = "avro_custom_types")]
+#[inline]
+fn values_equal_at(arr: &dyn Array, i: usize, j: usize) -> bool {
+    match (arr.is_null(i), arr.is_null(j)) {
+        (true, true) => true,
+        (true, false) | (false, true) => false,
+        (false, false) => {
+            let a = arr.slice(i, 1);
+            let b = arr.slice(j, 1);
+            a == b
+        }
+    }
+}
+
 #[derive(Debug)]
 struct Projector {
     writer_to_reader: Arc<[Option<usize>]>,
@@ -1846,6 +1971,8 @@ enum Skipper {
     Struct(Vec<Skipper>),
     Union(Vec<Skipper>),
     Nullable(Nullability, Box<Skipper>),
+    #[cfg(feature = "avro_custom_types")]
+    RunEndEncoded(Box<Skipper>),
 }
 
 impl Skipper {
@@ -1896,6 +2023,10 @@ impl Skipper {
                         .map(Skipper::from_avro)
                         .collect::<Result<_, _>>()?,
                 )
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::RunEndEncoded(inner, _w) => {
+                Self::RunEndEncoded(Box::new(Skipper::from_avro(inner)?))
             }
         };
         if let Some(n) = dt.nullability() {
@@ -2001,6 +2132,8 @@ impl Skipper {
                 }
                 Ok(())
             }
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(inner) => inner.skip(buf),
         }
     }
 }
@@ -4296,5 +4429,224 @@ mod tests {
         s.skip(&mut cursor)?;
         assert_eq!(cursor.position(), 12, "expected to consume 12 fixed bytes");
         Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_run_end_encoded_width16_int32_basic_grouping() {
+        use arrow_array::RunArray;
+        use std::sync::Arc;
+        let inner = avro_from_codec(Codec::Int32);
+        let ree = AvroDataType::new(
+            Codec::RunEndEncoded(Arc::new(inner), 16),
+            Default::default(),
+            None,
+        );
+        let mut dec = Decoder::try_new(&ree).expect("create REE decoder");
+        for v in [1, 1, 1, 2, 2, 3, 3, 3, 3] {
+            let bytes = encode_avro_int(v);
+            dec.decode(&mut AvroCursor::new(&bytes)).expect("decode");
+        }
+        let arr = dec.flush(None).expect("flush");
+        let ra = arr
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .expect("RunArray<Int16Type>");
+        assert_eq!(ra.len(), 9);
+        assert_eq!(ra.run_ends().values(), &[3, 5, 9]);
+        let vals = ra
+            .values()
+            .as_ref()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("values Int32");
+        assert_eq!(vals.values(), &[1, 2, 3]);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_run_end_encoded_width32_nullable_values_group_nulls() {
+        use arrow_array::RunArray;
+        use std::sync::Arc;
+        let inner = AvroDataType::new(
+            Codec::Int32,
+            Default::default(),
+            Some(Nullability::NullSecond),
+        );
+        let ree = AvroDataType::new(
+            Codec::RunEndEncoded(Arc::new(inner), 32),
+            Default::default(),
+            None,
+        );
+        let mut dec = Decoder::try_new(&ree).expect("create REE decoder");
+        let seq: [Option<i32>; 8] = [
+            None,
+            None,
+            Some(7),
+            Some(7),
+            Some(7),
+            None,
+            Some(5),
+            Some(5),
+        ];
+        for item in seq {
+            let mut bytes = Vec::new();
+            match item {
+                None => bytes.extend_from_slice(&encode_vlq_u64(1)),
+                Some(v) => {
+                    bytes.extend_from_slice(&encode_vlq_u64(0));
+                    bytes.extend_from_slice(&encode_avro_int(v));
+                }
+            }
+            dec.decode(&mut AvroCursor::new(&bytes)).expect("decode");
+        }
+        let arr = dec.flush(None).expect("flush");
+        let ra = arr
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("RunArray<Int32Type>");
+        assert_eq!(ra.len(), 8);
+        assert_eq!(ra.run_ends().values(), &[2, 5, 6, 8]);
+        let vals = ra
+            .values()
+            .as_ref()
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("values Int32 (nullable)");
+        assert_eq!(vals.len(), 4);
+        assert!(vals.is_null(0));
+        assert_eq!(vals.value(1), 7);
+        assert!(vals.is_null(2));
+        assert_eq!(vals.value(3), 5);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_run_end_encoded_decode_with_promotion_int_to_double_via_nullable_from_single() {
+        use arrow_array::RunArray;
+        let inner_values = Decoder::Float64(Vec::with_capacity(DEFAULT_CAPACITY));
+        let ree = Decoder::RunEndEncoded(
+            8, /* bytes => Int64 run-ends */
+            0,
+            Box::new(inner_values),
+        );
+        let mut dec = Decoder::Nullable(
+            Nullability::NullSecond,
+            NullBufferBuilder::new(DEFAULT_CAPACITY),
+            Box::new(ree),
+            NullablePlan::FromSingle {
+                promotion: Promotion::IntToDouble,
+            },
+        );
+        for v in [1, 1, 2, 2, 2] {
+            let bytes = encode_avro_int(v);
+            dec.decode(&mut AvroCursor::new(&bytes)).expect("decode");
+        }
+        let arr = dec.flush(None).expect("flush");
+        let ra = arr
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .expect("RunArray<Int64Type>");
+        assert_eq!(ra.len(), 5);
+        assert_eq!(ra.run_ends().values(), &[2, 5]);
+        let vals = ra
+            .values()
+            .as_ref()
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .expect("values Float64");
+        assert_eq!(vals.values(), &[1.0, 2.0]);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_run_end_encoded_unsupported_run_end_width_errors() {
+        use std::sync::Arc;
+        let inner = avro_from_codec(Codec::Int32);
+        let dt = AvroDataType::new(
+            Codec::RunEndEncoded(Arc::new(inner), 3),
+            Default::default(),
+            None,
+        );
+        let err = Decoder::try_new(&dt).expect_err("must reject unsupported width");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Unsupported run-end width")
+                && msg.contains("16/32/64 bits or 2/4/8 bytes"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_run_end_encoded_empty_input_is_empty_runarray() {
+        use arrow_array::RunArray;
+        use std::sync::Arc;
+        let inner = avro_from_codec(Codec::Utf8);
+        let dt = AvroDataType::new(
+            Codec::RunEndEncoded(Arc::new(inner), 4),
+            Default::default(),
+            None,
+        );
+        let mut dec = Decoder::try_new(&dt).expect("create REE decoder");
+        let arr = dec.flush(None).expect("flush");
+        let ra = arr
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("RunArray<Int32Type>");
+        assert_eq!(ra.len(), 0);
+        assert_eq!(ra.run_ends().len(), 0);
+        assert_eq!(ra.values().len(), 0);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn test_run_end_encoded_strings_grouping_width32_bits() {
+        use arrow_array::RunArray;
+        use std::sync::Arc;
+        let inner = avro_from_codec(Codec::Utf8);
+        let dt = AvroDataType::new(
+            Codec::RunEndEncoded(Arc::new(inner), 32),
+            Default::default(),
+            None,
+        );
+        let mut dec = Decoder::try_new(&dt).expect("create REE decoder");
+        for s in ["a", "a", "bb", "bb", "bb", "a"] {
+            let bytes = encode_avro_bytes(s.as_bytes());
+            dec.decode(&mut AvroCursor::new(&bytes)).expect("decode");
+        }
+        let arr = dec.flush(None).expect("flush");
+        let ra = arr
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("RunArray<Int32Type>");
+        assert_eq!(ra.run_ends().values(), &[2, 5, 6]);
+        let vals = ra
+            .values()
+            .as_ref()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("values String");
+        assert_eq!(vals.len(), 3);
+        assert_eq!(vals.value(0), "a");
+        assert_eq!(vals.value(1), "bb");
+        assert_eq!(vals.value(2), "a");
+    }
+
+    #[cfg(not(feature = "avro_custom_types"))]
+    #[test]
+    fn test_no_custom_types_feature_smoke_decodes_plain_int32() {
+        let dt = avro_from_codec(Codec::Int32);
+        let mut dec = Decoder::try_new(&dt).expect("create Int32 decoder");
+        for v in [1, 2, 3] {
+            let bytes = encode_avro_int(v);
+            dec.decode(&mut AvroCursor::new(&bytes)).expect("decode");
+        }
+        let arr = dec.flush(None).expect("flush");
+        let a = arr
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("Int32Array");
+        assert_eq!(a.values(), &[1, 2, 3]);
     }
 }
