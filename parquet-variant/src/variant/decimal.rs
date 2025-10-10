@@ -154,7 +154,7 @@ macro_rules! impl_variant_decimal {
 
             fn try_new_with_signed_scale(integer: $native, scale: i8) -> Result<Self, ArrowError> {
                 let (integer, scale) = if scale < 0 {
-                    let multiplier = <$native>::checked_pow(10, (-scale) as u32);
+                    let multiplier = <$native>::checked_pow(10, -scale as u32);
                     let Some(rescaled) = multiplier.and_then(|m| integer.checked_mul(m)) else {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Overflow when rescaling {integer} with scale {scale}"
