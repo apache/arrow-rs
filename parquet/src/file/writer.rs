@@ -393,6 +393,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Returns a reference to schema descriptor Arc.
+    #[cfg(feature = "arrow")]
     pub(crate) fn schema_descr_ptr(&self) -> &SchemaDescPtr {
         &self.descr
     }
