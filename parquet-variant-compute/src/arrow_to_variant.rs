@@ -170,17 +170,17 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             DataType::Float16 => PrimitiveFloat16(PrimitiveArrowToVariantBuilder::new(array)),
             DataType::Float32 => PrimitiveFloat32(PrimitiveArrowToVariantBuilder::new(array)),
             DataType::Float64 => PrimitiveFloat64(PrimitiveArrowToVariantBuilder::new(array)),
-            DataType::Decimal32(_, s) => {
-                Decimal32(DecimalArrowToVariantBuilder::new(array, options, *s))
+            DataType::Decimal32(_, scale) => {
+                Decimal32(DecimalArrowToVariantBuilder::new(array, options, *scale))
             }
-            DataType::Decimal64(_, s) => {
-                Decimal64(DecimalArrowToVariantBuilder::new(array, options, *s))
+            DataType::Decimal64(_, scale) => {
+                Decimal64(DecimalArrowToVariantBuilder::new(array, options, *scale))
             }
-            DataType::Decimal128(_, s) => {
-                Decimal128(DecimalArrowToVariantBuilder::new(array, options, *s))
+            DataType::Decimal128(_, scale) => {
+                Decimal128(DecimalArrowToVariantBuilder::new(array, options, *scale))
             }
-            DataType::Decimal256(_, s) => {
-                Decimal256(Decimal256ArrowToVariantBuilder::new(array, options, *s))
+            DataType::Decimal256(_, scale) => {
+                Decimal256(Decimal256ArrowToVariantBuilder::new(array, options, *scale))
             }
             DataType::Timestamp(time_unit, time_zone) => {
                 match time_unit {

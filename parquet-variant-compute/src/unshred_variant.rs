@@ -528,8 +528,8 @@ where
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         let raw = self.typed_value.value(index);
-        let value = V::try_new_with_signed_scale(raw, self.scale)?;
-        builder.append_value(value);
+        let variant = V::try_new_with_signed_scale(raw, self.scale)?;
+        builder.append_value(variant);
         Ok(())
     }
 }
