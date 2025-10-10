@@ -1894,12 +1894,6 @@ mod tests {
             80, 65, 82, 49,
         ];
         let ret = SerializedFileReader::new(Bytes::copy_from_slice(&data));
-        #[cfg(feature = "encryption")]
-        assert_eq!(
-            ret.err().unwrap().to_string(),
-            "Parquet error: Could not parse metadata: Parquet error: Received empty union from remote ColumnOrder"
-        );
-        #[cfg(not(feature = "encryption"))]
         assert_eq!(
             ret.err().unwrap().to_string(),
             "Parquet error: Received empty union from remote ColumnOrder"
