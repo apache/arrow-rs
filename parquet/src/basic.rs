@@ -25,6 +25,7 @@ use std::str::FromStr;
 use std::{fmt, str};
 
 pub use crate::compression::{BrotliLevel, GzipLevel, ZstdLevel};
+use crate::file::metadata::HeapSize;
 use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     WriteThrift, WriteThriftField,
@@ -724,22 +725,74 @@ impl FromStr for Encoding {
     }
 }
 
-const MAX_ENCODING: i32 = Encoding::BYTE_STREAM_SPLIT as i32;
+/// A bitmask representing the [`Encoding`]s employed while encoding a Parquet column chunk.
+// TODO(ets): full documentation with examples
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct EncodingMask(i32);
 
-/// Given a Thrift input stream, read a vector of [`Encoding`] enums and convert to a bitmask.
-pub(super) fn thrift_encodings_to_mask<'a, R: ThriftCompactInputProtocol<'a>>(
-    prot: &mut R,
-) -> Result<i32> {
-    let mut mask = 0;
+impl EncodingMask {
+    const MAX_ENCODING: i32 = Encoding::BYTE_STREAM_SPLIT as i32;
 
-    let list_ident = prot.read_list_begin()?;
-    for _ in 0..list_ident.size {
-        let val = i32::read_thrift(prot)?;
-        if (0..=MAX_ENCODING).contains(&val) {
-            mask |= 1 << val;
-        }
+    /// Create a new `EncodingMask` from an integer.
+    pub fn new(val: i32) -> Self {
+        Self(val)
     }
-    Ok(mask)
+
+    /// Return an integer representation of this `EncodingMask`.
+    pub fn as_i32(&self) -> i32 {
+        self.0
+    }
+
+    /// Create a new `EncodingMask` from a collection of [`Encoding`]s.
+    pub fn new_from_encodings(encodings: impl Iterator<Item = Encoding>) -> Self {
+        let mut mask = 0;
+        for e in encodings {
+            mask |= 1 << (e as i32);
+        }
+        Self(mask)
+    }
+
+    /// Test if a given [`Encoding`] is present in this mask.
+    pub fn is_set(&self, val: &Encoding) -> bool {
+        self.0 & (1 << (*val as i32)) != 0
+    }
+
+    /// Test if all [`Encoding`]s in a given set are present in this mask.
+    pub fn all_set(&self, mut encodings: impl Iterator<Item = Encoding>) -> bool {
+        encodings.all(|e| self.is_set(&e))
+    }
+
+    /// Return an iterator over all [`Encoding`]s present in this mask.
+    pub fn encodings(&self) -> impl Iterator<Item = Encoding> {
+        Self::mask_to_encodings_iter(self.0)
+    }
+
+    fn mask_to_encodings_iter(mask: i32) -> impl Iterator<Item = Encoding> {
+        (0..=Self::MAX_ENCODING)
+            .filter(move |i| mask & (1 << i) != 0)
+            .map(i32_to_encoding)
+    }
+}
+
+impl HeapSize for EncodingMask {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
+    }
+}
+
+impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
+    fn read_thrift(prot: &mut R) -> Result<Self> {
+        let mut mask = 0;
+
+        let list_ident = prot.read_list_begin()?;
+        for _ in 0..list_ident.size {
+            let val = i32::read_thrift(prot)?;
+            if (0..=Self::MAX_ENCODING).contains(&val) {
+                mask |= 1 << val;
+            }
+        }
+        Ok(Self(mask))
+    }
 }
 
 #[allow(deprecated)]
@@ -756,23 +809,6 @@ fn i32_to_encoding(val: i32) -> Encoding {
         9 => Encoding::BYTE_STREAM_SPLIT,
         _ => panic!("Impossible encoding {val}"),
     }
-}
-
-pub(super) fn encodings_to_mask<'a, I>(encodings: I) -> i32
-where
-    I: Iterator<Item = &'a Encoding>,
-{
-    let mut mask = 0;
-    for e in encodings {
-        mask |= 1 << (*e as i32);
-    }
-    mask
-}
-
-pub(super) fn mask_to_encodings_iter(mask: i32) -> impl Iterator<Item = Encoding> {
-    (0..=MAX_ENCODING)
-        .filter(move |i| mask & (1 << i) != 0)
-        .map(i32_to_encoding)
 }
 
 // ----------------------------------------------------------------------
@@ -2461,25 +2497,25 @@ mod tests {
         assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
     }
 
-    fn encodings_roundtrip(encodings: &mut [Encoding]) {
+    fn encodings_roundtrip(mut encodings: Vec<Encoding>) {
         encodings.sort();
-        let mask = encodings_to_mask(encodings.iter());
-        assert_eq!(
-            mask_to_encodings_iter(mask).collect::<Vec<_>>(),
-            encodings.to_vec()
-        );
+        let mask = EncodingMask::new_from_encodings(encodings.clone().into_iter());
+        assert!(mask.all_set(encodings.into_iter()));
     }
 
     #[test]
     fn test_encoding_roundtrip() {
-        encodings_roundtrip(&mut [
-            Encoding::RLE,
-            Encoding::PLAIN,
-            Encoding::DELTA_BINARY_PACKED,
-        ]);
-        encodings_roundtrip(&mut [Encoding::RLE_DICTIONARY, Encoding::PLAIN_DICTIONARY]);
-        encodings_roundtrip(&mut []);
-        let mut encodings = [
+        encodings_roundtrip(
+            [
+                Encoding::RLE,
+                Encoding::PLAIN,
+                Encoding::DELTA_BINARY_PACKED,
+            ]
+            .into(),
+        );
+        encodings_roundtrip([Encoding::RLE_DICTIONARY, Encoding::PLAIN_DICTIONARY].into());
+        encodings_roundtrip([].into());
+        let encodings = [
             Encoding::PLAIN,
             Encoding::BIT_PACKED,
             Encoding::RLE,
@@ -2490,6 +2526,6 @@ mod tests {
             Encoding::RLE_DICTIONARY,
             Encoding::BYTE_STREAM_SPLIT,
         ];
-        encodings_roundtrip(&mut encodings);
+        encodings_roundtrip(encodings.into());
     }
 }

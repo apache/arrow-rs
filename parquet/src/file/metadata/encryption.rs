@@ -20,7 +20,7 @@
 use std::io::Write;
 
 use crate::{
-    basic::{Compression, thrift_encodings_to_mask},
+    basic::{Compression, EncodingMask},
     encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
     errors::{ParquetError, Result},
     file::{
@@ -376,7 +376,7 @@ fn get_file_decryptor(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ColumnMetaData<'a> {
-    encodings: i32,
+    encodings: EncodingMask,
     codec: Compression,
     num_values: i64,
     total_uncompressed_size: i64,
@@ -395,7 +395,7 @@ struct ColumnMetaData<'a> {
 fn read_column_metadata<'a>(buf: &'a [u8]) -> Result<ColumnMetaData<'a>> {
     let mut prot = ThriftSliceInputProtocol::new(buf);
 
-    let mut encodings: Option<i32> = None;
+    let mut encodings: Option<EncodingMask> = None;
     let mut codec: Option<Compression> = None;
     let mut num_values: Option<i64> = None;
     let mut total_uncompressed_size: Option<i64> = None;
@@ -439,7 +439,7 @@ fn read_column_metadata<'a>(buf: &'a [u8]) -> Result<ColumnMetaData<'a>> {
         match field_ident.id {
             // 1: type is never used, we can use the column descriptor
             2 => {
-                let val = thrift_encodings_to_mask(&mut prot)?;
+                let val = EncodingMask::read_thrift(&mut prot)?;
                 encodings = Some(val);
             }
             // 3: path_in_schema is redundant

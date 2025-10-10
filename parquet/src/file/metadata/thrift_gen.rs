@@ -26,8 +26,8 @@ use crate::file::{
 };
 use crate::{
     basic::{
-        ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, PageType, Repetition, Type,
-        thrift_encodings_to_mask,
+        ColumnOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType,
+        Repetition, Type,
     },
     data_type::{ByteArray, FixedLenByteArray, Int96},
     errors::{ParquetError, Result},
@@ -342,7 +342,7 @@ fn read_column_chunk<'a>(
     let mut encrypted_column_metadata: Option<&[u8]> = None;
 
     // ColumnMetaData
-    let mut encodings: Option<i32> = None;
+    let mut encodings: Option<EncodingMask> = None;
     let mut codec: Option<Compression> = None;
     let mut num_values: Option<i64> = None;
     let mut total_uncompressed_size: Option<i64> = None;
@@ -411,7 +411,7 @@ fn read_column_chunk<'a>(
                     match field_ident.id {
                         // 1: type is never used, we can use the column descriptor
                         2 => {
-                            let val = thrift_encodings_to_mask(&mut *prot)?;
+                            let val = EncodingMask::read_thrift(&mut *prot)?;
                             encodings = Some(val);
                         }
                         // 3: path_in_schema is redundant

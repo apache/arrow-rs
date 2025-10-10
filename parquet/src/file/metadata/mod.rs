@@ -97,7 +97,7 @@ pub(crate) mod reader;
 pub(crate) mod thrift_gen;
 mod writer;
 
-use crate::basic::{PageType, encodings_to_mask, mask_to_encodings_iter};
+use crate::basic::{EncodingMask, PageType};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
@@ -790,7 +790,7 @@ impl RowGroupMetaDataBuilder {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnChunkMetaData {
     column_descr: ColumnDescPtr,
-    encodings: i32,
+    encodings: EncodingMask,
     file_path: Option<String>,
     file_offset: i64,
     num_values: i64,
@@ -971,12 +971,12 @@ impl ColumnChunkMetaData {
 
     /// All encodings used for this column.
     pub fn encodings(&self) -> impl Iterator<Item = Encoding> {
-        mask_to_encodings_iter(self.encodings)
+        self.encodings.encodings()
     }
 
     /// All encodings used for this column, returned as a bitmask.
-    pub fn encodings_mask(&self) -> i32 {
-        self.encodings
+    pub fn encodings_mask(&self) -> &EncodingMask {
+        &self.encodings
     }
 
     /// Total number of values in this column chunk.
@@ -1155,7 +1155,7 @@ impl ColumnChunkMetaDataBuilder {
     fn new(column_descr: ColumnDescPtr) -> Self {
         Self(ColumnChunkMetaData {
             column_descr,
-            encodings: 0,
+            encodings: Default::default(),
             file_path: None,
             file_offset: 0,
             num_values: 0,
@@ -1186,12 +1186,12 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets list of encodings for this column chunk.
     pub fn set_encodings(mut self, encodings: Vec<Encoding>) -> Self {
-        self.0.encodings = encodings_to_mask(encodings.iter());
+        self.0.encodings = EncodingMask::new_from_encodings(encodings.into_iter());
         self
     }
 
     /// Sets the encodings mask for this column chunk.
-    pub fn set_encodings_mask(mut self, encodings: i32) -> Self {
+    pub fn set_encodings_mask(mut self, encodings: EncodingMask) -> Self {
         self.0.encodings = encodings;
         self
     }
@@ -1599,7 +1599,7 @@ impl OffsetIndexBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::basic::{PageType, SortOrder, encodings_to_mask};
+    use crate::basic::{PageType, SortOrder};
     use crate::file::metadata::thrift_gen::tests::{read_column_chunk, read_row_group};
 
     #[test]
@@ -1718,7 +1718,9 @@ mod tests {
     fn test_column_chunk_metadata_thrift_conversion() {
         let column_descr = get_test_schema_descr().column(0);
         let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
-            .set_encodings_mask(encodings_to_mask([Encoding::PLAIN, Encoding::RLE].iter()))
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].into_iter(),
+            ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
             .set_compression(Compression::SNAPPY)
