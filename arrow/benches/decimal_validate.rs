@@ -19,8 +19,8 @@
 extern crate criterion;
 
 use arrow::array::{
-    Array, Decimal128Array, Decimal128Builder, Decimal256Array, Decimal256Builder, Decimal32Array,
-    Decimal32Builder, Decimal64Array, Decimal64Builder,
+    Array, Decimal32Array, Decimal32Builder, Decimal64Array, Decimal64Builder, Decimal128Array,
+    Decimal128Builder, Decimal256Array, Decimal256Builder,
 };
 use criterion::Criterion;
 use rand::Rng;

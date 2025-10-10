@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow_arith::numeric::{add, sub};
-use arrow_arith::temporal::{date_part, DatePart};
+use arrow_arith::temporal::{DatePart, date_part};
 use arrow_array::cast::AsArray;
 use arrow_array::temporal_conversions::as_datetime_with_timezone;
 use arrow_array::timezone::Tz;
