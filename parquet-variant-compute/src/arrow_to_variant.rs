@@ -33,7 +33,6 @@ use parquet_variant::{
     VariantDecimal16, VariantDecimalType,
 };
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::ops::Range;
 
 // ============================================================================
@@ -171,24 +170,15 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
             DataType::Float16 => PrimitiveFloat16(PrimitiveArrowToVariantBuilder::new(array)),
             DataType::Float32 => PrimitiveFloat32(PrimitiveArrowToVariantBuilder::new(array)),
             DataType::Float64 => PrimitiveFloat64(PrimitiveArrowToVariantBuilder::new(array)),
-            DataType::Decimal32(_, s) => Decimal32(DecimalArrowToVariantBuilder::new(
-                array,
-                options,
-                *s,
-                PhantomData,
-            )),
-            DataType::Decimal64(_, s) => Decimal64(DecimalArrowToVariantBuilder::new(
-                array,
-                options,
-                *s,
-                PhantomData,
-            )),
-            DataType::Decimal128(_, s) => Decimal128(DecimalArrowToVariantBuilder::new(
-                array,
-                options,
-                *s,
-                PhantomData,
-            )),
+            DataType::Decimal32(_, s) => {
+                Decimal32(DecimalArrowToVariantBuilder::new(array, options, *s))
+            }
+            DataType::Decimal64(_, s) => {
+                Decimal64(DecimalArrowToVariantBuilder::new(array, options, *s))
+            }
+            DataType::Decimal128(_, s) => {
+                Decimal128(DecimalArrowToVariantBuilder::new(array, options, *s))
+            }
             DataType::Decimal256(_, s) => {
                 Decimal256(Decimal256ArrowToVariantBuilder::new(array, options, *s))
             }
@@ -329,24 +319,26 @@ macro_rules! define_row_builder {
     (
         struct $name:ident<$lifetime:lifetime $(, $generic:ident $( : $bound:path )? )*>
         $( where $where_path:path: $where_bound:path $(,)? )?
-        $({ $($field:ident: $field_type:ty),+ $(,)? })?,
+        $({ $( $field:ident: $field_type:ty ),+ $(,)? })?,
         |$array_param:ident| -> $array_type:ty { $init_expr:expr }
-        $(, |$value:ident| $(-> Option<$option_ty:ty>)? $value_transform:expr)?
+        $(, |$value:ident| $(-> Option<$option_ty:ty>)? $value_transform:expr )?
     ) => {
         pub(crate) struct $name<$lifetime $(, $generic: $( $bound )? )*>
         $( where $where_path: $where_bound )?
         {
             array: &$lifetime $array_type,
             $( $( $field: $field_type, )+ )?
+            _phantom: std::marker::PhantomData<($( $generic, )*)>, // capture all type params
         }
 
         impl<$lifetime $(, $generic: $( $bound )? )*> $name<$lifetime $(, $generic)*>
         $( where $where_path: $where_bound )?
         {
-            pub(crate) fn new($array_param: &$lifetime dyn Array $(, $( $field: $field_type ),+ )?) -> Self {
+            pub(crate) fn new($array_param: &$lifetime dyn Array $( $(, $field: $field_type )+ )?) -> Self {
                 Self {
                     array: $init_expr,
                     $( $( $field, )+ )?
+                    _phantom: std::marker::PhantomData,
                 }
             }
 
@@ -410,11 +402,10 @@ define_row_builder!(
 define_row_builder!(
     struct DecimalArrowToVariantBuilder<'a, A: DecimalType, V>
     where
-        V: VariantDecimalType<Native = A::Native>
+        V: VariantDecimalType<Native = A::Native>,
     {
         options: &'a CastOptions,
         scale: i8,
-        _phantom: PhantomData<V>,
     },
     |array| -> PrimitiveArray<A> { array.as_primitive() },
     |value| -> Option<_> { V::try_new_with_signed_scale(value, *scale).ok() }
