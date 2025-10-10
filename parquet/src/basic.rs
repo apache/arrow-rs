@@ -2461,4 +2461,33 @@ mod tests {
         assert_eq!(EdgeInterpolationAlgorithm::ANDOYER.to_string(), "ANDOYER");
         assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
     }
+
+    fn encodings_roundtrip(encodings: &mut [Encoding]) {
+        encodings.sort();
+        let mask = encodings_to_mask(encodings.iter());
+        assert_eq!(mask_to_encodings_vec(mask), encodings.to_vec());
+    }
+
+    #[test]
+    fn test_encoding_roundtrip() {
+        encodings_roundtrip(&mut [
+            Encoding::RLE,
+            Encoding::PLAIN,
+            Encoding::DELTA_BINARY_PACKED,
+        ]);
+        encodings_roundtrip(&mut [Encoding::RLE_DICTIONARY, Encoding::PLAIN_DICTIONARY]);
+        encodings_roundtrip(&mut []);
+        let mut encodings = [
+            Encoding::PLAIN,
+            Encoding::BIT_PACKED,
+            Encoding::RLE,
+            Encoding::DELTA_BINARY_PACKED,
+            Encoding::DELTA_BYTE_ARRAY,
+            Encoding::DELTA_LENGTH_BYTE_ARRAY,
+            Encoding::PLAIN_DICTIONARY,
+            Encoding::RLE_DICTIONARY,
+            Encoding::BYTE_STREAM_SPLIT,
+        ];
+        encodings_roundtrip(&mut encodings);
+    }
 }
