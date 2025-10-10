@@ -4161,13 +4161,12 @@ mod tests {
             true,
         )]));
         let parquet_schema = Type::group_type_builder("root")
-            .with_fields(vec![Type::primitive_type_builder(
-                "integers",
-                crate::basic::Type::INT64,
-            )
-            .build()
-            .unwrap()
-            .into()])
+            .with_fields(vec![
+                Type::primitive_type_builder("integers", crate::basic::Type::INT64)
+                    .build()
+                    .unwrap()
+                    .into(),
+            ])
             .build()
             .unwrap();
         let parquet_schema_descr = SchemaDescriptor::new(parquet_schema.into());

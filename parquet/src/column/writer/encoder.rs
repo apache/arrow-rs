@@ -28,7 +28,7 @@ use crate::data_type::private::ParquetValueType;
 use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::{ParquetError, Result};
 use crate::file::properties::{EnabledStatistics, WriterProperties};
-use crate::geospatial::accumulator::{try_new_geo_stats_accumulator, GeoStatsAccumulator};
+use crate::geospatial::accumulator::{GeoStatsAccumulator, try_new_geo_stats_accumulator};
 use crate::geospatial::statistics::GeospatialStatistics;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor};
 

@@ -132,11 +132,11 @@ mod test {
 
     use std::{iter::zip, sync::Arc};
 
-    use arrow_array::{create_array, ArrayRef, BinaryArray, RecordBatch};
+    use arrow_array::{ArrayRef, BinaryArray, RecordBatch, create_array};
     use arrow_schema::{DataType, Field, Schema};
     use bytes::Bytes;
     use parquet::{
-        arrow::{arrow_writer::ArrowWriterOptions, ArrowWriter},
+        arrow::{ArrowWriter, arrow_writer::ArrowWriterOptions},
         column::reader::ColumnReader,
         data_type::{ByteArray, ByteArrayType},
         file::{
@@ -415,14 +415,13 @@ mod test {
 
     fn parquet_schema_geometry() -> Type {
         Type::group_type_builder("root")
-            .with_fields(vec![Type::primitive_type_builder(
-                "geo",
-                parquet::basic::Type::BYTE_ARRAY,
-            )
-            .with_logical_type(Some(LogicalType::Geometry { crs: None }))
-            .build()
-            .unwrap()
-            .into()])
+            .with_fields(vec![
+                Type::primitive_type_builder("geo", parquet::basic::Type::BYTE_ARRAY)
+                    .with_logical_type(Some(LogicalType::Geometry { crs: None }))
+                    .build()
+                    .unwrap()
+                    .into(),
+            ])
             .build()
             .unwrap()
     }
