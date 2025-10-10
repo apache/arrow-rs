@@ -914,28 +914,36 @@ impl ArrowRowGroupWriterFactory {
         }
     }
 
-    #[cfg(feature = "encryption")]
     fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
-        let writers = get_column_writers_with_encryptor(
-            &self.schema,
-            &self.props,
-            &self.arrow_schema,
-            self.file_encryptor.clone(),
-            row_group_index,
-        )?;
-        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn create_row_group_writer(&self, _row_group_index: usize) -> Result<ArrowRowGroupWriter> {
-        let writers = get_column_writers(&self.schema, &self.props, &self.arrow_schema)?;
+        let writers = self.create_column_writers(row_group_index)?;
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 
     /// Create column writers for a new row group.
     pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
-        let rg_writer = self.create_row_group_writer(row_group_index)?;
-        Ok(rg_writer.writers)
+        let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
+        let mut leaves = self.schema.columns().iter();
+        let column_factory = self.column_writer_factory(row_group_index);
+        for field in &self.arrow_schema.fields {
+            column_factory.get_arrow_column_writer(
+                field.data_type(),
+                &self.props,
+                &mut leaves,
+                &mut writers,
+            )?;
+        }
+        Ok(writers)
+    }
+
+    #[cfg(feature = "encryption")]
+    fn column_writer_factory(&self, row_group_idx: usize) -> ArrowColumnWriterFactory {
+        ArrowColumnWriterFactory::new()
+            .with_file_encryptor(row_group_idx, self.file_encryptor.clone())
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn column_writer_factory(&self, _row_group_idx: usize) -> ArrowColumnWriterFactory {
+        ArrowColumnWriterFactory::new()
     }
 }
 
@@ -948,30 +956,6 @@ pub fn get_column_writers(
     let mut writers = Vec::with_capacity(arrow.fields.len());
     let mut leaves = parquet.columns().iter();
     let column_factory = ArrowColumnWriterFactory::new();
-    for field in &arrow.fields {
-        column_factory.get_arrow_column_writer(
-            field.data_type(),
-            props,
-            &mut leaves,
-            &mut writers,
-        )?;
-    }
-    Ok(writers)
-}
-
-/// Returns the [`ArrowColumnWriter`] for a given schema and supports columnar encryption
-#[cfg(feature = "encryption")]
-fn get_column_writers_with_encryptor(
-    parquet: &SchemaDescriptor,
-    props: &WriterPropertiesPtr,
-    arrow: &SchemaRef,
-    file_encryptor: Option<Arc<FileEncryptor>>,
-    row_group_index: usize,
-) -> Result<Vec<ArrowColumnWriter>> {
-    let mut writers = Vec::with_capacity(arrow.fields.len());
-    let mut leaves = parquet.columns().iter();
-    let column_factory =
-        ArrowColumnWriterFactory::new().with_file_encryptor(row_group_index, file_encryptor);
     for field in &arrow.fields {
         column_factory.get_arrow_column_writer(
             field.data_type(),
