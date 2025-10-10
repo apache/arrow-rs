@@ -87,6 +87,8 @@
 //!
 //!                         * Same name, different struct
 //! ```
+#[cfg(feature = "encryption")]
+mod encryption;
 mod footer_tail;
 mod memory;
 mod parser;
@@ -100,9 +102,9 @@ use crate::basic::PageType;
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
-pub(crate) use crate::file::metadata::memory::HeapSize;
 #[cfg(feature = "encryption")]
-use crate::file::metadata::thrift_gen::EncryptionAlgorithm;
+use crate::file::metadata::encryption::EncryptionAlgorithm;
+pub(crate) use crate::file::metadata::memory::HeapSize;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
