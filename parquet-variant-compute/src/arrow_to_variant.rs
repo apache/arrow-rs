@@ -327,20 +327,20 @@ pub(crate) fn make_arrow_to_variant_row_builder<'a>(
 // worth the trouble, tho, because it makes for some pretty bulky and unwieldy macro expansions.
 macro_rules! define_row_builder {
     (
-        struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )*>
+        struct $name:ident<$lifetime:lifetime $(, $generic:ident $( : $bound:path )? )*>
         $( where $where_path:path: $where_bound:path $(,)? )?
         $({ $($field:ident: $field_type:ty),+ $(,)? })?,
         |$array_param:ident| -> $array_type:ty { $init_expr:expr }
         $(, |$value:ident| $(-> Option<$option_ty:ty>)? $value_transform:expr)?
     ) => {
-        pub(crate) struct $name<$lifetime $(, $generic: $bound )*>
+        pub(crate) struct $name<$lifetime $(, $generic: $( $bound )? )*>
         $( where $where_path: $where_bound )?
         {
             array: &$lifetime $array_type,
             $( $( $field: $field_type, )+ )?
         }
 
-        impl<$lifetime $(, $generic: $bound )*> $name<$lifetime $(, $generic)*>
+        impl<$lifetime $(, $generic: $( $bound )? )*> $name<$lifetime $(, $generic)*>
         $( where $where_path: $where_bound )?
         {
             pub(crate) fn new($array_param: &$lifetime dyn Array $(, $( $field: $field_type ),+ )?) -> Self {
@@ -408,16 +408,16 @@ define_row_builder!(
 );
 
 define_row_builder!(
-    struct DecimalArrowToVariantBuilder<'a, A: DecimalType, V: VariantDecimalType>
+    struct DecimalArrowToVariantBuilder<'a, A: DecimalType, V>
     where
-        V::Native: From<A::Native>,
+        V: VariantDecimalType<Native = A::Native>
     {
         options: &'a CastOptions,
         scale: i8,
         _phantom: PhantomData<V>,
     },
     |array| -> PrimitiveArray<A> { array.as_primitive() },
-    |value| -> Option<_> { V::try_new_with_signed_scale(value.into(), *scale).ok() }
+    |value| -> Option<_> { V::try_new_with_signed_scale(value, *scale).ok() }
 );
 
 // Decimal256 needs a two-stage conversion via i128
