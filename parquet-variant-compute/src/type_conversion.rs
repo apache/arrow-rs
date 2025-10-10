@@ -224,56 +224,68 @@ where
     O::Native: DecimalCast,
 {
     match variant {
-        Variant::Int8(i) => {
-            rescale_decimal::<Decimal32Type, O>(VariantDecimal4::MAX_PRECISION, 0, precision, scale)(
-                *i as i32,
-            )
-        }
-        Variant::Int16(i) => {
-            rescale_decimal::<Decimal32Type, O>(VariantDecimal4::MAX_PRECISION, 0, precision, scale)(
-                *i as i32,
-            )
-        }
-        Variant::Int32(i) => {
-            rescale_decimal::<Decimal32Type, O>(VariantDecimal4::MAX_PRECISION, 0, precision, scale)(
-                *i,
-            )
-        }
-        Variant::Int64(i) => {
-            rescale_decimal::<Decimal64Type, O>(VariantDecimal8::MAX_PRECISION, 0, precision, scale)(
-                *i,
-            )
-        }
+        Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
+            *i as i32,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int16(i) => rescale_decimal::<Decimal32Type, O>(
+            *i as i32,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int32(i) => rescale_decimal::<Decimal32Type, O>(
+            *i,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int64(i) => rescale_decimal::<Decimal64Type, O>(
+            *i,
+            VariantDecimal8::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
         Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
+            d.integer(),
             VariantDecimal4::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
-        )(d.integer()),
+        ),
         Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, O>(
+            d.integer(),
             VariantDecimal8::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
-        )(d.integer()),
+        ),
         Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, O>(
+            d.integer(),
             VariantDecimal16::MAX_PRECISION,
             d.scale() as i8,
             precision,
             scale,
-        )(d.integer()),
+        ),
         _ => None,
     }
 }
 
-/// Build a rescale function from (input_precision, input_scale) to (output_precision, output_scale)
-/// returning a closure `Fn(I::Native) -> Option<O::Native>` that performs the conversion.
+/// Rescale a decimal from (input_precision, input_scale) to (output_precision, output_scale)
+/// and return the scaled value if it fits the output precision.
 pub(crate) fn rescale_decimal<I, O>(
+    value: I::Native,
     input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
-) -> impl Fn(I::Native) -> Option<O::Native>
+) -> Option<O::Native>
 where
     I: DecimalType,
     O: DecimalType,
@@ -286,73 +298,32 @@ where
     let is_infallible_cast =
         is_infallible_decimal_cast(input_precision, input_scale, output_precision, output_scale);
 
-    // Build a single mode once and use a thin closure that calls into it
-    enum RescaleMode<I, O> {
-        SameScale,
-        Up { mul: O },
-        Down { div: I, half: I, half_neg: I },
-        Invalid,
-    }
-
-    let mode = if delta_scale == 0 {
-        RescaleMode::SameScale
+    let scaled = if delta_scale == 0 {
+        O::Native::from_decimal(value)
     } else if delta_scale > 0 {
-        match O::Native::from_decimal(10_i128).and_then(|t| t.pow_checked(delta_scale as u32).ok())
-        {
-            Some(mul) => RescaleMode::Up { mul },
-            None => RescaleMode::Invalid,
-        }
+        let mul = O::Native::from_decimal(10_i128)
+            .and_then(|t| t.pow_checked(delta_scale as u32).ok())?;
+        O::Native::from_decimal(value).and_then(|x| x.mul_checked(mul).ok())
     } else {
-        match I::Native::from_decimal(10_i128)
-            .and_then(|t| t.pow_checked(delta_scale.unsigned_abs() as u32).ok())
-        {
-            Some(div) => {
-                let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
-                let half_neg = half.neg_wrapping();
-                RescaleMode::Down {
-                    div,
-                    half,
-                    half_neg,
-                }
-            }
-            None => RescaleMode::Invalid,
-        }
+        let div = I::Native::from_decimal(10_i128)
+            .and_then(|t| t.pow_checked(delta_scale.unsigned_abs() as u32).ok())?;
+        let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
+        let half_neg = half.neg_wrapping();
+
+        // div is >= 10 and so this cannot overflow
+        let d = value.div_wrapping(div);
+        let r = value.mod_wrapping(div);
+
+        // Round result
+        let adjusted = match value >= I::Native::ZERO {
+            true if r >= half => d.add_wrapping(I::Native::ONE),
+            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+            _ => d,
+        };
+        O::Native::from_decimal(adjusted)
     };
 
-    let f = move |x: I::Native| {
-        match &mode {
-            RescaleMode::SameScale => O::Native::from_decimal(x),
-            RescaleMode::Up { mul } => {
-                O::Native::from_decimal(x).and_then(|x| x.mul_checked(*mul).ok())
-            }
-            RescaleMode::Down {
-                div,
-                half,
-                half_neg,
-            } => {
-                // div is >= 10 and so this cannot overflow
-                let d = x.div_wrapping(*div);
-                let r = x.mod_wrapping(*div);
-
-                // Round result
-                let adjusted = match x >= I::Native::ZERO {
-                    true if r >= *half => d.add_wrapping(I::Native::ONE),
-                    false if r <= *half_neg => d.sub_wrapping(I::Native::ONE),
-                    _ => d,
-                };
-                O::Native::from_decimal(adjusted)
-            }
-            RescaleMode::Invalid => None,
-        }
-    };
-
-    move |x| {
-        if is_infallible_cast {
-            f(x)
-        } else {
-            f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision))
-        }
-    }
+    scaled.filter(|v| is_infallible_cast || O::is_valid_decimal_precision(*v, output_precision))
 }
 
 /// Returns true if casting from (input_precision, input_scale) to
