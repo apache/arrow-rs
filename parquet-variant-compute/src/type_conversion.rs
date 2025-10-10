@@ -113,8 +113,7 @@ impl_timestamp_from_variant!(
     |timestamp| Self::make_value(timestamp.naive_utc())
 );
 
-/// A utility trait that provides checked conversions between
-/// decimal types inspired by [`NumCast`]
+/// A utility trait that provides checked conversions between decimal types
 pub(crate) trait DecimalCast: Sized {
     fn to_i32(self) -> Option<i32>;
 
