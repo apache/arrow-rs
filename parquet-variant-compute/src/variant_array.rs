@@ -26,13 +26,11 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{
-    ArrowError, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
-    DataType, Field, FieldRef, Fields, TimeUnit,
-};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use chrono::DateTime;
-use parquet_variant::Uuid;
-use parquet_variant::Variant;
+use parquet_variant::{
+    Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
+};
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -937,18 +935,6 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
     cast(array, new_type.as_ref())
 }
 
-/// Validates whether a given arrow decimal is a valid variant decimal
-///
-/// NOTE: By a strict reading of the "decimal table" in the [shredding spec], each decimal type
-/// should have a width-dependent lower bound on precision as well as an upper bound (i.e. Decimal16
-/// with precision 5 is invalid because Decimal4 "covers" it). But the variant shredding integration
-/// tests specifically expect such cases to succeed, so we only enforce the upper bound here.
-///
-/// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
-fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
-    (1..=max_precision).contains(p) && (0..=*p as i8).contains(s)
-}
-
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
 /// appear in a (possibly shredded) variant array. It also replaces Binary fields with BinaryView,
 /// since that's what comes back from the parquet reader and what the variant code expects to find.
@@ -984,16 +970,16 @@ fn canonicalize_and_verify_data_type(
         // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
         // requires using the narrowest decimal type for a given precision. Fix those up first.
         Decimal64(p, s) | Decimal128(p, s)
-            if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) =>
+            if VariantDecimal4::is_valid_precision_and_scale(p, s) =>
         {
             Cow::Owned(Decimal32(*p, *s))
         }
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => {
+        Decimal128(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
             Cow::Owned(Decimal64(*p, *s))
         }
-        Decimal32(p, s) if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL128_MAX_PRECISION) => borrow!(),
+        Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed
