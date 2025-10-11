@@ -367,7 +367,7 @@ pub(crate) fn decode_short_string(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use paste::paste;
+    use pastey::paste;
 
     macro_rules! test_decoder_bounds {
         ($test_name:ident, $data:expr, $decode_fn:ident, $expected:expr) => {

@@ -41,7 +41,7 @@ type Result<T> = std::result::Result<T, String>;
 /// Note the index is zero-based, while the case number is one-based
 macro_rules! variant_test_case {
     ($case_num:literal $(, $expected_error:literal )? ) => {
-        paste::paste! {
+        pastey::paste! {
             #[test]
             $( #[should_panic(expected = $expected_error)] )?
             fn [<test_variant_integration_case_ $case_num>]() {

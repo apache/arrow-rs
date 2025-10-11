@@ -44,7 +44,7 @@ name = "parquet_variant"
 bench = false
 
 [dev-dependencies]
-paste = { version = "1.0" }
+pastey = { version = "0.1" }
 criterion = { version = "0.6", default-features = false }
 rand = { version = "0.9", default-features = false, features = [
     "std",
