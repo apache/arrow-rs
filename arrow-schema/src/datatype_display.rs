@@ -158,7 +158,20 @@ impl fmt::Display for DataType {
             Self::Decimal64(precision, scale) => write!(f, "Decimal64({precision}, {scale})"),
             Self::Decimal128(precision, scale) => write!(f, "Decimal128({precision}, {scale})"),
             Self::Decimal256(precision, scale) => write!(f, "Decimal256({precision}, {scale})"),
-            Self::Map(field, keys_are_sorted) => write!(f, "Map({field}, {keys_are_sorted})"),
+            Self::Map(field, sorted) => {
+                write!(f, "Map(")?;
+                let name = field.name();
+                let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
+                let data_type = field.data_type();
+                let metadata_str = format_metadata(field.metadata());
+                let keys_are_sorted = if *sorted { "sorted" } else { "unsorted" };
+
+                write!(
+                    f,
+                    "\"{name}\": {maybe_nullable}{data_type}{metadata_str}, {keys_are_sorted})"
+                )?;
+                Ok(())
+            }
             Self::RunEndEncoded(run_ends_field, values_field) => {
                 write!(f, "RunEndEncoded({run_ends_field}, {values_field})")
             }
@@ -327,6 +340,48 @@ mod tests {
             "Union(Sparse, 0: Int32, 1: nullable Utf8, metadata: {\"key\": \"value\"})";
         assert_eq!(
             union_data_type_with_metadata_string,
+            expected_string_with_metadata
+        );
+    }
+
+    #[test]
+    fn test_display_map() {
+        let entry_field = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let map_data_type = DataType::Map(Arc::new(entry_field), true);
+        let map_data_type_string = map_data_type.to_string();
+        let expected_string =
+            "Map(\"entries\": Struct(\"key\": Utf8, \"value\": nullable Int32), sorted)";
+        assert_eq!(map_data_type_string, expected_string);
+
+        // Test with metadata
+        let mut entry_field_with_metadata = Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            false,
+        );
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        entry_field_with_metadata.set_metadata(metadata);
+        let map_data_type_with_metadata = DataType::Map(Arc::new(entry_field_with_metadata), true);
+        let map_data_type_with_metadata_string = map_data_type_with_metadata.to_string();
+        let expected_string_with_metadata = "Map(\"entries\": Struct(\"key\": Utf8, \"value\": nullable Int32), metadata: {\"key\": \"value\"}, sorted)";
+        assert_eq!(
+            map_data_type_with_metadata_string,
             expected_string_with_metadata
         );
     }
