@@ -762,8 +762,12 @@ impl FromStr for Encoding {
 pub struct EncodingMask(i32);
 
 impl EncodingMask {
+    /// Highest valued discriminant in the [`Encoding`] enum
     const MAX_ENCODING: i32 = Encoding::BYTE_STREAM_SPLIT as i32;
-    const ALLOWED_MASK: u32 = !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1);
+    /// A mask consisting of unused bit positions, used for validation. This includes the never
+    /// used GROUP_VAR_INT encoding value of `1`.
+    const ALLOWED_MASK: u32 =
+        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | 1;
 
     /// Attempt to create a new `EncodingMask` from an integer.
     ///
@@ -2569,12 +2573,22 @@ mod tests {
 
     #[test]
     fn test_invalid_encoding_mask() {
+        // any set bits higher than the max should trigger an error
         let res = EncodingMask::try_new(-1);
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert_eq!(
             err.to_string(),
             "Parquet error: Attempt to create invalid mask: 0xffffffff"
+        );
+
+        // test that GROUP_VAR_INT is disallowed
+        let res = EncodingMask::try_new(1);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Attempt to create invalid mask: 0x1"
         );
     }
 }
