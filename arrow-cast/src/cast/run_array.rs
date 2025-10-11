@@ -140,6 +140,7 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     value_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
+    use DataType::*;
     // Cast the input array to the target value type if necessary
     let cast_array = if array.data_type() == value_type {
         array
@@ -152,9 +153,10 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
         unreachable!()
     }
 
-    // Run-end encode the cast array
+    // Create a builder to construct the run array
     let mut run_ends_builder = PrimitiveBuilder::<K>::new();
 
+    // Return early if the array to cast is empty
     if cast_array.is_empty() {
         let empty_run_ends = run_ends_builder.finish();
         let empty_values = make_array(ArrayData::new_empty(value_type));
@@ -164,291 +166,342 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
         )?));
     }
 
-    // Create a temporary builder to construct the run array
+    // Run-end encode the cast array
     // We'll iterate through and build runs by comparing adjacent elements
-    let mut run_ends_vec = Vec::new();
-    let mut values_indices = Vec::new();
+    let mut run_ends = Vec::new();
+    let mut vals_idxs = Vec::new();
 
     // Add the first element as the start of the first run
-    values_indices.push(0);
+    vals_idxs.push(0);
 
-    // Identify runs by comparing adjacent elements
-    // We can afford to perform a simple comparison of adjacent elements here
-    // as we already validated the type in [can_cast_to_run_end_encoded].
-    for i in 1..cast_array.len() {
-        let values_equal = match (cast_array.is_null(i), cast_array.is_null(i - 1)) {
-            (true, true) => true,
-            (false, false) => match value_type {
-                // Primitive types
-                DataType::Boolean => {
-                    cast_array.as_boolean().value(i) == cast_array.as_boolean().value(i - 1)
-                }
-                DataType::Int8 => {
-                    cast_array.as_primitive::<Int8Type>().value(i)
-                        == cast_array.as_primitive::<Int8Type>().value(i - 1)
-                }
-                DataType::Int16 => {
-                    cast_array.as_primitive::<Int16Type>().value(i)
-                        == cast_array.as_primitive::<Int16Type>().value(i - 1)
-                }
-                DataType::Int32 => {
-                    cast_array.as_primitive::<Int32Type>().value(i)
-                        == cast_array.as_primitive::<Int32Type>().value(i - 1)
-                }
-                DataType::Int64 => {
-                    cast_array.as_primitive::<Int64Type>().value(i)
-                        == cast_array.as_primitive::<Int64Type>().value(i - 1)
-                }
-                DataType::UInt8 => {
-                    cast_array.as_primitive::<UInt8Type>().value(i)
-                        == cast_array.as_primitive::<UInt8Type>().value(i - 1)
-                }
-                DataType::UInt16 => {
-                    cast_array.as_primitive::<UInt16Type>().value(i)
-                        == cast_array.as_primitive::<UInt16Type>().value(i - 1)
-                }
-                DataType::UInt32 => {
-                    cast_array.as_primitive::<UInt32Type>().value(i)
-                        == cast_array.as_primitive::<UInt32Type>().value(i - 1)
-                }
-                DataType::UInt64 => {
-                    cast_array.as_primitive::<UInt64Type>().value(i)
-                        == cast_array.as_primitive::<UInt64Type>().value(i - 1)
-                }
-                DataType::Float16 => {
-                    cast_array.as_primitive::<Float16Type>().value(i)
-                        == cast_array.as_primitive::<Float16Type>().value(i - 1)
-                }
-                DataType::Float32 => {
-                    cast_array.as_primitive::<Float32Type>().value(i)
-                        == cast_array.as_primitive::<Float32Type>().value(i - 1)
-                }
-                DataType::Float64 => {
-                    cast_array.as_primitive::<Float64Type>().value(i)
-                        == cast_array.as_primitive::<Float64Type>().value(i - 1)
-                }
+    // Dispatch to specialized pack functions based on data type
+    match value_type {
+        // Primitive numeric types
+        Boolean => pack_boolean_runs(cast_array, &mut run_ends, &mut vals_idxs),
+        Int8 => pack_primitive_runs::<Int8Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Int16 => pack_primitive_runs::<Int16Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Int32 => pack_primitive_runs::<Int32Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Int64 => pack_primitive_runs::<Int64Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        UInt8 => pack_primitive_runs::<UInt8Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        UInt16 => pack_primitive_runs::<UInt16Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        UInt32 => pack_primitive_runs::<UInt32Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        UInt64 => pack_primitive_runs::<UInt64Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Float16 => pack_primitive_runs::<Float16Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Float32 => pack_primitive_runs::<Float32Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Float64 => pack_primitive_runs::<Float64Type>(cast_array, &mut run_ends, &mut vals_idxs),
 
-                // String types
-                DataType::Utf8 => {
-                    cast_array.as_string::<i32>().value(i)
-                        == cast_array.as_string::<i32>().value(i - 1)
-                }
-                DataType::LargeUtf8 => {
-                    cast_array.as_string::<i64>().value(i)
-                        == cast_array.as_string::<i64>().value(i - 1)
-                }
-                DataType::Utf8View => {
-                    cast_array.as_string_view().value(i) == cast_array.as_string_view().value(i - 1)
-                }
+        // String types
+        Utf8 => pack_string_runs::<i32>(cast_array, &mut run_ends, &mut vals_idxs),
+        LargeUtf8 => pack_string_runs::<i64>(cast_array, &mut run_ends, &mut vals_idxs),
+        Utf8View => pack_string_view_runs(cast_array, &mut run_ends, &mut vals_idxs),
 
-                // Binary types
-                DataType::Binary => {
-                    cast_array.as_binary::<i32>().value(i)
-                        == cast_array.as_binary::<i32>().value(i - 1)
-                }
-                DataType::LargeBinary => {
-                    cast_array.as_binary::<i64>().value(i)
-                        == cast_array.as_binary::<i64>().value(i - 1)
-                }
-                DataType::BinaryView => {
-                    cast_array.as_binary_view().value(i) == cast_array.as_binary_view().value(i - 1)
-                }
-                DataType::FixedSizeBinary(_) => {
-                    cast_array.as_fixed_size_binary().value(i)
-                        == cast_array.as_fixed_size_binary().value(i - 1)
-                }
-
-                // Temporal types
-                DataType::Date32 => {
-                    cast_array.as_primitive::<Date32Type>().value(i)
-                        == cast_array.as_primitive::<Date32Type>().value(i - 1)
-                }
-                DataType::Date64 => {
-                    cast_array.as_primitive::<Date64Type>().value(i)
-                        == cast_array.as_primitive::<Date64Type>().value(i - 1)
-                }
-                DataType::Timestamp(time_unit, _) => match time_unit {
-                    TimeUnit::Second => {
-                        cast_array.as_primitive::<TimestampSecondType>().value(i)
-                            == cast_array
-                                .as_primitive::<TimestampSecondType>()
-                                .value(i - 1)
-                    }
-                    TimeUnit::Millisecond => {
-                        cast_array
-                            .as_primitive::<TimestampMillisecondType>()
-                            .value(i)
-                            == cast_array
-                                .as_primitive::<TimestampMillisecondType>()
-                                .value(i - 1)
-                    }
-                    TimeUnit::Microsecond => {
-                        cast_array
-                            .as_primitive::<TimestampMicrosecondType>()
-                            .value(i)
-                            == cast_array
-                                .as_primitive::<TimestampMicrosecondType>()
-                                .value(i - 1)
-                    }
-                    TimeUnit::Nanosecond => {
-                        cast_array
-                            .as_primitive::<TimestampNanosecondType>()
-                            .value(i)
-                            == cast_array
-                                .as_primitive::<TimestampNanosecondType>()
-                                .value(i - 1)
-                    }
-                },
-                DataType::Time32(time_unit) => match time_unit {
-                    TimeUnit::Second => {
-                        cast_array.as_primitive::<Time32SecondType>().value(i)
-                            == cast_array.as_primitive::<Time32SecondType>().value(i - 1)
-                    }
-                    TimeUnit::Millisecond => {
-                        cast_array.as_primitive::<Time32MillisecondType>().value(i)
-                            == cast_array
-                                .as_primitive::<Time32MillisecondType>()
-                                .value(i - 1)
-                    }
-                    TimeUnit::Microsecond | TimeUnit::Nanosecond => {
-                        panic!("Time32 must have a TimeUnit of either seconds or milliseconds")
-                    }
-                },
-                DataType::Time64(time_unit) => match time_unit {
-                    TimeUnit::Second | TimeUnit::Millisecond => {
-                        panic!("Time64 must have a TimeUnit of either microseconds or nanoseconds")
-                    }
-                    TimeUnit::Microsecond => {
-                        cast_array.as_primitive::<Time64MicrosecondType>().value(i)
-                            == cast_array
-                                .as_primitive::<Time64MicrosecondType>()
-                                .value(i - 1)
-                    }
-                    TimeUnit::Nanosecond => {
-                        cast_array.as_primitive::<Time64NanosecondType>().value(i)
-                            == cast_array
-                                .as_primitive::<Time64NanosecondType>()
-                                .value(i - 1)
-                    }
-                },
-                DataType::Duration(time_unit) => match time_unit {
-                    TimeUnit::Second => {
-                        cast_array.as_primitive::<DurationSecondType>().value(i)
-                            == cast_array.as_primitive::<DurationSecondType>().value(i - 1)
-                    }
-                    TimeUnit::Millisecond => {
-                        cast_array
-                            .as_primitive::<DurationMillisecondType>()
-                            .value(i)
-                            == cast_array
-                                .as_primitive::<DurationMillisecondType>()
-                                .value(i - 1)
-                    }
-                    TimeUnit::Microsecond => {
-                        cast_array
-                            .as_primitive::<DurationMicrosecondType>()
-                            .value(i)
-                            == cast_array
-                                .as_primitive::<DurationMicrosecondType>()
-                                .value(i - 1)
-                    }
-                    TimeUnit::Nanosecond => {
-                        cast_array.as_primitive::<DurationNanosecondType>().value(i)
-                            == cast_array
-                                .as_primitive::<DurationNanosecondType>()
-                                .value(i - 1)
-                    }
-                },
-                DataType::Interval(interval_unit) => match interval_unit {
-                    IntervalUnit::YearMonth => {
-                        cast_array.as_primitive::<IntervalYearMonthType>().value(i)
-                            == cast_array
-                                .as_primitive::<IntervalYearMonthType>()
-                                .value(i - 1)
-                    }
-                    IntervalUnit::DayTime => {
-                        cast_array.as_primitive::<IntervalDayTimeType>().value(i)
-                            == cast_array
-                                .as_primitive::<IntervalDayTimeType>()
-                                .value(i - 1)
-                    }
-                    IntervalUnit::MonthDayNano => {
-                        cast_array
-                            .as_primitive::<IntervalMonthDayNanoType>()
-                            .value(i)
-                            == cast_array
-                                .as_primitive::<IntervalMonthDayNanoType>()
-                                .value(i - 1)
-                    }
-                },
-
-                // Decimal types
-                DataType::Decimal32(_, _) => {
-                    cast_array.as_primitive::<Decimal32Type>().value(i)
-                        == cast_array.as_primitive::<Decimal32Type>().value(i - 1)
-                }
-                DataType::Decimal64(_, _) => {
-                    cast_array.as_primitive::<Decimal64Type>().value(i)
-                        == cast_array.as_primitive::<Decimal64Type>().value(i - 1)
-                }
-                DataType::Decimal128(_, _) => {
-                    cast_array.as_primitive::<Decimal128Type>().value(i)
-                        == cast_array.as_primitive::<Decimal128Type>().value(i - 1)
-                }
-
-                DataType::Decimal256(_, _) => {
-                    cast_array.as_primitive::<Decimal256Type>().value(i)
-                        == cast_array.as_primitive::<Decimal256Type>().value(i - 1)
-                }
-
-                // REE arrays already handled by run_end_encoded_cast
-                DataType::RunEndEncoded(_, _) => {
-                    unreachable!()
-                }
-
-                // Unsupported types
-                DataType::Null
-                | DataType::List(_)
-                | DataType::ListView(_)
-                | DataType::FixedSizeList(_, _)
-                | DataType::LargeList(_)
-                | DataType::LargeListView(_)
-                | DataType::Struct(_)
-                | DataType::Union(_, _)
-                | DataType::Dictionary(_, _)
-                | DataType::Map(_, _) => false,
-            },
-            _ => false,
-        };
-
-        if !values_equal {
-            // End current run, start new run
-            run_ends_vec.push(i);
-            values_indices.push(i);
+        // Binary types
+        Binary => pack_binary_runs::<i32>(cast_array, &mut run_ends, &mut vals_idxs),
+        LargeBinary => pack_binary_runs::<i64>(cast_array, &mut run_ends, &mut vals_idxs),
+        BinaryView => pack_binary_view_runs(cast_array, &mut run_ends, &mut vals_idxs),
+        FixedSizeBinary(_) => {
+            pack_fixed_size_binary_runs(cast_array, &mut run_ends, &mut vals_idxs)
         }
-    }
+
+        // Temporal types
+        Date32 => pack_primitive_runs::<Date32Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Date64 => pack_primitive_runs::<Date64Type>(cast_array, &mut run_ends, &mut vals_idxs),
+        Timestamp(time_unit, _) => {
+            pack_timestamp_runs(cast_array, time_unit, &mut run_ends, &mut vals_idxs)
+        }
+        Time32(time_unit) => pack_time32_runs(cast_array, time_unit, &mut run_ends, &mut vals_idxs),
+        Time64(time_unit) => pack_time64_runs(cast_array, time_unit, &mut run_ends, &mut vals_idxs),
+        Duration(time_unit) => {
+            pack_duration_runs(cast_array, time_unit, &mut run_ends, &mut vals_idxs)
+        }
+        Interval(interval_unit) => {
+            pack_interval_runs(cast_array, interval_unit, &mut run_ends, &mut vals_idxs)
+        }
+
+        // Decimal types
+        Decimal32(_, _) => {
+            pack_primitive_runs::<Decimal32Type>(cast_array, &mut run_ends, &mut vals_idxs)
+        }
+        Decimal64(_, _) => {
+            pack_primitive_runs::<Decimal64Type>(cast_array, &mut run_ends, &mut vals_idxs)
+        }
+        Decimal128(_, _) => {
+            pack_primitive_runs::<Decimal128Type>(cast_array, &mut run_ends, &mut vals_idxs)
+        }
+        Decimal256(_, _) => {
+            pack_primitive_runs::<Decimal256Type>(cast_array, &mut run_ends, &mut vals_idxs)
+        }
+
+        // REE arrays already handled by run_end_encoded_cast
+        RunEndEncoded(_, _) => unreachable!(),
+
+        // Unsupported types: Cannot cast to these, so we should never get here
+        // (see can_cast_to_run_end_encoded)
+        Null
+        | List(_)
+        | ListView(_)
+        | FixedSizeList(_, _)
+        | LargeList(_)
+        | LargeListView(_)
+        | Struct(_)
+        | Union(_, _)
+        | Dictionary(_, _)
+        | Map(_, _) => unreachable!(),
+    };
 
     // Add the final run end
-    run_ends_vec.push(cast_array.len());
+    run_ends.push(cast_array.len());
 
     // Build the run_ends array
-    for run_end in run_ends_vec {
+    for run_end in run_ends {
         run_ends_builder.append_value(
             K::Native::from_usize(run_end)
                 .ok_or_else(|| ArrowError::CastError("Run end index out of range".to_string()))?,
         );
     }
     let run_ends_array = run_ends_builder.finish();
-
     // Build the values array by taking elements at the run start positions
-    let indices = PrimitiveArray::<UInt32Type>::from_iter_values(
-        values_indices.iter().map(|&idx| idx as u32),
-    );
+    let indices =
+        PrimitiveArray::<UInt32Type>::from_iter_values(vals_idxs.iter().map(|&idx| idx as u32));
     let values_array = take(cast_array, &indices, None)?;
 
     // Create and return the RunArray
     let run_array = RunArray::<K>::try_new(&run_ends_array, values_array.as_ref())?;
     Ok(Arc::new(run_array))
+}
+
+fn pack_primitive_runs<T: ArrowPrimitiveType>(
+    array: &dyn Array,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    let arr = array.as_primitive::<T>();
+    for i in 1..arr.len() {
+        let values_equal = match (arr.is_null(i), arr.is_null(i - 1)) {
+            (true, true) => true,
+            (false, false) => arr.value(i) == arr.value(i - 1),
+            (false, true) | (true, false) => false,
+        };
+        if !values_equal {
+            run_ends_vec.push(i);
+            values_indices.push(i);
+        }
+    }
+}
+
+fn pack_boolean_runs(
+    array: &dyn Array,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    let arr = array.as_boolean();
+    for i in 1..arr.len() {
+        let values_equal = match (arr.is_null(i), arr.is_null(i - 1)) {
+            (true, true) => true,
+            (false, false) => arr.value(i) == arr.value(i - 1),
+            (false, true) | (true, false) => false,
+        };
+        if !values_equal {
+            run_ends_vec.push(i);
+            values_indices.push(i);
+        }
+    }
+}
+
+fn pack_string_runs<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    let arr = array.as_string::<O>();
+    for i in 1..arr.len() {
+        let values_equal = match (arr.is_null(i), arr.is_null(i - 1)) {
+            (true, true) => true,
+            (false, false) => arr.value(i) == arr.value(i - 1),
+            (false, true) | (true, false) => false,
+        };
+        if !values_equal {
+            run_ends_vec.push(i);
+            values_indices.push(i);
+        }
+    }
+}
+
+fn pack_string_view_runs(
+    array: &dyn Array,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    let arr = array.as_string_view();
+    for i in 1..arr.len() {
+        let values_equal = match (arr.is_null(i), arr.is_null(i - 1)) {
+            (true, true) => true,
+            (false, false) => arr.value(i) == arr.value(i - 1),
+            (false, true) | (true, false) => false,
+        };
+        if !values_equal {
+            run_ends_vec.push(i);
+            values_indices.push(i);
+        }
+    }
+}
+
+fn pack_binary_runs<O: OffsetSizeTrait>(
+    array: &dyn Array,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    let arr = array.as_binary::<O>();
+    for i in 1..arr.len() {
+        let values_equal = match (arr.is_null(i), arr.is_null(i - 1)) {
+            (true, true) => true,
+            (false, false) => arr.value(i) == arr.value(i - 1),
+            (false, true) | (true, false) => false,
+        };
+        if !values_equal {
+            run_ends_vec.push(i);
+            values_indices.push(i);
+        }
+    }
+}
+
+fn pack_binary_view_runs(
+    array: &dyn Array,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    let arr = array.as_binary_view();
+    for i in 1..arr.len() {
+        let values_equal = match (arr.is_null(i), arr.is_null(i - 1)) {
+            (true, true) => true,
+            (false, false) => arr.value(i) == arr.value(i - 1),
+            (false, true) | (true, false) => false,
+        };
+        if !values_equal {
+            run_ends_vec.push(i);
+            values_indices.push(i);
+        }
+    }
+}
+
+fn pack_fixed_size_binary_runs(
+    array: &dyn Array,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    let arr = array.as_fixed_size_binary();
+    for i in 1..arr.len() {
+        let values_equal = match (arr.is_null(i), arr.is_null(i - 1)) {
+            (true, true) => true,
+            (false, false) => arr.value(i) == arr.value(i - 1),
+            (false, true) | (true, false) => false,
+        };
+        if !values_equal {
+            run_ends_vec.push(i);
+            values_indices.push(i);
+        }
+    }
+}
+
+fn pack_timestamp_runs(
+    array: &dyn Array,
+    time_unit: &TimeUnit,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    match time_unit {
+        TimeUnit::Second => {
+            pack_primitive_runs::<TimestampSecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Millisecond => {
+            pack_primitive_runs::<TimestampMillisecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Microsecond => {
+            pack_primitive_runs::<TimestampMicrosecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Nanosecond => {
+            pack_primitive_runs::<TimestampNanosecondType>(array, run_ends_vec, values_indices)
+        }
+    }
+}
+
+fn pack_time32_runs(
+    array: &dyn Array,
+    time_unit: &TimeUnit,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    match time_unit {
+        TimeUnit::Second => {
+            pack_primitive_runs::<Time32SecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Millisecond => {
+            pack_primitive_runs::<Time32MillisecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Microsecond | TimeUnit::Nanosecond => {
+            panic!("Time32 must have a TimeUnit of either seconds or milliseconds")
+        }
+    }
+}
+
+fn pack_time64_runs(
+    array: &dyn Array,
+    time_unit: &TimeUnit,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    match time_unit {
+        TimeUnit::Second | TimeUnit::Millisecond => {
+            panic!("Time64 must have a TimeUnit of either microseconds or nanoseconds")
+        }
+        TimeUnit::Microsecond => {
+            pack_primitive_runs::<Time64MicrosecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Nanosecond => {
+            pack_primitive_runs::<Time64NanosecondType>(array, run_ends_vec, values_indices)
+        }
+    }
+}
+
+fn pack_duration_runs(
+    array: &dyn Array,
+    time_unit: &TimeUnit,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    match time_unit {
+        TimeUnit::Second => {
+            pack_primitive_runs::<DurationSecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Millisecond => {
+            pack_primitive_runs::<DurationMillisecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Microsecond => {
+            pack_primitive_runs::<DurationMicrosecondType>(array, run_ends_vec, values_indices)
+        }
+        TimeUnit::Nanosecond => {
+            pack_primitive_runs::<DurationNanosecondType>(array, run_ends_vec, values_indices)
+        }
+    }
+}
+
+fn pack_interval_runs(
+    array: &dyn Array,
+    interval_unit: &IntervalUnit,
+    run_ends_vec: &mut Vec<usize>,
+    values_indices: &mut Vec<usize>,
+) {
+    match interval_unit {
+        IntervalUnit::YearMonth => {
+            pack_primitive_runs::<IntervalYearMonthType>(array, run_ends_vec, values_indices)
+        }
+        IntervalUnit::DayTime => {
+            pack_primitive_runs::<IntervalDayTimeType>(array, run_ends_vec, values_indices)
+        }
+        IntervalUnit::MonthDayNano => {
+            pack_primitive_runs::<IntervalMonthDayNanoType>(array, run_ends_vec, values_indices)
+        }
+    }
 }
 
 /// Checks if a given data type can be cast to a RunEndEncoded array.
