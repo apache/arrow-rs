@@ -140,14 +140,19 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     value_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
-    // Step 1: Cast the input array to the target value type if necessary
+    // Cast the input array to the target value type if necessary
     let cast_array = if array.data_type() == value_type {
         array
     } else {
         &cast_with_options(array, value_type, cast_options)?
     };
 
-    // Step 2: Run-end encode the cast array
+    // REE arrays already handled by run_end_encoded_cast
+    if let DataType::RunEndEncoded(_, _) = cast_array.data_type() {
+        panic!("unreachable");
+    }
+
+    // Run-end encode the cast array
     let mut run_ends_builder = PrimitiveBuilder::<K>::new();
 
     if cast_array.is_empty() {
@@ -166,10 +171,11 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
     // Add the first element as the start of the first run
     values_indices.push(0);
-    // Step 3: Identify runs by comparing adjacent elements
+
+    // Identify runs by comparing adjacent elements
+    // We can afford to perform a simple comparison of adjacent elements here
+    // as we already validated the type in [can_cast_to_run_end_encoded].
     for i in 1..cast_array.len() {
-        // We can afford to perform a simple comparison of adjacent elements here
-        // as we already validated the type in [can_cast_to_run_end_encoded].
         let values_equal = match (cast_array.is_null(i), cast_array.is_null(i - 1)) {
             (true, true) => true,
             (false, false) => match value_type {
@@ -395,9 +401,12 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
                         == cast_array.as_primitive::<Decimal256Type>().value(i - 1)
                 }
 
-                // TODO: How to handle REE?
-                DataType::RunEndEncoded(_, _) => todo!(),
+                // REE arrays already handled by run_end_encoded_cast
+                DataType::RunEndEncoded(_, _) => {
+                    panic!("unreachable");
+                }
 
+                // Unsupported types
                 DataType::Null
                 | DataType::List(_)
                 | DataType::ListView(_)
@@ -422,7 +431,7 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     // Add the final run end
     run_ends_vec.push(cast_array.len());
 
-    // Step 4: Build the run_ends array
+    // Build the run_ends array
     for run_end in run_ends_vec {
         run_ends_builder.append_value(
             K::Native::from_usize(run_end)
@@ -431,13 +440,13 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     }
     let run_ends_array = run_ends_builder.finish();
 
-    // Step 5: Build the values array by taking elements at the run start positions
+    // Build the values array by taking elements at the run start positions
     let indices = PrimitiveArray::<UInt32Type>::from_iter_values(
         values_indices.iter().map(|&idx| idx as u32),
     );
     let values_array = take(cast_array, &indices, None)?;
 
-    // Step 6: Create and return the RunArray
+    // Create and return the RunArray
     let run_array = RunArray::<K>::try_new(&run_ends_array, values_array.as_ref())?;
     Ok(Arc::new(run_array))
 }
