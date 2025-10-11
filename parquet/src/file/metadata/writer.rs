@@ -31,7 +31,7 @@ use crate::{
         modules::{ModuleType, create_footer_aad, create_module_aad},
     },
     file::column_crypto_metadata::ColumnCryptoMetaData,
-    file::metadata::thrift_gen::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
+    file::metadata::encryption::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
 };
 use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 

@@ -171,11 +171,7 @@ fn print_row_group_metadata(out: &mut dyn io::Write, rg_metadata: &RowGroupMetaD
 fn print_column_chunk_metadata(out: &mut dyn io::Write, cc_metadata: &ColumnChunkMetaData) {
     writeln!(out, "column type: {}", cc_metadata.column_type());
     writeln!(out, "column path: {}", cc_metadata.column_path());
-    let encoding_strs: Vec<_> = cc_metadata
-        .encodings()
-        .iter()
-        .map(|e| format!("{e}"))
-        .collect();
+    let encoding_strs: Vec<_> = cc_metadata.encodings().map(|e| format!("{e}")).collect();
     writeln!(out, "encodings: {}", encoding_strs.join(" "));
     let file_path_str = cc_metadata.file_path().unwrap_or("N/A");
     writeln!(out, "file path: {file_path_str}");
