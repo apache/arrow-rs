@@ -11760,17 +11760,11 @@ mod tests {
         let result: Result<Arc<dyn Array + 'static>, ArrowError> =
             cast_with_options(&array_ref, &target_type, &cast_options);
 
-        match result {
-            Err(e) => {
-                assert!(
-                    e.to_string()
-                        .contains("Cast error: Can't cast value 100000 to type Int16")
-                );
-            }
-            Ok(_array_ref) => {
-                panic!("This should not happen");
-            }
-        }
+        let e = result.err().expect("Cast should have failed but succeeded");
+        assert!(
+            e.to_string()
+                .contains("Cast error: Can't cast value 100000 to type Int16")
+        );
     }
 
     #[test]
@@ -11801,25 +11795,19 @@ mod tests {
         let result: Result<Arc<dyn Array + 'static>, ArrowError> =
             cast_with_options(&array_ref, &target_type, &cast_options);
 
-        match result {
-            Ok(array_ref) => {
-                // Downcast to RunArray<Int64Type>
-                let run_array = array_ref
-                    .as_any()
-                    .downcast_ref::<RunArray<Int64Type>>()
-                    .unwrap();
+        let array_ref = result.expect("Cast should have succeeded but failed");
+        // Downcast to RunArray<Int64Type>
+        let run_array = array_ref
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
 
-                // Verify the cast worked correctly
-                // Assert the values were cast correctly
-                assert_eq!(run_array.run_ends().values(), &[2i64, 5i64, 8i64]);
-                assert_eq!(run_array.values().as_string::<i32>().value(0), "a");
-                assert_eq!(run_array.values().as_string::<i32>().value(1), "b");
-                assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
-            }
-            Err(e) => {
-                panic!("Cast should have succeeded but failed: {}", e);
-            }
-        }
+        // Verify the cast worked correctly
+        // Assert the values were cast correctly
+        assert_eq!(run_array.run_ends().values(), &[2i64, 5i64, 8i64]);
+        assert_eq!(run_array.values().as_string::<i32>().value(0), "a");
+        assert_eq!(run_array.values().as_string::<i32>().value(1), "b");
+        assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
     }
 
     #[test]
@@ -11850,14 +11838,10 @@ mod tests {
         let result: Result<Arc<dyn Array + 'static>, ArrowError> =
             cast_with_options(&array_ref, &target_type, &cast_options);
 
-        match result {
-            Ok(_) => {
-                panic!("Cast should have failed due to overflow but succeeded");
-            }
-            Err(e) => {
-                // Verify the error is about overflow/out of range
-                assert!(e.to_string().contains("Can't cast value"));
-            }
-        }
+        // Verify the error is about overflow/out of range
+        let e = result
+            .err()
+            .expect("Cast should have failed due to overflow but succeeded");
+        assert!(e.to_string().contains("Can't cast value"));
     }
 }
