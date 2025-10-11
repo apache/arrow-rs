@@ -767,7 +767,7 @@ impl EncodingMask {
     /// A mask consisting of unused bit positions, used for validation. This includes the never
     /// used GROUP_VAR_INT encoding value of `1`.
     const ALLOWED_MASK: u32 =
-        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | 1;
+        !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1) | 1 << 1;
 
     /// Attempt to create a new `EncodingMask` from an integer.
     ///
@@ -2583,12 +2583,12 @@ mod tests {
         );
 
         // test that GROUP_VAR_INT is disallowed
-        let res = EncodingMask::try_new(1);
+        let res = EncodingMask::try_new(2);
         assert!(res.is_err());
         let err = res.unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Attempt to create invalid mask: 0x1"
+            "Parquet error: Attempt to create invalid mask: 0x2"
         );
     }
 }
