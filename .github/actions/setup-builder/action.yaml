@@ -16,7 +16,7 @@
 # under the License.
 
 name: Prepare Rust Builder
-description: 'Prepare Rust Build Environment'
+description: "Prepare Rust Build Environment"
 runs:
   using: "composite"
   steps:
@@ -53,6 +53,9 @@ runs:
     - name: Enable backtraces
       shell: bash
       run: echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
+    - name: Disable incremental compilation
+      shell: bash
+      run: echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV
     - name: Fixup git permissions
       # https://github.com/actions/checkout/issues/766
       shell: bash

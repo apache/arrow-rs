@@ -41,12 +41,11 @@
 
 use std::fmt;
 
-use crate::format::Statistics as TStatistics;
-
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::thrift_gen::PageStatistics;
 use crate::util::bit_util::FromBytes;
 
 pub(crate) mod private {
@@ -120,9 +119,9 @@ macro_rules! statistics_enum_func {
 }
 
 /// Converts Thrift definition into `Statistics`.
-pub fn from_thrift(
+pub(crate) fn from_thrift_page_stats(
     physical_type: Type,
-    thrift_stats: Option<TStatistics>,
+    thrift_stats: Option<PageStatistics>,
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
         Some(stats) => {
@@ -269,7 +268,7 @@ pub fn from_thrift(
 }
 
 /// Convert Statistics into Thrift definition.
-pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
+pub(crate) fn page_stats_to_thrift(stats: Option<&Statistics>) -> Option<PageStatistics> {
     let stats = stats?;
 
     // record null count if it can fit in i64
@@ -282,7 +281,7 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         .distinct_count_opt()
         .and_then(|value| i64::try_from(value).ok());
 
-    let mut thrift_stats = TStatistics {
+    let mut thrift_stats = PageStatistics {
         max: None,
         min: None,
         null_count,
@@ -319,15 +318,14 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
 
 /// Strongly typed statistics for a column chunk within a row group.
 ///
-/// This structure is a natively typed, in memory representation of the
-/// [`Statistics`] structure in a parquet file footer. The statistics stored in
+/// This structure is a natively typed, in memory representation of the thrift
+/// `Statistics` structure in a Parquet file footer. The statistics stored in
 /// this structure can be used by query engines to skip decoding pages while
 /// reading parquet data.
 ///
-/// Page level statistics are stored separately, in [NativeIndex].
+/// Page level statistics are stored separately, in [ColumnIndexMetaData].
 ///
-/// [`Statistics`]: crate::format::Statistics
-/// [NativeIndex]: crate::file::page_index::index::NativeIndex
+/// [ColumnIndexMetaData]: crate::file::page_index::column_index::ColumnIndexMetaData
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
     /// Statistics for Boolean column
@@ -702,7 +700,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "General(\"Statistics null count is negative -10\")")]
     fn test_statistics_negative_null_count() {
-        let thrift_stats = TStatistics {
+        let thrift_stats = PageStatistics {
             max: None,
             min: None,
             null_count: Some(-10),
@@ -713,13 +711,16 @@ mod tests {
             is_min_value_exact: None,
         };
 
-        from_thrift(Type::INT32, Some(thrift_stats)).unwrap();
+        from_thrift_page_stats(Type::INT32, Some(thrift_stats)).unwrap();
     }
 
     #[test]
     fn test_statistics_thrift_none() {
-        assert_eq!(from_thrift(Type::INT32, None).unwrap(), None);
-        assert_eq!(from_thrift(Type::BYTE_ARRAY, None).unwrap(), None);
+        assert_eq!(from_thrift_page_stats(Type::INT32, None).unwrap(), None);
+        assert_eq!(
+            from_thrift_page_stats(Type::BYTE_ARRAY, None).unwrap(),
+            None
+        );
     }
 
     #[test]
@@ -864,8 +865,11 @@ mod tests {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
             let tpe = stats.physical_type();
-            let thrift_stats = to_thrift(Some(&stats));
-            assert_eq!(from_thrift(tpe, thrift_stats).unwrap(), Some(stats));
+            let thrift_stats = page_stats_to_thrift(Some(&stats));
+            assert_eq!(
+                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                Some(stats)
+            );
         }
 
         check_stats(Statistics::boolean(
@@ -1001,7 +1005,7 @@ mod tests {
     fn test_count_encoding_distinct_too_large() {
         // statistics are stored using i64, so test trying to store larger values
         let statistics = make_bool_stats(Some(u64::MAX), Some(100));
-        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
         assert_eq!(thrift_stats.distinct_count, None); // can't store u64 max --> null
         assert_eq!(thrift_stats.null_count, Some(100));
     }
@@ -1010,18 +1014,24 @@ mod tests {
     fn test_count_encoding_null_too_large() {
         // statistics are stored using i64, so test trying to store larger values
         let statistics = make_bool_stats(Some(100), Some(u64::MAX));
-        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
         assert_eq!(thrift_stats.distinct_count, Some(100));
         assert_eq!(thrift_stats.null_count, None); // can' store u64 max --> null
     }
 
     #[test]
     fn test_count_decoding_null_invalid() {
-        let tstatistics = TStatistics {
+        let tstatistics = PageStatistics {
             null_count: Some(-42),
-            ..Default::default()
+            max: None,
+            min: None,
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
         };
-        let err = from_thrift(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
+        let err = from_thrift_page_stats(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Parquet error: Statistics null count is negative -42"
@@ -1034,14 +1044,14 @@ mod tests {
     fn statistics_count_test(distinct_count: Option<u64>, null_count: Option<u64>) {
         let statistics = make_bool_stats(distinct_count, null_count);
 
-        let thrift_stats = to_thrift(Some(&statistics)).unwrap();
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
         assert_eq!(thrift_stats.null_count.map(|c| c as u64), null_count);
         assert_eq!(
             thrift_stats.distinct_count.map(|c| c as u64),
             distinct_count
         );
 
-        let round_tripped = from_thrift(Type::BOOLEAN, Some(thrift_stats))
+        let round_tripped = from_thrift_page_stats(Type::BOOLEAN, Some(thrift_stats))
             .unwrap()
             .unwrap();
         // TODO: remove branch when we no longer support assuming null_count==None in the thrift

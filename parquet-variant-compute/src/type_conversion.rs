@@ -17,7 +17,7 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::datatypes::{self, ArrowPrimitiveType};
+use arrow::datatypes::{self, ArrowPrimitiveType, ArrowTimestampType, Date32Type};
 use parquet_variant::Variant;
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
@@ -33,70 +33,81 @@ impl Default for CastOptions {
     }
 }
 
-/// Helper trait for converting `Variant` values to arrow primitive values.
-pub(crate) trait VariantAsPrimitive<T: ArrowPrimitiveType> {
-    fn as_primitive(&self) -> Option<T::Native>;
+/// Extension trait for Arrow primitive types that can extract their native value from a Variant
+pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
+    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
 
-impl VariantAsPrimitive<datatypes::Int32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i32> {
-        self.as_int32()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i16> {
-        self.as_int16()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int8Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i8> {
-        self.as_int8()
-    }
-}
-impl VariantAsPrimitive<datatypes::Int64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<i64> {
-        self.as_int64()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<half::f16> {
-        self.as_f16()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<f32> {
-        self.as_f32()
-    }
-}
-impl VariantAsPrimitive<datatypes::Float64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<f64> {
-        self.as_f64()
-    }
+/// Extension trait for Arrow timestamp types that can extract their native value from a Variant
+/// We can't use [`PrimitiveFromVariant`] directly because we need _two_ implementations for each
+/// timestamp type -- the `NTZ` param here.
+pub(crate) trait TimestampFromVariant<const NTZ: bool>: ArrowTimestampType {
+    fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
 }
 
-impl VariantAsPrimitive<datatypes::UInt8Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u8> {
-        self.as_u8()
-    }
+/// Macro to generate PrimitiveFromVariant implementations for Arrow primitive types
+macro_rules! impl_primitive_from_variant {
+    ($arrow_type:ty, $variant_method:ident $(, $cast_fn:expr)?) => {
+        impl PrimitiveFromVariant for $arrow_type {
+            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
+                let value = variant.$variant_method();
+                $( let value = value.map($cast_fn); )?
+                value
+            }
+        }
+    };
 }
 
-impl VariantAsPrimitive<datatypes::UInt16Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u16> {
-        self.as_u16()
-    }
+macro_rules! impl_timestamp_from_variant {
+    ($timestamp_type:ty, $variant_method:ident, ntz=$ntz:ident, $cast_fn:expr $(,)?) => {
+        impl TimestampFromVariant<{ $ntz }> for $timestamp_type {
+            fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
+                variant.$variant_method().and_then($cast_fn)
+            }
+        }
+    };
 }
 
-impl VariantAsPrimitive<datatypes::UInt32Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u32> {
-        self.as_u32()
-    }
-}
-
-impl VariantAsPrimitive<datatypes::UInt64Type> for Variant<'_, '_> {
-    fn as_primitive(&self) -> Option<u64> {
-        self.as_u64()
-    }
-}
+impl_primitive_from_variant!(datatypes::Int32Type, as_int32);
+impl_primitive_from_variant!(datatypes::Int16Type, as_int16);
+impl_primitive_from_variant!(datatypes::Int8Type, as_int8);
+impl_primitive_from_variant!(datatypes::Int64Type, as_int64);
+impl_primitive_from_variant!(datatypes::UInt8Type, as_u8);
+impl_primitive_from_variant!(datatypes::UInt16Type, as_u16);
+impl_primitive_from_variant!(datatypes::UInt32Type, as_u32);
+impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
+impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
+impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
+impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
+impl_primitive_from_variant!(
+    datatypes::Date32Type,
+    as_naive_date,
+    Date32Type::from_naive_date
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampMicrosecondType,
+    as_timestamp_ntz_micros,
+    ntz = true,
+    Self::make_value,
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampMicrosecondType,
+    as_timestamp_micros,
+    ntz = false,
+    |timestamp| Self::make_value(timestamp.naive_utc())
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampNanosecondType,
+    as_timestamp_ntz_nanos,
+    ntz = true,
+    Self::make_value
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampNanosecondType,
+    as_timestamp_nanos,
+    ntz = false,
+    |timestamp| Self::make_value(timestamp.naive_utc())
+);
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
@@ -152,8 +163,9 @@ macro_rules! decimal_to_variant_decimal {
             (Some($v), *$scale as u8)
         };
 
+        // Return an Option to allow callers to decide whether to error (strict)
+        // or append null (non-strict) on conversion failure
         v.and_then(|v| <$variant_type>::try_new(v, scale).ok())
-            .map_or(Variant::Null, Variant::from)
     }};
 }
 pub(crate) use decimal_to_variant_decimal;

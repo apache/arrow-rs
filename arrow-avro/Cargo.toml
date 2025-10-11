@@ -25,7 +25,7 @@ authors = { workspace = true }
 license = { workspace = true }
 keywords = { workspace = true }
 include = { workspace = true }
-edition = { workspace = true }
+edition = "2024"
 rust-version = { workspace = true }
 
 [lib]
@@ -43,6 +43,7 @@ canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
+avro_custom_types = []
 
 [dependencies]
 arrow-schema = { workspace = true }

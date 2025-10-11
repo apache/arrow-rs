@@ -26,7 +26,7 @@
 use arrow_array::cast::*;
 
 use arrow_array::*;
-use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_schema::ArrowError;
 
 /// Checks if a [`GenericListArray`] contains a value in the [`PrimitiveArray`]
@@ -119,7 +119,7 @@ mod tests {
         ListBuilder, PrimitiveDictionaryBuilder, StringBuilder, StringDictionaryBuilder,
     };
     use arrow_array::types::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano};
+    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
     use arrow_data::ArrayData;
     use arrow_schema::{DataType, Field};
     use half::f16;

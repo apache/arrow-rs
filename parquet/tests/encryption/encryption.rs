@@ -18,18 +18,18 @@
 //! This module contains tests for reading encrypted Parquet files with the Arrow API
 
 use crate::encryption_util::{
-    read_and_roundtrip_to_encrypted_file, verify_column_indexes, verify_encryption_test_file_read,
-    TestKeyRetriever,
+    TestKeyRetriever, read_and_roundtrip_to_encrypted_file, verify_column_indexes,
+    verify_encryption_test_file_read,
 };
 use arrow::array::*;
 use arrow::error::Result as ArrowResult;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType as ArrowDataType, DataType, Field, Schema};
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder, RowSelection,
     RowSelector,
 };
-use parquet::arrow::ArrowWriter;
 use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
@@ -93,10 +93,12 @@ fn test_plaintext_footer_signature_verification() {
         ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let result = ArrowReaderMetadata::load(&file, options.clone());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
 }
 
 #[test]
@@ -336,10 +338,12 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
         ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let result = ArrowReaderMetadata::load(&temp_file, options.clone());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
 }
 
 #[test]
@@ -707,10 +711,12 @@ fn test_write_uniform_encryption_plaintext_footer() {
         ArrowReaderOptions::default().with_file_decryption_properties(wrong_decryption_properties);
     let result = ArrowReaderMetadata::load(&temp_file, options.clone());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .starts_with("Parquet error: Footer signature verification failed. Computed: ["));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .starts_with("Parquet error: Footer signature verification failed. Computed: [")
+    );
 }
 
 #[test]
@@ -982,23 +988,17 @@ pub fn test_retrieve_row_group_statistics_after_encrypted_write() {
     }
     let file_metadata = writer.close().unwrap();
 
-    assert_eq!(file_metadata.row_groups.len(), 1);
-    let row_group = &file_metadata.row_groups[0];
-    assert_eq!(row_group.columns.len(), 1);
-    let column = &row_group.columns[0];
-    let column_stats = column
-        .meta_data
-        .as_ref()
-        .unwrap()
-        .statistics
-        .as_ref()
-        .unwrap();
+    assert_eq!(file_metadata.num_row_groups(), 1);
+    let row_group = file_metadata.row_group(0);
+    assert_eq!(row_group.num_columns(), 1);
+    let column = row_group.column(0);
+    let column_stats = column.statistics().unwrap();
     assert_eq!(
-        column_stats.min_value.as_deref(),
+        column_stats.min_bytes_opt(),
         Some(3i32.to_le_bytes().as_slice())
     );
     assert_eq!(
-        column_stats.max_value.as_deref(),
+        column_stats.max_bytes_opt(),
         Some(19i32.to_le_bytes().as_slice())
     );
 }

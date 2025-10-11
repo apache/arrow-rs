@@ -113,7 +113,7 @@
     html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
     html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 /// Defines a an item with an experimental public API
 ///
@@ -142,7 +142,9 @@ macro_rules! experimental {
     feature = "flate2",
     not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backened"))
 ))]
-compile_error!("When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`.");
+compile_error!(
+    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`."
+);
 
 #[macro_use]
 pub mod errors;
@@ -188,8 +190,9 @@ pub mod file;
 pub mod record;
 pub mod schema;
 
+mod parquet_macros;
+mod parquet_thrift;
 pub mod thrift;
-
 /// What data is needed to read the next item from a decoder.
 ///
 /// This is used to communicate between the decoder and the caller
@@ -207,3 +210,4 @@ pub enum DecodeResult<T: Debug> {
 
 #[cfg(feature = "variant_experimental")]
 pub mod variant;
+experimental!(pub mod geospatial);

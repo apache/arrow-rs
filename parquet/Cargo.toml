@@ -25,7 +25,7 @@ repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "hadoop"]
 readme = "README.md"
-edition = { workspace = true }
+edition = "2024"
 rust-version = { workspace = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -93,7 +93,7 @@ arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "jso
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.36.0", default-features = false, features = ["system"] }
+sysinfo = { version = "0.37.1", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -130,7 +130,7 @@ encryption = ["dep:ring"]
 flate2-rust_backened = ["flate2/rust_backend"]
 flate2-zlib-rs = ["flate2/zlib-rs"]
 # Enable parquet variant support
-variant_experimental = ["parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
+variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
 
 
 [[example]]

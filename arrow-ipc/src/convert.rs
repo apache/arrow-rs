@@ -165,7 +165,7 @@ impl From<crate::Field<'_>> for Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
             #[allow(deprecated)]
             Field::new_dict(
-                field.name().unwrap(),
+                field.name().unwrap_or_default(),
                 get_data_type(field, true),
                 field.nullable(),
                 dictionary.id(),
@@ -173,7 +173,7 @@ impl From<crate::Field<'_>> for Field {
             )
         } else {
             Field::new(
-                field.name().unwrap(),
+                field.name().unwrap_or_default(),
                 get_data_type(field, true),
                 field.nullable(),
             )

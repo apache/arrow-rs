@@ -21,15 +21,15 @@ use crate::codec::{
 };
 use crate::reader::cursor::AvroCursor;
 use crate::schema::Nullability;
-use arrow_array::builder::{Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder};
 #[cfg(feature = "small_decimals")]
 use arrow_array::builder::{Decimal32Builder, Decimal64Builder};
+use arrow_array::builder::{Decimal128Builder, Decimal256Builder, IntervalMonthDayNanoBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::*;
 use arrow_schema::{
-    ArrowError, DataType, Field as ArrowField, FieldRef, Fields, Schema as ArrowSchema, SchemaRef,
-    UnionFields, UnionMode, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Field as ArrowField,
+    FieldRef, Fields, Schema as ArrowSchema, SchemaRef, UnionFields, UnionMode,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
@@ -39,6 +39,16 @@ use strum_macros::AsRefStr;
 use uuid::Uuid;
 
 const DEFAULT_CAPACITY: usize = 1024;
+
+/// Runtime plan for decoding reader-side `["null", T]` types.
+#[derive(Clone, Copy, Debug)]
+enum NullablePlan {
+    /// Writer actually wrote a union (branch tag present).
+    ReadTag,
+    /// Writer wrote a single (non-union) value resolved to the non-null branch
+    /// of the reader union; do NOT read a branch tag, but apply any promotion.
+    FromSingle { promotion: Promotion },
+}
 
 /// Macro to decode a decimal payload for a given width and integer type.
 macro_rules! decode_decimal {
@@ -82,53 +92,15 @@ macro_rules! append_decimal_default {
     }};
 }
 
-#[derive(Debug)]
-pub(crate) struct RecordDecoderBuilder<'a> {
-    data_type: &'a AvroDataType,
-    use_utf8view: bool,
-}
-
-impl<'a> RecordDecoderBuilder<'a> {
-    pub(crate) fn new(data_type: &'a AvroDataType) -> Self {
-        Self {
-            data_type,
-            use_utf8view: false,
-        }
-    }
-
-    pub(crate) fn with_utf8_view(mut self, use_utf8view: bool) -> Self {
-        self.use_utf8view = use_utf8view;
-        self
-    }
-
-    /// Builds the `RecordDecoder`.
-    pub(crate) fn build(self) -> Result<RecordDecoder, ArrowError> {
-        RecordDecoder::try_new_with_options(self.data_type, self.use_utf8view)
-    }
-}
-
 /// Decodes avro encoded data into [`RecordBatch`]
 #[derive(Debug)]
 pub(crate) struct RecordDecoder {
     schema: SchemaRef,
     fields: Vec<Decoder>,
-    use_utf8view: bool,
     projector: Option<Projector>,
 }
 
 impl RecordDecoder {
-    /// Creates a new `RecordDecoderBuilder` for configuring a `RecordDecoder`.
-    pub(crate) fn new(data_type: &'_ AvroDataType) -> Self {
-        RecordDecoderBuilder::new(data_type).build().unwrap()
-    }
-
-    /// Create a new [`RecordDecoder`] from the provided [`AvroDataType`] with default options
-    pub(crate) fn try_new(data_type: &AvroDataType) -> Result<Self, ArrowError> {
-        RecordDecoderBuilder::new(data_type)
-            .with_utf8_view(true)
-            .build()
-    }
-
     /// Creates a new [`RecordDecoder`] from the provided [`AvroDataType`] with additional options.
     ///
     /// This method allows you to customize how the Avro data is decoded into Arrow arrays.
@@ -139,10 +111,7 @@ impl RecordDecoder {
     ///
     /// # Errors
     /// This function will return an error if the provided `data_type` is not a `Record`.
-    pub(crate) fn try_new_with_options(
-        data_type: &AvroDataType,
-        use_utf8view: bool,
-    ) -> Result<Self, ArrowError> {
+    pub(crate) fn try_new_with_options(data_type: &AvroDataType) -> Result<Self, ArrowError> {
         match data_type.codec() {
             Codec::Struct(reader_fields) => {
                 // Build Arrow schema fields and per-child decoders
@@ -161,7 +130,6 @@ impl RecordDecoder {
                 Ok(Self {
                     schema: Arc::new(ArrowSchema::new(arrow_fields)),
                     fields: encodings,
-                    use_utf8view,
                     projector,
                 })
             }
@@ -219,6 +187,14 @@ enum Decoder {
     Boolean(BooleanBufferBuilder),
     Int32(Vec<i32>),
     Int64(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationSecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationMillisecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationMicrosecond(Vec<i64>),
+    #[cfg(feature = "avro_custom_types")]
+    DurationNanosecond(Vec<i64>),
     Float32(Vec<f32>),
     Float64(Vec<f64>),
     Date32(Vec<i32>),
@@ -259,7 +235,7 @@ enum Decoder {
     Decimal128(usize, Option<usize>, Option<usize>, Decimal128Builder),
     Decimal256(usize, Option<usize>, Option<usize>, Decimal256Builder),
     Union(UnionDecoder),
-    Nullable(Nullability, NullBufferBuilder, Box<Decoder>),
+    Nullable(Nullability, NullBufferBuilder, Box<Decoder>, NullablePlan),
 }
 
 impl Decoder {
@@ -341,6 +317,22 @@ impl Decoder {
             }
             (Codec::TimestampMicros(is_utc), _) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationNanos, _) => {
+                Self::DurationNanosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMicros, _) => {
+                Self::DurationMicrosecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationMillis, _) => {
+                Self::DurationMillisecond(Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            (Codec::DurationSeconds, _) => {
+                Self::DurationSecond(Vec::with_capacity(DEFAULT_CAPACITY))
             }
             (Codec::Fixed(sz), _) => Self::Fixed(*sz, Vec::with_capacity(DEFAULT_CAPACITY)),
             (Codec::Decimal(precision, scale, size), _) => {
@@ -484,11 +476,23 @@ impl Decoder {
             }
         };
         Ok(match data_type.nullability() {
-            Some(nullability) => Self::Nullable(
-                nullability,
-                NullBufferBuilder::new(DEFAULT_CAPACITY),
-                Box::new(decoder),
-            ),
+            Some(nullability) => {
+                // Default to reading a union branch tag unless the resolution proves otherwise.
+                let mut plan = NullablePlan::ReadTag;
+                if let Some(ResolutionInfo::Union(info)) = data_type.resolution.as_ref() {
+                    if !info.writer_is_union && info.reader_is_union {
+                        if let Some(Some((_reader_idx, promo))) = info.writer_to_reader.first() {
+                            plan = NullablePlan::FromSingle { promotion: *promo };
+                        }
+                    }
+                }
+                Self::Nullable(
+                    nullability,
+                    NullBufferBuilder::new(DEFAULT_CAPACITY),
+                    Box::new(decoder),
+                    plan,
+                )
+            }
             None => decoder,
         })
     }
@@ -504,6 +508,11 @@ impl Decoder {
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
             | Self::TimestampMicros(_, v) => v.push(0),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => v.push(0),
             Self::Float32(v) | Self::Int32ToFloat32(v) | Self::Int64ToFloat32(v) => v.push(0.),
             Self::Float64(v)
             | Self::Int32ToFloat64(v)
@@ -524,7 +533,7 @@ impl Decoder {
             }
             Self::Record(_, e, _) => {
                 for encoding in e.iter_mut() {
-                    encoding.append_null();
+                    encoding.append_null()?;
                 }
             }
             Self::Map(_, _koff, moff, _, _) => {
@@ -542,9 +551,9 @@ impl Decoder {
             Self::Enum(indices, _, _) => indices.push(0),
             Self::Duration(builder) => builder.append_null(),
             Self::Union(u) => u.append_null()?,
-            Self::Nullable(_, null_buffer, inner) => {
+            Self::Nullable(_, null_buffer, inner, _) => {
                 null_buffer.append(false);
-                inner.append_null();
+                inner.append_null()?;
             }
         }
         Ok(())
@@ -553,7 +562,7 @@ impl Decoder {
     /// Append a single default literal into the decoder's buffers
     fn append_default(&mut self, lit: &AvroLiteral) -> Result<(), ArrowError> {
         match self {
-            Self::Nullable(_, nb, inner) => {
+            Self::Nullable(_, nb, inner, _) => {
                 if matches!(lit, AvroLiteral::Null) {
                     nb.append(false);
                     inner.append_null()
@@ -587,6 +596,19 @@ impl Decoder {
                 }
                 _ => Err(ArrowError::InvalidArgumentError(
                     "Default for int32/date32/time-millis must be int".to_string(),
+                )),
+            },
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(v)
+            | Self::DurationMillisecond(v)
+            | Self::DurationMicrosecond(v)
+            | Self::DurationNanosecond(v) => match lit {
+                AvroLiteral::Long(i) => {
+                    v.push(*i);
+                    Ok(())
+                }
+                _ => Err(ArrowError::InvalidArgumentError(
+                    "Default for duration long must be long".to_string(),
                 )),
             },
             Self::Int64(v)
@@ -766,7 +788,7 @@ impl Decoder {
                         } else if let Some(proj) = projector.as_ref() {
                             proj.project_default(dec, i)?;
                         } else {
-                            dec.append_null();
+                            dec.append_null()?;
                         }
                     }
                     Ok(())
@@ -776,7 +798,7 @@ impl Decoder {
                         if let Some(proj) = projector.as_ref() {
                             proj.project_default(dec, i)?;
                         } else {
-                            dec.append_null();
+                            dec.append_null()?;
                         }
                     }
                     Ok(())
@@ -800,6 +822,11 @@ impl Decoder {
             | Self::TimeMicros(values)
             | Self::TimestampMillis(_, values)
             | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(values)
+            | Self::DurationMillisecond(values)
+            | Self::DurationMicrosecond(values)
+            | Self::DurationNanosecond(values) => values.push(buf.get_long()?),
             Self::Float32(values) => values.push(buf.get_float()?),
             Self::Float64(values) => values.push(buf.get_double()?),
             Self::Int32ToInt64(values) => values.push(buf.get_int()? as i64),
@@ -892,19 +919,27 @@ impl Decoder {
                 builder.append_value(IntervalMonthDayNano::new(months as i32, days as i32, nanos));
             }
             Self::Union(u) => u.decode(buf)?,
-            Self::Nullable(order, nb, encoding) => {
-                let branch = buf.read_vlq()?;
-                let is_not_null = match *order {
-                    Nullability::NullFirst => branch != 0,
-                    Nullability::NullSecond => branch == 0,
-                };
-                if is_not_null {
-                    // It is important to decode before appending to null buffer in case of decode error
-                    encoding.decode(buf)?;
-                } else {
-                    encoding.append_null();
+            Self::Nullable(order, nb, encoding, plan) => {
+                match *plan {
+                    NullablePlan::FromSingle { promotion } => {
+                        encoding.decode_with_promotion(buf, promotion)?;
+                        nb.append(true);
+                    }
+                    NullablePlan::ReadTag => {
+                        let branch = buf.read_vlq()?;
+                        let is_not_null = match *order {
+                            Nullability::NullFirst => branch != 0,
+                            Nullability::NullSecond => branch == 0,
+                        };
+                        if is_not_null {
+                            // It is important to decode before appending to null buffer in case of decode error
+                            encoding.decode(buf)?;
+                        } else {
+                            encoding.append_null()?;
+                        }
+                        nb.append(is_not_null);
+                    }
                 }
-                nb.append(is_not_null);
             }
         }
         Ok(())
@@ -971,7 +1006,7 @@ impl Decoder {
     /// Flush decoded records to an [`ArrayRef`]
     fn flush(&mut self, nulls: Option<NullBuffer>) -> Result<ArrayRef, ArrowError> {
         Ok(match self {
-            Self::Nullable(_, n, e) => e.flush(n.finish())?,
+            Self::Nullable(_, n, e, _) => e.flush(n.finish())?,
             Self::Null(size) => Arc::new(NullArray::new(std::mem::replace(size, 0))),
             Self::Boolean(b) => Arc::new(BooleanArray::new(b.finish(), nulls)),
             Self::Int32(values) => Arc::new(flush_primitive::<Int32Type>(values, nulls)),
@@ -991,6 +1026,22 @@ impl Decoder {
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
                     .with_timezone_opt(is_utc.then(|| "+00:00")),
             ),
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationSecond(values) => {
+                Arc::new(flush_primitive::<DurationSecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMillisecond(values) => {
+                Arc::new(flush_primitive::<DurationMillisecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationMicrosecond(values) => {
+                Arc::new(flush_primitive::<DurationMicrosecondType>(values, nulls))
+            }
+            #[cfg(feature = "avro_custom_types")]
+            Self::DurationNanosecond(values) => {
+                Arc::new(flush_primitive::<DurationNanosecondType>(values, nulls))
+            }
             Self::Float32(values) => Arc::new(flush_primitive::<Float32Type>(values, nulls)),
             Self::Float64(values) => Arc::new(flush_primitive::<Float64Type>(values, nulls)),
             Self::Int32ToInt64(values) => Arc::new(flush_primitive::<Int64Type>(values, nulls)),
@@ -1188,7 +1239,6 @@ struct UnionDecoder {
     branches: Vec<Decoder>,
     counts: Vec<i32>,
     reader_type_codes: Vec<i8>,
-    null_branch: Option<usize>,
     default_emit_idx: usize,
     null_emit_idx: usize,
     plan: UnionReadPlan,
@@ -1203,7 +1253,6 @@ impl Default for UnionDecoder {
             branches: Vec::new(),
             counts: Vec::new(),
             reader_type_codes: Vec::new(),
-            null_branch: None,
             default_emit_idx: 0,
             null_emit_idx: 0,
             plan: UnionReadPlan::Passthrough,
@@ -1255,7 +1304,6 @@ impl UnionDecoder {
             branches,
             counts: vec![0; branch_len],
             reader_type_codes,
-            null_branch,
             default_emit_idx,
             null_emit_idx,
             plan: Self::plan_from_resolved(resolved)?,
@@ -1785,8 +1833,6 @@ enum Skipper {
     Float64,
     Bytes,
     String,
-    Date32,
-    TimeMillis,
     TimeMicros,
     TimestampMillis,
     TimestampMicros,
@@ -1812,6 +1858,11 @@ impl Skipper {
             Codec::TimeMicros => Self::TimeMicros,
             Codec::TimestampMillis(_) => Self::TimestampMillis,
             Codec::TimestampMicros(_) => Self::TimestampMicros,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::DurationNanos
+            | Codec::DurationMicros
+            | Codec::DurationMillis
+            | Codec::DurationSeconds => Self::Int64,
             Codec::Float32 => Self::Float32,
             Codec::Float64 => Self::Float64,
             Codec::Binary => Self::Bytes,
@@ -1846,12 +1897,6 @@ impl Skipper {
                         .collect::<Result<_, _>>()?,
                 )
             }
-            _ => {
-                return Err(ArrowError::NotYetImplemented(format!(
-                    "Skipper not implemented for codec {:?}",
-                    dt.codec()
-                )));
-            }
         };
         if let Some(n) = dt.nullability() {
             base = Self::Nullable(n, Box::new(base));
@@ -1866,7 +1911,7 @@ impl Skipper {
                 buf.get_bool()?;
                 Ok(())
             }
-            Self::Int32 | Self::Date32 | Self::TimeMillis => {
+            Self::Int32 => {
                 buf.get_int()?;
                 Ok(())
             }
@@ -1963,10 +2008,11 @@ impl Skipper {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::AvroField;
-    use crate::schema::{PrimitiveType, Schema, TypeName};
+    use crate::codec::AvroFieldBuilder;
+    use crate::schema::{Attributes, ComplexType, Field, PrimitiveType, Record, Schema, TypeName};
     use arrow_array::cast::AsArray;
     use indexmap::IndexMap;
+    use std::collections::HashMap;
 
     fn encode_avro_int(value: i32) -> Vec<u8> {
         let mut buf = Vec::new();
@@ -2000,6 +2046,58 @@ mod tests {
         AvroDataType::new(codec, Default::default(), None)
     }
 
+    fn resolved_root_datatype(
+        writer: Schema<'static>,
+        reader: Schema<'static>,
+        use_utf8view: bool,
+        strict_mode: bool,
+    ) -> AvroDataType {
+        // Wrap writer schema in a single-field record
+        let writer_record = Schema::Complex(ComplexType::Record(Record {
+            name: "Root",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: writer,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+
+        // Wrap reader schema in a single-field record
+        let reader_record = Schema::Complex(ComplexType::Record(Record {
+            name: "Root",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: reader,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+
+        // Build resolved record, then extract the inner field's resolved AvroDataType
+        let field = AvroFieldBuilder::new(&writer_record)
+            .with_reader_schema(&reader_record)
+            .with_utf8view(use_utf8view)
+            .with_strict_mode(strict_mode)
+            .build()
+            .expect("schema resolution should succeed");
+
+        match field.data_type().codec() {
+            Codec::Struct(fields) => fields[0].data_type().clone(),
+            other => panic!("expected wrapper struct, got {other:?}"),
+        }
+    }
+
     fn decoder_for_promotion(
         writer: PrimitiveType,
         reader: PrimitiveType,
@@ -2007,9 +2105,23 @@ mod tests {
     ) -> Decoder {
         let ws = Schema::TypeName(TypeName::Primitive(writer));
         let rs = Schema::TypeName(TypeName::Primitive(reader));
-        let field =
-            AvroField::resolve_from_writer_and_reader(&ws, &rs, use_utf8view, false).unwrap();
-        Decoder::try_new(field.data_type()).unwrap()
+        let dt = resolved_root_datatype(ws, rs, use_utf8view, false);
+        Decoder::try_new(&dt).unwrap()
+    }
+
+    fn make_avro_dt(codec: Codec, nullability: Option<Nullability>) -> AvroDataType {
+        AvroDataType::new(codec, HashMap::new(), nullability)
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    fn encode_vlq_u64(mut x: u64) -> Vec<u8> {
+        let mut out = Vec::with_capacity(10);
+        while x >= 0x80 {
+            out.push((x as u8) | 0x80);
+            x >>= 7;
+        }
+        out.push(x as u8);
+        out
     }
 
     #[test]
@@ -2022,36 +2134,44 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
         ]);
-        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
-        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+
+        let dt = resolved_root_datatype(ws, rs, false, false);
+        let mut dec = Decoder::try_new(&dt).unwrap();
+
         let mut rec1 = encode_avro_long(0);
         rec1.extend(encode_avro_int(7));
         let mut cur1 = AvroCursor::new(&rec1);
         dec.decode(&mut cur1).unwrap();
+
         let mut rec2 = encode_avro_long(1);
         rec2.extend(encode_avro_bytes("abc".as_bytes()));
         let mut cur2 = AvroCursor::new(&rec2);
         dec.decode(&mut cur2).unwrap();
+
         let arr = dec.flush(None).unwrap();
         let ua = arr
             .as_any()
             .downcast_ref::<UnionArray>()
             .expect("dense union output");
+
         assert_eq!(
             ua.type_id(0),
             1,
             "first value must select reader 'long' branch"
         );
         assert_eq!(ua.value_offset(0), 0);
+
         assert_eq!(
             ua.type_id(1),
             0,
             "second value must select reader 'string' branch"
         );
         assert_eq!(ua.value_offset(1), 0);
+
         let long_child = ua.child(1).as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(long_child.len(), 1);
         assert_eq!(long_child.value(0), 7);
+
         let str_child = ua.child(0).as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(str_child.len(), 1);
         assert_eq!(str_child.value(0), "abc");
@@ -2064,12 +2184,15 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
         ]);
         let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
-        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
-        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+
+        let dt = resolved_root_datatype(ws, rs, false, false);
+        let mut dec = Decoder::try_new(&dt).unwrap();
+
         let mut data = encode_avro_long(0);
         data.extend(encode_avro_int(5));
         let mut cur = AvroCursor::new(&data);
         dec.decode(&mut cur).unwrap();
+
         let arr = dec.flush(None).unwrap();
         let out = arr.as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(out.len(), 1);
@@ -2083,8 +2206,10 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
         ]);
         let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Long));
-        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
-        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+
+        let dt = resolved_root_datatype(ws, rs, false, false);
+        let mut dec = Decoder::try_new(&dt).unwrap();
+
         let mut data = encode_avro_long(1);
         data.extend(encode_avro_bytes("z".as_bytes()));
         let mut cur = AvroCursor::new(&data);
@@ -2102,11 +2227,14 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
         ]);
-        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
-        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+
+        let dt = resolved_root_datatype(ws, rs, false, false);
+        let mut dec = Decoder::try_new(&dt).unwrap();
+
         let data = encode_avro_int(6);
         let mut cur = AvroCursor::new(&data);
         dec.decode(&mut cur).unwrap();
+
         let arr = dec.flush(None).unwrap();
         let ua = arr
             .as_any()
@@ -2119,9 +2247,11 @@ mod tests {
             "must resolve to reader 'long' branch (type_id 1)"
         );
         assert_eq!(ua.value_offset(0), 0);
+
         let long_child = ua.child(1).as_any().downcast_ref::<Int64Array>().unwrap();
         assert_eq!(long_child.len(), 1);
         assert_eq!(long_child.value(0), 6);
+
         let str_child = ua.child(0).as_any().downcast_ref::<StringArray>().unwrap();
         assert_eq!(str_child.len(), 0, "string branch must be empty");
     }
@@ -2136,8 +2266,10 @@ mod tests {
             Schema::TypeName(TypeName::Primitive(PrimitiveType::String)),
             Schema::TypeName(TypeName::Primitive(PrimitiveType::Long)),
         ]);
-        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
-        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+
+        let dt = resolved_root_datatype(ws, rs, false, false);
+        let mut dec = Decoder::try_new(&dt).unwrap();
+
         let mut data = encode_avro_long(1);
         data.push(1);
         let mut cur = AvroCursor::new(&data);
@@ -2293,8 +2425,47 @@ mod tests {
     fn test_schema_resolution_no_promotion_passthrough_int() {
         let ws = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
         let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
-        let field = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false).unwrap();
-        let mut dec = Decoder::try_new(field.data_type()).unwrap();
+        // Wrap both in a synthetic single-field record and resolve with AvroFieldBuilder
+        let writer_record = Schema::Complex(ComplexType::Record(Record {
+            name: "Root",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: ws,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+        let reader_record = Schema::Complex(ComplexType::Record(Record {
+            name: "Root",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: rs,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+        let field = AvroFieldBuilder::new(&writer_record)
+            .with_reader_schema(&reader_record)
+            .with_utf8view(false)
+            .with_strict_mode(false)
+            .build()
+            .unwrap();
+        // Extract the resolved inner field's AvroDataType
+        let dt = match field.data_type().codec() {
+            Codec::Struct(fields) => fields[0].data_type().clone(),
+            other => panic!("expected wrapper struct, got {other:?}"),
+        };
+        let mut dec = Decoder::try_new(&dt).unwrap();
         assert!(matches!(dec, Decoder::Int32(_)));
         for v in [7, -9] {
             let data = encode_avro_int(v);
@@ -2311,7 +2482,39 @@ mod tests {
     fn test_schema_resolution_illegal_promotion_int_to_boolean_errors() {
         let ws = Schema::TypeName(TypeName::Primitive(PrimitiveType::Int));
         let rs = Schema::TypeName(TypeName::Primitive(PrimitiveType::Boolean));
-        let res = AvroField::resolve_from_writer_and_reader(&ws, &rs, false, false);
+        let writer_record = Schema::Complex(ComplexType::Record(Record {
+            name: "Root",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: ws,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+        let reader_record = Schema::Complex(ComplexType::Record(Record {
+            name: "Root",
+            namespace: None,
+            doc: None,
+            aliases: vec![],
+            fields: vec![Field {
+                name: "v",
+                r#type: rs,
+                default: None,
+                doc: None,
+                aliases: vec![],
+            }],
+            attributes: Attributes::default(),
+        }));
+        let res = AvroFieldBuilder::new(&writer_record)
+            .with_reader_schema(&reader_record)
+            .with_utf8view(false)
+            .with_strict_mode(false)
+            .build();
         assert!(res.is_err(), "expected error for illegal promotion");
     }
 
@@ -2679,6 +2882,7 @@ mod tests {
             Nullability::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
+            NullablePlan::ReadTag,
         );
         let mut data = Vec::new();
         data.extend_from_slice(&encode_avro_int(0));
@@ -2721,6 +2925,7 @@ mod tests {
             Nullability::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
+            NullablePlan::ReadTag,
         );
         let row1 = [
             0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
@@ -2891,6 +3096,91 @@ mod tests {
         let mut decoder = Decoder::try_new(&avro_type).unwrap();
         let array = decoder.flush(None).unwrap();
         assert_eq!(array.len(), 0);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_seconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationSeconds, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        // Three values: 0, -1, 2
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_long(-1));
+        data.extend_from_slice(&encode_avro_long(2));
+        let mut cursor = AvroCursor::new(&data);
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        decoder.decode(&mut cursor).unwrap();
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationSecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[0, -1, 2]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_milliseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationMillis, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [1i64, 0, -2] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMillisecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[1, 0, -2]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_microseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationMicros, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [5i64, -6, 7] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationMicrosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[5, -6, 7]);
+    }
+
+    #[test]
+    #[cfg(feature = "avro_custom_types")]
+    fn test_duration_nanoseconds_decoding() {
+        let avro_type = AvroDataType::new(Codec::DurationNanos, Default::default(), None);
+        let mut decoder = Decoder::try_new(&avro_type).unwrap();
+        let mut data = Vec::new();
+        for v in [8i64, 9, -10] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cursor = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cursor).unwrap();
+        }
+        let array = decoder.flush(None).unwrap();
+        let dur = array
+            .as_any()
+            .downcast_ref::<DurationNanosecondArray>()
+            .unwrap();
+        assert_eq!(dur.values(), &[8, 9, -10]);
     }
 
     #[test]
@@ -3515,6 +3805,7 @@ mod tests {
             Nullability::NullFirst,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(inner),
+            NullablePlan::ReadTag,
         );
         dec.append_default(&AvroLiteral::Null).unwrap();
         dec.append_default(&AvroLiteral::Int(11)).unwrap();
@@ -3756,8 +4047,8 @@ mod tests {
     }
 
     #[test]
-    fn test_record_append_default_missing_fields_without_projector_defaults_yields_type_nulls_or_empties(
-    ) {
+    fn test_record_append_default_missing_fields_without_projector_defaults_yields_type_nulls_or_empties()
+     {
         let fields = vec![("a", DataType::Int32, true), ("b", DataType::Utf8, true)];
         let mut field_refs: Vec<FieldRef> = Vec::new();
         let mut encoders: Vec<Decoder> = Vec::new();
@@ -3768,6 +4059,7 @@ mod tests {
             Nullability::NullSecond,
             NullBufferBuilder::new(DEFAULT_CAPACITY),
             Box::new(Decoder::Int32(Vec::with_capacity(DEFAULT_CAPACITY))),
+            NullablePlan::ReadTag,
         );
         let enc_b = Decoder::Nullable(
             Nullability::NullSecond,
@@ -3776,6 +4068,7 @@ mod tests {
                 OffsetBufferBuilder::new(DEFAULT_CAPACITY),
                 Vec::with_capacity(DEFAULT_CAPACITY),
             )),
+            NullablePlan::ReadTag,
         );
         encoders.push(enc_a);
         encoders.push(enc_b);
@@ -3880,5 +4173,128 @@ mod tests {
         assert_eq!(int_child.value(0), 5);
         let type_ids: Vec<i8> = fields.iter().map(|(tid, _)| tid).collect();
         assert_eq!(type_ids, vec![42_i8, 7_i8]);
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_from_avro_maps_custom_duration_variants_to_int64() -> Result<(), ArrowError> {
+        for codec in [
+            Codec::DurationNanos,
+            Codec::DurationMicros,
+            Codec::DurationMillis,
+            Codec::DurationSeconds,
+        ] {
+            let dt = make_avro_dt(codec.clone(), None);
+            let s = Skipper::from_avro(&dt)?;
+            match s {
+                Skipper::Int64 => {}
+                other => panic!("expected Int64 skipper for {:?}, got {:?}", codec, other),
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_skip_consumes_one_long_for_custom_durations() -> Result<(), ArrowError> {
+        let values: [i64; 7] = [0, 1, -1, 150, -150, i64::MAX / 3, i64::MIN / 3];
+        for codec in [
+            Codec::DurationNanos,
+            Codec::DurationMicros,
+            Codec::DurationMillis,
+            Codec::DurationSeconds,
+        ] {
+            let dt = make_avro_dt(codec.clone(), None);
+            let mut s = Skipper::from_avro(&dt)?;
+            for &v in &values {
+                let bytes = encode_avro_long(v);
+                let mut cursor = AvroCursor::new(&bytes);
+                s.skip(&mut cursor)?;
+                assert_eq!(
+                    cursor.position(),
+                    bytes.len(),
+                    "did not consume all bytes for {:?} value {}",
+                    codec,
+                    v
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_nullable_custom_duration_respects_null_first() -> Result<(), ArrowError> {
+        let dt = make_avro_dt(Codec::DurationNanos, Some(Nullability::NullFirst));
+        let mut s = Skipper::from_avro(&dt)?;
+        match &s {
+            Skipper::Nullable(Nullability::NullFirst, inner) => match **inner {
+                Skipper::Int64 => {}
+                ref other => panic!("expected inner Int64, got {:?}", other),
+            },
+            other => panic!("expected Nullable(NullFirst, Int64), got {:?}", other),
+        }
+        {
+            let buf = encode_vlq_u64(0);
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(cursor.position(), 1, "expected to consume only tag=0");
+        }
+        {
+            let mut buf = encode_vlq_u64(1);
+            buf.extend(encode_avro_long(0));
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(cursor.position(), 2, "expected to consume tag=1 + long(0)");
+        }
+
+        Ok(())
+    }
+
+    #[cfg(feature = "avro_custom_types")]
+    #[test]
+    fn skipper_nullable_custom_duration_respects_null_second() -> Result<(), ArrowError> {
+        let dt = make_avro_dt(Codec::DurationMicros, Some(Nullability::NullSecond));
+        let mut s = Skipper::from_avro(&dt)?;
+        match &s {
+            Skipper::Nullable(Nullability::NullSecond, inner) => match **inner {
+                Skipper::Int64 => {}
+                ref other => panic!("expected inner Int64, got {:?}", other),
+            },
+            other => panic!("expected Nullable(NullSecond, Int64), got {:?}", other),
+        }
+        {
+            let buf = encode_vlq_u64(1);
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(cursor.position(), 1, "expected to consume only tag=1");
+        }
+        {
+            let mut buf = encode_vlq_u64(0);
+            buf.extend(encode_avro_long(-1));
+            let mut cursor = AvroCursor::new(&buf);
+            s.skip(&mut cursor)?;
+            assert_eq!(
+                cursor.position(),
+                1 + encode_avro_long(-1).len(),
+                "expected to consume tag=0 + long(-1)"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn skipper_interval_is_fixed12_and_skips_12_bytes() -> Result<(), ArrowError> {
+        let dt = make_avro_dt(Codec::Interval, None);
+        let mut s = Skipper::from_avro(&dt)?;
+        match s {
+            Skipper::DurationFixed12 => {}
+            other => panic!("expected DurationFixed12, got {:?}", other),
+        }
+        let payload = vec![0u8; 12];
+        let mut cursor = AvroCursor::new(&payload);
+        s.skip(&mut cursor)?;
+        assert_eq!(cursor.position(), 12, "expected to consume 12 fixed bytes");
+        Ok(())
     }
 }

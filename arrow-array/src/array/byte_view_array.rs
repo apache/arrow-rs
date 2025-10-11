@@ -324,17 +324,17 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// Caller is responsible for ensuring that the index is within the bounds
     /// of the array
     pub unsafe fn value_unchecked(&self, idx: usize) -> &T::Native {
-        let v = self.views.get_unchecked(idx);
+        let v = unsafe { self.views.get_unchecked(idx) };
         let len = *v as u32;
         let b = if len <= MAX_INLINE_VIEW_LEN {
-            Self::inline_value(v, len as usize)
+            unsafe { Self::inline_value(v, len as usize) }
         } else {
             let view = ByteView::from(*v);
-            let data = self.buffers.get_unchecked(view.buffer_index as usize);
+            let data = unsafe { self.buffers.get_unchecked(view.buffer_index as usize) };
             let offset = view.offset as usize;
-            data.get_unchecked(offset..offset + len as usize)
+            unsafe { data.get_unchecked(offset..offset + len as usize) }
         };
-        T::Native::from_bytes_unchecked(b)
+        unsafe { T::Native::from_bytes_unchecked(b) }
     }
 
     /// Returns the first `len` bytes the inline value of the view.
@@ -345,7 +345,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     #[inline(always)]
     pub unsafe fn inline_value(view: &u128, len: usize) -> &[u8] {
         debug_assert!(len <= MAX_INLINE_VIEW_LEN as usize);
-        std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
+        unsafe {
+            std::slice::from_raw_parts((view as *const u128 as *const u8).wrapping_add(4), len)
+        }
     }
 
     /// Constructs a new iterator for iterating over the values of this array
@@ -541,7 +543,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     #[inline(always)]
     unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 {
         // SAFETY: `i < self.len()` ensures this is in‑bounds.
-        let raw_view = *self.views().get_unchecked(i);
+        let raw_view = unsafe { *self.views().get_unchecked(i) };
         let mut bv = ByteView::from(raw_view);
 
         // Inline‑small views stay as‑is.
@@ -550,10 +552,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         } else {
             // SAFETY: `bv.buffer_index` and `bv.offset..bv.offset+bv.length`
             // must both lie within valid ranges for `self.buffers`.
-            let buffer = self.buffers.get_unchecked(bv.buffer_index as usize);
+            let buffer = unsafe { self.buffers.get_unchecked(bv.buffer_index as usize) };
             let start = bv.offset as usize;
             let end = start + bv.length as usize;
-            let slice = buffer.get_unchecked(start..end);
+            let slice = unsafe { buffer.get_unchecked(start..end) };
 
             // Copy out‑of‑line data into our single “0” buffer.
             let new_offset = data_buf.len() as u32;
@@ -624,10 +626,10 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         right: &GenericByteViewArray<T>,
         right_idx: usize,
     ) -> Ordering {
-        let l_view = left.views().get_unchecked(left_idx);
+        let l_view = unsafe { left.views().get_unchecked(left_idx) };
         let l_byte_view = ByteView::from(*l_view);
 
-        let r_view = right.views().get_unchecked(right_idx);
+        let r_view = unsafe { right.views().get_unchecked(right_idx) };
         let r_byte_view = ByteView::from(*r_view);
 
         let l_len = l_byte_view.length;
@@ -853,7 +855,7 @@ impl<'a, T: ByteViewType + ?Sized> ArrayAccessor for &'a GenericByteViewArray<T>
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericByteViewArray::value_unchecked(self, index)
+        unsafe { GenericByteViewArray::value_unchecked(self, index) }
     }
 }
 
@@ -999,7 +1001,7 @@ impl BinaryViewArray {
     /// # Safety
     /// Caller is responsible for ensuring that items in array are utf8 data.
     pub unsafe fn to_string_view_unchecked(self) -> StringViewArray {
-        StringViewArray::new_unchecked(self.views, self.buffers, self.nulls)
+        unsafe { StringViewArray::new_unchecked(self.views, self.buffers, self.nulls) }
     }
 }
 
@@ -1171,7 +1173,10 @@ mod tests {
             builder.finish()
         };
         assert_eq!(array.value(0), "large payload over 12 bytes");
-        assert_eq!(array.value(1), "another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created");
+        assert_eq!(
+            array.value(1),
+            "another large payload over 12 bytes that double than the first one, so that we can trigger the in_progress in builder re-created"
+        );
         assert_eq!(2, array.buffers.len());
     }
 

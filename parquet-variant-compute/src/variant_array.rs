@@ -22,11 +22,14 @@ use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Date32Type, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use arrow_schema::{
+    ArrowError, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
+    DataType, Field, FieldRef, Fields, TimeUnit,
+};
 use chrono::DateTime;
 use parquet_variant::Uuid;
 use parquet_variant::Variant;
@@ -272,26 +275,11 @@ impl VariantArray {
             )));
         };
 
-        // Extract value and typed_value fields
-        let value = if let Some(value_col) = inner.column_by_name("value") {
-            if let Some(binary_view) = value_col.as_binary_view_opt() {
-                Some(binary_view.clone())
-            } else {
-                return Err(ArrowError::NotYetImplemented(format!(
-                    "VariantArray 'value' field must be BinaryView, got {}",
-                    value_col.data_type()
-                )));
-            }
-        } else {
-            None
-        };
-        let typed_value = inner.column_by_name("typed_value").cloned();
-
         // Note these clones are cheap, they just bump the ref count
         Ok(Self {
             inner: inner.clone(),
             metadata: metadata.clone(),
-            shredding_state: ShreddingState::new(value, typed_value),
+            shredding_state: ShreddingState::try_from(inner)?,
         })
     }
 
@@ -521,7 +509,7 @@ impl ShreddedVariantFieldArray {
         // Note this clone is cheap, it just bumps the ref count
         Ok(Self {
             inner: inner_struct.clone(),
-            shredding_state: ShreddingState::from(inner_struct),
+            shredding_state: ShreddingState::try_from(inner_struct)?,
         })
     }
 
@@ -660,7 +648,7 @@ impl ShreddingState {
     /// Create a new `ShreddingState` from the given `value` and `typed_value` fields
     ///
     /// Note you can create a `ShreddingState` from a &[`StructArray`] using
-    /// `ShreddingState::from(&struct_array)`, for example:
+    /// `ShreddingState::try_from(&struct_array)`, for example:
     ///
     /// ```no_run
     /// # use arrow::array::StructArray;
@@ -669,7 +657,7 @@ impl ShreddingState {
     /// #   unimplemented!()
     /// # }
     /// let struct_array: StructArray = get_struct_array();
-    /// let shredding_state = ShreddingState::from(&struct_array);
+    /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
     /// ```
     pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
         Self { value, typed_value }
@@ -685,6 +673,14 @@ impl ShreddingState {
         self.typed_value.as_ref()
     }
 
+    /// Returns a borrowed version of this shredding state
+    pub fn borrow(&self) -> BorrowedShreddingState<'_> {
+        BorrowedShreddingState {
+            value: self.value_field(),
+            typed_value: self.typed_value_field(),
+        }
+    }
+
     /// Slice all the underlying arrays
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
@@ -694,14 +690,79 @@ impl ShreddingState {
     }
 }
 
-impl From<&StructArray> for ShreddingState {
-    fn from(inner_struct: &StructArray) -> Self {
-        let value = inner_struct
-            .column_by_name("value")
-            .and_then(|col| col.as_binary_view_opt().cloned());
-        let typed_value = inner_struct.column_by_name("typed_value").cloned();
+/// Similar to [`ShreddingState`] except it holds borrowed references of the target arrays. Useful
+/// for avoiding clone operations when the caller does not need a self-standing shredding state.
+#[derive(Clone, Debug)]
+pub struct BorrowedShreddingState<'a> {
+    value: Option<&'a BinaryViewArray>,
+    typed_value: Option<&'a ArrayRef>,
+}
 
-        ShreddingState::new(value, typed_value)
+impl<'a> BorrowedShreddingState<'a> {
+    /// Create a new `BorrowedShreddingState` from the given `value` and `typed_value` fields
+    ///
+    /// Note you can create a `BorrowedShreddingState` from a &[`StructArray`] using
+    /// `BorrowedShreddingState::try_from(&struct_array)`, for example:
+    ///
+    /// ```no_run
+    /// # use arrow::array::StructArray;
+    /// # use parquet_variant_compute::BorrowedShreddingState;
+    /// # fn get_struct_array() -> StructArray {
+    /// #   unimplemented!()
+    /// # }
+    /// let struct_array: StructArray = get_struct_array();
+    /// let shredding_state = BorrowedShreddingState::try_from(&struct_array).unwrap();
+    /// ```
+    pub fn new(value: Option<&'a BinaryViewArray>, typed_value: Option<&'a ArrayRef>) -> Self {
+        Self { value, typed_value }
+    }
+
+    /// Return a reference to the value field, if present
+    pub fn value_field(&self) -> Option<&'a BinaryViewArray> {
+        self.value
+    }
+
+    /// Return a reference to the typed_value field, if present
+    pub fn typed_value_field(&self) -> Option<&'a ArrayRef> {
+        self.typed_value
+    }
+}
+
+impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
+    type Error = ArrowError;
+
+    fn try_from(inner_struct: &'a StructArray) -> Result<Self, ArrowError> {
+        // The `value` column need not exist, but if it does it must be a binary view.
+        let value = if let Some(value_col) = inner_struct.column_by_name("value") {
+            let Some(binary_view) = value_col.as_binary_view_opt() else {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "VariantArray 'value' field must be BinaryView, got {}",
+                    value_col.data_type()
+                )));
+            };
+            Some(binary_view)
+        } else {
+            None
+        };
+        let typed_value = inner_struct.column_by_name("typed_value");
+        Ok(BorrowedShreddingState::new(value, typed_value))
+    }
+}
+
+impl TryFrom<&StructArray> for ShreddingState {
+    type Error = ArrowError;
+
+    fn try_from(inner_struct: &StructArray) -> Result<Self, ArrowError> {
+        Ok(BorrowedShreddingState::try_from(inner_struct)?.into())
+    }
+}
+
+impl From<BorrowedShreddingState<'_>> for ShreddingState {
+    fn from(state: BorrowedShreddingState<'_>) -> Self {
+        ShreddingState {
+            value: state.value_field().cloned(),
+            typed_value: state.typed_value_field().cloned(),
+        }
     }
 }
 
@@ -868,6 +929,11 @@ fn typed_value_to_variant<'a>(
 /// So cast them to get the right type.
 fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     let new_type = canonicalize_and_verify_data_type(array.data_type())?;
+    if let Cow::Borrowed(_) = new_type {
+        if let Some(array) = array.as_struct_opt() {
+            return Ok(Arc::new(array.clone())); // bypass the unnecessary cast
+        }
+    }
     cast(array, new_type.as_ref())
 }
 
@@ -914,9 +980,20 @@ fn canonicalize_and_verify_data_type(
         UInt8 | UInt16 | UInt32 | UInt64 | Float16 => fail!(),
 
         // Most decimal types are allowed, with restrictions on precision and scale
-        Decimal32(p, s) if is_valid_variant_decimal(p, s, 9) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal(p, s, 18) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, 38) => borrow!(),
+        //
+        // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
+        // requires using the narrowest decimal type for a given precision. Fix those up first.
+        Decimal64(p, s) | Decimal128(p, s)
+            if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) =>
+        {
+            Cow::Owned(Decimal32(*p, *s))
+        }
+        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => {
+            Cow::Owned(Decimal64(*p, *s))
+        }
+        Decimal32(p, s) if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) => borrow!(),
+        Decimal64(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => borrow!(),
+        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL128_MAX_PRECISION) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed

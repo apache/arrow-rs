@@ -23,16 +23,16 @@ use arrow::{
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
-use crate::variant_array::ShreddingState;
-use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::VariantArray;
+use crate::variant_array::BorrowedShreddingState;
+use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
 use arrow::array::AsArray;
 use std::sync::Arc;
 
-pub(crate) enum ShreddedPathStep {
+pub(crate) enum ShreddedPathStep<'a> {
     /// Path step succeeded, return the new shredding state
-    Success(ShreddingState),
+    Success(BorrowedShreddingState<'a>),
     /// The path element is not present in the `typed_value` column and there is no `value` column,
     /// so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
@@ -47,18 +47,16 @@ pub(crate) enum ShreddedPathStep {
 /// level, or if `typed_value` is not a struct, or if the requested field name does not exist.
 ///
 /// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
-pub(crate) fn follow_shredded_path_element(
-    shredding_state: &ShreddingState,
+pub(crate) fn follow_shredded_path_element<'a>(
+    shredding_state: &BorrowedShreddingState<'a>,
     path_element: &VariantPathElement<'_>,
     cast_options: &CastOptions,
-) -> Result<ShreddedPathStep> {
+) -> Result<ShreddedPathStep<'a>> {
     // If the requested path element is not present in `typed_value`, and `value` is missing, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
-    let missing_path_step = || {
-        let Some(_value_field) = shredding_state.value_field() else {
-            return ShreddedPathStep::Missing;
-        };
-        ShreddedPathStep::NotShredded
+    let missing_path_step = || match shredding_state.value_field() {
+        Some(_) => ShreddedPathStep::NotShredded,
+        None => ShreddedPathStep::Missing,
     };
 
     let Some(typed_value) = shredding_state.typed_value_field() else {
@@ -98,7 +96,8 @@ pub(crate) fn follow_shredded_path_element(
                 ))
             })?;
 
-            Ok(ShreddedPathStep::Success(struct_array.into()))
+            let state = BorrowedShreddingState::try_from(struct_array)?;
+            Ok(ShreddedPathStep::Success(state))
         }
         VariantPathElement::Index { .. } => {
             // TODO: Support array indexing. Among other things, it will require slicing not
@@ -152,7 +151,7 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state().clone();
+    let mut shredding_state = input.shredding_state().borrow();
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
@@ -296,20 +295,21 @@ impl<'a> GetOptions<'a> {
 mod test {
     use std::sync::Arc;
 
-    use super::{variant_get, GetOptions};
+    use super::{GetOptions, variant_get};
+    use crate::VariantArray;
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::VariantArray;
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
+        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float32Array,
+        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, StringArray, StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
-    use arrow_schema::{DataType, Field, FieldRef, Fields};
+    use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
+    use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
     use chrono::DateTime;
-    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
+    use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantPath};
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -603,7 +603,10 @@ mod test {
 
         let err = variant_get(&array, options).unwrap_err();
         // TODO make this error message nicer (not Debug format)
-        assert_eq!(err.to_string(), "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])");
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])"
+        );
     }
 
     /// Perfect Shredding: extract the typed value as a VariantArray
@@ -698,7 +701,7 @@ mod test {
     }
 
     macro_rules! perfectly_shredded_to_arrow_primitive_test {
-        ($name:ident, $primitive_type:ident, $perfectly_shredded_array_gen_fun:ident, $expected_array:expr) => {
+        ($name:ident, $primitive_type:expr, $perfectly_shredded_array_gen_fun:ident, $expected_array:expr) => {
             #[test]
             fn $name() {
                 let array = $perfectly_shredded_array_gen_fun();
@@ -710,6 +713,13 @@ mod test {
             }
         };
     }
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_int18_as_int8,
+        Int8,
+        perfectly_shredded_int8_variant_array,
+        Int8Array::from(vec![Some(1), Some(2), Some(3)])
+    );
 
     perfectly_shredded_to_arrow_primitive_test!(
         get_variant_perfectly_shredded_int16_as_int16,
@@ -732,6 +742,54 @@ mod test {
         Int64Array::from(vec![Some(1), Some(2), Some(3)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_float32_as_float32,
+        Float32,
+        perfectly_shredded_float32_variant_array,
+        Float32Array::from(vec![Some(1.0), Some(2.0), Some(3.0)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_float64_as_float64,
+        Float64,
+        perfectly_shredded_float64_variant_array,
+        Float64Array::from(vec![Some(1.0), Some(2.0), Some(3.0)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_boolean_as_boolean,
+        Boolean,
+        perfectly_shredded_bool_variant_array,
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    );
+
+    macro_rules! perfectly_shredded_variant_array_fn {
+        ($func:ident, $typed_value_gen:expr) => {
+            fn $func() -> ArrayRef {
+                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
+                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                    EMPTY_VARIANT_METADATA_BYTES,
+                    3,
+                ));
+                let typed_value = $typed_value_gen();
+
+                let struct_array = StructArrayBuilder::new()
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
+                    .build();
+
+                VariantArray::try_new(&struct_array)
+                    .expect("should create variant array")
+                    .into()
+            }
+        };
+    }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    });
+
     /// Return a VariantArray that represents a perfectly "shredded" variant
     /// for the given typed value.
     ///
@@ -745,28 +803,13 @@ mod test {
     /// ```
     macro_rules! numeric_perfectly_shredded_variant_array_fn {
         ($func:ident, $array_type:ident, $primitive_type:ty) => {
-            fn $func() -> ArrayRef {
-                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
-                    EMPTY_VARIANT_METADATA_BYTES,
-                    3,
-                ));
-                let typed_value = $array_type::from(vec![
+            perfectly_shredded_variant_array_fn!($func, || {
+                $array_type::from(vec![
                     Some(<$primitive_type>::try_from(1u8).unwrap()),
                     Some(<$primitive_type>::try_from(2u8).unwrap()),
                     Some(<$primitive_type>::try_from(3u8).unwrap()),
-                ]);
-
-                let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata), false)
-                    .with_field("typed_value", Arc::new(typed_value), true)
-                    .build();
-
-                VariantArray::try_new(&struct_array)
-                    .expect("should create variant array")
-                    .into()
-            }
+                ])
+            });
         };
     }
 
@@ -799,6 +842,128 @@ mod test {
         perfectly_shredded_float64_variant_array,
         Float64Array,
         f64
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(-456000),
+                Some(1758602096000001),
+                Some(1758602096000002),
+            ])
+        }
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_timestamp_micro_ntz,
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+    );
+
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_nano_ntz,
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_timestamp_micro_variant_array, || {
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_timestamp_micro,
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array,
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+        .with_timezone("+00:00")
+    );
+
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_nano,
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_nano_ntz_variant_array,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(-4999999561),
+                Some(1758602096000000001),
+                Some(1758602096000000002),
+            ])
+        }
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_nano_ntz,
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        perfectly_shredded_timestamp_nano_ntz_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_timestamp_nano_variant_array, || {
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_as_timestamp_nano,
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_nano_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_date_variant_array, || {
+        Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_date_as_date,
+        DataType::Date32,
+        perfectly_shredded_date_variant_array,
+        Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
     );
 
     macro_rules! assert_variant_get_as_variant_array_with_default_option {
@@ -1927,9 +2092,11 @@ mod test {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(matches!(error, ArrowError::CastError(_)));
-        assert!(error
-            .to_string()
-            .contains("Cannot access field 'nonexistent_field' on non-struct type"));
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot access field 'nonexistent_field' on non-struct type")
+        );
     }
 
     #[test]

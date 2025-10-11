@@ -273,8 +273,8 @@ mod union_builder;
 
 pub use union_builder::*;
 
-use crate::types::{Int16Type, Int32Type, Int64Type, Int8Type};
 use crate::ArrayRef;
+use crate::types::{Int8Type, Int16Type, Int32Type, Int64Type};
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
 

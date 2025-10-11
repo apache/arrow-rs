@@ -15,23 +15,37 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::errors::ParquetError;
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::DecodeResult;
+#[cfg(feature = "encryption")]
+use crate::encryption::decrypt::FileDecryptionProperties;
+use crate::errors::{ParquetError, Result};
+use crate::file::FOOTER_SIZE;
+use crate::file::metadata::parser::{MetadataParser, parse_column_index, parse_offset_index};
+use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData};
+use crate::file::page_index::index_reader::acc_range;
+use crate::file::reader::ChunkReader;
+use bytes::Bytes;
+use std::ops::Range;
 
 /// A push decoder for [`ParquetMetaData`].
 ///
-/// This structure implements a push API based version of the [`ParquetMetaDataReader`], which
-/// decouples the IO from the metadata decoding logic.
+/// This structure implements a push API for decoding Parquet metadata, which
+/// decouples IO from the metadata decoding logic (sometimes referred to as
+/// [Sans-IO]).
 ///
-/// You can use this decoder to customize your IO operations, as shown in the
-/// examples below for minimizing bytes read, prefetching data, or
-/// using async IO.
+/// See [`ParquetMetaDataReader`] for a pull-based API that incorporates IO and
+/// is simpler to use for basic use cases. This decoder is best for customizing
+/// your IO operations to minimize bytes read, prefetch data, or use async IO.
+///
+/// [Sans-IO]: https://sans-io.readthedocs.io
+/// [`ParquetMetaDataReader`]: crate::file::metadata::ParquetMetaDataReader
 ///
 /// # Example
 ///
 /// The most basic usage is to feed the decoder with the necessary byte ranges
-/// as requested as shown below.
+/// as requested as shown below. This minimizes the number of bytes read, but
+/// requires the most IO operations - one to read the footer and then one
+/// to read the metadata, and possibly more if page indexes are requested.
 ///
 /// ```rust
 /// # use std::ops::Range;
@@ -192,9 +206,16 @@ use crate::DecodeResult;
 /// [`AsyncRead`]: tokio::io::AsyncRead
 #[derive(Debug)]
 pub struct ParquetMetaDataPushDecoder {
-    done: bool,
-    metadata_reader: ParquetMetaDataReader,
+    /// Decoding state
+    state: DecodeState,
+    /// policy for loading ColumnIndex (part of the PageIndex)
+    column_index_policy: PageIndexPolicy,
+    /// policy for loading OffsetIndex (part of the PageIndex)
+    offset_index_policy: PageIndexPolicy,
+    /// Underlying buffers
     buffers: crate::util::push_buffers::PushBuffers,
+    /// Encryption API
+    metadata_parser: MetadataParser,
 }
 
 impl ParquetMetaDataPushDecoder {
@@ -204,21 +225,37 @@ impl ParquetMetaDataPushDecoder {
     /// [`ParquetMetaDataPushDecoder::with_page_index_policy`] for more detail.
     ///
     /// See examples on [`ParquetMetaDataPushDecoder`].
-    pub fn try_new(file_len: u64) -> Result<Self, ParquetError> {
+    pub fn try_new(file_len: u64) -> Result<Self> {
         if file_len < 8 {
             return Err(ParquetError::General(format!(
                 "Parquet files are at least 8 bytes long, but file length is {file_len}"
             )));
         };
 
-        let metadata_reader =
-            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Optional);
-
         Ok(Self {
-            done: false,
-            metadata_reader,
+            state: DecodeState::ReadingFooter,
+            column_index_policy: PageIndexPolicy::Optional,
+            offset_index_policy: PageIndexPolicy::Optional,
             buffers: crate::util::push_buffers::PushBuffers::new(file_len),
+            metadata_parser: MetadataParser::new(),
         })
+    }
+
+    /// Begin decoding from the given footer tail.
+    pub(crate) fn try_new_with_footer_tail(file_len: u64, footer_tail: FooterTail) -> Result<Self> {
+        let mut new_self = Self::try_new(file_len)?;
+        new_self.state = DecodeState::ReadingMetadata(footer_tail);
+        Ok(new_self)
+    }
+
+    /// Create a decoder with the given `ParquetMetaData` already known.
+    ///
+    /// This can be used to parse and populate the page index structures
+    /// after the metadata has already been decoded.
+    pub fn try_new_with_metadata(file_len: u64, metadata: ParquetMetaData) -> Result<Self> {
+        let mut new_self = Self::try_new(file_len)?;
+        new_self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
+        Ok(new_self)
     }
 
     /// Enable or disable reading the page index structures described in
@@ -232,9 +269,32 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     pub fn with_page_index_policy(mut self, page_index_policy: PageIndexPolicy) -> Self {
-        self.metadata_reader = self
-            .metadata_reader
-            .with_page_index_policy(page_index_policy);
+        self.column_index_policy = page_index_policy;
+        self.offset_index_policy = page_index_policy;
+        self
+    }
+
+    /// Set the policy for reading the ColumnIndex (part of the PageIndex)
+    pub fn with_column_index_policy(mut self, column_index_policy: PageIndexPolicy) -> Self {
+        self.column_index_policy = column_index_policy;
+        self
+    }
+
+    /// Set the policy for reading the OffsetIndex (part of the PageIndex)
+    pub fn with_offset_index_policy(mut self, offset_index_policy: PageIndexPolicy) -> Self {
+        self.offset_index_policy = offset_index_policy;
+        self
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Provide decryption properties for decoding encrypted Parquet files
+    pub(crate) fn with_file_decryption_properties(
+        mut self,
+        file_decryption_properties: Option<std::sync::Arc<FileDecryptionProperties>>,
+    ) -> Self {
+        self.metadata_parser = self
+            .metadata_parser
+            .with_file_decryption_properties(file_decryption_properties);
         self
     }
 
@@ -257,72 +317,161 @@ impl ParquetMetaDataPushDecoder {
     ///
     /// Speculatively pushing data can be used when  "prefetching" data. See
     /// example on [`Self`]
-    pub fn push_ranges(
-        &mut self,
-        ranges: Vec<std::ops::Range<u64>>,
-        buffers: Vec<bytes::Bytes>,
-    ) -> std::result::Result<(), String> {
-        if self.done {
-            return Err(
+    pub fn push_ranges(&mut self, ranges: Vec<Range<u64>>, buffers: Vec<Bytes>) -> Result<()> {
+        if matches!(&self.state, DecodeState::Finished) {
+            return Err(general_err!(
                 "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
-                    .to_string(),
-            );
+            ));
         }
         self.buffers.push_ranges(ranges, buffers);
         Ok(())
     }
 
+    /// Pushes a single range of data into the decoder's buffer.
+    pub fn push_range(&mut self, range: Range<u64>, buffer: Bytes) -> Result<()> {
+        if matches!(&self.state, DecodeState::Finished) {
+            return Err(general_err!(
+                "ParquetMetaDataPushDecoder: cannot push data after decoding is finished"
+            ));
+        }
+        self.buffers.push_range(range, buffer);
+        Ok(())
+    }
+
     /// Try to decode the metadata from the pushed data, returning the
     /// decoded metadata or an error if not enough data is available.
-    pub fn try_decode(
-        &mut self,
-    ) -> std::result::Result<DecodeResult<ParquetMetaData>, ParquetError> {
-        if self.done {
-            return Ok(DecodeResult::Finished);
-        }
-
-        // need to have the last 8 bytes of the file to decode the metadata
+    pub fn try_decode(&mut self) -> Result<DecodeResult<ParquetMetaData>> {
         let file_len = self.buffers.file_len();
-        if !self.buffers.has_range(&(file_len - 8..file_len)) {
-            #[expect(clippy::single_range_in_vec_init)]
-            return Ok(DecodeResult::NeedsData(vec![file_len - 8..file_len]));
-        }
+        let footer_len = FOOTER_SIZE as u64;
+        loop {
+            match std::mem::replace(&mut self.state, DecodeState::Intermediate) {
+                DecodeState::ReadingFooter => {
+                    // need to have the last 8 bytes of the file to decode the metadata
+                    let footer_start = file_len.saturating_sub(footer_len);
+                    let footer_range = footer_start..file_len;
 
-        // Try to parse the metadata from the buffers we have.
-        //
-        // If we don't have enough data, returns a `ParquetError::NeedMoreData`
-        // with the number of bytes needed to complete the metadata parsing.
-        //
-        // If we have enough data, returns `Ok(())` and we can complete
-        // the metadata parsing.
-        let maybe_metadata = self
-            .metadata_reader
-            .try_parse_sized(&self.buffers, self.buffers.file_len());
+                    if !self.buffers.has_range(&footer_range) {
+                        self.state = DecodeState::ReadingFooter;
+                        return Ok(needs_range(footer_range));
+                    }
+                    let footer_bytes = self.get_bytes(&footer_range)?;
+                    let footer_tail = FooterTail::try_from(footer_bytes.as_ref())?;
 
-        match maybe_metadata {
-            Ok(()) => {
-                // Metadata successfully parsed, proceed to decode the row groups
-                let metadata = self.metadata_reader.finish()?;
-                self.done = true;
-                Ok(DecodeResult::Data(metadata))
+                    self.state = DecodeState::ReadingMetadata(footer_tail);
+                    continue;
+                }
+
+                DecodeState::ReadingMetadata(footer_tail) => {
+                    let metadata_len: u64 = footer_tail.metadata_length() as u64;
+                    let metadata_start = file_len - footer_len - metadata_len;
+                    let metadata_end = metadata_start + metadata_len;
+                    let metadata_range = metadata_start..metadata_end;
+
+                    if !self.buffers.has_range(&metadata_range) {
+                        self.state = DecodeState::ReadingMetadata(footer_tail);
+                        return Ok(needs_range(metadata_range));
+                    }
+
+                    let metadata = self.metadata_parser.decode_metadata(
+                        &self.get_bytes(&metadata_range)?,
+                        footer_tail.is_encrypted_footer(),
+                    )?;
+                    // Note: ReadingPageIndex first checks if page indexes are needed
+                    // and is a no-op if not
+                    self.state = DecodeState::ReadingPageIndex(Box::new(metadata));
+                    continue;
+                }
+
+                DecodeState::ReadingPageIndex(mut metadata) => {
+                    // First determine if any page indexes are needed based on
+                    // the specified policies
+                    let range = range_for_page_index(
+                        &metadata,
+                        self.column_index_policy,
+                        self.offset_index_policy,
+                    );
+
+                    let Some(page_index_range) = range else {
+                        self.state = DecodeState::Finished;
+                        return Ok(DecodeResult::Data(*metadata));
+                    };
+
+                    if !self.buffers.has_range(&page_index_range) {
+                        self.state = DecodeState::ReadingPageIndex(metadata);
+                        return Ok(needs_range(page_index_range));
+                    }
+
+                    let buffer = self.get_bytes(&page_index_range)?;
+                    let offset = page_index_range.start;
+                    parse_column_index(&mut metadata, self.column_index_policy, &buffer, offset)?;
+                    parse_offset_index(&mut metadata, self.offset_index_policy, &buffer, offset)?;
+                    self.state = DecodeState::Finished;
+                    return Ok(DecodeResult::Data(*metadata));
+                }
+
+                DecodeState::Finished => return Ok(DecodeResult::Finished),
+                DecodeState::Intermediate => {
+                    return Err(general_err!(
+                        "ParquetMetaDataPushDecoder: internal error, invalid state"
+                    ));
+                }
             }
-
-            Err(ParquetError::NeedMoreData(needed)) => {
-                let needed = needed as u64;
-                let Some(start_offset) = file_len.checked_sub(needed) else {
-                    return Err(ParquetError::General(format!(
-                        "Parquet metadata reader needs at least {needed} bytes, but file length is only {file_len}"
-                    )));
-                };
-                let needed_range = start_offset..start_offset + needed;
-                // needs `needed_range` bytes at the end of the file
-                Ok(DecodeResult::NeedsData(vec![needed_range]))
-            }
-            Err(ParquetError::NeedMoreDataRange(range)) => Ok(DecodeResult::NeedsData(vec![range])),
-
-            Err(e) => Err(e), // some other error, pass back
         }
     }
+
+    /// Returns the bytes for the given range from the internal buffer
+    fn get_bytes(&self, range: &Range<u64>) -> Result<Bytes> {
+        let start = range.start;
+        let raw_len = range.end - range.start;
+        let len: usize = raw_len.try_into().map_err(|_| {
+            ParquetError::General(format!(
+                "ParquetMetaDataPushDecoder: Range length too large to fit in usize: {raw_len}",
+            ))
+        })?;
+        self.buffers.get_bytes(start, len)
+    }
+}
+
+/// returns a DecodeResults that describes needing the given range
+fn needs_range(range: Range<u64>) -> DecodeResult<ParquetMetaData> {
+    DecodeResult::NeedsData(vec![range])
+}
+
+/// Decoding state machine
+#[derive(Debug)]
+enum DecodeState {
+    /// Reading the last 8 bytes of the file
+    ReadingFooter,
+    /// Reading the metadata thrift structure
+    ReadingMetadata(FooterTail),
+    // Actively reading the page index
+    ReadingPageIndex(Box<ParquetMetaData>),
+    // Decoding is complete
+    Finished,
+    /// State left during the `try_decode` method so something valid is present.
+    /// This state should never be observed.
+    Intermediate,
+}
+
+/// Returns the byte range needed to read the offset/page indexes, based on the
+/// specified policies
+///
+/// Returns None if no page indexes are needed
+pub fn range_for_page_index(
+    metadata: &ParquetMetaData,
+    column_index_policy: PageIndexPolicy,
+    offset_index_policy: PageIndexPolicy,
+) -> Option<Range<u64>> {
+    let mut range = None;
+    for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
+        if column_index_policy != PageIndexPolicy::Skip {
+            range = acc_range(range, c.column_index_range());
+        }
+        if offset_index_policy != PageIndexPolicy::Skip {
+            range = acc_range(range, c.offset_index_range());
+        }
+    }
+    range
 }
 
 // These tests use the arrow writer to create a parquet file in memory
@@ -533,7 +682,7 @@ mod tests {
     }
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::Data`] and return the corresponding element
-    fn expect_data<T: Debug>(result: Result<DecodeResult<T>, ParquetError>) -> T {
+    fn expect_data<T: Debug>(result: Result<DecodeResult<T>>) -> T {
         match result.expect("Expected Ok(DecodeResult::Data(T))") {
             DecodeResult::Data(data) => data,
             result => panic!("Expected DecodeResult::Data, got {result:?}"),
@@ -541,16 +690,14 @@ mod tests {
     }
 
     /// Expect that the [`DecodeResult`] is a [`DecodeResult::NeedsData`] and return the corresponding ranges
-    fn expect_needs_data<T: Debug>(
-        result: Result<DecodeResult<T>, ParquetError>,
-    ) -> Vec<Range<u64>> {
+    fn expect_needs_data<T: Debug>(result: Result<DecodeResult<T>>) -> Vec<Range<u64>> {
         match result.expect("Expected Ok(DecodeResult::NeedsData{ranges})") {
             DecodeResult::NeedsData(ranges) => ranges,
             result => panic!("Expected DecodeResult::NeedsData, got {result:?}"),
         }
     }
 
-    fn expect_finished<T: Debug>(result: Result<DecodeResult<T>, ParquetError>) {
+    fn expect_finished<T: Debug>(result: Result<DecodeResult<T>>) {
         match result.expect("Expected Ok(DecodeResult::Finished)") {
             DecodeResult::Finished => {}
             result => panic!("Expected DecodeResult::Finished, got {result:?}"),

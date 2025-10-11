@@ -19,7 +19,7 @@
 
 use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
 use crate::variant_to_arrow::{
-    make_primitive_variant_to_arrow_row_builder, PrimitiveVariantToArrowRowBuilder,
+    PrimitiveVariantToArrowRowBuilder, make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
@@ -27,7 +27,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Fields};
 use arrow::error::{ArrowError, Result};
-use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant};
+use parquet_variant::{Variant, VariantBuilderExt};
 
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -267,9 +267,8 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         };
 
         // Route the object's fields by name as either shredded or unshredded
-        let mut metadata_builder = ReadOnlyMetadataBuilder::new(value.metadata().clone());
-        let state = self.value_builder.parent_state(&mut metadata_builder);
-        let mut object_builder = ObjectBuilder::new(state, false);
+        let mut builder = self.value_builder.builder_ext(value.metadata());
+        let mut object_builder = builder.try_new_object()?;
         let mut seen = std::collections::HashSet::new();
         let mut partially_shredded = false;
         for (field_name, value) in obj.iter() {
@@ -329,7 +328,7 @@ mod tests {
     use crate::VariantArrayBuilder;
     use arrow::array::{Array, Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields};
-    use parquet_variant::{Variant, VariantBuilder, VariantBuilderExt as _};
+    use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
     use std::sync::Arc;
 
     fn create_test_variant_array(values: Vec<Option<Variant<'_, '_>>>) -> VariantArray {
@@ -795,7 +794,7 @@ mod tests {
         let object_with_foo_field = |i| {
             use parquet_variant::{ParentState, ValueBuilder, VariantMetadata};
             let metadata = VariantMetadata::new(metadata.value(i));
-            let mut metadata_builder = ReadOnlyMetadataBuilder::new(metadata.clone());
+            let mut metadata_builder = ReadOnlyMetadataBuilder::new(&metadata);
             let mut value_builder = ValueBuilder::new();
             let state = ParentState::variant(&mut value_builder, &mut metadata_builder);
             ObjectBuilder::new(state, false)

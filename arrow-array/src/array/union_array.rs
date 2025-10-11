@@ -16,7 +16,7 @@
 // under the License.
 #![allow(clippy::enum_clike_unportable_variant)]
 
-use crate::{make_array, Array, ArrayRef};
+use crate::{Array, ArrayRef, make_array};
 use arrow_buffer::bit_chunk_iterator::{BitChunkIterator, BitChunks};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, ScalarBuffer};
@@ -165,8 +165,8 @@ impl UnionArray {
             .len(len);
 
         let data = match offsets {
-            Some(offsets) => builder.add_buffer(offsets.into_inner()).build_unchecked(),
-            None => builder.build_unchecked(),
+            Some(offsets) => unsafe { builder.add_buffer(offsets.into_inner()).build_unchecked() },
+            None => unsafe { builder.build_unchecked() },
         };
         Self::from(data)
     }
@@ -219,7 +219,7 @@ impl UnionArray {
                 _ => {
                     return Err(ArrowError::InvalidArgumentError(
                         "Type Ids values must match one of the field type ids".to_owned(),
-                    ))
+                    ));
                 }
             }
         }
@@ -312,7 +312,7 @@ impl UnionArray {
     }
 
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
-    fn is_dense(&self) -> bool {
+    pub fn is_dense(&self) -> bool {
         match self.data_type() {
             DataType::Union(_, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),
