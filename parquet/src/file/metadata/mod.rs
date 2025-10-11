@@ -92,7 +92,7 @@ mod memory;
 mod parser;
 mod push_decoder;
 pub(crate) mod reader;
-pub(crate) mod thrift_gen;
+pub mod thrift_gen;
 mod writer;
 
 use crate::basic::PageType;

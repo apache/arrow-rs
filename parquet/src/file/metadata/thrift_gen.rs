@@ -41,7 +41,7 @@ use crate::{
     schema::types::{
         ColumnDescriptor, SchemaDescriptor, TypePtr, num_nodes, parquet_schema_from_array,
     },
-    thrift_struct,
+    thrift_struct, thrift_union,
     util::bit_util::FromBytes,
 };
 #[cfg(feature = "encryption")]
@@ -51,11 +51,13 @@ use crate::{
     thrift_union,
 };
 
+use super::HeapSize;
+
 // this needs to be visible to the schema conversion code
 thrift_struct!(
-pub(crate) struct SchemaElement<'a> {
+pub struct SchemaElement {
   /// Data type for this field. Not set if the current element is a non-leaf node
-  1: optional Type r#type;
+  1: optional Type r#type_;
   /// If type is FIXED_LEN_BYTE_ARRAY, this is the byte length of the values.
   /// Otherwise, if specified, this is the maximum bit length to store any of the values.
   /// (e.g. a low cardinality INT col could have this set to 3).  Note that this is
@@ -65,7 +67,7 @@ pub(crate) struct SchemaElement<'a> {
   /// All other nodes must have one.
   3: optional Repetition repetition_type;
   /// Name of the field in the schema
-  4: required string<'a> name;
+  4: required string name;
   /// Nested fields. Since thrift does not support nested fields,
   /// the nesting is flattened to a single list by a depth-first traversal.
   /// The children count is used to construct the nested relationship.
@@ -94,7 +96,7 @@ pub(crate) struct SchemaElement<'a> {
 );
 
 thrift_struct!(
-pub(crate) struct Statistics<'a> {
+pub struct Statistics<'a> {
    1: optional binary<'a> max;
    2: optional binary<'a> min;
    3: optional i64 null_count;
@@ -107,7 +109,6 @@ pub(crate) struct Statistics<'a> {
 );
 
 // TODO(ets): move a lot of the encryption stuff to its own module
-#[cfg(feature = "encryption")]
 thrift_struct!(
 pub(crate) struct AesGcmV1 {
   /// AAD prefix
@@ -131,7 +132,6 @@ impl HeapSize for AesGcmV1 {
     }
 }
 
-#[cfg(feature = "encryption")]
 thrift_struct!(
 pub(crate) struct AesGcmCtrV1 {
   /// AAD prefix
@@ -146,7 +146,6 @@ pub(crate) struct AesGcmCtrV1 {
 }
 );
 
-#[cfg(feature = "encryption")]
 impl HeapSize for AesGcmCtrV1 {
     fn heap_size(&self) -> usize {
         self.aad_prefix.heap_size()
@@ -155,7 +154,6 @@ impl HeapSize for AesGcmCtrV1 {
     }
 }
 
-#[cfg(feature = "encryption")]
 thrift_union!(
 union EncryptionAlgorithm {
   1: (AesGcmV1) AES_GCM_V1
@@ -189,12 +187,10 @@ pub(crate) struct FileCryptoMetaData<'a> {
 );
 
 // the following are only used internally so are private
-#[cfg(feature = "encryption")]
-type CompressionCodec = Compression;
-#[cfg(feature = "encryption")]
+pub type CompressionCodec = Compression;
 thrift_struct!(
-struct ColumnMetaData<'a> {
-  1: required Type r#type
+pub struct ColumnMetaData<'a> {
+  1: required Type r#type_
   2: required list<Encoding> encodings
   // we don't expose path_in_schema so skip
   //3: required list<string> path_in_schema
@@ -230,14 +226,14 @@ struct BoundingBox {
 );
 
 thrift_struct!(
-struct GeospatialStatistics {
+pub struct GeospatialStatistics {
   1: optional BoundingBox bbox;
   2: optional list<i32> geospatial_types;
 }
 );
 
 thrift_struct!(
-struct SizeStatistics {
+pub struct SizeStatistics {
    1: optional i64 unencoded_byte_array_data_bytes;
    2: optional list<i64> repetition_level_histogram;
    3: optional list<i64> definition_level_histogram;
@@ -696,6 +692,74 @@ fn get_file_decryptor(
         )),
     }
 }
+
+thrift_struct!(
+    struct EncryptionWithFooterKey {
+        1: optional binary key_metadata
+    }
+);
+
+thrift_struct!(
+struct EncryptionWithColumnKey {
+  /** Column path in schema **/
+  1: required list<string> path_in_schema
+
+  /** Retrieval metadata of column encryption key **/
+  2: optional binary key_metadata
+}
+);
+
+thrift_union!(
+union ColumnCryptoMetaData {
+  1: (EncryptionWithFooterKey) ENCRYPTION_WITH_FOOTER_KEY
+  2: (EncryptionWithColumnKey) ENCRYPTION_WITH_COLUMN_KEY
+}
+);
+
+thrift_struct!(
+pub struct ColumnChunk<'a> {
+  /** File where column data is stored.  If not set, assumed to be same file as
+    * metadata.  This path is relative to the current file.
+    **/
+  1: optional string file_path
+
+  /** Deprecated: Byte offset in file_path to the ColumnMetaData
+   *
+   * Past use of this field has been inconsistent, with some implementations
+   * using it to point to the ColumnMetaData and some using it to point to
+   * the first page in the column chunk. In many cases, the ColumnMetaData at this
+   * location is wrong. This field is now deprecated and should not be used.
+   * Writers should set this field to 0 if no ColumnMetaData has been written outside
+   * the footer.
+   */
+  2: required i64 file_offset = 0
+
+  /** Column metadata for this chunk. Some writers may also replicate this at the
+   * location pointed to by file_path/file_offset.
+   * Note: while marked as optional, this field is in fact required by most major
+   * Parquet implementations. As such, writers MUST populate this field.
+   **/
+  3: optional ColumnMetaData<'a> meta_data
+
+  /** File offset of ColumnChunk's OffsetIndex **/
+  4: optional i64 offset_index_offset
+
+  /** Size of ColumnChunk's OffsetIndex, in bytes **/
+  5: optional i32 offset_index_length
+
+  /** File offset of ColumnChunk's ColumnIndex **/
+  6: optional i64 column_index_offset
+
+  /** Size of ColumnChunk's ColumnIndex, in bytes **/
+  7: optional i32 column_index_length
+
+  /** Crypto metadata of encrypted columns **/
+  8: optional ColumnCryptoMetaData crypto_metadata
+
+  /** Encrypted column metadata for this chunk **/
+  9: optional binary encrypted_column_metadata
+}
+);
 
 // using ThriftSliceInputProtocol rather than ThriftCompactInputProtocl trait because
 // these are all internal and operate on slices.
@@ -1710,17 +1774,98 @@ pub(crate) struct FileMeta<'a> {
     pub(crate) row_groups: &'a Vec<RowGroupMetaData>,
 }
 
-// struct FileMetaData {
-//   1: required i32 version
-//   2: required list<SchemaElement> schema;
-//   3: required i64 num_rows
-//   4: required list<RowGroup> row_groups
-//   5: optional list<KeyValue> key_value_metadata
-//   6: optional string created_by
-//   7: optional list<ColumnOrder> column_orders;
-//   8: optional EncryptionAlgorithm encryption_algorithm
-//   9: optional binary footer_signing_key_metadata
-// }
+thrift_struct!(
+pub struct RowGroup<'a> {
+  /** Metadata for each column chunk in this row group.
+   * This list must have the same order as the SchemaElement list in FileMetaData.
+   **/
+  1: required list<'a><ColumnChunk> columns
+
+  /** Total byte size of all the uncompressed column data in this row group **/
+  2: required i64 total_byte_size
+
+  /** Number of rows in this row group **/
+  3: required i64 num_rows
+
+  /** If set, specifies a sort ordering of the rows in this RowGroup.
+   * The sorting columns can be a subset of all the columns.
+   */
+  4: optional list<SortingColumn> sorting_columns
+
+  /** Byte offset from beginning of file to first page (data or dictionary)
+   * in this row group **/
+  5: optional i64 file_offset
+
+  /** Total byte size of all compressed (and potentially encrypted) column data
+   *  in this row group **/
+  6: optional i64 total_compressed_size
+
+  /** Row group ordinal in the file **/
+  7: optional i16 ordinal
+}
+);
+
+thrift_struct!(
+pub struct FileMetaData<'a> {
+  /** Version of this file **/
+  1: required i32 version
+
+  /** Parquet schema for this file.  This schema contains metadata for all the columns.
+   * The schema is represented as a tree with a single root.  The nodes of the tree
+   * are flattened to a list by doing a depth-first traversal.
+   * The column metadata contains the path in the schema for that column which can be
+   * used to map columns to nodes in the schema.
+   * The first element is the root **/
+  2: required list<SchemaElement> schema;
+
+  /** Number of rows in this file **/
+  3: required i64 num_rows
+
+  /** Row groups in this file **/
+  4: required list<'a><RowGroup> row_groups
+
+  /** Optional key/value metadata **/
+  5: optional list<KeyValue> key_value_metadata
+
+  /** String for application that wrote this file.  This should be in the format
+   * <Application> version <App Version> (build <App Build Hash>).
+   * e.g. impala version 1.0 (build 6cf94d29b2b7115df4de2c06e2ab4326d721eb55)
+   **/
+  6: optional string created_by
+
+  /**
+   * Sort order used for the min_value and max_value fields in the Statistics
+   * objects and the min_values and max_values fields in the ColumnIndex
+   * objects of each column in this file. Sort orders are listed in the order
+   * matching the columns in the schema. The indexes are not necessary the same
+   * though, because only leaf nodes of the schema are represented in the list
+   * of sort orders.
+   *
+   * Without column_orders, the meaning of the min_value and max_value fields
+   * in the Statistics object and the ColumnIndex object is undefined. To ensure
+   * well-defined behaviour, if these fields are written to a Parquet file,
+   * column_orders must be written as well.
+   *
+   * The obsolete min and max fields in the Statistics object are always sorted
+   * by signed comparison regardless of column_orders.
+   */
+  7: optional list<ColumnOrder> column_orders;
+
+  /**
+   * Encryption algorithm. This field is set only in encrypted files
+   * with plaintext footer. Files with encrypted footer store algorithm id
+   * in FileCryptoMetaData structure.
+   */
+  8: optional EncryptionAlgorithm encryption_algorithm
+
+  /**
+   * Retrieval metadata of key used for signing the footer.
+   * Used only in encrypted files with plaintext footer.
+   */
+  9: optional binary footer_signing_key_metadata
+}
+);
+
 impl<'a> WriteThrift for FileMeta<'a> {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
@@ -1793,14 +1938,14 @@ fn write_schema_helper<W: Write>(
             precision,
         } => {
             let element = SchemaElement {
-                r#type: Some(*physical_type),
+                r#type_: Some(*physical_type),
                 type_length: if *type_length >= 0 {
                     Some(*type_length)
                 } else {
                     None
                 },
                 repetition_type: Some(basic_info.repetition()),
-                name: basic_info.name(),
+                name: basic_info.name().to_string(),
                 num_children: None,
                 converted_type: match basic_info.converted_type() {
                     ConvertedType::NONE => None,
@@ -1829,10 +1974,10 @@ fn write_schema_helper<W: Write>(
             };
 
             let element = SchemaElement {
-                r#type: None,
+                r#type_: None,
                 type_length: None,
                 repetition_type: repetition,
-                name: basic_info.name(),
+                name: basic_info.name().to_string(),
                 num_children: Some(fields.len().try_into()?),
                 converted_type: match basic_info.converted_type() {
                     ConvertedType::NONE => None,
@@ -2104,7 +2249,7 @@ pub(crate) mod tests {
         Ok(buf)
     }
 
-    pub(crate) fn buf_to_schema_list<'a>(buf: &'a mut Vec<u8>) -> Result<Vec<SchemaElement<'a>>> {
+    pub(crate) fn buf_to_schema_list<'a>(buf: &'a mut Vec<u8>) -> Result<Vec<SchemaElement>> {
         let mut prot = ThriftSliceInputProtocol::new(buf.as_mut_slice());
         read_thrift_vec(&mut prot)
     }
