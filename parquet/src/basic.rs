@@ -726,7 +726,38 @@ impl FromStr for Encoding {
 }
 
 /// A bitmask representing the [`Encoding`]s employed while encoding a Parquet column chunk.
-// TODO(ets): full documentation with examples
+///
+/// The Parquet [`ColumnMetaData`] struct contains an array that indicates what encodings were
+/// used when writing that column chunk. For memory and performance reasons, this crate reduces
+/// that array to bitmask, where each bit position represents a different [`Encoding`]. This
+/// struct contains that bitmask, and provides methods to interact with the data.
+///
+/// # Example
+/// ```no_run
+/// # use parquet::file::metadata::ParquetMetaDataReader;
+/// # use parquet::basic::Encoding;
+/// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
+/// // read parquet metadata from a file
+/// let file = open_parquet_file("some_path.parquet");
+/// let mut reader = ParquetMetaDataReader::new();
+/// reader.try_parse(&file).unwrap();
+/// let metadata = reader.finish().unwrap();
+///
+/// // find the encodings used by the first column chunk in the first row group
+/// let col_meta = metadata.row_group(0).column(0);
+/// let encodings = col_meta.encodings_mask();
+///
+/// // check to see if a particular encoding was used
+/// let used_rle = encodings.is_set(&Encoding::RLE);
+///
+/// // check to see if all of a set of encodings were used
+/// let used_all = encodings.all_set([Encoding::RLE, Encoding::PLAIN].into_iter());
+///
+/// // convert mask to a Vec<Encoding>
+/// let encodings_vec = encodings.encodings().collect::<Vec<_>>();
+/// ```
+///
+/// [`ColumnMetaData`]: https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/src/main/thrift/parquet.thrift#L875
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EncodingMask(i32);
 
