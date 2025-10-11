@@ -149,7 +149,7 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
     // REE arrays already handled by run_end_encoded_cast
     if let DataType::RunEndEncoded(_, _) = cast_array.data_type() {
-        panic!("unreachable");
+        unreachable!()
     }
 
     // Run-end encode the cast array
@@ -403,7 +403,7 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
                 // REE arrays already handled by run_end_encoded_cast
                 DataType::RunEndEncoded(_, _) => {
-                    panic!("unreachable");
+                    unreachable!()
                 }
 
                 // Unsupported types
