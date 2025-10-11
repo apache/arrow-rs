@@ -748,10 +748,10 @@ impl FromStr for Encoding {
 /// let encodings = col_meta.encodings_mask();
 ///
 /// // check to see if a particular encoding was used
-/// let used_rle = encodings.is_set(&Encoding::RLE);
+/// let used_rle = encodings.is_set(Encoding::RLE);
 ///
 /// // check to see if all of a set of encodings were used
-/// let used_all = encodings.all_set([Encoding::RLE, Encoding::PLAIN].into_iter());
+/// let used_all = encodings.all_set([Encoding::RLE, Encoding::PLAIN].iter());
 ///
 /// // convert mask to a Vec<Encoding>
 /// let encodings_vec = encodings.encodings().collect::<Vec<_>>();
@@ -775,22 +775,22 @@ impl EncodingMask {
     }
 
     /// Create a new `EncodingMask` from a collection of [`Encoding`]s.
-    pub fn new_from_encodings(encodings: impl Iterator<Item = Encoding>) -> Self {
+    pub fn new_from_encodings<'a>(encodings: impl Iterator<Item = &'a Encoding>) -> Self {
         let mut mask = 0;
-        for e in encodings {
+        for &e in encodings {
             mask |= 1 << (e as i32);
         }
         Self(mask)
     }
 
     /// Test if a given [`Encoding`] is present in this mask.
-    pub fn is_set(&self, val: &Encoding) -> bool {
-        self.0 & (1 << (*val as i32)) != 0
+    pub fn is_set(&self, val: Encoding) -> bool {
+        self.0 & (1 << (val as i32)) != 0
     }
 
     /// Test if all [`Encoding`]s in a given set are present in this mask.
-    pub fn all_set(&self, mut encodings: impl Iterator<Item = Encoding>) -> bool {
-        encodings.all(|e| self.is_set(&e))
+    pub fn all_set<'a>(&self, mut encodings: impl Iterator<Item = &'a Encoding>) -> bool {
+        encodings.all(|&e| self.is_set(e))
     }
 
     /// Return an iterator over all [`Encoding`]s present in this mask.
@@ -2530,8 +2530,10 @@ mod tests {
 
     fn encodings_roundtrip(mut encodings: Vec<Encoding>) {
         encodings.sort();
-        let mask = EncodingMask::new_from_encodings(encodings.clone().into_iter());
-        assert!(mask.all_set(encodings.into_iter()));
+        let mask = EncodingMask::new_from_encodings(encodings.iter());
+        assert!(mask.all_set(encodings.iter()));
+        let v = mask.encodings().collect::<Vec<_>>();
+        assert_eq!(v, encodings);
     }
 
     #[test]

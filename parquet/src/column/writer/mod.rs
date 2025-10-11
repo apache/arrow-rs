@@ -1190,9 +1190,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
-            .set_encodings_mask(EncodingMask::new_from_encodings(
-                self.encodings.clone().into_iter(),
-            ))
+            .set_encodings_mask(EncodingMask::new_from_encodings(self.encodings.iter()))
             .set_page_encoding_stats(self.encoding_stats.clone())
             .set_total_compressed_size(total_compressed_size)
             .set_total_uncompressed_size(total_uncompressed_size)

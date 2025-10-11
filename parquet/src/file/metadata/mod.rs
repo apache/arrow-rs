@@ -1186,7 +1186,7 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets list of encodings for this column chunk.
     pub fn set_encodings(mut self, encodings: Vec<Encoding>) -> Self {
-        self.0.encodings = EncodingMask::new_from_encodings(encodings.into_iter());
+        self.0.encodings = EncodingMask::new_from_encodings(encodings.iter());
         self
     }
 
@@ -1719,7 +1719,7 @@ mod tests {
         let column_descr = get_test_schema_descr().column(0);
         let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
             .set_encodings_mask(EncodingMask::new_from_encodings(
-                [Encoding::PLAIN, Encoding::RLE].into_iter(),
+                [Encoding::PLAIN, Encoding::RLE].iter(),
             ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
