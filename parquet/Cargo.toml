@@ -260,5 +260,10 @@ name = "row_selector"
 harness = false
 required-features = ["arrow"]
 
+[[bench]]
+name = "bloom_filter"
+harness = false
+required-features = ["arrow"]
+
 [lib]
 bench = false
