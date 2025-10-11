@@ -19,7 +19,7 @@
 extern crate criterion;
 
 use criterion::{Bencher, Criterion, Throughput};
-use parquet::arrow::arrow_writer::compute_leaves;
+use parquet::arrow::arrow_writer::{ArrowRowGroupWriterFactory, compute_leaves};
 use parquet::basic::{Compression, ZstdLevel};
 
 extern crate arrow;
@@ -33,8 +33,10 @@ use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::RecordBatchOptions;
+use parquet::arrow::ArrowSchemaConverter;
+use parquet::errors::Result;
 use parquet::file::properties::{WriterProperties, WriterVersion};
-use parquet::{arrow::ArrowWriter, errors::Result};
+use parquet::file::writer::SerializedFileWriter;
 
 fn create_primitive_bench_batch(
     size: usize,
@@ -341,8 +343,12 @@ fn write_batch_with_option(
     props: Option<WriterProperties>,
 ) -> Result<()> {
     let mut file = Empty::default();
-    let writer = ArrowWriter::try_new(&mut file, batch.schema(), props)?;
-    let (_, row_group_writer_factory) = writer.into_serialized_writer()?;
+    let props = Arc::new(props.unwrap_or_default());
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(batch.schema_ref())?;
+    let writer = SerializedFileWriter::new(&mut file, parquet_schema.root_schema_ptr(), props)?;
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, batch.schema());
 
     bench.iter(|| {
         let mut row_group = row_group_writer_factory.create_column_writers(0).unwrap();
