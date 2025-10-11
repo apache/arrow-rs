@@ -758,15 +758,21 @@ impl FromStr for Encoding {
 /// ```
 ///
 /// [`ColumnMetaData`]: https://github.com/apache/parquet-format/blob/9fd57b59e0ce1a82a69237dcf8977d3e72a2965d/src/main/thrift/parquet.thrift#L875
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct EncodingMask(i32);
 
 impl EncodingMask {
     const MAX_ENCODING: i32 = Encoding::BYTE_STREAM_SPLIT as i32;
+    const ALLOWED_MASK: u32 = !(1u32 << (EncodingMask::MAX_ENCODING as u32 + 1)).wrapping_sub(1);
 
-    /// Create a new `EncodingMask` from an integer.
-    pub fn new(val: i32) -> Self {
-        Self(val)
+    /// Attempt to create a new `EncodingMask` from an integer.
+    ///
+    /// This will return an error if a bit outside the allowable range is set.
+    pub fn try_new(val: i32) -> Result<Self> {
+        if val as u32 & Self::ALLOWED_MASK != 0 {
+            return Err(general_err!("Attempt to create invalid mask: 0x{:x}", val));
+        }
+        Ok(Self(val))
     }
 
     /// Return an integer representation of this `EncodingMask`.
@@ -815,12 +821,11 @@ impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EncodingMask {
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let mut mask = 0;
 
+        // This reads a Thrift `list<Encoding>` and turns it into a bitmask
         let list_ident = prot.read_list_begin()?;
         for _ in 0..list_ident.size {
-            let val = i32::read_thrift(prot)?;
-            if (0..=Self::MAX_ENCODING).contains(&val) {
-                mask |= 1 << val;
-            }
+            let val = Encoding::read_thrift(prot)?;
+            mask |= 1 << val as i32;
         }
         Ok(Self(mask))
     }
@@ -2560,5 +2565,16 @@ mod tests {
             Encoding::BYTE_STREAM_SPLIT,
         ];
         encodings_roundtrip(encodings.into());
+    }
+
+    #[test]
+    fn test_invalid_encoding_mask() {
+        let res = EncodingMask::try_new(-1);
+        assert!(res.is_err());
+        let err = res.unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Attempt to create invalid mask: 0xffffffff"
+        );
     }
 }
