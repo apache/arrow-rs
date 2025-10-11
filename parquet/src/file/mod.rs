@@ -97,7 +97,6 @@
 //!     println!("{}", row.unwrap());
 //! }
 //! ```
-#[cfg(feature = "encryption")]
 pub mod column_crypto_metadata;
 pub mod metadata;
 pub mod page_index;

@@ -150,18 +150,6 @@ compile_error!(
 pub mod errors;
 pub mod basic;
 
-/// Automatically generated code from the Parquet thrift definition.
-///
-/// This module code generated from [parquet.thrift]. See [crate::file] for
-/// more information on reading Parquet encoded data.
-///
-/// [parquet.thrift]: https://github.com/apache/parquet-format/blob/master/src/main/thrift/parquet.thrift
-// see parquet/CONTRIBUTING.md for instructions on regenerating
-// Don't try clippy and format auto generated code
-#[allow(clippy::all, missing_docs)]
-#[rustfmt::skip]
-pub mod format;
-
 #[macro_use]
 pub mod data_type;
 
@@ -191,7 +179,8 @@ pub mod record;
 pub mod schema;
 
 mod parquet_macros;
-mod parquet_thrift;
+#[allow(clippy::all, missing_docs)]
+pub mod parquet_thrift;
 pub mod thrift;
 /// What data is needed to read the next item from a decoder.
 ///

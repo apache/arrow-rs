@@ -38,14 +38,13 @@ use std::io::Read;
 
 use clap::Parser;
 use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::file::metadata::thrift_gen::PageHeader;
+use parquet::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use serde::Serialize;
-use thrift::protocol::TCompactInputProtocol;
 
 use parquet::basic::Compression;
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
-use parquet::format::PageHeader;
-use parquet::thrift::TSerializable;
 
 #[derive(Serialize, Debug)]
 struct ParquetFile {
@@ -105,7 +104,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         if let Some(dictionary) = header.dictionary_page_header {
                             pages.push(Page {
                                 compression,
-                                encoding: encoding(dictionary.encoding.0),
+                                encoding: encoding(dictionary.encoding as i32),
                                 page_type: "dictionary",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -116,7 +115,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         } else if let Some(data_page) = header.data_page_header {
                             pages.push(Page {
                                 compression,
-                                encoding: encoding(data_page.encoding.0),
+                                encoding: encoding(data_page.encoding as i32),
                                 page_type: "data_page_v1",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -129,7 +128,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
 
                             pages.push(Page {
                                 compression: compression.filter(|_| is_compressed),
-                                encoding: encoding(data_page.encoding.0),
+                                encoding: encoding(data_page.encoding as i32),
                                 page_type: "data_page_v2",
                                 offset: start,
                                 compressed_bytes: header.compressed_page_size,
@@ -176,8 +175,8 @@ fn read_page_header<C: ChunkReader>(reader: &C, offset: u64) -> Result<(usize, P
 
     let input = reader.get_read(offset)?;
     let mut tracked = TrackedRead(input, 0);
-    let mut prot = TCompactInputProtocol::new(&mut tracked);
-    let header = PageHeader::read_from_in_protocol(&mut prot)?;
+    let mut prot = ThriftReadInputProtocol::new(&mut tracked);
+    let header = PageHeader::read_thrift(&mut prot)?;
     Ok((tracked.1, header))
 }
 

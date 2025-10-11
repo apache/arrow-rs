@@ -15,20 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use parquet::file::metadata::ParquetMetaDataReader;
+use parquet::basic::{Encoding, FieldRepetitionType, PageType, Type};
+use parquet::file::metadata::thrift_gen::{
+    ColumnChunk, ColumnMetaData, CompressionCodec, FileMetaData, RowGroup, SchemaElement,
+    Statistics,
+};
+use parquet::file::metadata::{PageEncodingStats, ParquetMetaDataReader};
 use rand::Rng;
-use thrift::protocol::TCompactOutputProtocol;
+
+use parquet::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 
 use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
 use criterion::*;
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
-use parquet::format::{
-    ColumnChunk, ColumnMetaData, CompressionCodec, Encoding, FieldRepetitionType, FileMetaData,
-    PageEncodingStats, PageType, RowGroup, SchemaElement, Type,
-};
-use parquet::thrift::TSerializable;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
@@ -64,13 +65,15 @@ fn encoded_meta() -> Vec<u8> {
         })
     }
 
-    let stats = parquet::format::Statistics {
+    let max_value_binding = vec![rng.random(); 8];
+    let min_value_binding = vec![rng.random(); 8];
+    let stats = Statistics {
         min: None,
         max: None,
         null_count: Some(0),
         distinct_count: None,
-        max_value: Some(vec![rng.random(); 8]),
-        min_value: Some(vec![rng.random(); 8]),
+        max_value: Some(&max_value_binding),
+        min_value: Some(&min_value_binding),
         is_max_value_exact: Some(true),
         is_min_value_exact: Some(true),
     };
@@ -84,12 +87,10 @@ fn encoded_meta() -> Vec<u8> {
                     meta_data: Some(ColumnMetaData {
                         type_: Type::FLOAT,
                         encodings: vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY],
-                        path_in_schema: vec![],
                         codec: CompressionCodec::UNCOMPRESSED,
                         num_values: rng.random_range(1..1000000),
                         total_uncompressed_size: rng.random_range(100000..100000000),
                         total_compressed_size: rng.random_range(50000..5000000),
-                        key_value_metadata: None,
                         data_page_offset: rng.random_range(4..2000000000),
                         index_page_offset: None,
                         dictionary_page_offset: Some(rng.random_range(4..2000000000)),
@@ -146,8 +147,8 @@ fn encoded_meta() -> Vec<u8> {
 
     let mut buf = Vec::with_capacity(1024);
     {
-        let mut out = TCompactOutputProtocol::new(&mut buf);
-        file.write_to_out_protocol(&mut out).unwrap();
+        let mut out = ThriftCompactOutputProtocol::new(&mut buf);
+        file.write_thrift(&mut out).unwrap();
     }
     buf
 }

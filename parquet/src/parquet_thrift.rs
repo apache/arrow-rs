@@ -67,7 +67,7 @@ impl PartialOrd for OrderedF64 {
 
 // Thrift compact protocol types for struct fields.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum FieldType {
+pub enum FieldType {
     Stop = 0,
     BooleanTrue = 1,
     BooleanFalse = 2,
@@ -125,7 +125,7 @@ impl TryFrom<ElementType> for FieldType {
 
 // Thrift compact protocol types for list elements
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ElementType {
+pub enum ElementType {
     Bool = 2,
     Byte = 3,
     I16 = 4,
@@ -167,23 +167,23 @@ impl TryFrom<u8> for ElementType {
 /// Struct used to describe a [thrift struct] field during decoding.
 ///
 /// [thrift struct]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#struct-encoding
-pub(crate) struct FieldIdentifier {
+pub struct FieldIdentifier {
     /// The type for the field.
-    pub(crate) field_type: FieldType,
+    pub field_type: FieldType,
     /// The field's `id`. May be computed from delta or directly decoded.
-    pub(crate) id: i16,
+    pub id: i16,
     /// Stores the value for booleans.
     ///
     /// Boolean fields store no data, instead the field type is either boolean true, or
     /// boolean false.
-    pub(crate) bool_val: Option<bool>,
+    pub bool_val: Option<bool>,
 }
 
 /// Struct used to describe a [thrift list].
 ///
 /// [thrift list]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct ListIdentifier {
+pub struct ListIdentifier {
     /// The type for each element in the list.
     pub(crate) element_type: ElementType,
     /// Number of elements contained in the list.
@@ -197,7 +197,7 @@ pub(crate) struct ListIdentifier {
 /// here to perform deserialization.
 ///
 /// [compact]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
-pub(crate) trait ThriftCompactInputProtocol<'a> {
+pub trait ThriftCompactInputProtocol<'a> {
     /// Read a single byte from the input.
     fn read_byte(&mut self) -> Result<u8>;
 
@@ -434,7 +434,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
 }
 
 /// A high performance Thrift reader that reads from a slice of bytes.
-pub(crate) struct ThriftSliceInputProtocol<'a> {
+pub struct ThriftSliceInputProtocol<'a> {
     buf: &'a [u8],
 }
 
@@ -494,12 +494,12 @@ fn eof_error() -> ParquetError {
 ///
 /// Note that this is only intended for use in reading Parquet page headers. This will panic
 /// if Thrift `binary` data is encountered because a slice of that data cannot be returned.
-pub(crate) struct ThriftReadInputProtocol<R: Read> {
+pub struct ThriftReadInputProtocol<R: Read> {
     reader: R,
 }
 
 impl<R: Read> ThriftReadInputProtocol<R> {
-    pub(crate) fn new(reader: R) -> Self {
+    pub fn new(reader: R) -> Self {
         Self { reader }
     }
 }
@@ -540,7 +540,7 @@ impl<'a, R: Read> ThriftCompactInputProtocol<'a> for ThriftReadInputProtocol<R> 
 
 /// Trait implemented for objects that can be deserialized from a Thrift input stream.
 /// Implementations are provided for Thrift primitive types.
-pub(crate) trait ReadThrift<'a, R: ThriftCompactInputProtocol<'a>> {
+pub trait ReadThrift<'a, R: ThriftCompactInputProtocol<'a>> {
     /// Read an object of type `Self` from the input protocol object.
     fn read_thrift(prot: &mut R) -> Result<Self>
     where
@@ -629,13 +629,13 @@ where
 /// but is instead intended for use by implementers of [`WriteThrift`] and [`WriteThriftField`].
 ///
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
-pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
+pub struct ThriftCompactOutputProtocol<W: Write> {
     writer: W,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
-    pub(crate) fn new(writer: W) -> Self {
+    pub fn new(writer: W) -> Self {
         Self { writer }
     }
 
@@ -751,7 +751,7 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
 /// stream. Implementations are also provided for primitive Thrift types.
 ///
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
-pub(crate) trait WriteThrift {
+pub trait WriteThrift {
     /// The [`ElementType`] to use when a list of this object is written.
     const ELEMENT_TYPE: ElementType;
 
@@ -898,7 +898,7 @@ impl WriteThrift for String {
 /// }
 /// ```
 ///
-pub(crate) trait WriteThriftField {
+pub trait WriteThriftField {
     /// Used to write struct fields (which may be primitive or IDL defined types). This will
     /// write the field marker for the given `field_id`, using `last_field_id` to compute the
     /// field delta used by the Thrift [compact protocol]. On success this will return `field_id`

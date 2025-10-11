@@ -1226,7 +1226,7 @@ fn check_logical_type(logical_type: &Option<LogicalType>) -> Result<()> {
 
 // convert thrift decoded array of `SchemaElement` into this crate's representation of
 // parquet types. this function consumes `elements`.
-pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) -> Result<TypePtr> {
+pub(crate) fn parquet_schema_from_array(elements: Vec<SchemaElement>) -> Result<TypePtr> {
     let mut index = 0;
     let num_elements = elements.len();
     let mut schema_nodes = Vec::with_capacity(1); // there should only be one element when done
@@ -1254,8 +1254,8 @@ pub(crate) fn parquet_schema_from_array<'a>(elements: Vec<SchemaElement<'a>>) ->
 }
 
 // recursive helper function for schema conversion
-fn schema_from_array_helper<'a>(
-    elements: &mut IntoIter<SchemaElement<'a>>,
+fn schema_from_array_helper(
+    elements: &mut IntoIter<SchemaElement>,
     num_elements: usize,
     index: usize,
 ) -> Result<(usize, TypePtr)> {
@@ -1274,7 +1274,7 @@ fn schema_from_array_helper<'a>(
 
     // Check for empty schema
     if let (true, None | Some(0)) = (is_root_node, element.num_children) {
-        let builder = Type::group_type_builder(element.name);
+        let builder = Type::group_type_builder(&element.name);
         return Ok((index + 1, Arc::new(builder.build().unwrap())));
     }
 
@@ -1300,11 +1300,11 @@ fn schema_from_array_helper<'a>(
                 ));
             }
             let repetition = element.repetition_type.unwrap();
-            if let Some(physical_type) = element.r#type {
+            if let Some(physical_type) = element.r#type_ {
                 let length = element.type_length.unwrap_or(-1);
                 let scale = element.scale.unwrap_or(-1);
                 let precision = element.precision.unwrap_or(-1);
-                let name = element.name;
+                let name = &element.name;
                 let builder = Type::primitive_type_builder(name, physical_type)
                     .with_repetition(repetition)
                     .with_converted_type(converted_type)
@@ -1315,7 +1315,7 @@ fn schema_from_array_helper<'a>(
                     .with_id(field_id);
                 Ok((index + 1, Arc::new(builder.build()?)))
             } else {
-                let mut builder = Type::group_type_builder(element.name)
+                let mut builder = Type::group_type_builder(&element.name)
                     .with_converted_type(converted_type)
                     .with_logical_type(logical_type)
                     .with_id(field_id);
@@ -1343,7 +1343,7 @@ fn schema_from_array_helper<'a>(
                 fields.push(child_result.1);
             }
 
-            let mut builder = Type::group_type_builder(element.name)
+            let mut builder = Type::group_type_builder(&element.name)
                 .with_converted_type(converted_type)
                 .with_logical_type(logical_type)
                 .with_fields(fields)
