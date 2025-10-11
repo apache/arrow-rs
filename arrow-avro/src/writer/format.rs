@@ -15,11 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::compression::{CompressionCodec, CODEC_METADATA_KEY};
-use crate::schema::{
-    AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, CONFLUENT_MAGIC,
-    SCHEMA_METADATA_KEY, SINGLE_OBJECT_MAGIC,
-};
+use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
+use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::write_long;
 use arrow_schema::{ArrowError, Schema};
 use rand::RngCore;

@@ -18,14 +18,16 @@
 //! Memory calculations for [`ParquetMetadata::memory_size`]
 //!
 //! [`ParquetMetadata::memory_size`]: crate::file::metadata::ParquetMetaData::memory_size
-use crate::basic::{ColumnOrder, Compression, Encoding, PageType};
+use crate::basic::{BoundaryOrder, ColumnOrder, Compression, Encoding, PageType};
 use crate::data_type::private::ParquetValueType;
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, KeyValue, RowGroupMetaData};
-use crate::file::page_encoding_stats::PageEncodingStats;
-use crate::file::page_index::index::{Index, NativeIndex, PageIndex};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, KeyValue, PageEncodingStats, RowGroupMetaData, SortingColumn,
+};
+use crate::file::page_index::column_index::{
+    ByteArrayColumnIndex, ColumnIndex, ColumnIndexMetaData, PrimitiveColumnIndex,
+};
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics::{Statistics, ValueStatistics};
-use crate::format::{BoundaryOrder, PageLocation, SortingColumn};
 use std::sync::Arc;
 
 /// Trait for calculating the size of various containers
@@ -54,6 +56,12 @@ impl<T: HeapSize> HeapSize for Arc<T> {
     }
 }
 
+impl<T: HeapSize> HeapSize for Box<T> {
+    fn heap_size(&self) -> usize {
+        std::mem::size_of::<T>() + self.as_ref().heap_size()
+    }
+}
+
 impl<T: HeapSize> HeapSize for Option<T> {
     fn heap_size(&self) -> usize {
         self.as_ref().map(|inner| inner.heap_size()).unwrap_or(0)
@@ -68,10 +76,17 @@ impl HeapSize for String {
 
 impl HeapSize for FileMetaData {
     fn heap_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_heap_size =
+            self.encryption_algorithm.heap_size() + self.footer_signing_key_metadata.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_heap_size = 0;
+
         self.created_by.heap_size()
             + self.key_value_metadata.heap_size()
             + self.schema_descr.heap_size()
             + self.column_orders.heap_size()
+            + encryption_heap_size
     }
 }
 
@@ -91,6 +106,12 @@ impl HeapSize for RowGroupMetaData {
 
 impl HeapSize for ColumnChunkMetaData {
     fn heap_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_heap_size =
+            self.column_crypto_metadata.heap_size() + self.encrypted_column_metadata.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_heap_size = 0;
+
         // don't count column_descr here because it is already counted in
         // FileMetaData
         self.encodings.heap_size()
@@ -101,6 +122,8 @@ impl HeapSize for ColumnChunkMetaData {
             + self.unencoded_byte_array_data_bytes.heap_size()
             + self.repetition_level_histogram.heap_size()
             + self.definition_level_histogram.heap_size()
+            + self.geo_statistics.heap_size()
+            + encryption_heap_size
     }
 }
 
@@ -132,6 +155,7 @@ impl HeapSize for PageType {
         0 // no heap allocations
     }
 }
+
 impl HeapSize for Statistics {
     fn heap_size(&self) -> usize {
         match self {
@@ -153,31 +177,45 @@ impl HeapSize for OffsetIndexMetaData {
     }
 }
 
-impl HeapSize for Index {
+impl HeapSize for ColumnIndexMetaData {
     fn heap_size(&self) -> usize {
         match self {
-            Index::NONE => 0,
-            Index::BOOLEAN(native_index) => native_index.heap_size(),
-            Index::INT32(native_index) => native_index.heap_size(),
-            Index::INT64(native_index) => native_index.heap_size(),
-            Index::INT96(native_index) => native_index.heap_size(),
-            Index::FLOAT(native_index) => native_index.heap_size(),
-            Index::DOUBLE(native_index) => native_index.heap_size(),
-            Index::BYTE_ARRAY(native_index) => native_index.heap_size(),
-            Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index.heap_size(),
+            Self::NONE => 0,
+            Self::BOOLEAN(native_index) => native_index.heap_size(),
+            Self::INT32(native_index) => native_index.heap_size(),
+            Self::INT64(native_index) => native_index.heap_size(),
+            Self::INT96(native_index) => native_index.heap_size(),
+            Self::FLOAT(native_index) => native_index.heap_size(),
+            Self::DOUBLE(native_index) => native_index.heap_size(),
+            Self::BYTE_ARRAY(native_index) => native_index.heap_size(),
+            Self::FIXED_LEN_BYTE_ARRAY(native_index) => native_index.heap_size(),
         }
     }
 }
 
-impl<T: ParquetValueType> HeapSize for NativeIndex<T> {
+impl HeapSize for ColumnIndex {
     fn heap_size(&self) -> usize {
-        self.indexes.heap_size() + self.boundary_order.heap_size()
+        self.null_pages.heap_size()
+            + self.boundary_order.heap_size()
+            + self.null_counts.heap_size()
+            + self.definition_level_histograms.heap_size()
+            + self.repetition_level_histograms.heap_size()
     }
 }
 
-impl<T: ParquetValueType> HeapSize for PageIndex<T> {
+impl<T: ParquetValueType> HeapSize for PrimitiveColumnIndex<T> {
     fn heap_size(&self) -> usize {
-        self.min.heap_size() + self.max.heap_size() + self.null_count.heap_size()
+        self.column_index.heap_size() + self.min_values.heap_size() + self.max_values.heap_size()
+    }
+}
+
+impl HeapSize for ByteArrayColumnIndex {
+    fn heap_size(&self) -> usize {
+        self.column_index.heap_size()
+            + self.min_bytes.heap_size()
+            + self.min_offsets.heap_size()
+            + self.max_bytes.heap_size()
+            + self.max_offsets.heap_size()
     }
 }
 
@@ -188,6 +226,11 @@ impl<T: ParquetValueType> HeapSize for ValueStatistics<T> {
     }
 }
 impl HeapSize for bool {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
+    }
+}
+impl HeapSize for u8 {
     fn heap_size(&self) -> usize {
         0 // no heap allocations
     }

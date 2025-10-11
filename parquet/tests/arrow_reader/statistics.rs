@@ -23,29 +23,29 @@ use std::fs::File;
 use std::sync::Arc;
 
 use super::make_test_file_rg;
-use super::{struct_array, Scenario};
+use super::{Scenario, struct_array};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, i256,
 };
 use arrow_array::{
-    make_array, new_null_array, Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray,
-    Date32Array, Date64Array, Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array,
-    FixedSizeBinaryArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, LargeBinaryArray, LargeStringArray, RecordBatch, StringArray,
-    StringViewArray, Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array,
-    UInt8Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
+    Float16Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    LargeBinaryArray, LargeStringArray, RecordBatch, StringArray, StringViewArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, make_array,
+    new_null_array,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use half::f16;
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
-use parquet::arrow::ArrowWriter;
 use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::file::statistics::{Statistics, ValueStatistics};
@@ -2626,9 +2626,9 @@ mod test {
     use super::*;
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
-        new_empty_array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
-        TimestampNanosecondArray,
+        ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+        Int32Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+        new_empty_array,
     };
     use arrow_schema::{DataType, SchemaRef, TimeUnit};
     use bytes::Bytes;

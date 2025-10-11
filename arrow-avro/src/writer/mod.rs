@@ -30,7 +30,7 @@
 //!   any container framing. This is useful when the schema is known out‑of‑band (i.e.,
 //!   via a registry) and you want minimal overhead.
 //!
-//! ## Which format should I use?
+//! ## Which format should you use?
 //!
 //! * Use **OCF** when you need a portable, self‑contained file. The schema travels with
 //!   the data, making it easy to read elsewhere.
@@ -62,7 +62,7 @@ use crate::compression::CompressionCodec;
 use crate::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
 };
-use crate::writer::encoder::{write_long, RecordEncoder, RecordEncoderBuilder};
+use crate::writer::encoder::{RecordEncoder, RecordEncoderBuilder, write_long};
 use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Schema};
@@ -70,7 +70,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 /// Encodes `RecordBatch` into the Avro binary format.
-pub mod encoder;
+mod encoder;
 /// Logic for different Avro container file formats.
 pub mod format;
 
@@ -133,6 +133,7 @@ impl WriterBuilder {
         let maybe_fingerprint = if F::NEEDS_PREFIX {
             match self.fingerprint_strategy {
                 Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
+                Some(FingerprintStrategy::Id64(id)) => Some(Fingerprint::Id64(id)),
                 Some(strategy) => {
                     Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
                 }
@@ -392,16 +393,39 @@ mod tests {
     use super::*;
     use crate::compression::CompressionCodec;
     use crate::reader::ReaderBuilder;
-    use crate::schema::{AvroSchema, SchemaStore, CONFLUENT_MAGIC};
+    use crate::schema::{AvroSchema, SchemaStore};
     use crate::test_util::arrow_test_data;
-    use arrow_array::{ArrayRef, BinaryArray, DurationSecondArray, Int32Array, RecordBatch};
-    use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit};
+    use arrow_array::{
+        Array, ArrayRef, BinaryArray, Int32Array, RecordBatch, StructArray, UnionArray,
+    };
+    #[cfg(not(feature = "avro_custom_types"))]
+    use arrow_schema::{DataType, Field, Schema};
+    #[cfg(feature = "avro_custom_types")]
+    use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs::File;
     use std::io::{BufReader, Cursor};
     use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::NamedTempFile;
+
+    fn files() -> impl Iterator<Item = &'static str> {
+        [
+            // TODO: avoid requiring snappy for this file
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.avro",
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.snappy.avro",
+            #[cfg(feature = "zstd")]
+            "avro/alltypes_plain.zstandard.avro",
+            #[cfg(feature = "bzip2")]
+            "avro/alltypes_plain.bzip2.avro",
+            #[cfg(feature = "xz")]
+            "avro/alltypes_plain.xz.avro",
+        ]
+        .into_iter()
+    }
 
     fn make_schema() -> Schema {
         Schema::new(vec![
@@ -422,7 +446,6 @@ mod tests {
 
     #[test]
     fn test_stream_writer_writes_prefix_per_row_rt() -> Result<(), ArrowError> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let batch = RecordBatch::try_new(
             Arc::new(schema.clone()),
@@ -466,9 +489,43 @@ mod tests {
             .build::<_, AvroBinaryFormat>(Vec::new())?;
         writer.write(&batch)?;
         let encoded = writer.into_inner();
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let avro_schema = AvroSchema::try_from(&schema)?;
         let _ = store.set(Fingerprint::Id(schema_id), avro_schema)?;
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .build_decoder()?;
+        let _ = decoder.decode(&encoded)?;
+        let decoded = decoder
+            .flush()?
+            .expect("expected at least one batch from decoder");
+        assert_eq!(decoded.num_columns(), 1);
+        assert_eq!(decoded.num_rows(), 3);
+        let col = decoded
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .expect("int column");
+        assert_eq!(col, &Int32Array::from(vec![1, 2, 3]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_stream_writer_with_id64_fingerprint_rt() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        )?;
+        let schema_id: u64 = 42;
+        let mut writer = WriterBuilder::new(schema.clone())
+            .with_fingerprint_strategy(FingerprintStrategy::Id64(schema_id))
+            .build::<_, AvroBinaryFormat>(Vec::new())?;
+        writer.write(&batch)?;
+        let encoded = writer.into_inner();
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
+        let avro_schema = AvroSchema::try_from(&schema)?;
+        let _ = store.set(Fingerprint::Id64(schema_id), avro_schema)?;
         let mut decoder = ReaderBuilder::new()
             .with_writer_schema_store(store)
             .build_decoder()?;
@@ -551,17 +608,10 @@ mod tests {
 
     #[test]
     fn test_roundtrip_alltypes_roundtrip_writer() -> Result<(), ArrowError> {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for rel in files {
+        for rel in files() {
             let path = arrow_test_data(rel);
             let rdr_file = File::open(&path).expect("open input avro");
-            let mut reader = ReaderBuilder::new()
+            let reader = ReaderBuilder::new()
                 .build(BufReader::new(rdr_file))
                 .expect("build reader");
             let schema = reader.schema();
@@ -589,7 +639,7 @@ mod tests {
             writer.finish()?;
             drop(writer);
             let rt_file = File::open(&out_path).expect("open roundtrip avro");
-            let mut rt_reader = ReaderBuilder::new()
+            let rt_reader = ReaderBuilder::new()
                 .build(BufReader::new(rt_file))
                 .expect("build roundtrip reader");
             let rt_schema = rt_reader.schema();
@@ -609,7 +659,7 @@ mod tests {
     fn test_roundtrip_nested_records_writer() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/nested_records.avro");
         let rdr_file = File::open(&path).expect("open nested_records.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for nested_records.avro");
         let schema = reader.schema();
@@ -624,7 +674,7 @@ mod tests {
             writer.finish()?;
         }
         let rt_file = File::open(&out_path).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -639,10 +689,11 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_nested_lists_writer() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/nested_lists.snappy.avro");
         let rdr_file = File::open(&path).expect("open nested_lists.snappy.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for nested_lists.snappy.avro");
         let schema = reader.schema();
@@ -659,7 +710,7 @@ mod tests {
             writer.finish()?;
         }
         let rt_file = File::open(&out_path).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -677,7 +728,7 @@ mod tests {
     fn test_round_trip_simple_fixed_ocf() -> Result<(), ArrowError> {
         let path = arrow_test_data("avro/simple_fixed.avro");
         let rdr_file = File::open(&path).expect("open avro/simple_fixed.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build avro reader");
         let schema = reader.schema();
@@ -691,7 +742,7 @@ mod tests {
         writer.finish()?;
         drop(writer);
         let rt_file = File::open(tmp.path()).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
@@ -702,12 +753,14 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(not(feature = "canonical_extension_types"))]
+    // Strict equality (schema + values) only when canonical extension types are enabled
+    #[cfg(feature = "canonical_extension_types")]
     #[test]
     fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
+        use arrow_schema::{DataType, IntervalUnit};
         let in_file =
             File::open("test/data/duration_uuid.avro").expect("open test/data/duration_uuid.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(in_file))
             .expect("build reader for duration_uuid.avro");
         let in_schema = reader.schema();
@@ -732,16 +785,13 @@ mod tests {
         let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
         let input =
             arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
-        let tmp = NamedTempFile::new().expect("create temp file");
-        {
-            let out_file = File::create(tmp.path()).expect("create temp avro");
-            let mut writer = AvroWriter::new(out_file, in_schema.as_ref().clone())?;
-            writer.write(&input)?;
-            writer.finish()?;
-        }
-        let rt_file = File::open(tmp.path()).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
-            .build(BufReader::new(rt_file))
+        // Write to an in‑memory OCF and read back
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), in_schema.as_ref().clone())?;
+        writer.write(&input)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();
         let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
@@ -751,15 +801,95 @@ mod tests {
         Ok(())
     }
 
+    // Feature OFF: only values are asserted equal; schema may legitimately differ (uuid as fixed(16))
+    #[cfg(not(feature = "canonical_extension_types"))]
+    #[test]
+    fn test_duration_and_uuid_ocf_without_extensions_round_trips_values() -> Result<(), ArrowError>
+    {
+        use arrow::datatypes::{DataType, IntervalUnit};
+        use std::io::BufReader;
+
+        // Read input Avro (duration + uuid)
+        let in_file =
+            File::open("test/data/duration_uuid.avro").expect("open test/data/duration_uuid.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(in_file))
+            .expect("build reader for duration_uuid.avro");
+        let in_schema = reader.schema();
+
+        // Sanity checks: has MonthDayNano and a FixedSizeBinary(16)
+        assert!(
+            in_schema.fields().iter().any(|f| {
+                matches!(
+                    f.data_type(),
+                    DataType::Interval(IntervalUnit::MonthDayNano)
+                )
+            }),
+            "expected at least one Interval(MonthDayNano) field"
+        );
+        assert!(
+            in_schema
+                .fields()
+                .iter()
+                .any(|f| matches!(f.data_type(), DataType::FixedSizeBinary(16))),
+            "expected a FixedSizeBinary(16) field (uuid)"
+        );
+
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let input =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+
+        // Write to a temp OCF and read back
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), in_schema.as_ref().clone())?;
+        writer.write(&input)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+
+        // 1) Values must round-trip for both columns
+        assert_eq!(
+            round_trip.column(0),
+            input.column(0),
+            "duration column values differ"
+        );
+        assert_eq!(round_trip.column(1), input.column(1), "uuid bytes differ");
+
+        // 2) Schema expectation without extensions:
+        //    uuid is written as named fixed(16), so reader attaches avro.name
+        let uuid_rt = rt_schema.field_with_name("uuid_field")?;
+        assert_eq!(uuid_rt.data_type(), &DataType::FixedSizeBinary(16));
+        assert_eq!(
+            uuid_rt.metadata().get("avro.name").map(|s| s.as_str()),
+            Some("uuid_field")
+        );
+
+        // 3) Duration remains Interval(MonthDayNano)
+        let dur_rt = rt_schema.field_with_name("duration_field")?;
+        assert!(matches!(
+            dur_rt.data_type(),
+            DataType::Interval(IntervalUnit::MonthDayNano)
+        ));
+
+        Ok(())
+    }
+
     // This test reads the same 'nonnullable.impala.avro' used by the reader tests,
     // writes it back out with the writer (hitting Map encoding paths), then reads it
     // again and asserts exact Arrow equivalence.
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nonnullable_impala_roundtrip_writer() -> Result<(), ArrowError> {
         // Load source Avro with Map fields
         let path = arrow_test_data("avro/nonnullable.impala.avro");
         let rdr_file = File::open(&path).expect("open avro/nonnullable.impala.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for nonnullable.impala.avro");
         // Collect all input batches and concatenate to a single RecordBatch
@@ -784,7 +914,7 @@ mod tests {
         writer.finish()?;
         let out_bytes = writer.into_inner();
         // Read the produced bytes back with the Reader
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(Cursor::new(out_bytes))
             .expect("build reader for round-tripped in-memory OCF");
         let rt_schema = rt_reader.schema();
@@ -800,6 +930,8 @@ mod tests {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for these files
+    #[cfg(feature = "snappy")]
     fn test_roundtrip_decimals_via_writer() -> Result<(), ArrowError> {
         // (file, resolve via ARROW_TEST_DATA?)
         let files: [(&str, bool); 8] = [
@@ -824,7 +956,7 @@ mod tests {
             };
             // Read original file into a single RecordBatch for comparison
             let f_in = File::open(&path).expect("open input avro");
-            let mut rdr = ReaderBuilder::new().build(BufReader::new(f_in))?;
+            let rdr = ReaderBuilder::new().build(BufReader::new(f_in))?;
             let in_schema = rdr.schema();
             let in_batches = rdr.collect::<Result<Vec<_>, _>>()?;
             let original =
@@ -838,7 +970,7 @@ mod tests {
             writer.finish()?;
             // Read back the file we just wrote and compare equality (schema + data)
             let f_rt = File::open(&out_path).expect("open roundtrip avro");
-            let mut rt_rdr = ReaderBuilder::new().build(BufReader::new(f_rt))?;
+            let rt_rdr = ReaderBuilder::new().build(BufReader::new(f_rt))?;
             let rt_schema = rt_rdr.schema();
             let rt_batches = rt_rdr.collect::<Result<Vec<_>, _>>()?;
             let roundtrip =
@@ -849,11 +981,342 @@ mod tests {
     }
 
     #[test]
+    fn test_named_types_complex_roundtrip() -> Result<(), ArrowError> {
+        // 1. Read the new, more complex named references file.
+        let path =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/data/named_types_complex.avro");
+        let rdr_file = File::open(&path).expect("open avro/named_types_complex.avro");
+
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for named_types_complex.avro");
+
+        // 2. Concatenate all batches to one RecordBatch.
+        let in_schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+
+        // 3. Sanity Checks: Validate that all named types were reused correctly.
+        {
+            let arrow_schema = original.schema();
+
+            // --- A. Validate 'User' record reuse ---
+            let author_field = arrow_schema.field_with_name("author")?;
+            let author_type = author_field.data_type();
+            let editors_field = arrow_schema.field_with_name("editors")?;
+            let editors_item_type = match editors_field.data_type() {
+                DataType::List(item_field) => item_field.data_type(),
+                other => panic!("Editors field should be a List, but was {:?}", other),
+            };
+            assert_eq!(
+                author_type, editors_item_type,
+                "The DataType for the 'author' struct and the 'editors' list items must be identical"
+            );
+
+            // --- B. Validate 'PostStatus' enum reuse ---
+            let status_field = arrow_schema.field_with_name("status")?;
+            let status_type = status_field.data_type();
+            assert!(
+                matches!(status_type, DataType::Dictionary(_, _)),
+                "Status field should be a Dictionary (Enum)"
+            );
+
+            let prev_status_field = arrow_schema.field_with_name("previous_status")?;
+            let prev_status_type = prev_status_field.data_type();
+            assert_eq!(
+                status_type, prev_status_type,
+                "The DataType for 'status' and 'previous_status' enums must be identical"
+            );
+
+            // --- C. Validate 'MD5' fixed reuse ---
+            let content_hash_field = arrow_schema.field_with_name("content_hash")?;
+            let content_hash_type = content_hash_field.data_type();
+            assert!(
+                matches!(content_hash_type, DataType::FixedSizeBinary(16)),
+                "Content hash should be FixedSizeBinary(16)"
+            );
+
+            let thumb_hash_field = arrow_schema.field_with_name("thumbnail_hash")?;
+            let thumb_hash_type = thumb_hash_field.data_type();
+            assert_eq!(
+                content_hash_type, thumb_hash_type,
+                "The DataType for 'content_hash' and 'thumbnail_hash' fixed types must be identical"
+            );
+        }
+
+        // 4. Write the data to an in-memory buffer.
+        let buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(buffer, original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+
+        // 5. Read the data back and compare for exact equality.
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build reader for round-trip");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+
+        assert_eq!(
+            roundtrip, original,
+            "Avro complex named types round-trip mismatch"
+        );
+
+        Ok(())
+    }
+
+    // Union Roundtrip Test Helpers
+
+    // Asserts that the `actual` schema is a semantically equivalent superset of the `expected` one.
+    // This allows the `actual` schema to contain additional metadata keys
+    // (`arrowUnionMode`, `arrowUnionTypeIds`, `avro.name`) that are added during an Arrow-to-Avro-to-Arrow
+    // roundtrip, while ensuring no other information was lost or changed.
+    fn assert_schema_is_semantically_equivalent(expected: &Schema, actual: &Schema) {
+        // Compare top-level schema metadata using the same superset logic.
+        assert_metadata_is_superset(expected.metadata(), actual.metadata(), "Schema");
+
+        // Compare fields.
+        assert_eq!(
+            expected.fields().len(),
+            actual.fields().len(),
+            "Schema must have the same number of fields"
+        );
+
+        for (expected_field, actual_field) in expected.fields().iter().zip(actual.fields().iter()) {
+            assert_field_is_semantically_equivalent(expected_field, actual_field);
+        }
+    }
+
+    fn assert_field_is_semantically_equivalent(expected: &Field, actual: &Field) {
+        let context = format!("Field '{}'", expected.name());
+
+        assert_eq!(
+            expected.name(),
+            actual.name(),
+            "{context}: names must match"
+        );
+        assert_eq!(
+            expected.is_nullable(),
+            actual.is_nullable(),
+            "{context}: nullability must match"
+        );
+
+        // Recursively check the data types.
+        assert_datatype_is_semantically_equivalent(
+            expected.data_type(),
+            actual.data_type(),
+            &context,
+        );
+
+        // Check that metadata is a valid superset.
+        assert_metadata_is_superset(expected.metadata(), actual.metadata(), &context);
+    }
+
+    fn assert_datatype_is_semantically_equivalent(
+        expected: &DataType,
+        actual: &DataType,
+        context: &str,
+    ) {
+        match (expected, actual) {
+            (DataType::List(expected_field), DataType::List(actual_field))
+            | (DataType::LargeList(expected_field), DataType::LargeList(actual_field))
+            | (DataType::Map(expected_field, _), DataType::Map(actual_field, _)) => {
+                assert_field_is_semantically_equivalent(expected_field, actual_field);
+            }
+            (DataType::Struct(expected_fields), DataType::Struct(actual_fields)) => {
+                assert_eq!(
+                    expected_fields.len(),
+                    actual_fields.len(),
+                    "{context}: struct must have same number of fields"
+                );
+                for (ef, af) in expected_fields.iter().zip(actual_fields.iter()) {
+                    assert_field_is_semantically_equivalent(ef, af);
+                }
+            }
+            (
+                DataType::Union(expected_fields, expected_mode),
+                DataType::Union(actual_fields, actual_mode),
+            ) => {
+                assert_eq!(
+                    expected_mode, actual_mode,
+                    "{context}: union mode must match"
+                );
+                assert_eq!(
+                    expected_fields.len(),
+                    actual_fields.len(),
+                    "{context}: union must have same number of variants"
+                );
+                for ((exp_id, exp_field), (act_id, act_field)) in
+                    expected_fields.iter().zip(actual_fields.iter())
+                {
+                    assert_eq!(exp_id, act_id, "{context}: union type ids must match");
+                    assert_field_is_semantically_equivalent(exp_field, act_field);
+                }
+            }
+            _ => {
+                assert_eq!(expected, actual, "{context}: data types must be identical");
+            }
+        }
+    }
+
+    fn assert_batch_data_is_identical(expected: &RecordBatch, actual: &RecordBatch) {
+        assert_eq!(
+            expected.num_columns(),
+            actual.num_columns(),
+            "RecordBatches must have the same number of columns"
+        );
+        assert_eq!(
+            expected.num_rows(),
+            actual.num_rows(),
+            "RecordBatches must have the same number of rows"
+        );
+
+        for i in 0..expected.num_columns() {
+            let context = format!("Column {i}");
+            let expected_col = expected.column(i);
+            let actual_col = actual.column(i);
+            assert_array_data_is_identical(expected_col, actual_col, &context);
+        }
+    }
+
+    /// Recursively asserts that the data content of two Arrays is identical.
+    fn assert_array_data_is_identical(expected: &dyn Array, actual: &dyn Array, context: &str) {
+        assert_eq!(
+            expected.nulls(),
+            actual.nulls(),
+            "{context}: null buffers must match"
+        );
+        assert_eq!(
+            expected.len(),
+            actual.len(),
+            "{context}: array lengths must match"
+        );
+
+        match (expected.data_type(), actual.data_type()) {
+            (DataType::Union(expected_fields, _), DataType::Union(..)) => {
+                let expected_union = expected.as_any().downcast_ref::<UnionArray>().unwrap();
+                let actual_union = actual.as_any().downcast_ref::<UnionArray>().unwrap();
+
+                // Compare the type_ids buffer (always the first buffer).
+                assert_eq!(
+                    &expected.to_data().buffers()[0],
+                    &actual.to_data().buffers()[0],
+                    "{context}: union type_ids buffer mismatch"
+                );
+
+                // For dense unions, compare the value_offsets buffer (the second buffer).
+                if expected.to_data().buffers().len() > 1 {
+                    assert_eq!(
+                        &expected.to_data().buffers()[1],
+                        &actual.to_data().buffers()[1],
+                        "{context}: union value_offsets buffer mismatch"
+                    );
+                }
+
+                // Recursively compare children based on the fields in the DataType.
+                for (type_id, _) in expected_fields.iter() {
+                    let child_context = format!("{context} -> child variant {type_id}");
+                    assert_array_data_is_identical(
+                        expected_union.child(type_id),
+                        actual_union.child(type_id),
+                        &child_context,
+                    );
+                }
+            }
+            (DataType::Struct(_), DataType::Struct(_)) => {
+                let expected_struct = expected.as_any().downcast_ref::<StructArray>().unwrap();
+                let actual_struct = actual.as_any().downcast_ref::<StructArray>().unwrap();
+                for i in 0..expected_struct.num_columns() {
+                    let child_context = format!("{context} -> struct child {i}");
+                    assert_array_data_is_identical(
+                        expected_struct.column(i),
+                        actual_struct.column(i),
+                        &child_context,
+                    );
+                }
+            }
+            // Fallback for primitive types and other types where buffer comparison is sufficient.
+            _ => {
+                assert_eq!(
+                    expected.to_data().buffers(),
+                    actual.to_data().buffers(),
+                    "{context}: data buffers must match"
+                );
+            }
+        }
+    }
+
+    /// Checks that `actual_meta` contains all of `expected_meta`, and any additional
+    /// keys in `actual_meta` are from a permitted set.
+    fn assert_metadata_is_superset(
+        expected_meta: &HashMap<String, String>,
+        actual_meta: &HashMap<String, String>,
+        context: &str,
+    ) {
+        let allowed_additions: HashSet<&str> =
+            vec!["arrowUnionMode", "arrowUnionTypeIds", "avro.name"]
+                .into_iter()
+                .collect();
+        for (key, expected_value) in expected_meta {
+            match actual_meta.get(key) {
+                Some(actual_value) => assert_eq!(
+                    expected_value, actual_value,
+                    "{context}: preserved metadata for key '{key}' must have the same value"
+                ),
+                None => panic!("{context}: metadata key '{key}' was lost during roundtrip"),
+            }
+        }
+        for key in actual_meta.keys() {
+            if !expected_meta.contains_key(key) && !allowed_additions.contains(key.as_str()) {
+                panic!("{context}: unexpected metadata key '{key}' was added during roundtrip");
+            }
+        }
+    }
+
+    #[test]
+    fn test_union_roundtrip() -> Result<(), ArrowError> {
+        let file_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test/data/union_fields.avro")
+            .to_string_lossy()
+            .into_owned();
+        let rdr_file = File::open(&file_path).expect("open avro/union_fields.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for union_fields.avro");
+        let schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&schema, &input_batches).expect("concat input");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+
+        // The nature of the crate is such that metadata gets appended during the roundtrip,
+        // so we can't compare the schemas directly. Instead, we semantically compare the schemas and data.
+        assert_schema_is_semantically_equivalent(&original.schema(), &round_trip.schema());
+
+        assert_batch_data_is_identical(&original, &round_trip);
+        Ok(())
+    }
+
+    #[test]
     fn test_enum_roundtrip_uses_reader_fixture() -> Result<(), ArrowError> {
         // Read the known-good enum file (same as reader::test_simple)
         let path = arrow_test_data("avro/simple_enum.avro");
         let rdr_file = File::open(&path).expect("open avro/simple_enum.avro");
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(rdr_file))
             .expect("build reader for simple_enum.avro");
         // Concatenate all batches to one RecordBatch for a clean equality check
@@ -880,7 +1343,7 @@ mod tests {
         writer.finish()?;
         let bytes = writer.into_inner();
         // Read back and compare for exact equality (schema + data)
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(Cursor::new(bytes))
             .expect("reader for round-trip");
         let rt_schema = rt_reader.schema();
@@ -937,7 +1400,7 @@ mod tests {
         let in_file = File::open(&file_path)
             .unwrap_or_else(|_| panic!("Failed to open test file: {}", file_path));
 
-        let mut reader = ReaderBuilder::new()
+        let reader = ReaderBuilder::new()
             .build(BufReader::new(in_file))
             .expect("build reader for duration_logical_types.avro");
         let in_schema = reader.schema();
@@ -978,7 +1441,7 @@ mod tests {
         }
 
         let rt_file = File::open(tmp.path()).expect("open round_trip avro");
-        let mut rt_reader = ReaderBuilder::new()
+        let rt_reader = ReaderBuilder::new()
             .build(BufReader::new(rt_file))
             .expect("build round_trip reader");
         let rt_schema = rt_reader.schema();

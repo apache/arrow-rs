@@ -15,12 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#[cfg(feature = "canonical_extension_types")]
+use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
     ArrowError, DataType, Field as ArrowField, IntervalUnit, Schema as ArrowSchema, TimeUnit,
     UnionMode,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map as JsonMap, Value};
+use serde_json::{Map as JsonMap, Value, json};
 #[cfg(feature = "sha256")]
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -282,7 +284,7 @@ pub(crate) struct Enum<'a> {
 ///
 /// <https://avro.apache.org/docs/1.11.1/specification/#arrays>
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Array<'a> {
+pub(crate) struct Array<'a> {
     /// The schema for items in this array
     #[serde(borrow)]
     pub(crate) items: Box<Schema<'a>>,
@@ -363,16 +365,16 @@ impl AvroSchema {
     /// - `Fingerprint::MD5` for `FingerprintAlgorithm::MD5`
     /// - `Fingerprint::SHA256` for `FingerprintAlgorithm::SHA256`
     ///
-    /// Note: [`FingerprintAlgorithm::None`] cannot be used to generate a fingerprint
+    /// Note: [`FingerprintAlgorithm::Id`] or [`FingerprintAlgorithm::Id64`] cannot be used to generate a fingerprint
     /// and will result in an error. If you intend to use a Schema Registry ID-based
-    /// wire format, load or set the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`]
-    /// or [`SchemaStore::set`].
+    /// wire format, either use [`SchemaStore::set`] or load the [`Fingerprint::Id`] directly via [`Fingerprint::load_fingerprint_id`] or for
+    /// [`Fingerprint::Id64`] via [`Fingerprint::load_fingerprint_id64`].
     ///
     /// See also: <https://avro.apache.org/docs/1.11.1/specification/#schema-fingerprints>
     ///
     /// # Errors
     /// Returns an error if deserializing the schema fails, if generating the
-    /// canonical form of the schema fails, or if `hash_type` is [`FingerprintAlgorithm::None`].
+    /// canonical form of the schema fails, or if `hash_type` is [`FingerprintAlgorithm::Id`].
     ///
     /// # Examples
     /// ```
@@ -396,8 +398,8 @@ impl AvroSchema {
             FingerprintAlgorithm::Rabin => {
                 Ok(Fingerprint::Rabin(compute_fingerprint_rabin(&canonical)))
             }
-            FingerprintAlgorithm::None => Err(ArrowError::SchemaError(
-                "FingerprintAlgorithm of None cannot be used to generate a fingerprint; \
+            FingerprintAlgorithm::Id | FingerprintAlgorithm::Id64 => Err(ArrowError::SchemaError(
+                "FingerprintAlgorithm of Id or Id64 cannot be used to generate a fingerprint; \
                 if using Fingerprint::Id, pass the registry ID in instead using the set method."
                     .to_string(),
             )),
@@ -490,6 +492,8 @@ pub enum FingerprintStrategy {
     Rabin,
     /// Use a Confluent Schema Registry 32-bit ID.
     Id(u32),
+    /// Use an Apicurio Schema Registry 64-bit ID.
+    Id64(u64),
     #[cfg(feature = "md5")]
     /// Use the 128-bit MD5 fingerprint.
     MD5,
@@ -508,7 +512,8 @@ impl From<FingerprintAlgorithm> for FingerprintStrategy {
     fn from(f: FingerprintAlgorithm) -> Self {
         match f {
             FingerprintAlgorithm::Rabin => FingerprintStrategy::Rabin,
-            FingerprintAlgorithm::None => FingerprintStrategy::Id(0),
+            FingerprintAlgorithm::Id => FingerprintStrategy::Id(0),
+            FingerprintAlgorithm::Id64 => FingerprintStrategy::Id64(0),
             #[cfg(feature = "md5")]
             FingerprintAlgorithm::MD5 => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -521,7 +526,8 @@ impl From<&Fingerprint> for FingerprintStrategy {
     fn from(f: &Fingerprint) -> Self {
         match f {
             Fingerprint::Rabin(_) => FingerprintStrategy::Rabin,
-            Fingerprint::Id(id) => FingerprintStrategy::Id(*id),
+            Fingerprint::Id(_) => FingerprintStrategy::Id(0),
+            Fingerprint::Id64(_) => FingerprintStrategy::Id64(0),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintStrategy::MD5,
             #[cfg(feature = "sha256")]
@@ -537,8 +543,10 @@ pub enum FingerprintAlgorithm {
     /// 64‑bit CRC‑64‑AVRO Rabin fingerprint.
     #[default]
     Rabin,
-    /// Represents a fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
-    None,
+    /// Represents a 32 bit fingerprint not based on a hash algorithm, (e.g., a 32-bit Schema Registry ID.)
+    Id,
+    /// Represents a 64 bit fingerprint not based on a hash algorithm, (e.g., a 64-bit Schema Registry ID.)
+    Id64,
     #[cfg(feature = "md5")]
     /// 128-bit MD5 message digest.
     MD5,
@@ -552,7 +560,8 @@ impl From<&Fingerprint> for FingerprintAlgorithm {
     fn from(fp: &Fingerprint) -> Self {
         match fp {
             Fingerprint::Rabin(_) => FingerprintAlgorithm::Rabin,
-            Fingerprint::Id(_) => FingerprintAlgorithm::None,
+            Fingerprint::Id(_) => FingerprintAlgorithm::Id,
+            Fingerprint::Id64(_) => FingerprintAlgorithm::Id64,
             #[cfg(feature = "md5")]
             Fingerprint::MD5(_) => FingerprintAlgorithm::MD5,
             #[cfg(feature = "sha256")]
@@ -571,7 +580,8 @@ impl From<&FingerprintStrategy> for FingerprintAlgorithm {
     fn from(s: &FingerprintStrategy) -> Self {
         match s {
             FingerprintStrategy::Rabin => FingerprintAlgorithm::Rabin,
-            FingerprintStrategy::Id(_) => FingerprintAlgorithm::None,
+            FingerprintStrategy::Id(_) => FingerprintAlgorithm::Id,
+            FingerprintStrategy::Id64(_) => FingerprintAlgorithm::Id64,
             #[cfg(feature = "md5")]
             FingerprintStrategy::MD5 => FingerprintAlgorithm::MD5,
             #[cfg(feature = "sha256")]
@@ -594,6 +604,8 @@ pub enum Fingerprint {
     Rabin(u64),
     /// A 32-bit Schema Registry ID.
     Id(u32),
+    /// A 64-bit Schema Registry ID.
+    Id64(u64),
     #[cfg(feature = "md5")]
     /// A 128-bit MD5 fingerprint.
     MD5([u8; 16]),
@@ -613,6 +625,7 @@ impl From<&FingerprintStrategy> for Fingerprint {
         match s {
             FingerprintStrategy::Rabin => Fingerprint::Rabin(0),
             FingerprintStrategy::Id(id) => Fingerprint::Id(*id),
+            FingerprintStrategy::Id64(id) => Fingerprint::Id64(*id),
             #[cfg(feature = "md5")]
             FingerprintStrategy::MD5 => Fingerprint::MD5([0; 16]),
             #[cfg(feature = "sha256")]
@@ -625,7 +638,8 @@ impl From<FingerprintAlgorithm> for Fingerprint {
     fn from(s: FingerprintAlgorithm) -> Self {
         match s {
             FingerprintAlgorithm::Rabin => Fingerprint::Rabin(0),
-            FingerprintAlgorithm::None => Fingerprint::Id(0),
+            FingerprintAlgorithm::Id => Fingerprint::Id(0),
+            FingerprintAlgorithm::Id64 => Fingerprint::Id64(0),
             #[cfg(feature = "md5")]
             FingerprintAlgorithm::MD5 => Fingerprint::MD5([0; 16]),
             #[cfg(feature = "sha256")]
@@ -646,11 +660,24 @@ impl Fingerprint {
         Fingerprint::Id(u32::from_be(id))
     }
 
+    /// Loads the 64-bit Schema Registry fingerprint (Apicurio Schema Registry ID).
+    ///
+    /// The provided `id` is in big-endian wire order; this converts it to host order
+    /// and returns `Fingerprint::Id64`.
+    ///
+    /// # Returns
+    /// A `Fingerprint::Id64` variant containing the 64-bit fingerprint.
+    pub fn load_fingerprint_id64(id: u64) -> Self {
+        Fingerprint::Id64(u64::from_be(id))
+    }
+
     /// Constructs a serialized prefix represented as a `Vec<u8>` based on the variant of the enum.
     ///
     /// This method serializes data in different formats depending on the variant of `self`:
     /// - **`Id(id)`**: Uses the Confluent wire format, which includes a predefined magic header (`CONFLUENT_MAGIC`)
     ///   followed by the big-endian byte representation of the `id`.
+    /// - **`Id64(id)`**: Uses the Apicurio wire format, which includes a predefined magic header (`CONFLUENT_MAGIC`)
+    ///   followed by the big-endian 8-byte representation of the `id`.
     /// - **`Rabin(val)`**: Uses the Avro single-object specification format. This includes a different magic header
     ///   (`SINGLE_OBJECT_MAGIC`) followed by the little-endian byte representation of the `val`.
     /// - **`MD5(bytes)`** (optional, `md5` feature enabled): A non-standard extension that adds the
@@ -671,6 +698,7 @@ impl Fingerprint {
         let mut buf = [0u8; MAX_PREFIX_LEN];
         let len = match self {
             Self::Id(val) => write_prefix(&mut buf, &CONFLUENT_MAGIC, &val.to_be_bytes()),
+            Self::Id64(val) => write_prefix(&mut buf, &CONFLUENT_MAGIC, &val.to_be_bytes()),
             Self::Rabin(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, &val.to_le_bytes()),
             #[cfg(feature = "md5")]
             Self::MD5(val) => write_prefix(&mut buf, &SINGLE_OBJECT_MAGIC, val),
@@ -796,7 +824,7 @@ impl SchemaStore {
     /// A fingerprint is calculated for the given schema using the store's configured
     /// hash type. If a schema with the same fingerprint does not already exist in the
     /// store, the new schema is inserted. If the fingerprint already exists, the
-    /// existing schema is not overwritten. If FingerprintAlgorithm is set to None, this
+    /// existing schema is not overwritten. If FingerprintAlgorithm is set to Id or Id64, this
     /// method will return an error. Confluent wire format implementations should leverage the
     /// set method instead.
     ///
@@ -809,7 +837,9 @@ impl SchemaStore {
     /// A `Result` containing the `Fingerprint` of the schema if successful,
     /// or an `ArrowError` on failure.
     pub fn register(&mut self, schema: AvroSchema) -> Result<Fingerprint, ArrowError> {
-        if self.fingerprint_algorithm == FingerprintAlgorithm::None {
+        if self.fingerprint_algorithm == FingerprintAlgorithm::Id
+            || self.fingerprint_algorithm == FingerprintAlgorithm::Id64
+        {
             return Err(ArrowError::SchemaError(
                 "Invalid FingerprintAlgorithm; unable to generate fingerprint. \
             Use the set method directly instead, providing a valid fingerprint"
@@ -910,6 +940,10 @@ fn build_canonical(schema: &Schema, enclosing_ns: Option<&str>) -> Result<String
                     .fields
                     .iter()
                     .map(|f| {
+                        // PCF [STRIP] per Avro spec: keep only attributes relevant to parsing
+                        // ("name" and "type" for fields) and **strip others** such as doc,
+                        // default, order, and **aliases**. This preserves canonicalization. See:
+                        // https://avro.apache.org/docs/1.11.1/specification/#parsing-canonical-form-for-schemas
                         let field_type =
                             build_canonical(&f.r#type, child_ns.as_deref().or(enclosing_ns))?;
                         Ok(format!(
@@ -1098,7 +1132,7 @@ impl NameGenerator {
     }
 }
 
-fn merge_extras(schema: Value, mut extras: JsonMap<String, Value>) -> Value {
+fn merge_extras(schema: Value, extras: JsonMap<String, Value>) -> Value {
     if extras.is_empty() {
         return schema;
     }
@@ -1146,6 +1180,21 @@ fn wrap_nullable(inner: Value, null_order: Nullability) -> Value {
             Nullability::NullSecond => Value::Array(vec![other, null]),
         },
     }
+}
+
+fn min_fixed_bytes_for_precision(p: usize) -> usize {
+    // From the spec: max precision for n=1..=32 bytes:
+    // [2,4,6,9,11,14,16,18,21,23,26,28,31,33,35,38,40,43,45,47,50,52,55,57,59,62,64,67,69,71,74,76]
+    const MAX_P: [usize; 32] = [
+        2, 4, 6, 9, 11, 14, 16, 18, 21, 23, 26, 28, 31, 33, 35, 38, 40, 43, 45, 47, 50, 52, 55, 57,
+        59, 62, 64, 67, 69, 71, 74, 76,
+    ];
+    for (i, &max_p) in MAX_P.iter().enumerate() {
+        if p <= max_p {
+            return i + 1;
+        }
+    }
+    32 // saturate at Decimal256
 }
 
 fn union_branch_signature(branch: &Value) -> Result<String, ArrowError> {
@@ -1197,20 +1246,30 @@ fn datatype_to_avro(
                  must be <= precision ({precision})"
             )));
         }
-
         let mut meta = JsonMap::from_iter([
             ("logicalType".into(), json!("decimal")),
             ("precision".into(), json!(*precision)),
             ("scale".into(), json!(*scale)),
         ]);
-        if let Some(size) = metadata
-            .get("size")
-            .and_then(|val| val.parse::<usize>().ok())
-        {
+        let mut fixed_size = metadata.get("size").and_then(|v| v.parse::<usize>().ok());
+        let carries_name = metadata.contains_key(AVRO_NAME_METADATA_KEY)
+            || metadata.contains_key(AVRO_NAMESPACE_METADATA_KEY);
+        if fixed_size.is_none() && carries_name {
+            fixed_size = Some(min_fixed_bytes_for_precision(*precision as usize));
+        }
+        if let Some(size) = fixed_size {
             meta.insert("type".into(), json!("fixed"));
             meta.insert("size".into(), json!(size));
-            meta.insert("name".into(), json!(name_gen.make_unique(field_name)));
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            meta.insert("name".into(), json!(chosen_name));
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                meta.insert("namespace".into(), json!(ns));
+            }
         } else {
+            // default to bytes-backed decimal
             meta.insert("type".into(), json!("bytes"));
         }
         Ok(Value::Object(meta))
@@ -1231,21 +1290,34 @@ fn datatype_to_avro(
             Value::String("bytes".into())
         }
         DataType::FixedSizeBinary(len) => {
-            let is_uuid = metadata
-                .get("logicalType")
-                .is_some_and(|value| value == "uuid")
-                || (*len == 16
-                    && metadata
-                        .get("ARROW:extension:name")
-                        .is_some_and(|value| value == "uuid"));
+            // UUID handling:
+            // - When the canonical extension feature is ON *and* this field is the Arrow canonical UUID
+            //   (extension name "arrow.uuid" or legacy "uuid"), emit Avro string with logicalType "uuid".
+            // - Otherwise, fall back to a named fixed of size = len.
+            #[cfg(not(feature = "canonical_extension_types"))]
+            let is_uuid = false;
+            #[cfg(feature = "canonical_extension_types")]
+            let is_uuid = (*len == 16)
+                && metadata
+                    .get(arrow_schema::extension::EXTENSION_TYPE_NAME_KEY)
+                    .map(|value| value == arrow_schema::extension::Uuid::NAME || value == "uuid")
+                    .unwrap_or(false);
             if is_uuid {
                 json!({ "type": "string", "logicalType": "uuid" })
             } else {
-                json!({
-                    "type": "fixed",
-                    "name": name_gen.make_unique(field_name),
-                    "size": len
-                })
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("fixed")),
+                    ("name".into(), json!(chosen_name)),
+                    ("size".into(), json!(len)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             }
         }
         #[cfg(feature = "small_decimals")]
@@ -1290,30 +1362,37 @@ fn datatype_to_avro(
             };
             json!({ "type": "long", "logicalType": logical_type })
         }
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::Duration(_unit) => Value::String("long".into()),
+        #[cfg(feature = "avro_custom_types")]
         DataType::Duration(unit) => {
-            #[cfg(feature = "avro_custom_types")]
-            {
-                // When the feature is enabled, create an Avro schema object
-                // with the correct `logicalType` annotation.
-                let logical_type = match unit {
-                    TimeUnit::Second => "arrow.duration-seconds",
-                    TimeUnit::Millisecond => "arrow.duration-millis",
-                    TimeUnit::Microsecond => "arrow.duration-micros",
-                    TimeUnit::Nanosecond => "arrow.duration-nanos",
-                };
-                json!({ "type": "long", "logicalType": logical_type })
-            }
-            #[cfg(not(feature = "avro_custom_types"))]
-            {
-                Value::String("long".into())
-            }
+            // When the feature is enabled, create an Avro schema object
+            // with the correct `logicalType` annotation.
+            let logical_type = match unit {
+                TimeUnit::Second => "arrow.duration-seconds",
+                TimeUnit::Millisecond => "arrow.duration-millis",
+                TimeUnit::Microsecond => "arrow.duration-micros",
+                TimeUnit::Nanosecond => "arrow.duration-nanos",
+            };
+            json!({ "type": "long", "logicalType": logical_type })
         }
-        DataType::Interval(IntervalUnit::MonthDayNano) => json!({
-            "type": "fixed",
-            "name": name_gen.make_unique(&format!("{field_name}_duration")),
-            "size": 12,
-            "logicalType": "duration"
-        }),
+        DataType::Interval(IntervalUnit::MonthDayNano) => {
+            // Avro duration logical type: fixed(12) with months/days/millis per spec.
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("fixed")),
+                ("name".into(), json!(chosen_name)),
+                ("size".into(), json!(12)),
+                ("logicalType".into(), json!("duration")),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            json!(obj)
+        }
         DataType::Interval(IntervalUnit::YearMonth) => {
             extras.insert(
                 "arrowIntervalUnit".into(),
@@ -1381,7 +1460,7 @@ fn datatype_to_avro(
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Map 'entries' field must be Struct(key,value)".into(),
-                    ))
+                    ));
                 }
             };
             let values_schema = process_datatype(
@@ -1402,21 +1481,39 @@ fn datatype_to_avro(
                 .iter()
                 .map(|field| arrow_field_to_avro(field, name_gen, null_order))
                 .collect::<Result<Vec<_>, _>>()?;
-            json!({
-                "type": "record",
-                "name": name_gen.make_unique(field_name),
-                "fields": avro_fields
-            })
+            // Prefer avro.name/avro.namespace when provided on the struct field metadata
+            let chosen_name = metadata
+                .get(AVRO_NAME_METADATA_KEY)
+                .map(|s| sanitise_avro_name(s))
+                .unwrap_or_else(|| name_gen.make_unique(field_name));
+            let mut obj = JsonMap::from_iter([
+                ("type".into(), json!("record")),
+                ("name".into(), json!(chosen_name)),
+                ("fields".into(), Value::Array(avro_fields)),
+            ]);
+            if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                obj.insert("namespace".into(), json!(ns));
+            }
+            Value::Object(obj)
         }
         DataType::Dictionary(_, value) => {
             if let Some(j) = metadata.get(AVRO_ENUM_SYMBOLS_METADATA_KEY) {
                 let symbols: Vec<&str> =
                     serde_json::from_str(j).map_err(|e| ArrowError::ParseError(e.to_string()))?;
-                json!({
-                    "type": "enum",
-                    "name": name_gen.make_unique(field_name),
-                    "symbols": symbols
-                })
+                // Prefer avro.name/namespace when provided for enums
+                let chosen_name = metadata
+                    .get(AVRO_NAME_METADATA_KEY)
+                    .map(|s| sanitise_avro_name(s))
+                    .unwrap_or_else(|| name_gen.make_unique(field_name));
+                let mut obj = JsonMap::from_iter([
+                    ("type".into(), json!("enum")),
+                    ("name".into(), json!(chosen_name)),
+                    ("symbols".into(), json!(symbols)),
+                ]);
+                if let Some(ns) = metadata.get(AVRO_NAMESPACE_METADATA_KEY) {
+                    obj.insert("namespace".into(), json!(ns));
+                }
+                Value::Object(obj)
             } else {
                 process_datatype(
                     value.as_ref(),
@@ -1483,10 +1580,11 @@ fn datatype_to_avro(
 
             Value::Array(branches)
         }
+        #[cfg(not(feature = "small_decimals"))]
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Arrow type {other:?} has no Avro representation"
-            )))
+            )));
         }
     };
     Ok((val, extras))
@@ -1553,7 +1651,7 @@ fn arrow_field_to_avro(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::codec::{AvroDataType, AvroField, AvroFieldBuilder};
+    use crate::codec::{AvroField, AvroFieldBuilder};
     use arrow_schema::{DataType, Fields, SchemaBuilder, TimeUnit, UnionFields};
     use serde_json::json;
     use std::sync::Arc;
@@ -1817,21 +1915,24 @@ mod tests {
             }))
         );
         let codec = AvroField::try_from(&schema).unwrap();
-        assert_eq!(
-            codec.field(),
-            arrow_schema::Field::new(
-                "topLevelRecord",
-                DataType::Struct(Fields::from(vec![
-                    arrow_schema::Field::new("id", DataType::Int32, true),
-                    arrow_schema::Field::new(
-                        "timestamp_col",
-                        DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
-                        true
-                    ),
-                ])),
-                false
-            )
-        );
+        let expected_arrow_field = arrow_schema::Field::new(
+            "topLevelRecord",
+            DataType::Struct(Fields::from(vec![
+                arrow_schema::Field::new("id", DataType::Int32, true),
+                arrow_schema::Field::new(
+                    "timestamp_col",
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("+00:00".into())),
+                    true,
+                ),
+            ])),
+            false,
+        )
+        .with_metadata(std::collections::HashMap::from([(
+            AVRO_NAME_METADATA_KEY.to_string(),
+            "topLevelRecord".to_string(),
+        )]));
+
+        assert_eq!(codec.field(), expected_arrow_field);
 
         let schema: Schema = serde_json::from_str(
             r#"{
@@ -2075,19 +2176,24 @@ mod tests {
                     store.lookup(&Fingerprint::Rabin(fp_val)).cloned(),
                     Some(schema.clone())
                 );
-                assert!(store
-                    .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
-                    .is_none());
+                assert!(
+                    store
+                        .lookup(&Fingerprint::Rabin(fp_val.wrapping_add(1)))
+                        .is_none()
+                );
             }
-            Fingerprint::Id(id) => {
+            Fingerprint::Id(_id) => {
+                unreachable!("This test should only generate Rabin fingerprints")
+            }
+            Fingerprint::Id64(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
             #[cfg(feature = "md5")]
-            Fingerprint::MD5(id) => {
+            Fingerprint::MD5(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
             #[cfg(feature = "sha256")]
-            Fingerprint::SHA256(id) => {
+            Fingerprint::SHA256(_id) => {
                 unreachable!("This test should only generate Rabin fingerprints")
             }
         }
@@ -2103,6 +2209,39 @@ mod tests {
         assert_eq!(out_fp, fp);
         assert_eq!(store.lookup(&fp).cloned(), Some(schema.clone()));
         assert!(store.lookup(&Fingerprint::Id(id.wrapping_add(1))).is_none());
+    }
+
+    #[test]
+    fn test_set_and_lookup_id64() {
+        let mut store = SchemaStore::new();
+        let schema = AvroSchema::new(serde_json::to_string(&int_schema()).unwrap());
+        let id64: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+        let fp = Fingerprint::Id64(id64);
+        let out_fp = store.set(fp, schema.clone()).unwrap();
+        assert_eq!(out_fp, fp, "set should return the same Id64 fingerprint");
+        assert_eq!(
+            store.lookup(&fp).cloned(),
+            Some(schema.clone()),
+            "lookup should find the schema by Id64"
+        );
+        assert!(
+            store
+                .lookup(&Fingerprint::Id64(id64.wrapping_add(1)))
+                .is_none(),
+            "lookup with a different Id64 must return None"
+        );
+    }
+
+    #[test]
+    fn test_fingerprint_id64_conversions() {
+        let algo_from_fp = FingerprintAlgorithm::from(&Fingerprint::Id64(123));
+        assert_eq!(algo_from_fp, FingerprintAlgorithm::Id64);
+        let fp_from_algo = Fingerprint::from(FingerprintAlgorithm::Id64);
+        assert!(matches!(fp_from_algo, Fingerprint::Id64(0)));
+        let strategy_from_fp = FingerprintStrategy::from(Fingerprint::Id64(5));
+        assert!(matches!(strategy_from_fp, FingerprintStrategy::Id64(0)));
+        let algo_from_strategy = FingerprintAlgorithm::from(strategy_from_fp);
+        assert_eq!(algo_from_strategy, FingerprintAlgorithm::Id64);
     }
 
     #[test]
@@ -2177,8 +2316,7 @@ mod tests {
         let mut store = SchemaStore::new();
         let schema = AvroSchema::new(serde_json::to_string(&record_schema()).unwrap());
         let canonical_form = r#"{"name":"test.namespace.record1","type":"record","fields":[{"name":"field1","type":"int"},{"name":"field2","type":"string"}]}"#;
-        let expected_fingerprint =
-            Fingerprint::Rabin(super::compute_fingerprint_rabin(canonical_form));
+        let expected_fingerprint = Fingerprint::Rabin(compute_fingerprint_rabin(canonical_form));
         let fingerprint = store.register(schema.clone()).unwrap();
         assert_eq!(fingerprint, expected_fingerprint);
         let looked_up = store.lookup(&fingerprint).cloned();
@@ -2306,6 +2444,7 @@ mod tests {
         assert_json_contains(&avro_uuid.json_string, "\"logicalType\":\"uuid\"");
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_interval_duration() {
         let interval_field = ArrowField::new(
@@ -2320,7 +2459,6 @@ mod tests {
         let dur_field = ArrowField::new("latency", DataType::Duration(TimeUnit::Nanosecond), false);
         let s2 = single_field_schema(dur_field);
         let avro2 = AvroSchema::try_from(&s2).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro2.json_string,
             "\"logicalType\":\"arrow.duration-nanos\"",
@@ -2459,13 +2597,13 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_duration_list_extras_propagated() {
         let child = ArrowField::new("lat", DataType::Duration(TimeUnit::Microsecond), false);
         let list_dt = DataType::List(Arc::new(child));
         let arrow_schema = single_field_schema(ArrowField::new("durations", list_dt, false));
         let avro = AvroSchema::try_from(&arrow_schema).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro.json_string,
             "\"logicalType\":\"arrow.duration-micros\"",
@@ -2497,6 +2635,7 @@ mod tests {
         assert_json_contains(&avro.json_string, "\"arrowFixedSize\":3");
     }
 
+    #[cfg(feature = "avro_custom_types")]
     #[test]
     fn test_map_duration_value_extra() {
         let val_field = ArrowField::new("value", DataType::Duration(TimeUnit::Second), true);
@@ -2511,7 +2650,6 @@ mod tests {
         let map_dt = DataType::Map(Arc::new(entries_struct), false);
         let schema = single_field_schema(ArrowField::new("metrics", map_dt, false));
         let avro = AvroSchema::try_from(&schema).unwrap();
-        #[cfg(feature = "avro_custom_types")]
         assert_json_contains(
             &avro.json_string,
             "\"logicalType\":\"arrow.duration-seconds\"",
@@ -2534,7 +2672,6 @@ mod tests {
                 {"name": "u", "type": ["int", "null"], "default": 42}
             ]
         }"#;
-
         let schema: Schema = serde_json::from_str(schema_json).expect("schema should parse");
         match &schema {
             Schema::Complex(ComplexType::Record(_)) => {}
@@ -2544,7 +2681,6 @@ mod tests {
         let field = crate::codec::AvroField::try_from(&schema)
             .expect("Avro->Arrow conversion should succeed");
         let arrow_field = field.field();
-
         // Build expected Arrow field
         let expected_list_item = ArrowField::new(
             arrow_schema::Field::LIST_FIELD_DEFAULT_NAME,
@@ -2564,7 +2700,8 @@ mod tests {
         );
         let expected_c =
             ArrowField::new("c", DataType::Map(Arc::new(expected_entries), false), false);
-
+        let mut inner_md = std::collections::HashMap::new();
+        inner_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "Inner".to_string());
         let expected_inner = ArrowField::new(
             "inner",
             DataType::Struct(Fields::from(vec![
@@ -2572,8 +2709,10 @@ mod tests {
                 ArrowField::new("name", DataType::Utf8, false),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(inner_md);
+        let mut root_md = std::collections::HashMap::new();
+        root_md.insert(AVRO_NAME_METADATA_KEY.to_string(), "R".to_string());
         let expected = ArrowField::new(
             "R",
             DataType::Struct(Fields::from(vec![
@@ -2584,8 +2723,8 @@ mod tests {
                 ArrowField::new("u", DataType::Int32, true),
             ])),
             false,
-        );
-
+        )
+        .with_metadata(root_md);
         assert_eq!(arrow_field, expected);
     }
 

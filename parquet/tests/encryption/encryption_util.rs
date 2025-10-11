@@ -16,11 +16,11 @@
 // under the License.
 
 use arrow_array::cast::AsArray;
-use arrow_array::{types, RecordBatch};
+use arrow_array::{RecordBatch, types};
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
-use parquet::arrow::ArrowWriter;
 use parquet::encryption::decrypt::{FileDecryptionProperties, KeyRetriever};
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
@@ -202,12 +202,14 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
     let column_index = &column_index[0][float_col_idx];
 
     match column_index {
-        parquet::file::page_index::index::Index::FLOAT(float_index) => {
-            assert_eq!(float_index.indexes.len(), 1);
-            assert_eq!(float_index.indexes[0].min, Some(0.0f32));
-            assert!(float_index.indexes[0]
-                .max
-                .is_some_and(|max| (max - 53.9).abs() < 1e-6));
+        parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index) => {
+            assert_eq!(float_index.num_pages(), 1);
+            assert_eq!(float_index.min_value(0), Some(&0.0f32));
+            assert!(
+                float_index
+                    .max_value(0)
+                    .is_some_and(|max| (max - 53.9).abs() < 1e-6)
+            );
         }
         _ => {
             panic!("Expected a float column index for column {float_col_idx}");
