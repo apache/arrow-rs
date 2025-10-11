@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["ColumnIndexMetaData"],"macro":["colidx_enum_func","column_index_iters"],"struct":["ByteArrayColumnIndex","ColumnIndex","PrimitiveColumnIndex"],"trait":["ColumnIndexIterators"]};

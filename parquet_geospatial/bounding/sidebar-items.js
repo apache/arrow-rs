@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["dimension_index","geometry_type","visit_collection","visit_intervals","visit_point","visit_sequence"],"struct":["GeometryBounder"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"macro":["decimal_to_variant_decimal","generic_conversion_single_value","impl_primitive_from_variant","impl_timestamp_from_variant","non_generic_conversion_single_value","primitive_conversion_single_value"],"struct":["CastOptions"],"trait":["PrimitiveFromVariant","TimestampFromVariant"]};
