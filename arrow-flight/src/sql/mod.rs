@@ -40,7 +40,7 @@
 //! [`metadata`]: crate::sql::metadata
 use arrow_schema::ArrowError;
 use bytes::Bytes;
-use paste::paste;
+use pastey::paste;
 use prost::Message;
 
 #[allow(clippy::all)]

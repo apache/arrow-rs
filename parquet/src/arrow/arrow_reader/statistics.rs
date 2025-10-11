@@ -43,7 +43,7 @@ use arrow_array::{
 use arrow_buffer::i256;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use half::f16;
-use paste::paste;
+use pastey::paste;
 use std::sync::Arc;
 
 // Convert the bytes array to i32.
