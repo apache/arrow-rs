@@ -33,7 +33,7 @@ fn left_mutable_bitwise_bin_op_helper<F>(
     return;
   }
 
-  // offset inside a byte, guaranteed to be between 0 and 7 (inclusive)
+  // offset inside a byte
   let left_bit_offset = left_offset_in_bits % 8;
 
   let is_mutable_buffer_byte_aligned = left_bit_offset == 0;
@@ -48,7 +48,7 @@ fn left_mutable_bitwise_bin_op_helper<F>(
       op,
     );
   } else {
-    // If we are not byte aligned we will read the first few bits
+    // If we are not byte aligned, run `op` on the first few bits to reach byte alignment
     let bits_to_next_byte = 8 - left_bit_offset;
 
     {
@@ -98,41 +98,31 @@ fn align_to_byte<F>(
 where
   F: FnMut(u64) -> u64
 {
-    let left_bit_offset = offset_in_bits % 8;
-    let bits_to_next_byte = 8 - left_bit_offset;
+    let byte_offset = offset_in_bits / 8;
+    let bit_offset = offset_in_bits % 8;
 
-    let left_byte_offset = offset_in_bits / 8;
-    let right_byte_offset = right_offset_in_bits / 8;
-    // 1. read the first byte from the left buffer
-    let left_first_byte: u8 = buffer.as_slice()[left_byte_offset];
+    // 1. read the first byte from the buffer
+    let first_byte: u8 = buffer.as_slice()[byte_offset];
 
-    // 2. Shift left byte by the left bit offset, keeping only the relevant bits
-    let relevant_left_first_byte = left_first_byte >> left_bit_offset;
-
-    // 3. read the same amount of bits from the right buffer
-    let right_first_byte: u8 = read_up_to_byte_from_offset(
-      &right[right_byte_offset..],
-      bits_to_next_byte,
-      // Right bit offset
-      right_offset_in_bits % 8,
-    );
+    // 2. Shift byte by the bit offset, keeping only the relevant bits
+    let relevant_first_byte = first_byte >> bit_offset;
 
     // 4. run the op on the first byte only
     let result_first_byte =
-      op(relevant_left_first_byte as u64, right_first_byte as u64) as u8;
+      op(relevant_first_byte as u64) as u8;
 
     // 5. Shift back the result to the original position
-    let result_first_byte = result_first_byte << left_bit_offset;
+    let result_first_byte = result_first_byte << bit_offset;
 
-    // 6. Mask the bits that are outside the relevant bits in the left byte
-    //    so the bits until left_bit_offset are 1 and the rest are 0
-    let mask_for_first_bit_offset = (1 << left_bit_offset) - 1;
+    // 6. Mask the bits that are outside the relevant bits in the byte
+    //    so the bits until bit_offset are 1 and the rest are 0
+    let mask_for_first_bit_offset = (1 << bit_offset) - 1;
 
-    let result_first_byte = (left_first_byte & mask_for_first_bit_offset)
+    let result_first_byte = (first_byte & mask_for_first_bit_offset)
       | (result_first_byte & !mask_for_first_bit_offset);
 
-    // 7. write back the result to the left buffer
-    buffer.as_slice_mut()[left_byte_offset] = result_first_byte;
+    // 7. write back the result to the buffer
+    buffer.as_slice_mut()[byte_offset] = result_first_byte;
 }
 
 /// Read 8 bits from a buffer starting at a given bit offset
@@ -505,7 +495,7 @@ fn handle_mutable_buffer_remainder_unary<F>(
 /// Apply a bitwise operation `op` to the passed [`MutableBuffer`] and update it
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
 pub fn mutable_bitwise_unary_op_helper<F>(
-  left: &mut MutableBuffer,
+  buffer: &mut MutableBuffer,
   offset_in_bits: usize,
   len_in_bits: usize,
   mut op: F,
@@ -516,14 +506,14 @@ pub fn mutable_bitwise_unary_op_helper<F>(
     return;
   }
 
-  // offset inside a byte, guaranteed to be between 0 and 7 (inclusive)
+  // offset inside a byte
   let left_bit_offset = offset_in_bits % 8;
 
   let is_mutable_buffer_byte_aligned = left_bit_offset == 0;
 
   if is_mutable_buffer_byte_aligned {
     mutable_byte_aligned_bitwise_unary_op_helper(
-      left,
+      buffer,
       offset_in_bits,
       len_in_bits,
       op,
@@ -532,31 +522,11 @@ pub fn mutable_bitwise_unary_op_helper<F>(
     // If we are not byte aligned we will read the first few bits
     let bits_to_next_byte = 8 - left_bit_offset;
 
-    {
-      let left_byte_offset = offset_in_bits / 8;
-      // 1. read the first byte from the left buffer
-      let left_first_byte: u8 = left.as_slice()[left_byte_offset];
-
-      // 2. Shift left byte by the left bit offset, keeping only the relevant bits
-      let relevant_left_first_byte = left_first_byte >> left_bit_offset;
-
-      // 4. run the op on the first byte only
-      let result_first_byte =
-        op(relevant_left_first_byte as u64) as u8;
-
-      // 5. Shift back the result to the original position
-      let result_first_byte = result_first_byte << left_bit_offset;
-
-      // 6. Mask the bits that are outside the relevant bits in the left byte
-      //    so the bits until left_bit_offset are 1 and the rest are 0
-      let mask_for_first_bit_offset = (1 << left_bit_offset) - 1;
-
-      let result_first_byte = (left_first_byte & mask_for_first_bit_offset)
-        | (result_first_byte & !mask_for_first_bit_offset);
-
-      // 7. write back the result to the left buffer
-      left.as_slice_mut()[left_byte_offset] = result_first_byte;
-    }
+    align_to_byte(
+      &mut op,
+      buffer,
+      offset_in_bits
+    );
 
     let offset_in_bits = offset_in_bits + bits_to_next_byte;
     let len_in_bits = len_in_bits.saturating_sub(bits_to_next_byte);
@@ -567,7 +537,7 @@ pub fn mutable_bitwise_unary_op_helper<F>(
 
     // We are now byte aligned
     mutable_byte_aligned_bitwise_unary_op_helper(
-      left,
+      buffer,
       offset_in_bits,
       len_in_bits,
       op,
