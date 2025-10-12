@@ -276,8 +276,8 @@ impl<'a> BitChunks<'a> {
             // pointer to remainder bytes after all complete chunks
             let base = unsafe {
                 self.buffer
-                    .as_ptr()
-                    .add(self.chunk_len * std::mem::size_of::<u64>())
+                  .as_ptr()
+                  .add(self.chunk_len * std::mem::size_of::<u64>())
             };
 
             let mut bits = unsafe { std::ptr::read(base) } as u64 >> bit_offset;
@@ -343,7 +343,7 @@ impl Iterator for BitChunkIterator<'_> {
             // the constructor ensures that bit_offset is in 0..8
             // that means we need to read at most one additional byte to fill in the high bits
             let next =
-                unsafe { std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64 };
+              unsafe { std::ptr::read_unaligned(raw_data.add(index + 1) as *const u8) as u64 };
 
             (current >> bit_offset) | (next << (64 - bit_offset))
         };

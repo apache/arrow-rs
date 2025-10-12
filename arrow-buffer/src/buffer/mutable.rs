@@ -17,20 +17,18 @@
 
 use std::alloc::{Layout, handle_alloc_error};
 use std::mem;
+use std::ops::AddAssign;
 use std::ptr::NonNull;
 
 use crate::alloc::{ALIGNMENT, Deallocation};
-use crate::{
-    bytes::Bytes,
-    native::{ArrowNativeType, ToByteSlice},
-    util::bit_util,
-};
+use crate::{bitwise_unary_op_helper, bytes::Bytes, native::{ArrowNativeType, ToByteSlice}, util::bit_util};
 
 #[cfg(feature = "pool")]
 use crate::pool::{MemoryPool, MemoryReservation};
 #[cfg(feature = "pool")]
 use std::sync::Mutex;
-
+use crate::bit_chunk_iterator::{BitChunks, BitChunksMut, UnalignedBitChunk};
+use crate::bit_util::ceil;
 use super::Buffer;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
@@ -513,6 +511,19 @@ impl MutableBuffer {
 
         buffer.truncate(bit_util::ceil(len, 8));
         buffer
+    }
+
+    /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
+    /// in larger chunks and starting at arbitrary bit offsets.
+    /// Note that both `offset` and `length` are measured in bits.
+    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks<'_> {
+        BitChunks::new(self.as_slice(), offset, len)
+    }
+
+    /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
+    /// inspected. Note that both `offset` and `length` are measured in bits.
+    pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
+        UnalignedBitChunk::new(self.as_slice(), offset, len).count_ones()
     }
 
     /// Register this [`MutableBuffer`] with the provided [`MemoryPool`]
