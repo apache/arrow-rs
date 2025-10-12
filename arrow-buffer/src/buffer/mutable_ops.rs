@@ -51,7 +51,24 @@ fn left_mutable_bitwise_bin_op_helper<F>(
     // If we are not byte aligned we will read the first few bits
     let bits_to_next_byte = 8 - left_bit_offset;
 
-    align_to_byte(left, left_offset_in_bits, &right, right_offset_in_bits, &mut op, left_bit_offset, bits_to_next_byte);
+    {
+      let right_byte_offset = right_offset_in_bits / 8;
+
+      // 3. read the same amount of bits from the right buffer
+      let right_first_byte: u8 = read_up_to_byte_from_offset(
+        &right[right_byte_offset..],
+        bits_to_next_byte,
+        // Right bit offset
+        right_offset_in_bits % 8,
+      );
+
+      align_to_byte(
+        // Hope it gets inlined
+        &mut |left| op(left, right_first_byte as u64),
+        left,
+        left_offset_in_bits,
+      );
+    }
 
     let left_offset_in_bits = left_offset_in_bits + bits_to_next_byte;
     let right_offset_in_bits = right_offset_in_bits + bits_to_next_byte;
@@ -81,7 +98,6 @@ fn align_to_byte<F>(
 where
   F: FnMut(u64) -> u64
 {
-  {
     let left_bit_offset = offset_in_bits % 8;
     let bits_to_next_byte = 8 - left_bit_offset;
 
@@ -117,48 +133,8 @@ where
 
     // 7. write back the result to the left buffer
     buffer.as_slice_mut()[left_byte_offset] = result_first_byte;
-  }
 }
 
-fn a() {
-  let right_byte_offset = right_offset_in_bits / 8;
-
-  // 3. read the same amount of bits from the right buffer
-  let right_first_byte: u8 = read_up_to_byte_from_offset(
-    &right[right_byte_offset..],
-    bits_to_next_byte,
-    // Right bit offset
-    right_offset_in_bits % 8,
-  );
-
-  {
-    let left_byte_offset = left_offset_in_bits / 8;
-
-    // 1. read the first byte from the left buffer
-    let left_first_byte: u8 = left.as_slice()[left_byte_offset];
-
-    // 2. Shift left byte by the left bit offset, keeping only the relevant bits
-    let relevant_left_first_byte = left_first_byte >> left_bit_offset;
-
-
-    // 4. run the op on the first byte only
-    let result_first_byte =
-      op(relevant_left_first_byte as u64, right_first_byte as u64) as u8;
-
-    // 5. Shift back the result to the original position
-    let result_first_byte = result_first_byte << left_bit_offset;
-
-    // 6. Mask the bits that are outside the relevant bits in the left byte
-    //    so the bits until left_bit_offset are 1 and the rest are 0
-    let mask_for_first_bit_offset = (1 << left_bit_offset) - 1;
-
-    let result_first_byte = (left_first_byte & mask_for_first_bit_offset)
-      | (result_first_byte & !mask_for_first_bit_offset);
-
-    // 7. write back the result to the left buffer
-    left.as_slice_mut()[left_byte_offset] = result_first_byte;
-  }
-}
 /// Read 8 bits from a buffer starting at a given bit offset
 #[inline]
 fn get_8_bits_from_offset(buffer: &Buffer, offset_in_bits: usize) -> u8 {
