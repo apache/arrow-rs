@@ -27,7 +27,7 @@ use crate::{bitwise_unary_op_helper, bytes::Bytes, native::{ArrowNativeType, ToB
 use crate::pool::{MemoryPool, MemoryReservation};
 #[cfg(feature = "pool")]
 use std::sync::Mutex;
-use crate::bit_chunk_iterator::{BitChunks, BitChunksMut, UnalignedBitChunk};
+use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::bit_util::ceil;
 use super::Buffer;
 
