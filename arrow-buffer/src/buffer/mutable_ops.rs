@@ -494,7 +494,7 @@ fn handle_mutable_buffer_remainder_unary<F>(
 
 /// Apply a bitwise operation `op` to the passed [`MutableBuffer`] and update it
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
-pub fn mutable_bitwise_unary_op_helper<F>(
+pub(crate) fn mutable_bitwise_unary_op_helper<F>(
   buffer: &mut MutableBuffer,
   offset_in_bits: usize,
   len_in_bits: usize,
@@ -547,7 +547,7 @@ pub fn mutable_bitwise_unary_op_helper<F>(
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
-pub fn left_mutable_buffer_bin_and(
+pub(crate) fn left_mutable_buffer_bin_and(
   left: &mut MutableBuffer,
   left_offset_in_bits: usize,
   right: &Buffer,
@@ -566,7 +566,7 @@ pub fn left_mutable_buffer_bin_and(
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
-pub fn both_mutable_buffer_bin_and(
+pub(crate) fn both_mutable_buffer_bin_and(
   left: &mut MutableBuffer,
   left_offset_in_bits: usize,
   right: &MutableBuffer,
@@ -585,7 +585,7 @@ pub fn both_mutable_buffer_bin_and(
 
 /// Apply a bitwise or to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
-pub fn left_mutable_buffer_bin_or(
+pub(crate) fn left_mutable_buffer_bin_or(
   left: &mut MutableBuffer,
   left_offset_in_bits: usize,
   right: &Buffer,
@@ -604,7 +604,7 @@ pub fn left_mutable_buffer_bin_or(
 
 /// Apply a bitwise or to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
-pub fn both_mutable_buffer_bin_or(
+pub(crate) fn both_mutable_buffer_bin_or(
   left: &mut MutableBuffer,
   left_offset_in_bits: usize,
   right: &MutableBuffer,
@@ -623,7 +623,7 @@ pub fn both_mutable_buffer_bin_or(
 
 /// Apply a bitwise xor to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
-pub fn left_mutable_buffer_bin_xor(
+pub(crate) fn left_mutable_buffer_bin_xor(
   left: &mut MutableBuffer,
   left_offset_in_bits: usize,
   right: &Buffer,
@@ -642,7 +642,7 @@ pub fn left_mutable_buffer_bin_xor(
 
 /// Apply a bitwise xor to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
-pub fn both_mutable_buffer_bin_xor(
+pub(crate) fn both_mutable_buffer_bin_xor(
   left: &mut MutableBuffer,
   left_offset_in_bits: usize,
   right: &MutableBuffer,
@@ -661,7 +661,7 @@ pub fn both_mutable_buffer_bin_xor(
 
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
-pub fn mutable_buffer_unary_not(
+pub(crate) fn mutable_buffer_unary_not(
   left: &mut MutableBuffer,
   offset_in_bits: usize,
   len_in_bits: usize,

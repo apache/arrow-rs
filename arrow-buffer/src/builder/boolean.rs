@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util, buffer_unary_not, buffer_bin_and, buffer_bin_or, buffer_bin_xor, left_mutable_buffer_bin_and, both_mutable_buffer_bin_and, left_mutable_buffer_bin_or, both_mutable_buffer_bin_or, left_mutable_buffer_bin_xor, both_mutable_buffer_bin_xor, mutable_buffer_unary_not};
+use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util, left_mutable_buffer_bin_and, both_mutable_buffer_bin_and, left_mutable_buffer_bin_or, both_mutable_buffer_bin_or, left_mutable_buffer_bin_xor, both_mutable_buffer_bin_xor, mutable_buffer_unary_not};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Range};
 
 /// Builder for [`BooleanBuffer`]
