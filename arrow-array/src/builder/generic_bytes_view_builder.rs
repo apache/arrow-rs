@@ -306,15 +306,30 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// - String length exceeds `u32::MAX`
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        self.try_append_value(value).unwrap()
+    }
+
+    /// Appends a value into the builder
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - String buffer count exceeds `u32::MAX`
+    /// - String length exceeds `u32::MAX`
+    #[inline]
+    pub fn try_append_value(&mut self, value: impl AsRef<T::Native>) -> Result<(), ArrowError> {
         let v: &[u8] = value.as_ref().as_ref();
-        let length: u32 = v.len().try_into().unwrap();
+        let length: u32 = v.len().try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!("String length {} exceeds u32::MAX", v.len()))
+        })?;
+
         if length <= MAX_INLINE_VIEW_LEN {
             let mut view_buffer = [0; 16];
             view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
             view_buffer[4..4 + v.len()].copy_from_slice(v);
             self.views_buffer.push(u128::from_le_bytes(view_buffer));
             self.null_buffer_builder.append_non_null();
-            return;
+            return Ok(());
         }
 
         // Deduplication if:
@@ -339,7 +354,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                     self.views_buffer.push(self.views_buffer[*idx]);
                     self.null_buffer_builder.append_non_null();
                     self.string_tracker = Some((ht, hasher));
-                    return;
+                    return Ok(());
                 }
                 Entry::Vacant(vacant) => {
                     // o.w. we insert the (string hash -> view index)
@@ -356,17 +371,41 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             let to_reserve = v.len().max(self.block_size.next_size() as usize);
             self.in_progress.reserve(to_reserve);
         };
-        let offset = self.in_progress.len() as u32;
+        let offset: u32 = self.in_progress.len().try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "In-progress buffer length {} exceeds u32::MAX",
+                self.in_progress.len()
+            ))
+        })?;
         self.in_progress.extend_from_slice(v);
+
+        let prefix = v
+            .get(0..4)
+            .and_then(|slice| slice.try_into().ok())
+            .map(u32::from_le_bytes)
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "String must be at least 4 bytes for non-inline view".to_string(),
+                )
+            })?;
+
+        let buffer_index: u32 = self.completed.len().try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "Buffer count {} exceeds u32::MAX",
+                self.completed.len()
+            ))
+        })?;
 
         let view = ByteView {
             length,
-            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
-            buffer_index: self.completed.len() as u32,
+            prefix,
+            buffer_index,
             offset,
         };
         self.views_buffer.push(view.into());
         self.null_buffer_builder.append_non_null();
+
+        Ok(())
     }
 
     /// Append an `Option` value into the builder
