@@ -524,6 +524,7 @@ pub(crate) fn can_cast_to_run_end_encoded(from_type: &DataType, to_type: &DataTy
                 | DataType::UInt16
                 | DataType::UInt32
                 | DataType::UInt64
+                | DataType::Float16
                 | DataType::Float32
                 | DataType::Float64 => true,
 
@@ -546,7 +547,10 @@ pub(crate) fn can_cast_to_run_end_encoded(from_type: &DataType, to_type: &DataTy
                 | DataType::Interval(_) => true,
 
                 // Decimal types - support equality
-                DataType::Decimal128(_, _) | DataType::Decimal256(_, _) => true,
+                DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
+                | DataType::Decimal128(_, _)
+                | DataType::Decimal256(_, _) => true,
 
                 // Already REE-encoded - can be re-encoded
                 DataType::RunEndEncoded(_, _) => true,
