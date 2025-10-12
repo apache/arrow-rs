@@ -17,7 +17,9 @@
 
 use super::{Buffer, MutableBuffer};
 use crate::bit_chunk_iterator::BitChunks;
+use crate::{BooleanBuffer, BooleanBufferBuilder};
 use crate::util::bit_util::ceil;
+
 
 fn left_mutable_bitwise_bin_op_helper<F>(
   left: &mut MutableBuffer,
@@ -667,4 +669,29 @@ pub(crate) fn mutable_buffer_unary_not(
   len_in_bits: usize,
 ) {
   mutable_bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
+}
+
+#[cfg(test)]
+mod tests {
+  use std::ops::BitAnd;
+  use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
+
+  // Todo - test different types for different alignments
+
+  fn to_boolean_vec(boolean_buffer_builder: &BooleanBufferBuilder) -> Vec<bool> {
+    let boolean_buffer: BooleanBuffer = boolean_buffer_builder.finish_cloned();
+    boolean_buffer.iter().collect()
+  }
+
+  #[test]
+  fn mutable_buffer_not_enough_for_single_byte() {
+    let input = BooleanBufferBuilder::from([
+      true, false, true, false,
+    ].as_slice());
+
+    let input = !input;
+    // assert_eq!(to_boolean_vec(&input), )
+
+
+  }
 }

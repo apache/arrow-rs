@@ -256,6 +256,33 @@ impl BooleanBufferBuilder {
     pub fn finish_cloned(&self) -> BooleanBuffer {
         BooleanBuffer::new(Buffer::from_slice_ref(self.as_slice()), 0, self.len)
     }
+
+    /// Returns a reference to the inner [`MutableBuffer`]
+    ///
+    /// only in tests and not public API to avoid misuse as the length of the buffer
+    /// is not updated when modifying the inner buffer directly
+    #[cfg(test)]
+    pub(crate) fn inner_mut(&mut self) -> &mut MutableBuffer {
+        &mut self.buffer
+    }
+
+    /// Get the inner [`MutableBuffer`]
+    /// 
+    /// Note: it might be larger than the actual length of initialized bits
+    /// as the bits are packed.
+    pub fn into_inner(self) -> MutableBuffer {
+        self.buffer
+    }
+    
+    
+    pub fn fixed_slice(&mut self, range: Range<usize>) -> BooleanBuffer {
+        assert!(range.end <= self.len);
+        BooleanBuffer::new(
+            Buffer::from_slice_ref(self.as_slice()),
+            range.start,
+            range.end - range.start,
+        )
+    }
 }
 
 impl Not for BooleanBufferBuilder {
@@ -389,6 +416,16 @@ impl From<BooleanBufferBuilder> for BooleanBuffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
         BooleanBuffer::new(builder.buffer.into(), 0, builder.len)
+    }
+}
+
+impl From<&[bool]> for BooleanBufferBuilder {
+    #[inline]
+    fn from(source: &[bool]) -> Self {
+        let mut builder = BooleanBufferBuilder::new(source.len());
+        builder.append_slice(source);
+        
+        builder
     }
 }
 
