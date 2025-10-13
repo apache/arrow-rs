@@ -360,6 +360,9 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Flushes all buffered rows into a new row group
+    ///
+    /// Note the underlying writer is not flushed with this call.
+    /// If this is a desired behavior, please call [`ArrowWriter::sync`].
     pub fn flush(&mut self) -> Result<()> {
         let in_progress = match self.in_progress.take() {
             Some(in_progress) => in_progress,
