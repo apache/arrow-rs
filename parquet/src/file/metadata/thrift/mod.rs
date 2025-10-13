@@ -197,9 +197,10 @@ fn convert_stats(
             let null_count = stats.null_count.unwrap_or(0);
 
             if null_count < 0 {
-                return Err(ParquetError::General(format!(
-                    "Statistics null count is negative {null_count}",
-                )));
+                return Err(general_err!(
+                    "Statistics null count is negative {}",
+                    null_count
+                ));
             }
 
             // Generic null count.
@@ -224,16 +225,12 @@ fn convert_stats(
             fn check_len(min: &Option<&[u8]>, max: &Option<&[u8]>, len: usize) -> Result<()> {
                 if let Some(min) = min {
                     if min.len() < len {
-                        return Err(ParquetError::General(
-                            "Insufficient bytes to parse min statistic".to_string(),
-                        ));
+                        return Err(general_err!("Insufficient bytes to parse min statistic",));
                     }
                 }
                 if let Some(max) = max {
                     if max.len() < len {
-                        return Err(ParquetError::General(
-                            "Insufficient bytes to parse max statistic".to_string(),
-                        ));
+                        return Err(general_err!("Insufficient bytes to parse max statistic",));
                     }
                 }
                 Ok(())
@@ -903,23 +900,19 @@ impl DataPageHeader {
             last_field_id = field_ident.id;
         }
         let Some(num_values) = num_values else {
-            return Err(ParquetError::General(
-                "Required field num_values is missing".to_owned(),
-            ));
+            return Err(general_err!("Required field num_values is missing"));
         };
         let Some(encoding) = encoding else {
-            return Err(ParquetError::General(
-                "Required field encoding is missing".to_owned(),
-            ));
+            return Err(general_err!("Required field encoding is missing"));
         };
         let Some(definition_level_encoding) = definition_level_encoding else {
-            return Err(ParquetError::General(
-                "Required field definition_level_encoding is missing".to_owned(),
+            return Err(general_err!(
+                "Required field definition_level_encoding is missing"
             ));
         };
         let Some(repetition_level_encoding) = repetition_level_encoding else {
-            return Err(ParquetError::General(
-                "Required field repetition_level_encoding is missing".to_owned(),
+            return Err(general_err!(
+                "Required field repetition_level_encoding is missing"
             ));
         };
         Ok(Self {
@@ -1001,33 +994,25 @@ impl DataPageHeaderV2 {
             last_field_id = field_ident.id;
         }
         let Some(num_values) = num_values else {
-            return Err(ParquetError::General(
-                "Required field num_values is missing".to_owned(),
-            ));
+            return Err(general_err!("Required field num_values is missing"));
         };
         let Some(num_nulls) = num_nulls else {
-            return Err(ParquetError::General(
-                "Required field num_nulls is missing".to_owned(),
-            ));
+            return Err(general_err!("Required field num_nulls is missing"));
         };
         let Some(num_rows) = num_rows else {
-            return Err(ParquetError::General(
-                "Required field num_rows is missing".to_owned(),
-            ));
+            return Err(general_err!("Required field num_rows is missing"));
         };
         let Some(encoding) = encoding else {
-            return Err(ParquetError::General(
-                "Required field encoding is missing".to_owned(),
-            ));
+            return Err(general_err!("Required field encoding is missing"));
         };
         let Some(definition_levels_byte_length) = definition_levels_byte_length else {
-            return Err(ParquetError::General(
-                "Required field definition_levels_byte_length is missing".to_owned(),
+            return Err(general_err!(
+                "Required field definition_levels_byte_length is missing"
             ));
         };
         let Some(repetition_levels_byte_length) = repetition_levels_byte_length else {
-            return Err(ParquetError::General(
-                "Required field repetition_levels_byte_length is missing".to_owned(),
+            return Err(general_err!(
+                "Required field repetition_levels_byte_length is missing"
             ));
         };
         Ok(Self {
@@ -1127,18 +1112,16 @@ impl PageHeader {
             last_field_id = field_ident.id;
         }
         let Some(type_) = type_ else {
-            return Err(ParquetError::General(
-                "Required field type_ is missing".to_owned(),
-            ));
+            return Err(general_err!("Required field type_ is missing"));
         };
         let Some(uncompressed_page_size) = uncompressed_page_size else {
-            return Err(ParquetError::General(
-                "Required field uncompressed_page_size is missing".to_owned(),
+            return Err(general_err!(
+                "Required field uncompressed_page_size is missing"
             ));
         };
         let Some(compressed_page_size) = compressed_page_size else {
-            return Err(ParquetError::General(
-                "Required field compressed_page_size is missing".to_owned(),
+            return Err(general_err!(
+                "Required field compressed_page_size is missing"
             ));
         };
         Ok(Self {
