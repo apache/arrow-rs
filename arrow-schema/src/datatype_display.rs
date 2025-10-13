@@ -497,7 +497,8 @@ mod tests {
             )),
         );
         let complex_dict_data_type_string = complex_dict_data_type.to_string();
-        let expected_complex_string = "Dictionary(Int16, Struct(\"a\": Int32, \"b\": nullable Utf8))";
+        let expected_complex_string =
+            "Dictionary(Int16, Struct(\"a\": Int32, \"b\": nullable Utf8))";
         assert_eq!(complex_dict_data_type_string, expected_complex_string);
     }
 
