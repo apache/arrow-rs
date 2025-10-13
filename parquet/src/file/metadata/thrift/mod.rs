@@ -331,6 +331,7 @@ fn convert_stats(
     })
 }
 
+// bit positions for required fields in the Thrift ColumnMetaData struct
 const COL_META_TYPE: u16 = 1 << 1;
 const COL_META_ENCODINGS: u16 = 1 << 2;
 const COL_META_CODEC: u16 = 1 << 4;
@@ -338,6 +339,8 @@ const COL_META_NUM_VALUES: u16 = 1 << 5;
 const COL_META_TOTAL_UNCOMP_SZ: u16 = 1 << 6;
 const COL_META_TOTAL_COMP_SZ: u16 = 1 << 7;
 const COL_META_DATA_PAGE_OFFSET: u16 = 1 << 9;
+
+// a mask where all required fields' bits are set
 const COL_META_ALL_REQUIRED: u16 = COL_META_TYPE
     | COL_META_ENCODINGS
     | COL_META_CODEC
@@ -346,9 +349,10 @@ const COL_META_ALL_REQUIRED: u16 = COL_META_TYPE
     | COL_META_TOTAL_COMP_SZ
     | COL_META_DATA_PAGE_OFFSET;
 
+// check mask to see if all required fields are set. return an appropriate error if
+// any are missing.
 fn validate_column_metadata(mask: u16) -> Result<()> {
     if mask != COL_META_ALL_REQUIRED {
-        // not encrypted, so meta_data better exist
         if mask & COL_META_ENCODINGS == 0 {
             return Err(general_err!("Required field encodings is missing"));
         }
@@ -376,6 +380,8 @@ fn validate_column_metadata(mask: u16) -> Result<()> {
     Ok(())
 }
 
+// Decode `ColumnMetaData`. Returns a mask of all required fields that were observed.
+// This mask can be passed to `validate_column_metadata`.
 fn read_column_metadata<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column: &mut ColumnChunkMetaData,
@@ -383,7 +389,6 @@ fn read_column_metadata<'a>(
     // mask for seen required fields in ColumnMetaData
     let mut seen_mask = 0u16;
 
-    // `ColumnMetaData`. Read inline for performance sake.
     // struct ColumnMetaData {
     //   1: required Type type
     //   2: required list<Encoding> encodings
