@@ -784,6 +784,11 @@ impl RowGroupMetaDataBuilder {
 
         Ok(self.0)
     }
+
+    /// Build row group metadata without validation.
+    pub(super) fn build_unchecked(self) -> RowGroupMetaData {
+        self.0
+    }
 }
 
 /// Metadata for a column chunk.

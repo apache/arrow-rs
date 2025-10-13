@@ -20,23 +20,20 @@
 use std::io::Write;
 
 use crate::{
-    basic::{Compression, EncodingMask},
     encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
     errors::{ParquetError, Result},
     file::{
         column_crypto_metadata::ColumnCryptoMetaData,
         metadata::{
-            HeapSize, LevelHistogram, PageEncodingStats, ParquetMetaData, RowGroupMetaData,
+            HeapSize, ParquetMetaData, RowGroupMetaData,
             thrift_gen::{
-                GeospatialStatistics, SizeStatistics, Statistics, convert_geo_stats, convert_stats,
-                parquet_metadata_from_bytes,
+                parquet_metadata_from_bytes, read_column_metadata, validate_column_metadata,
             },
         },
     },
     parquet_thrift::{
         ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
         ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
-        read_thrift_vec,
     },
     thrift_struct, thrift_union,
 };
@@ -180,41 +177,9 @@ fn row_group_from_encrypted_thrift(
                 })?;
 
             // parse decrypted buffer and then replace fields in 'c'
-            let col_meta = read_column_metadata(decrypted_cc_buf.as_slice())?;
-
-            let (
-                unencoded_byte_array_data_bytes,
-                repetition_level_histogram,
-                definition_level_histogram,
-            ) = if let Some(size_stats) = col_meta.size_statistics {
-                (
-                    size_stats.unencoded_byte_array_data_bytes,
-                    size_stats.repetition_level_histogram,
-                    size_stats.definition_level_histogram,
-                )
-            } else {
-                (None, None, None)
-            };
-
-            let repetition_level_histogram = repetition_level_histogram.map(LevelHistogram::from);
-            let definition_level_histogram = definition_level_histogram.map(LevelHistogram::from);
-
-            c.encodings = col_meta.encodings;
-            c.compression = col_meta.codec;
-            c.num_values = col_meta.num_values;
-            c.total_uncompressed_size = col_meta.total_uncompressed_size;
-            c.total_compressed_size = col_meta.total_compressed_size;
-            c.data_page_offset = col_meta.data_page_offset;
-            c.index_page_offset = col_meta.index_page_offset;
-            c.dictionary_page_offset = col_meta.dictionary_page_offset;
-            c.statistics = convert_stats(d.physical_type(), col_meta.statistics)?;
-            c.encoding_stats = col_meta.encoding_stats;
-            c.bloom_filter_offset = col_meta.bloom_filter_offset;
-            c.bloom_filter_length = col_meta.bloom_filter_length;
-            c.unencoded_byte_array_data_bytes = unencoded_byte_array_data_bytes;
-            c.repetition_level_histogram = repetition_level_histogram;
-            c.definition_level_histogram = definition_level_histogram;
-            c.geo_statistics = convert_geo_stats(col_meta.geospatial_statistics);
+            let mut prot = ThriftSliceInputProtocol::new(&decrypted_cc_buf);
+            let mask = read_column_metadata(&mut prot, &mut c)?;
+            validate_column_metadata(mask)?;
 
             columns.push(c);
         } else {
@@ -372,173 +337,4 @@ fn get_file_decryptor(
             "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
         )),
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct ColumnMetaData<'a> {
-    encodings: EncodingMask,
-    codec: Compression,
-    num_values: i64,
-    total_uncompressed_size: i64,
-    total_compressed_size: i64,
-    data_page_offset: i64,
-    index_page_offset: Option<i64>,
-    dictionary_page_offset: Option<i64>,
-    statistics: Option<Statistics<'a>>,
-    encoding_stats: Option<Vec<PageEncodingStats>>,
-    bloom_filter_offset: Option<i64>,
-    bloom_filter_length: Option<i32>,
-    size_statistics: Option<SizeStatistics>,
-    geospatial_statistics: Option<GeospatialStatistics>,
-}
-
-fn read_column_metadata<'a>(buf: &'a [u8]) -> Result<ColumnMetaData<'a>> {
-    let mut prot = ThriftSliceInputProtocol::new(buf);
-
-    let mut encodings: Option<EncodingMask> = None;
-    let mut codec: Option<Compression> = None;
-    let mut num_values: Option<i64> = None;
-    let mut total_uncompressed_size: Option<i64> = None;
-    let mut total_compressed_size: Option<i64> = None;
-    let mut data_page_offset: Option<i64> = None;
-    let mut index_page_offset: Option<i64> = None;
-    let mut dictionary_page_offset: Option<i64> = None;
-    let mut statistics: Option<Statistics> = None;
-    let mut encoding_stats: Option<Vec<PageEncodingStats>> = None;
-    let mut bloom_filter_offset: Option<i64> = None;
-    let mut bloom_filter_length: Option<i32> = None;
-    let mut size_statistics: Option<SizeStatistics> = None;
-    let mut geospatial_statistics: Option<GeospatialStatistics> = None;
-
-    // `ColumnMetaData`. Read inline for performance sake.
-    // struct ColumnMetaData {
-    //   1: required Type type
-    //   2: required list<Encoding> encodings
-    //   3: required list<string> path_in_schema
-    //   4: required CompressionCodec codec
-    //   5: required i64 num_values
-    //   6: required i64 total_uncompressed_size
-    //   7: required i64 total_compressed_size
-    //   8: optional list<KeyValue> key_value_metadata
-    //   9: required i64 data_page_offset
-    //   10: optional i64 index_page_offset
-    //   11: optional i64 dictionary_page_offset
-    //   12: optional Statistics statistics;
-    //   13: optional list<PageEncodingStats> encoding_stats;
-    //   14: optional i64 bloom_filter_offset;
-    //   15: optional i32 bloom_filter_length;
-    //   16: optional SizeStatistics size_statistics;
-    //   17: optional GeospatialStatistics geospatial_statistics;
-    // }
-    let mut last_field_id = 0i16;
-    loop {
-        let field_ident = prot.read_field_begin(last_field_id)?;
-        if field_ident.field_type == FieldType::Stop {
-            break;
-        }
-        match field_ident.id {
-            // 1: type is never used, we can use the column descriptor
-            2 => {
-                let val = EncodingMask::read_thrift(&mut prot)?;
-                encodings = Some(val);
-            }
-            // 3: path_in_schema is redundant
-            4 => {
-                codec = Some(Compression::read_thrift(&mut prot)?);
-            }
-            5 => {
-                num_values = Some(i64::read_thrift(&mut prot)?);
-            }
-            6 => {
-                total_uncompressed_size = Some(i64::read_thrift(&mut prot)?);
-            }
-            7 => {
-                total_compressed_size = Some(i64::read_thrift(&mut prot)?);
-            }
-            // 8: we don't expose this key value
-            9 => {
-                data_page_offset = Some(i64::read_thrift(&mut prot)?);
-            }
-            10 => {
-                index_page_offset = Some(i64::read_thrift(&mut prot)?);
-            }
-            11 => {
-                dictionary_page_offset = Some(i64::read_thrift(&mut prot)?);
-            }
-            12 => {
-                statistics = Some(Statistics::read_thrift(&mut prot)?);
-            }
-            13 => {
-                let val =
-                    read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut prot)?;
-                encoding_stats = Some(val);
-            }
-            14 => {
-                bloom_filter_offset = Some(i64::read_thrift(&mut prot)?);
-            }
-            15 => {
-                bloom_filter_length = Some(i32::read_thrift(&mut prot)?);
-            }
-            16 => {
-                let val = SizeStatistics::read_thrift(&mut prot)?;
-                size_statistics = Some(val);
-            }
-            17 => {
-                let val = GeospatialStatistics::read_thrift(&mut prot)?;
-                geospatial_statistics = Some(val);
-            }
-            _ => {
-                prot.skip(field_ident.field_type)?;
-            }
-        };
-        last_field_id = field_ident.id;
-    }
-
-    let Some(encodings) = encodings else {
-        return Err(ParquetError::General(
-            "Required field encodings is missing".to_owned(),
-        ));
-    };
-    let Some(codec) = codec else {
-        return Err(ParquetError::General(
-            "Required field codec is missing".to_owned(),
-        ));
-    };
-    let Some(num_values) = num_values else {
-        return Err(ParquetError::General(
-            "Required field num_values is missing".to_owned(),
-        ));
-    };
-    let Some(total_uncompressed_size) = total_uncompressed_size else {
-        return Err(ParquetError::General(
-            "Required field total_uncompressed_size is missing".to_owned(),
-        ));
-    };
-    let Some(total_compressed_size) = total_compressed_size else {
-        return Err(ParquetError::General(
-            "Required field total_compressed_size is missing".to_owned(),
-        ));
-    };
-    let Some(data_page_offset) = data_page_offset else {
-        return Err(ParquetError::General(
-            "Required field data_page_offset is missing".to_owned(),
-        ));
-    };
-
-    Ok(ColumnMetaData {
-        encodings,
-        num_values,
-        codec,
-        total_uncompressed_size,
-        total_compressed_size,
-        data_page_offset,
-        index_page_offset,
-        dictionary_page_offset,
-        statistics,
-        encoding_stats,
-        bloom_filter_offset,
-        bloom_filter_length,
-        size_statistics,
-        geospatial_statistics,
-    })
 }
