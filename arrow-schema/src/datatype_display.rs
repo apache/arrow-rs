@@ -130,10 +130,7 @@ impl fmt::Display for DataType {
                 if !fields.is_empty() {
                     let fields_str = fields
                         .iter()
-                        .map(|field| {
-                            let field_str = format_field(field);
-                            format!("{field_str}")
-                        })
+                        .map(|field| format_field(field))
                         .collect::<Vec<_>>()
                         .join(", ");
                     write!(f, "{fields_str}")?;
@@ -148,7 +145,7 @@ impl fmt::Display for DataType {
                         .iter()
                         .map(|v| {
                             let type_id = v.0;
-                            let field_str = format_field(&v.1);
+                            let field_str = format_field(v.1);
                             format!("{type_id:?}: ({field_str})")
                         })
                         .collect::<Vec<_>>()
