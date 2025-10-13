@@ -1253,8 +1253,7 @@ impl Decoder {
                     2 => {
                         if n > i16::MAX as usize {
                             return Err(ArrowError::InvalidArgumentError(format!(
-                                "RunEndEncoded length {} exceeds i16::MAX for run end width 2",
-                                n
+                                "RunEndEncoded length {n} exceeds i16::MAX for run end width 2"
                             )));
                         }
                         build_run_array!(i16, Int16Type)
