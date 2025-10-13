@@ -138,6 +138,7 @@ fn shredded_get_path(
                 as_type,
                 cast_options,
                 target.len(),
+                target.inner().get_buffer_memory_size(),
             )?;
             for i in 0..target.len() {
                 if target.is_null(i) {
