@@ -43,7 +43,7 @@ canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
-avro_custom_types = ["arrow-select"]
+avro_custom_types = ["dep:arrow-select"]
 
 [dependencies]
 arrow-schema = { workspace = true }

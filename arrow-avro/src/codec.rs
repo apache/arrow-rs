@@ -787,7 +787,7 @@ impl Codec {
                     16 => DataType::Int16,
                     32 => DataType::Int32,
                     64 => DataType::Int64,
-                    _ => DataType::Int32,
+                    _ => unreachable!(),
                 };
                 DataType::RunEndEncoded(
                     Arc::new(Field::new("run_ends", run_ends_dt, false)),
