@@ -795,7 +795,7 @@ mod test {
     }
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_variant_array, || {
-        StringArray::from(vec![Some("foo"), Some("baz"), Some("bar")])
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
     });
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
