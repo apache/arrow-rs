@@ -15,14 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// a collection of generated structs used to parse thrift metadata
+//! This module is the bridge between a Parquet file's thrift encoded metadata
+//! and this crate's [Parquet metadata API]. It contains objects and functions used
+//! to serialize/deserialize metadata objects into/from the Thrift compact protocol
+//! format as defined by the [Parquet specification].
+//!
+//! [Parquet metadata API]: crate::file::metadata
+//! [Parquet specification]: https://github.com/apache/parquet-format/tree/master
 
 use std::io::Write;
 use std::sync::Arc;
 
 #[cfg(feature = "encryption")]
+pub(crate) mod encryption;
+
+#[cfg(feature = "encryption")]
 use crate::file::{
-    column_crypto_metadata::ColumnCryptoMetaData, metadata::encryption::EncryptionAlgorithm,
+    column_crypto_metadata::ColumnCryptoMetaData, metadata::thrift::encryption::EncryptionAlgorithm,
 };
 use crate::{
     basic::{
@@ -107,7 +116,7 @@ struct Statistics<'a> {
 );
 
 thrift_struct!(
-pub(super) struct BoundingBox {
+struct BoundingBox {
   1: required double xmin;
   2: required double xmax;
   3: required double ymin;
@@ -120,21 +129,21 @@ pub(super) struct BoundingBox {
 );
 
 thrift_struct!(
-pub(super) struct GeospatialStatistics {
+struct GeospatialStatistics {
   1: optional BoundingBox bbox;
   2: optional list<i32> geospatial_types;
 }
 );
 
 thrift_struct!(
-pub(super) struct SizeStatistics {
+struct SizeStatistics {
    1: optional i64 unencoded_byte_array_data_bytes;
    2: optional list<i64> repetition_level_histogram;
    3: optional list<i64> definition_level_histogram;
 }
 );
 
-pub(super) fn convert_geo_stats(
+fn convert_geo_stats(
     stats: Option<GeospatialStatistics>,
 ) -> Option<Box<crate::geospatial::statistics::GeospatialStatistics>> {
     stats.map(|st| {
@@ -340,7 +349,7 @@ const COL_META_ALL_REQUIRED: u16 = COL_META_TYPE
     | COL_META_TOTAL_COMP_SZ
     | COL_META_DATA_PAGE_OFFSET;
 
-pub(crate) fn validate_column_metadata(mask: u16) -> Result<()> {
+fn validate_column_metadata(mask: u16) -> Result<()> {
     if mask != COL_META_ALL_REQUIRED {
         // not encrypted, so meta_data better exist
         if mask & COL_META_ENCODINGS == 0 {
@@ -370,7 +379,7 @@ pub(crate) fn validate_column_metadata(mask: u16) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read_column_metadata<'a>(
+fn read_column_metadata<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column: &mut ColumnChunkMetaData,
 ) -> Result<u16> {
@@ -1058,7 +1067,7 @@ pub(crate) struct PageHeader {
 
 impl PageHeader {
     // reader that skips reading page statistics. obtained by running
-    // `cargo expand -p parquet --all-features --lib file::metadata::thrift_gen`
+    // `cargo expand -p parquet --all-features --lib file::metadata::thrift`
     // and modifying the impl of `read_thrift`
     pub(crate) fn read_thrift_without_stats<'a, R>(prot: &mut R) -> Result<Self>
     where
@@ -1168,7 +1177,7 @@ impl PageHeader {
 //   16: optional SizeStatistics size_statistics;
 //   17: optional GeospatialStatistics geospatial_statistics;
 // }
-pub(crate) fn serialize_column_meta_data<W: Write>(
+pub(super) fn serialize_column_meta_data<W: Write>(
     column_chunk: &ColumnChunkMetaData,
     w: &mut ThriftCompactOutputProtocol<W>,
 ) -> Result<()> {
@@ -1246,9 +1255,9 @@ pub(crate) fn serialize_column_meta_data<W: Write>(
 }
 
 // temp struct used for writing
-pub(crate) struct FileMeta<'a> {
-    pub(crate) file_metadata: &'a crate::file::metadata::FileMetaData,
-    pub(crate) row_groups: &'a Vec<RowGroupMetaData>,
+pub(super) struct FileMeta<'a> {
+    pub(super) file_metadata: &'a crate::file::metadata::FileMetaData,
+    pub(super) row_groups: &'a Vec<RowGroupMetaData>,
 }
 
 // struct FileMetaData {
@@ -1588,7 +1597,7 @@ impl WriteThriftField for crate::geospatial::bounding_box::BoundingBox {
 #[cfg(test)]
 pub(crate) mod tests {
     use crate::errors::Result;
-    use crate::file::metadata::thrift_gen::{BoundingBox, SchemaElement, write_schema};
+    use crate::file::metadata::thrift::{BoundingBox, SchemaElement, write_schema};
     use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
     use crate::parquet_thrift::{
@@ -1605,7 +1614,7 @@ pub(crate) mod tests {
         schema_descr: Arc<SchemaDescriptor>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift_gen::read_row_group(&mut reader, &schema_descr)
+        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr)
     }
 
     pub(crate) fn read_column_chunk(
@@ -1613,7 +1622,7 @@ pub(crate) mod tests {
         column_descr: Arc<ColumnDescriptor>,
     ) -> Result<ColumnChunkMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift_gen::read_column_chunk(&mut reader, &column_descr)
+        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr)
     }
 
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {

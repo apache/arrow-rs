@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// a collection of generated structs used to parse thrift metadata
+//! Encryption support for Thrift serialization
 
 use std::io::Write;
 
@@ -26,9 +26,7 @@ use crate::{
         column_crypto_metadata::ColumnCryptoMetaData,
         metadata::{
             HeapSize, ParquetMetaData, RowGroupMetaData,
-            thrift_gen::{
-                parquet_metadata_from_bytes, read_column_metadata, validate_column_metadata,
-            },
+            thrift::{parquet_metadata_from_bytes, read_column_metadata, validate_column_metadata},
         },
     },
     parquet_thrift::{

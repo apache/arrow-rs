@@ -1524,7 +1524,7 @@ mod tests {
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::column::page::{Page, PageReader};
-    use crate::file::metadata::thrift_gen::PageHeader;
+    use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
     use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};

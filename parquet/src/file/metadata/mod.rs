@@ -87,14 +87,12 @@
 //!
 //!                         * Same name, different struct
 //! ```
-#[cfg(feature = "encryption")]
-mod encryption;
 mod footer_tail;
 mod memory;
 mod parser;
 mod push_decoder;
 pub(crate) mod reader;
-pub(crate) mod thrift_gen;
+pub(crate) mod thrift;
 mod writer;
 
 use crate::basic::{EncodingMask, PageType};
@@ -102,9 +100,9 @@ use crate::basic::{EncodingMask, PageType};
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
-#[cfg(feature = "encryption")]
-use crate::file::metadata::encryption::EncryptionAlgorithm;
 pub(crate) use crate::file::metadata::memory::HeapSize;
+#[cfg(feature = "encryption")]
+use crate::file::metadata::thrift::encryption::EncryptionAlgorithm;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
@@ -1605,7 +1603,7 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::metadata::thrift_gen::tests::{read_column_chunk, read_row_group};
+    use crate::file::metadata::thrift::tests::{read_column_chunk, read_row_group};
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
