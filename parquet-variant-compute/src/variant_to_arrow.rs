@@ -573,3 +573,84 @@ impl VariantToBinaryVariantArrowRowBuilder {
         Ok(ArrayRef::from(variant_array))
     }
 }
+
+#[cfg(test)]
+mod test {
+    use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
+    use arrow::array::{Array, BinaryViewArray, LargeStringArray, StringViewArray};
+    use arrow::compute::CastOptions;
+    use arrow::datatypes::DataType;
+    use parquet_variant::EMPTY_VARIANT_METADATA_BYTES;
+    use parquet_variant::{Variant, VariantPath};
+    use std::sync::Arc;
+
+    #[test]
+    fn test_large_utf8_variant_to_large_utf8_arrow() {
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
+        let cast_options = CastOptions::default();
+        let path = VariantPath::default();
+        let capacity = 3;
+        let data_capacity = 9usize;
+        let data_type = Some(&DataType::LargeUtf8);
+
+        let mut builder = make_variant_to_arrow_row_builder(
+            &metadata,
+            path,
+            data_type,
+            &cast_options,
+            capacity,
+            data_capacity,
+        )
+        .unwrap();
+
+        builder.append_value(Variant::from("foo")).unwrap();
+        builder.append_value(Variant::from("bar")).unwrap();
+        builder.append_value(Variant::from("baz")).unwrap();
+
+        let output = builder.finish().unwrap();
+
+        let expected = Arc::new(LargeStringArray::from(vec![
+            Some("foo"),
+            Some("bar"),
+            Some("baz"),
+        ]));
+
+        assert_eq!(&output.to_data(), &expected.to_data());
+    }
+
+    #[test]
+    fn test_utf8_view_variant_to_utf8_view_arrow() {
+        let metadata =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
+        let cast_options = CastOptions::default();
+        let path = VariantPath::default();
+        let capacity = 3;
+        let data_capacity = 9usize;
+        let data_type = Some(&DataType::Utf8View);
+
+        let mut builder = make_variant_to_arrow_row_builder(
+            &metadata,
+            path,
+            data_type,
+            &cast_options,
+            capacity,
+            data_capacity,
+        )
+        .unwrap();
+
+        builder.append_value(Variant::from("foo")).unwrap();
+        builder.append_value(Variant::from("bar")).unwrap();
+        builder.append_value(Variant::from("baz")).unwrap();
+
+        let output = builder.finish().unwrap();
+
+        let expected = Arc::new(StringViewArray::from(vec![
+            Some("foo"),
+            Some("bar"),
+            Some("baz"),
+        ]));
+
+        assert_eq!(&output.to_data(), &expected.to_data());
+    }
+}

@@ -764,6 +764,13 @@ mod test {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
     macro_rules! perfectly_shredded_variant_array_fn {
         ($func:ident, $typed_value_gen:expr) => {
             fn $func() -> ArrayRef {
@@ -786,6 +793,10 @@ mod test {
             }
         };
     }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_variant_array, || {
+        StringArray::from(vec![Some("foo"), Some("baz"), Some("bar")])
+    });
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
