@@ -1218,8 +1218,7 @@ impl Decoder {
                 }
                 if n > (u32::MAX as usize) {
                     return Err(ArrowError::InvalidArgumentError(format!(
-                        "RunEndEncoded length {} exceeds maximum supported by UInt32 indices for take",
-                        n
+                        "RunEndEncoded length {n} exceeds maximum supported by UInt32 indices for take",
                     )));
                 }
                 let run_count = run_starts.len();
