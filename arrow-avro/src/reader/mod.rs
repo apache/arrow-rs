@@ -7437,7 +7437,6 @@ mod test {
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
     }
-
     #[test]
     fn comprehensive_e2e_resolution_test() {
         use serde_json::Value;
@@ -7593,6 +7592,7 @@ mod test {
         let batch = read_alltypes_with_reader_schema(path, reader_schema.clone());
 
         const UUID_EXT_KEY: &str = "ARROW:extension:name";
+        const UUID_LOGICAL_KEY: &str = "logicalType";
 
         let uuid_md_top: Option<HashMap<String, String>> = batch
             .schema()
@@ -7600,7 +7600,12 @@ mod test {
             .ok()
             .and_then(|f| {
                 let md = f.metadata();
-                if md.get(UUID_EXT_KEY).is_some() {
+                let has_ext = md.get(UUID_EXT_KEY).is_some();
+                let is_uuid_logical = md
+                    .get(UUID_LOGICAL_KEY)
+                    .map(|v| v.trim_matches('"') == "uuid")
+                    .unwrap_or(false);
+                if has_ext || is_uuid_logical {
                     Some(md.clone())
                 } else {
                     None
@@ -7617,7 +7622,12 @@ mod test {
                     .find(|(_, child)| child.name() == "uuid")
                     .and_then(|(_, child)| {
                         let md = child.metadata();
-                        if md.get(UUID_EXT_KEY).is_some() {
+                        let has_ext = md.get(UUID_EXT_KEY).is_some();
+                        let is_uuid_logical = md
+                            .get(UUID_LOGICAL_KEY)
+                            .map(|v| v.trim_matches('"') == "uuid")
+                            .unwrap_or(false);
+                        if has_ext || is_uuid_logical {
                             Some(md.clone())
                         } else {
                             None
