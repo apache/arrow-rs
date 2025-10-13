@@ -34,7 +34,7 @@ impl fmt::Display for DataType {
             let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
             let data_type = field.data_type();
             let metadata_str = format_metadata(field.metadata());
-            format!("'{name}': {maybe_nullable}{data_type}{metadata_str}")
+            format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
         }
 
         // A lot of these can still be improved a lot.
@@ -356,7 +356,7 @@ mod tests {
         ];
         let struct_data_type = DataType::Struct(fields.into());
         let struct_data_type_string = struct_data_type.to_string();
-        let expected_string = "Struct('a': Int32, 'b': nullable Utf8)";
+        let expected_string = "Struct(\"a\": Int32, \"b\": nullable Utf8)";
         assert_eq!(struct_data_type_string, expected_string);
 
         // Test with metadata
@@ -368,7 +368,7 @@ mod tests {
         let struct_data_type_with_metadata = DataType::Struct(struct_fields_with_metadata.into());
         let struct_data_type_with_metadata_string = struct_data_type_with_metadata.to_string();
         let expected_string_with_metadata =
-            "Struct('a': Int32, 'b': nullable Utf8, metadata: {\"key\": \"value\"})";
+            "Struct(\"a\": Int32, \"b\": nullable Utf8, metadata: {\"key\": \"value\"})";
         assert_eq!(
             struct_data_type_with_metadata_string,
             expected_string_with_metadata
@@ -389,7 +389,7 @@ mod tests {
 
         let union_data_type = DataType::Union(union_fields, crate::UnionMode::Sparse);
         let union_data_type_string = union_data_type.to_string();
-        let expected_string = "Union(Sparse, 0: ('a': Int32), 1: ('b': nullable Utf8))";
+        let expected_string = "Union(Sparse, 0: (\"a\": Int32), 1: (\"b\": nullable Utf8))";
         assert_eq!(union_data_type_string, expected_string);
 
         // Test with metadata
@@ -405,7 +405,7 @@ mod tests {
         let union_data_type_with_metadata =
             DataType::Union(union_fields_with_metadata, crate::UnionMode::Sparse);
         let union_data_type_with_metadata_string = union_data_type_with_metadata.to_string();
-        let expected_string_with_metadata = "Union(Sparse, 0: ('a': Int32), 1: ('b': nullable Utf8, metadata: {\"key\": \"value\"}))";
+        let expected_string_with_metadata = "Union(Sparse, 0: (\"a\": Int32), 1: (\"b\": nullable Utf8, metadata: {\"key\": \"value\"}))";
         assert_eq!(
             union_data_type_with_metadata_string,
             expected_string_with_metadata
@@ -428,7 +428,7 @@ mod tests {
         let map_data_type = DataType::Map(Arc::new(entry_field), true);
         let map_data_type_string = map_data_type.to_string();
         let expected_string =
-            "Map('entries': Struct('key': Utf8, 'value': nullable Int32), sorted)";
+            "Map(\"entries\": Struct(\"key\": Utf8, \"value\": nullable Int32), sorted)";
         assert_eq!(map_data_type_string, expected_string);
 
         // Test with metadata
@@ -447,7 +447,7 @@ mod tests {
         entry_field_with_metadata.set_metadata(metadata);
         let map_data_type_with_metadata = DataType::Map(Arc::new(entry_field_with_metadata), true);
         let map_data_type_with_metadata_string = map_data_type_with_metadata.to_string();
-        let expected_string_with_metadata = "Map('entries': Struct('key': Utf8, 'value': nullable Int32), metadata: {\"key\": \"value\"}, sorted)";
+        let expected_string_with_metadata = "Map(\"entries\": Struct(\"key\": Utf8, \"value\": nullable Int32), metadata: {\"key\": \"value\"}, sorted)";
         assert_eq!(
             map_data_type_with_metadata_string,
             expected_string_with_metadata
@@ -460,7 +460,7 @@ mod tests {
         let values_field = Arc::new(Field::new("values", DataType::Int32, true));
         let ree_data_type = DataType::RunEndEncoded(run_ends_field.clone(), values_field.clone());
         let ree_data_type_string = ree_data_type.to_string();
-        let expected_string = "RunEndEncoded('run_ends': UInt32, 'values': nullable Int32)";
+        let expected_string = "RunEndEncoded(\"run_ends\": UInt32, \"values\": nullable Int32)";
         assert_eq!(ree_data_type_string, expected_string);
 
         // Test with metadata
@@ -470,7 +470,7 @@ mod tests {
         let ree_data_type_with_metadata =
             DataType::RunEndEncoded(Arc::new(run_ends_field_with_metadata), values_field.clone());
         let ree_data_type_with_metadata_string = ree_data_type_with_metadata.to_string();
-        let expected_string_with_metadata = "RunEndEncoded('run_ends': UInt32, metadata: {\"key\": \"value\"}, 'values': nullable Int32)";
+        let expected_string_with_metadata = "RunEndEncoded(\"run_ends\": UInt32, metadata: {\"key\": \"value\"}, \"values\": nullable Int32)";
         assert_eq!(
             ree_data_type_with_metadata_string,
             expected_string_with_metadata
@@ -497,7 +497,7 @@ mod tests {
             )),
         );
         let complex_dict_data_type_string = complex_dict_data_type.to_string();
-        let expected_complex_string = "Dictionary(Int16, Struct('a': Int32, 'b': nullable Utf8))";
+        let expected_complex_string = "Dictionary(Int16, Struct(\"a\": Int32, \"b\": nullable Utf8))";
         assert_eq!(complex_dict_data_type_string, expected_complex_string);
     }
 
