@@ -392,6 +392,9 @@ pub(crate) fn decode_page(
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
+            if offset > buffer.len() || offset > uncompressed_page_size {
+                return Err(general_err!("Invalid page header"));
+            }
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
@@ -458,7 +461,7 @@ pub(crate) fn decode_page(
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            unimplemented!("Page type {:?} is not supported", page_header.r#type)
+            return Err(general_err!("Page type {:?} is not supported", page_header.r#type));
         }
     };
 

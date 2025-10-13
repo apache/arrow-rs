@@ -569,11 +569,15 @@ fn parse_v1_level(
     match encoding {
         Encoding::RLE => {
             let i32_size = std::mem::size_of::<i32>();
-            let data_size = read_num_bytes::<i32>(i32_size, buf.as_ref()) as usize;
-            Ok((
-                i32_size + data_size,
-                buf.slice(i32_size..i32_size + data_size),
-            ))
+            if i32_size <= buf.len() {
+                let data_size = read_num_bytes::<i32>(i32_size, buf.as_ref()) as usize;
+                let end =
+                    i32_size.checked_add(data_size).ok_or(general_err!("invalid level length"))?;
+                if end <= buf.len() {
+                    return Ok((end, buf.slice(i32_size..end)));
+                }
+            }
+            Err(general_err!("not enough data to read levels"))
         }
         #[allow(deprecated)]
         Encoding::BIT_PACKED => {

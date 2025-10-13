@@ -124,11 +124,26 @@ impl ChunkReader for Bytes {
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
         let start = start as usize;
+        if start > self.len() {
+            return Err(eof_err!(
+                "Expected to read at offset {}, while file has length {}",
+                start,
+                self.len()
+            ));
+        }
         Ok(self.slice(start..).reader())
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let start = start as usize;
+        if start > self.len() || start + length > self.len() {
+            return Err(eof_err!(
+                "Expected to read {} bytes at offset {}, while file has length {}",
+                length,
+                start,
+                self.len()
+            ));
+        }
         Ok(self.slice(start..start + length))
     }
 }

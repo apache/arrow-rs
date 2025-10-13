@@ -382,6 +382,12 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // First byte in `data` is bit width
         let bit_width = data.as_ref()[0];
+        if bit_width > 32 {
+            return Err(general_err!(
+                "Invalid or corrupted Bit width {}. Max allowed is 32",
+                bit_width
+            ));
+        }
         let mut rle_decoder = RleDecoder::new(bit_width);
         rle_decoder.set_data(data.slice(1..));
         self.num_values = num_values;
