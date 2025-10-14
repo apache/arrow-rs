@@ -177,6 +177,7 @@ pub(crate) fn from_thrift_page_stats(
                 Type::BOOLEAN => check_len(&min, &max, 1),
                 Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
                 Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
+                Type::INT96 => check_len(&min, &max, 12),
                 _ => Ok(()),
             }?;
 
