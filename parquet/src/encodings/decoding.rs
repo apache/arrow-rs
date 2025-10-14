@@ -381,6 +381,10 @@ impl<T: DataType> DictDecoder<T> {
 impl<T: DataType> Decoder<T> for DictDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // First byte in `data` is bit width
+        if data.len() < 1 {
+            return Err(eof_err!("Not enough bytes to decode bit_width"));
+        }
+
         let bit_width = data.as_ref()[0];
         if bit_width > 32 {
             return Err(general_err!(
