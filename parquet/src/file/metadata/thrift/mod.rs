@@ -356,6 +356,7 @@ fn validate_column_metadata(mask: u16) -> Result<()> {
         if mask & COL_META_ENCODINGS == 0 {
             return Err(general_err!("Required field encodings is missing"));
         }
+
         if mask & COL_META_CODEC == 0 {
             return Err(general_err!("Required field codec is missing"));
         }

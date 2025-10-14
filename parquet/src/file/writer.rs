@@ -213,12 +213,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         properties: &WriterPropertiesPtr,
         schema_descriptor: &SchemaDescriptor,
     ) -> Result<Option<Arc<FileEncryptor>>> {
-        if let Some(file_encryption_properties) = &properties.file_encryption_properties {
+        if let Some(file_encryption_properties) = properties.file_encryption_properties() {
             file_encryption_properties.validate_encrypted_column_names(schema_descriptor)?;
 
-            Ok(Some(Arc::new(FileEncryptor::new(
-                file_encryption_properties.clone(),
-            )?)))
+            Ok(Some(Arc::new(FileEncryptor::new(Arc::clone(
+                file_encryption_properties,
+            ))?)))
         } else {
             Ok(None)
         }
@@ -318,7 +318,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Writes magic bytes at the beginning of the file.
     #[cfg(feature = "encryption")]
     fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
-        let magic = get_file_magic(properties.file_encryption_properties.as_ref());
+        let magic = get_file_magic(properties.file_encryption_properties.as_deref());
 
         buf.write_all(magic)?;
         Ok(())

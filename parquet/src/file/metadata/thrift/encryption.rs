@@ -17,8 +17,6 @@
 
 //! Encryption support for Thrift serialization
 
-use std::io::Write;
-
 use crate::{
     encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
     errors::{ParquetError, Result},
@@ -35,6 +33,8 @@ use crate::{
     },
     thrift_struct, thrift_union,
 };
+use std::io::Write;
+use std::sync::Arc;
 
 thrift_struct!(
 pub(crate) struct AesGcmV1 {
@@ -210,7 +210,7 @@ fn row_group_from_encrypted_thrift(
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
 pub(crate) fn parquet_metadata_with_encryption(
-    file_decryption_properties: Option<&FileDecryptionProperties>,
+    file_decryption_properties: Option<&Arc<FileDecryptionProperties>>,
     encrypted_footer: bool,
     buf: &[u8],
 ) -> Result<ParquetMetaData> {
@@ -310,7 +310,7 @@ pub(crate) fn parquet_metadata_with_encryption(
 fn get_file_decryptor(
     encryption_algorithm: EncryptionAlgorithm,
     footer_key_metadata: Option<&[u8]>,
-    file_decryption_properties: &FileDecryptionProperties,
+    file_decryption_properties: &Arc<FileDecryptionProperties>,
 ) -> Result<FileDecryptor> {
     match encryption_algorithm {
         EncryptionAlgorithm::AES_GCM_V1(algo) => {

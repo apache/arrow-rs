@@ -433,7 +433,7 @@ async fn test_decrypt_page_index_non_uniform() {
 
 async fn test_decrypt_page_index(
     path: &str,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) -> Result<(), ParquetError> {
     let mut file = File::open(&path).await?;
 
@@ -450,7 +450,7 @@ async fn test_decrypt_page_index(
 
 async fn verify_encryption_test_file_read_async(
     file: &mut tokio::fs::File,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) -> Result<(), ParquetError> {
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
@@ -470,14 +470,14 @@ async fn verify_encryption_test_file_read_async(
 
 async fn read_and_roundtrip_to_encrypted_file_async(
     path: &str,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
     encryption_properties: FileEncryptionProperties,
 ) -> Result<(), ParquetError> {
     let temp_file = tempfile::tempfile().unwrap();
     let mut file = File::open(&path).await.unwrap();
 
-    let options =
-        ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties.clone());
+    let options = ArrowReaderOptions::new()
+        .with_file_decryption_properties(Arc::clone(&decryption_properties));
     let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
     let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
         file.try_clone().await?,
@@ -759,7 +759,7 @@ async fn test_multi_threaded_encrypted_writing() {
         .unwrap();
 
     let (record_batches, metadata) =
-        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
     let schema = metadata.schema().clone();
 
     let props = Arc::new(
@@ -830,7 +830,7 @@ async fn test_multi_threaded_encrypted_writing() {
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
-        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&temp_file, decryption_properties).unwrap();
     verify_encryption_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted
@@ -860,7 +860,7 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
         .unwrap();
 
     let (record_batches, metadata) =
-        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
     let to_write: Vec<_> = record_batches
         .iter()
         .flat_map(|rb| rb.columns().to_vec())
@@ -920,7 +920,7 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
-        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&temp_file, decryption_properties).unwrap();
     verify_encryption_double_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted

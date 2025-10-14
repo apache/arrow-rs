@@ -73,7 +73,7 @@ mod inner {
         ) -> Result<ParquetMetaData> {
             if encrypted_footer || self.file_decryption_properties.is_some() {
                 crate::file::metadata::thrift::encryption::parquet_metadata_with_encryption(
-                    self.file_decryption_properties.as_deref(),
+                    self.file_decryption_properties.as_ref(),
                     encrypted_footer,
                     buf,
                 )
