@@ -89,8 +89,8 @@ fn test_plaintext_footer_signature_verification() {
         .build()
         .unwrap();
 
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let result = ArrowReaderMetadata::load(&file, options.clone());
     assert!(result.is_err());
     assert!(
@@ -148,8 +148,8 @@ fn test_non_uniform_encryption_disabled_aad_storage() {
         .unwrap();
 
     let file = File::open(path).unwrap();
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let result = ArrowReaderMetadata::load(&file, options.clone());
     assert!(result.is_err());
     assert_eq!(
@@ -279,8 +279,8 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
         .build()
         .unwrap();
 
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let metadata = ArrowReaderMetadata::load(&file, options.clone()).unwrap();
 
     // Write data into temporary file with plaintext footer and footer key metadata
@@ -320,8 +320,8 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
         .build()
         .unwrap();
 
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let _ = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
 
     // Read temporary file with plaintext metadata using key retriever with invalid key
@@ -334,8 +334,8 @@ fn test_uniform_encryption_plaintext_footer_with_key_retriever() {
     let decryption_properties = FileDecryptionProperties::with_key_retriever(key_retriever)
         .build()
         .unwrap();
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let result = ArrowReaderMetadata::load(&temp_file, options.clone());
     assert!(result.is_err());
     assert!(
@@ -672,7 +672,7 @@ fn test_write_uniform_encryption_plaintext_footer() {
     // Try writing plaintext footer and then reading it with the correct footer key
     read_and_roundtrip_to_encrypted_file(
         &file,
-        decryption_properties.clone(),
+        Arc::clone(&decryption_properties),
         file_encryption_properties.clone(),
     );
 
@@ -928,8 +928,8 @@ fn test_write_encrypted_struct_field() {
         .with_column_key("struct_col.float64_col", column_key_2)
         .build()
         .unwrap();
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
 
     let builder =
         ParquetRecordBatchReaderBuilder::try_new_with_options(temp_file, options).unwrap();
@@ -1036,7 +1036,7 @@ fn test_decrypt_page_index_non_uniform() {
 
 fn test_decrypt_page_index(
     path: &str,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) -> Result<(), ParquetError> {
     let file = File::open(path)?;
     let options = ArrowReaderOptions::default()

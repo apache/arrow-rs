@@ -21,7 +21,7 @@ use std::vec::IntoIter;
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use crate::file::metadata::HeapSize;
-use crate::file::metadata::thrift_gen::SchemaElement;
+use crate::file::metadata::thrift::SchemaElement;
 
 use crate::basic::{
     ColumnOrder, ConvertedType, LogicalType, Repetition, SortOrder, TimeUnit, Type as PhysicalType,
@@ -1370,7 +1370,7 @@ mod tests {
     use super::*;
 
     use crate::{
-        file::metadata::thrift_gen::tests::{buf_to_schema_list, roundtrip_schema, schema_to_buf},
+        file::metadata::thrift::tests::{buf_to_schema_list, roundtrip_schema, schema_to_buf},
         schema::parser::parse_message_type,
     };
 
