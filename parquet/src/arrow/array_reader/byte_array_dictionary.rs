@@ -165,6 +165,10 @@ where
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        // advance the def & rep level buffers
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
+
         if self.record_reader.num_values() == 0 {
             // once the record_reader has been consumed, we've replaced its values with the default
             // variant of DictionaryBuffer (Offset). If `consume_batch` then gets called again, we
@@ -175,9 +179,6 @@ where
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         let array = buffer.into_array(null_buffer, &self.data_type)?;
-
-        self.def_levels_buffer = self.record_reader.consume_def_levels();
-        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
 
         Ok(array)
