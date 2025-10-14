@@ -17,6 +17,10 @@
 
 //! Binary that prints the physical layout of a parquet file
 //!
+//! NOTE: due to this binary's use of the deprecated [`parquet::format`] module, it
+//! will no longer be maintained, and will likely be removed in the future.
+//! Alternatives to this include [`parquet-cli`] and [`parquet-viewer`].
+//!
 //! # Install
 //!
 //! `parquet-layout` can be installed using `cargo`:
@@ -32,6 +36,9 @@
 //! ```
 //! cargo run --features=cli --bin parquet-layout XYZ.parquet
 //! ```
+//!
+//! [`parquet-cli`]: https://github.com/apache/parquet-java/tree/master/parquet-cli
+//! [`parquet-viewer`]: https://github.com/xiangpenghao/parquet-viewer
 
 use std::fs::File;
 use std::io::Read;
@@ -44,6 +51,7 @@ use thrift::protocol::TCompactInputProtocol;
 use parquet::basic::Compression;
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
+#[allow(deprecated)]
 use parquet::format::PageHeader;
 use parquet::thrift::TSerializable;
 
