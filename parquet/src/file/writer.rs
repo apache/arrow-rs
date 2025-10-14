@@ -18,7 +18,7 @@
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
