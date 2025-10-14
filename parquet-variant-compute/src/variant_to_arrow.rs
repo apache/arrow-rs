@@ -483,7 +483,7 @@ macro_rules! define_variant_to_primitive_builder {
 
 define_variant_to_primitive_builder!(
     struct VariantToUtf8ArrowRowBuilder<'a>
-    |item_capacity, data_capacity: usize| -> StringBuilder {StringBuilder::with_capacity(item_capacity, data_capacity)},
+    |item_capacity, data_capacity: usize| -> StringBuilder { StringBuilder::with_capacity(item_capacity, data_capacity) },
     |value| value.as_string(),
     type_name: "Utf8"
 );
