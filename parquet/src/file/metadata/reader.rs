@@ -542,9 +542,9 @@ impl ParquetMetaDataReader {
             return Err(ParquetError::NeedMoreData(FOOTER_SIZE));
         }
 
-        let mut footer = [0_u8; 8];
+        let mut footer = [0_u8; FOOTER_SIZE];
         chunk_reader
-            .get_read(file_size - 8)?
+            .get_read(file_size - FOOTER_SIZE as u64)?
             .read_exact(&mut footer)?;
 
         let footer = FooterTail::try_new(&footer)?;
@@ -844,7 +844,7 @@ mod tests {
         let err = ParquetMetaDataReader::new()
             .parse_metadata(&test_file)
             .unwrap_err();
-        assert!(matches!(err, ParquetError::NeedMoreData(8)));
+        assert!(matches!(err, ParquetError::NeedMoreData(FOOTER_SIZE)));
     }
 
     #[test]

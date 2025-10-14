@@ -20,20 +20,22 @@
 use crate::codec::{AvroDataType, AvroField, Codec};
 use crate::schema::{Fingerprint, Nullability, Prefix};
 use arrow_array::cast::AsArray;
+use arrow_array::types::RunEndIndexType;
 use arrow_array::types::{
     ArrowPrimitiveType, Date32Type, DurationMicrosecondType, DurationMillisecondType,
-    DurationNanosecondType, DurationSecondType, Float32Type, Float64Type, Int32Type, Int64Type,
-    IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType, Time32MillisecondType,
-    Time64MicrosecondType, TimestampMicrosecondType, TimestampMillisecondType,
+    DurationNanosecondType, DurationSecondType, Float32Type, Float64Type, Int16Type, Int32Type,
+    Int64Type, IntervalDayTimeType, IntervalMonthDayNanoType, IntervalYearMonthType,
+    Time32MillisecondType, Time64MicrosecondType, TimestampMicrosecondType,
+    TimestampMillisecondType,
 };
 use arrow_array::{
     Array, Decimal128Array, Decimal256Array, DictionaryArray, FixedSizeBinaryArray,
     GenericBinaryArray, GenericListArray, GenericStringArray, LargeListArray, ListArray, MapArray,
-    OffsetSizeTrait, PrimitiveArray, RecordBatch, StringArray, StructArray, UnionArray,
+    OffsetSizeTrait, PrimitiveArray, RecordBatch, RunArray, StringArray, StructArray, UnionArray,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_array::{Decimal32Array, Decimal64Array};
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{ArrowNativeType, NullBuffer};
 use arrow_schema::{
     ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode,
 };
@@ -423,7 +425,6 @@ impl<'a> FieldEncoder<'a> {
                         .ok_or_else(|| {
                             ArrowError::SchemaError("Expected DictionaryArray<Int32>".into())
                         })?;
-
                     let values = dict
                         .values()
                         .as_any()
@@ -463,6 +464,67 @@ impl<'a> FieldEncoder<'a> {
                     .ok_or_else(|| ArrowError::SchemaError("Expected UnionArray".into()))?;
 
                 Encoder::Union(Box::new(UnionEncoder::try_new(arr, bindings)?))
+            }
+            FieldPlan::RunEndEncoded {
+                values_nullability,
+                value_plan,
+            } => {
+                let dt = array.data_type();
+                let values_field = match dt {
+                    DataType::RunEndEncoded(_re_field, v_field) => v_field.as_ref(),
+                    other => {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Avro RunEndEncoded site requires Arrow DataType::RunEndEncoded, found: {other:?}"
+                        )));
+                    }
+                };
+                // Helper closure to build a typed RunEncodedEncoder<R>
+                let build = |run_arr_any: &'a dyn Array| -> Result<Encoder<'a>, ArrowError> {
+                    if let Some(arr) = run_arr_any.as_any().downcast_ref::<RunArray<Int16Type>>() {
+                        let values_enc = prepare_value_site_encoder(
+                            arr.values().as_ref(),
+                            values_field,
+                            *values_nullability,
+                            value_plan.as_ref(),
+                        )?;
+                        return Ok(Encoder::RunEncoded16(Box::new(RunEncodedEncoder::<
+                            Int16Type,
+                        >::new(
+                            arr, values_enc
+                        ))));
+                    }
+                    if let Some(arr) = run_arr_any.as_any().downcast_ref::<RunArray<Int32Type>>() {
+                        let values_enc = prepare_value_site_encoder(
+                            arr.values().as_ref(),
+                            values_field,
+                            *values_nullability,
+                            value_plan.as_ref(),
+                        )?;
+                        return Ok(Encoder::RunEncoded32(Box::new(RunEncodedEncoder::<
+                            Int32Type,
+                        >::new(
+                            arr, values_enc
+                        ))));
+                    }
+                    if let Some(arr) = run_arr_any.as_any().downcast_ref::<RunArray<Int64Type>>() {
+                        let values_enc = prepare_value_site_encoder(
+                            arr.values().as_ref(),
+                            values_field,
+                            *values_nullability,
+                            value_plan.as_ref(),
+                        )?;
+                        return Ok(Encoder::RunEncoded64(Box::new(RunEncodedEncoder::<
+                            Int64Type,
+                        >::new(
+                            arr, values_enc
+                        ))));
+                    }
+                    Err(ArrowError::SchemaError(
+                        "Unsupported run-ends index type for RunEndEncoded; expected Int16/Int32/Int64"
+                            .into(),
+                    ))
+                };
+                build(array)?
             }
         };
         // Compute the effective null state from writer-declared nullability and data nulls.
@@ -545,6 +607,12 @@ enum FieldPlan {
     Enum { symbols: Arc<[String]> },
     /// Avro union, maps to Arrow Union.
     Union { bindings: Vec<FieldBinding> },
+    /// Avro RunEndEncoded site. Values are encoded per logical row by mapping the
+    /// row index to its containing run and emitting that run's value with `value_plan`.
+    RunEndEncoded {
+        values_nullability: Option<Nullability>,
+        value_plan: Box<FieldPlan>,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -638,10 +706,17 @@ impl RecordEncoder {
                 ArrowError::SchemaError(format!("Column index {arrow_index} out of range"))
             })?;
             let field = fields[arrow_index].as_ref();
+            #[cfg(not(feature = "avro_custom_types"))]
+            let site_nullability = match &col_plan.plan {
+                FieldPlan::RunEndEncoded { .. } => None,
+                _ => col_plan.nullability,
+            };
+            #[cfg(feature = "avro_custom_types")]
+            let site_nullability = col_plan.nullability;
             let encoder = prepare_value_site_encoder(
                 array.as_ref(),
                 field,
-                col_plan.nullability,
+                site_nullability,
                 &col_plan.plan,
             )?;
             out.push(encoder);
@@ -694,6 +769,25 @@ fn find_map_value_field_index(fields: &arrow_schema::Fields) -> Option<usize> {
 
 impl FieldPlan {
     fn build(avro_dt: &AvroDataType, arrow_field: &Field) -> Result<Self, ArrowError> {
+        #[cfg(not(feature = "avro_custom_types"))]
+        if let DataType::RunEndEncoded(_re_field, values_field) = arrow_field.data_type() {
+            let values_nullability = avro_dt.nullability();
+            let value_site_dt: &AvroDataType = match avro_dt.codec() {
+                Codec::Union(branches, _, _) => branches
+                    .iter()
+                    .find(|b| !matches!(b.codec(), Codec::Null))
+                    .ok_or_else(|| {
+                        ArrowError::SchemaError(
+                            "Avro union at RunEndEncoded site has no non-null branch".into(),
+                        )
+                    })?,
+                _ => avro_dt,
+            };
+            return Ok(FieldPlan::RunEndEncoded {
+                values_nullability,
+                value_plan: Box::new(FieldPlan::build(value_site_dt, values_field.as_ref())?),
+            });
+        }
         if let DataType::FixedSizeBinary(len) = arrow_field.data_type() {
             // Extension-based detection (only when the feature is enabled)
             let ext_is_uuid = {
@@ -860,7 +954,6 @@ impl FieldPlan {
                         )));
                     }
                 };
-
                 if avro_branches.len() != arrow_union_fields.len() {
                     return Err(ArrowError::SchemaError(format!(
                         "Mismatched number of branches between Avro union ({}) and Arrow union ({}) for field '{}'",
@@ -869,7 +962,6 @@ impl FieldPlan {
                         arrow_field.name()
                     )));
                 }
-
                 let bindings = avro_branches
                     .iter()
                     .zip(arrow_union_fields.iter())
@@ -882,12 +974,26 @@ impl FieldPlan {
                         })
                     })
                     .collect::<Result<Vec<_>, ArrowError>>()?;
-
                 Ok(FieldPlan::Union { bindings })
             }
             Codec::Union(_, _, UnionMode::Sparse) => Err(ArrowError::NotYetImplemented(
                 "Sparse Arrow unions are not yet supported".to_string(),
             )),
+            #[cfg(feature = "avro_custom_types")]
+            Codec::RunEndEncoded(values_dt, _width_code) => {
+                let values_field = match arrow_field.data_type() {
+                    DataType::RunEndEncoded(_run_ends_field, values_field) => values_field.as_ref(),
+                    other => {
+                        return Err(ArrowError::SchemaError(format!(
+                            "Avro RunEndEncoded maps to Arrow DataType::RunEndEncoded, found: {other:?}"
+                        )));
+                    }
+                };
+                Ok(FieldPlan::RunEndEncoded {
+                    values_nullability: values_dt.nullability(),
+                    value_plan: Box::new(FieldPlan::build(values_dt.as_ref(), values_field)?),
+                })
+            }
             _ => Ok(FieldPlan::Scalar),
         }
     }
@@ -935,6 +1041,10 @@ enum Encoder<'a> {
     Enum(EnumEncoder<'a>),
     Map(Box<MapEncoder<'a>>),
     Union(Box<UnionEncoder<'a>>),
+    /// Run-end encoded values with specific run-end index widths
+    RunEncoded16(Box<RunEncodedEncoder16<'a>>),
+    RunEncoded32(Box<RunEncodedEncoder32<'a>>),
+    RunEncoded64(Box<RunEncodedEncoder64<'a>>),
     Null,
 }
 
@@ -977,6 +1087,9 @@ impl<'a> Encoder<'a> {
             Encoder::Map(e) => (e).encode(out, idx),
             Encoder::Enum(e) => (e).encode(out, idx),
             Encoder::Union(e) => (e).encode(out, idx),
+            Encoder::RunEncoded16(e) => (e).encode(out, idx),
+            Encoder::RunEncoded32(e) => (e).encode(out, idx),
+            Encoder::RunEncoded64(e) => (e).encode(out, idx),
             Encoder::Null => Ok(()),
         }
     }
@@ -1460,6 +1573,7 @@ impl IntervalToDurationParts for IntervalDayTimeType {
         })
     }
 }
+
 /// Single generic encoder used for all three interval units.
 /// Writes Avro `fixed(12)` as three little-endian u32 values in one call.
 struct DurationEncoder<'a, P: ArrowPrimitiveType + IntervalToDurationParts>(&'a PrimitiveArray<P>);
@@ -1553,6 +1667,72 @@ type Decimal32Encoder<'a> = DecimalEncoder<'a, 4, Decimal32Array>;
 type Decimal64Encoder<'a> = DecimalEncoder<'a, 8, Decimal64Array>;
 type Decimal128Encoder<'a> = DecimalEncoder<'a, 16, Decimal128Array>;
 type Decimal256Encoder<'a> = DecimalEncoder<'a, 32, Decimal256Array>;
+
+/// Generic encoder for Arrow `RunArray<R>`-based sites (run-end encoded).
+/// Follows the pattern used by other generic encoders (i.e., `ListEncoder<O>`),
+/// avoiding runtime branching on run-end width.
+struct RunEncodedEncoder<'a, R: RunEndIndexType> {
+    ends_slice: &'a [<R as ArrowPrimitiveType>::Native],
+    base: usize,
+    len: usize,
+    values: FieldEncoder<'a>,
+    // Cached run index used for sequential scans of rows [0..n)
+    cur_run: usize,
+    // Cached end (logical index, 1-based per spec) for the current run.
+    cur_end: usize,
+}
+
+type RunEncodedEncoder16<'a> = RunEncodedEncoder<'a, Int16Type>;
+type RunEncodedEncoder32<'a> = RunEncodedEncoder<'a, Int32Type>;
+type RunEncodedEncoder64<'a> = RunEncodedEncoder<'a, Int64Type>;
+
+impl<'a, R: RunEndIndexType> RunEncodedEncoder<'a, R> {
+    fn new(arr: &'a RunArray<R>, values: FieldEncoder<'a>) -> Self {
+        let ends = arr.run_ends();
+        let base = ends.get_start_physical_index();
+        let slice = ends.values();
+        let len = ends.len();
+        let cur_end = if len == 0 { 0 } else { slice[base].as_usize() };
+        Self {
+            ends_slice: slice,
+            base,
+            len,
+            values,
+            cur_run: 0,
+            cur_end,
+        }
+    }
+
+    /// Advance `cur_run` so that `idx` is within the run ending at `cur_end`.
+    /// Uses the REE invariant: run ends are strictly increasing, positive, and 1-based.
+    #[inline(always)]
+    fn advance_to_row(&mut self, idx: usize) -> Result<(), ArrowError> {
+        if idx < self.cur_end {
+            return Ok(());
+        }
+        // Move forward across run boundaries until idx falls within cur_end
+        while self.cur_run + 1 < self.len && idx >= self.cur_end {
+            self.cur_run += 1;
+            self.cur_end = self.ends_slice[self.base + self.cur_run].as_usize();
+        }
+        if idx < self.cur_end {
+            Ok(())
+        } else {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "row index {idx} out of bounds for run-ends ({} runs)",
+                self.len
+            )))
+        }
+    }
+
+    #[inline(always)]
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+        self.advance_to_row(idx)?;
+        // For REE values, the value for any logical row within a run is at
+        // the physical index of that run.
+        self.values.encode(out, self.cur_run)
+    }
+}
 
 #[cfg(test)]
 mod tests {
