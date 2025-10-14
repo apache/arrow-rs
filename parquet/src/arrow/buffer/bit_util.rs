@@ -18,6 +18,7 @@
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use std::ops::Range;
 
+#[allow(unused)]
 /// Counts the number of set bits in the provided range
 pub fn count_set_bits(bytes: &[u8], range: Range<usize>) -> usize {
     let unaligned = UnalignedBitChunk::new(bytes, range.start, range.end - range.start);
