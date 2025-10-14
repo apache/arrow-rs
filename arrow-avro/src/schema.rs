@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Avro Schema representations for Arrow.
+
 #[cfg(feature = "canonical_extension_types")]
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{
@@ -1525,14 +1527,46 @@ fn datatype_to_avro(
                 )?
             }
         }
-        DataType::RunEndEncoded(_, values) => process_datatype(
-            values.data_type(),
-            values.name(),
-            values.metadata(),
-            name_gen,
-            null_order,
-            false,
-        )?,
+        #[cfg(feature = "avro_custom_types")]
+        DataType::RunEndEncoded(run_ends, values) => {
+            let bits = match run_ends.data_type() {
+                DataType::Int16 => 16,
+                DataType::Int32 => 32,
+                DataType::Int64 => 64,
+                other => {
+                    return Err(ArrowError::SchemaError(format!(
+                        "RunEndEncoded requires Int16/Int32/Int64 for run_ends, found: {other:?}"
+                    )));
+                }
+            };
+            // Build the value site schema, preserving its own nullability
+            let (value_schema, value_extras) = datatype_to_avro(
+                values.data_type(),
+                values.name(),
+                values.metadata(),
+                name_gen,
+                null_order,
+            )?;
+            let mut merged = merge_extras(value_schema, value_extras);
+            if values.is_nullable() {
+                merged = wrap_nullable(merged, null_order);
+            }
+            let mut extras = JsonMap::new();
+            extras.insert("logicalType".into(), json!("arrow.run-end-encoded"));
+            extras.insert("arrow.runEndIndexBits".into(), json!(bits));
+            return Ok((merged, extras));
+        }
+        #[cfg(not(feature = "avro_custom_types"))]
+        DataType::RunEndEncoded(_run_ends, values) => {
+            let (value_schema, _extras) = datatype_to_avro(
+                values.data_type(),
+                values.name(),
+                values.metadata(),
+                name_gen,
+                null_order,
+            )?;
+            return Ok((value_schema, JsonMap::new()));
+        }
         DataType::Union(fields, mode) => {
             let mut branches: Vec<Value> = Vec::with_capacity(fields.len());
             let mut type_ids: Vec<i32> = Vec::with_capacity(fields.len());
