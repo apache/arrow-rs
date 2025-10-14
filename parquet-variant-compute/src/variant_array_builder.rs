@@ -162,6 +162,17 @@ impl VariantArrayBuilder {
     }
 }
 
+impl<'m, 'v> Extend<Option<Variant<'m, 'v>>> for VariantArrayBuilder {
+    fn extend<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(&mut self, iter: T) {
+        for v in iter {
+            match v {
+                Some(v) => self.append_variant(v),
+                None => self.append_null(),
+            }
+        }
+    }
+}
+
 /// Builder-specific state for array building that manages array-level offsets and nulls. See
 /// [`VariantBuilderExt`] for details.
 #[derive(Debug)]
@@ -438,7 +449,7 @@ fn binary_view_array_from_buffers(buffer: Vec<u8>, offsets: Vec<usize>) -> Binar
 mod test {
     use super::*;
     use arrow::array::Array;
-    use parquet_variant::Variant;
+    use parquet_variant::{ShortString, Variant};
 
     /// Test that both the metadata and value buffers are non nullable
     #[test]
@@ -498,6 +509,22 @@ mod test {
         let variant = variant_array.value(3);
         let list = variant.as_list().expect("variant to be a list");
         assert_eq!(list.len(), 2);
+    }
+
+    #[test]
+    fn test_extend_variant_array_builder() {
+        let mut b = VariantArrayBuilder::new(3);
+        b.extend([None, Some(Variant::Null), Some(Variant::from("norm"))]);
+
+        let variant_array = b.build();
+
+        assert_eq!(variant_array.len(), 3);
+        assert!(variant_array.is_null(0));
+        assert_eq!(variant_array.value(1), Variant::Null);
+        assert_eq!(
+            variant_array.value(2),
+            Variant::ShortString(ShortString::try_new("norm").unwrap())
+        );
     }
 
     #[test]
