@@ -1098,7 +1098,7 @@ mod tests {
     fn test_int96_invalid_statistics() {
         let mut thrift_stats = PageStatistics {
             max: None,
-            min: Some(vec![1, 2, 3]),
+            min: Some((0..13).collect()),
             null_count: Some(0),
             distinct_count: None,
             max_value: None,
@@ -1114,7 +1114,7 @@ mod tests {
         );
 
         thrift_stats.min = None;
-        thrift_stats.max = Some(vec![1, 2, 3]);
+        thrift_stats.max = Some((0..13).collect());
         let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
         assert_eq!(
             err.to_string(),
