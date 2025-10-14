@@ -353,8 +353,8 @@ impl ArrayReader for CachedArrayReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::ArrayReader;
     use crate::arrow::array_reader::row_group_cache::RowGroupCache;
+    use crate::arrow::array_reader::ArrayReader;
     use arrow_array::{ArrayRef, Int32Array};
     use std::sync::{Arc, Mutex};
 

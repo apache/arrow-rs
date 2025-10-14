@@ -20,12 +20,12 @@ use bytes::Bytes;
 use crate::basic::Encoding;
 use crate::data_type::DataType;
 use crate::encodings::{
-    decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder},
+    decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder},
     rle::RleDecoder,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::bit_util::{BitReader, num_required_bits};
+use crate::util::bit_util::{num_required_bits, BitReader};
 
 /// Decodes level data
 pub trait ColumnLevelDecoder {
@@ -153,7 +153,6 @@ fn enc_slot(e: Encoding) -> usize {
         Encoding::DELTA_BYTE_ARRAY => 7,
         Encoding::RLE_DICTIONARY => 8,
         Encoding::BYTE_STREAM_SPLIT => 9,
-        _ => unreachable!("unsupported encoding: {e}"),
     }
 }
 
