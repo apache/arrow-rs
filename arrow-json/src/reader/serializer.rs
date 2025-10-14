@@ -17,10 +17,10 @@
 
 use crate::reader::tape::TapeElement;
 use lexical_core::FormattedSize;
-use serde::ser::{
+use serde_core::ser::{
     Impossible, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct,
 };
-use serde::{Serialize, Serializer};
+use serde_core::{Serialize, Serializer};
 
 #[derive(Debug)]
 pub struct SerializerError(String);
@@ -33,7 +33,7 @@ impl std::fmt::Display for SerializerError {
     }
 }
 
-impl serde::ser::Error for SerializerError {
+impl serde_core::ser::Error for SerializerError {
     fn custom<T>(msg: T) -> Self
     where
         T: std::fmt::Display,

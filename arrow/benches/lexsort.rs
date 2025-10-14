@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::compute::{lexsort_to_indices, SortColumn};
+use arrow::compute::{SortColumn, lexsort_to_indices};
 use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{
     create_dict_from_values, create_primitive_array, create_string_array_with_len,
@@ -24,7 +24,7 @@ use arrow::util::data_gen::create_random_array;
 use arrow_array::types::Int32Type;
 use arrow_array::{Array, ArrayRef, UInt32Array};
 use arrow_schema::{DataType, Field};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::{hint, sync::Arc};
 
 #[derive(Copy, Clone)]

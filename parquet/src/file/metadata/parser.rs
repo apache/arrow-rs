@@ -21,12 +21,12 @@
 //! into the corresponding Rust structures
 
 use crate::errors::ParquetError;
+use crate::file::metadata::thrift_gen::parquet_metadata_from_bytes;
 use crate::file::metadata::{ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData};
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::index_reader::{decode_column_index, decode_offset_index};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
-use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
 use bytes::Bytes;
 
 /// Helper struct for metadata parsing
@@ -71,11 +71,15 @@ mod inner {
             buf: &[u8],
             encrypted_footer: bool,
         ) -> Result<ParquetMetaData> {
-            crate::file::metadata::thrift_gen::parquet_metadata_with_encryption(
-                self.file_decryption_properties.as_deref(),
-                encrypted_footer,
-                buf,
-            )
+            if encrypted_footer || self.file_decryption_properties.is_some() {
+                crate::file::metadata::encryption::parquet_metadata_with_encryption(
+                    self.file_decryption_properties.as_deref(),
+                    encrypted_footer,
+                    buf,
+                )
+            } else {
+                decode_metadata(buf)
+            }
         }
     }
 
@@ -195,8 +199,7 @@ mod inner {
 ///
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 pub(crate) fn decode_metadata(buf: &[u8]) -> crate::errors::Result<ParquetMetaData> {
-    let mut prot = ThriftSliceInputProtocol::new(buf);
-    ParquetMetaData::read_thrift(&mut prot)
+    parquet_metadata_from_bytes(buf)
 }
 
 /// Parses column index from the provided bytes and adds it to the metadata.

@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 extern crate arrow;
 
-use arrow::compute::{lexsort, sort, sort_to_indices, SortColumn};
+use arrow::compute::{SortColumn, lexsort, sort, sort_to_indices};
 use arrow::datatypes::{Int16Type, Int32Type};
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
