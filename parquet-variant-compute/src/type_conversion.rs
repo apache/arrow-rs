@@ -311,23 +311,3 @@ macro_rules! primitive_conversion_single_value {
     }};
 }
 pub(crate) use primitive_conversion_single_value;
-
-/// Convert a decimal value to a `VariantDecimal`
-macro_rules! decimal_to_variant_decimal {
-    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {{
-        let (v, scale) = if *$scale < 0 {
-            // For negative scale, we need to multiply the value by 10^|scale|
-            // For example: 123 with scale -2 becomes 12300 with scale 0
-            let v =
-                <$value_type>::checked_pow(10, (-*$scale) as u32).and_then(|m| m.checked_mul($v));
-            (v, 0u8)
-        } else {
-            (Some($v), *$scale as u8)
-        };
-
-        // Return an Option to allow callers to decide whether to error (strict)
-        // or append null (non-strict) on conversion failure
-        v.and_then(|v| <$variant_type>::try_new(v, scale).ok())
-    }};
-}
-pub(crate) use decimal_to_variant_decimal;

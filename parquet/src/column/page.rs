@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::{
+use crate::file::metadata::thrift::{
     DataPageHeader, DataPageHeaderV2, DictionaryPageHeader, PageHeader,
 };
 use crate::file::statistics::{Statistics, page_stats_to_thrift};
@@ -345,11 +345,11 @@ pub struct PageMetadata {
     pub is_dict: bool,
 }
 
-impl TryFrom<&crate::file::metadata::thrift_gen::PageHeader> for PageMetadata {
+impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
     type Error = ParquetError;
 
     fn try_from(
-        value: &crate::file::metadata::thrift_gen::PageHeader,
+        value: &crate::file::metadata::thrift::PageHeader,
     ) -> std::result::Result<Self, Self::Error> {
         match value.r#type {
             PageType::DATA_PAGE => {
