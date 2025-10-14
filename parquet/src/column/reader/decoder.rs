@@ -15,8 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-
 use bytes::Bytes;
 
 use crate::basic::Encoding;
@@ -68,9 +66,9 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
-    /// Read up to `num_levels` definition levels into `out`
+    /// Read up to `num_levels` definition levels into `out`.
     ///
-    /// Returns the number of values skipped, and the number of levels skipped
+    /// Returns the number of values read, and the number of levels read.
     ///
     /// # Panics
     ///
@@ -81,9 +79,9 @@ pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
         num_levels: usize,
     ) -> Result<(usize, usize)>;
 
-    /// Skips over `num_levels` definition levels
+    /// Skips over `num_levels` definition levels.
     ///
-    /// Returns the number of values skipped, and the number of levels skipped
+    /// Returns the number of values skipped, and the number of levels skipped.
     fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)>;
 }
 
@@ -136,14 +134,76 @@ pub trait ColumnValueDecoder {
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
 }
 
+/// Bucket-based storage for decoder instances keyed by `Encoding`.
+///
+/// This replaces `HashMap` lookups with direct indexing to avoid hashing overhead in the
+/// hot decoding paths.
+const ENCODING_SLOTS: usize = 10; // covers the encodings handled in `enc_slot`
+
+#[inline]
+fn enc_slot(e: Encoding) -> usize {
+    match e {
+        Encoding::PLAIN => 0,
+        Encoding::PLAIN_DICTIONARY => 2,
+        Encoding::RLE => 3,
+        #[allow(deprecated)]
+        Encoding::BIT_PACKED => 4,
+        Encoding::DELTA_BINARY_PACKED => 5,
+        Encoding::DELTA_LENGTH_BYTE_ARRAY => 6,
+        Encoding::DELTA_BYTE_ARRAY => 7,
+        Encoding::RLE_DICTIONARY => 8,
+        Encoding::BYTE_STREAM_SPLIT => 9,
+        _ => unreachable!("unsupported encoding: {e}"),
+    }
+}
+
+/// Fixed-capacity storage for decoder instances keyed by Parquet encoding.
+struct DecoderBuckets<V> {
+    inner: [Option<V>; ENCODING_SLOTS],
+}
+
+impl<V> DecoderBuckets<V> {
+    #[inline]
+    fn new() -> Self {
+        Self {
+            inner: std::array::from_fn(|_| None),
+        }
+    }
+
+    #[inline]
+    fn contains_key(&self, e: Encoding) -> bool {
+        self.inner[enc_slot(e)].is_some()
+    }
+
+    #[inline]
+    fn get_mut(&mut self, e: Encoding) -> Option<&mut V> {
+        self.inner[enc_slot(e)].as_mut()
+    }
+
+    #[inline]
+    fn insert_and_get_mut(&mut self, e: Encoding, v: V) -> &mut V {
+        let slot = &mut self.inner[enc_slot(e)];
+        debug_assert!(slot.is_none());
+        *slot = Some(v);
+        slot.as_mut().unwrap()
+    }
+}
+
+impl<V> Default for DecoderBuckets<V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An implementation of [`ColumnValueDecoder`] for `[T::T]`
 pub struct ColumnValueDecoderImpl<T: DataType> {
     descr: ColumnDescPtr,
 
     current_encoding: Option<Encoding>,
 
-    // Cache of decoders for existing encodings
-    decoders: HashMap<Encoding, Box<dyn Decoder<T>>>,
+    /// Cache of decoders for existing encodings.
+    /// Uses `DecoderBuckets` instead of `HashMap` for predictable indexing.
+    decoders: DecoderBuckets<Box<dyn Decoder<T>>>,
 }
 
 impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
@@ -153,7 +213,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         Self {
             descr: descr.clone(),
             current_encoding: None,
-            decoders: Default::default(),
+            decoders: DecoderBuckets::new(),
         }
     }
 
@@ -168,7 +228,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             encoding = Encoding::RLE_DICTIONARY
         }
 
-        if self.decoders.contains_key(&encoding) {
+        if self.decoders.contains_key(encoding) {
             return Err(general_err!("Column cannot have more than one dictionary"));
         }
 
@@ -178,7 +238,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
             let mut decoder = DictDecoder::new();
             decoder.set_dict(Box::new(dictionary))?;
-            self.decoders.insert(encoding, Box::new(decoder));
+            self.decoders
+                .insert_and_get_mut(encoding, Box::new(decoder));
             Ok(())
         } else {
             Err(nyi_err!(
@@ -195,24 +256,20 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
-        use std::collections::hash_map::Entry;
-
         if encoding == Encoding::PLAIN_DICTIONARY {
             encoding = Encoding::RLE_DICTIONARY;
         }
 
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
             self.decoders
-                .get_mut(&encoding)
+                .get_mut(encoding)
                 .expect("Decoder for dict should have been set")
         } else {
-            // Search cache for data page decoder
-            match self.decoders.entry(encoding) {
-                Entry::Occupied(e) => e.into_mut(),
-                Entry::Vacant(v) => {
-                    let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
-                    v.insert(data_decoder)
-                }
+            if let Some(decoder) = self.decoders.get_mut(encoding) {
+                decoder
+            } else {
+                let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
+                self.decoders.insert_and_get_mut(encoding, data_decoder)
             }
         };
 
@@ -228,7 +285,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
         let current_decoder = self
             .decoders
-            .get_mut(&encoding)
+            .get_mut(encoding)
             .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
 
         // TODO: Push vec into decoder (#5177)
@@ -246,7 +303,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
         let current_decoder = self
             .decoders
-            .get_mut(&encoding)
+            .get_mut(encoding)
             .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
 
         current_decoder.skip(num_values)

@@ -18,10 +18,11 @@
 //! [`CachedArrayReader`] wrapper around [`ArrayReader`]
 
 use crate::arrow::array_reader::row_group_cache::BatchID;
-use crate::arrow::array_reader::{ArrayReader, row_group_cache::RowGroupCache};
+use crate::arrow::array_reader::{row_group_cache::RowGroupCache, ArrayReader};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::errors::Result;
-use arrow_array::{ArrayRef, BooleanArray, new_empty_array};
+use ahash::RandomState;
+use arrow_array::{new_empty_array, ArrayRef, BooleanArray};
 use arrow_buffer::BooleanBufferBuilder;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
@@ -82,9 +83,10 @@ pub struct CachedArrayReader {
     selections: BooleanBufferBuilder,
     /// Role of this reader (Producer or Consumer)
     role: CacheRole,
-    /// Local cache to store batches between read_records and consume_batch calls
-    /// This ensures data is available even if the shared cache evicts items
-    local_cache: HashMap<BatchID, ArrayRef>,
+    /// Local cache to store batches between read_records and consume_batch calls.
+    /// This ensures data is available even if the shared cache evicts items, and it uses
+    /// `ahash::RandomState` to minimize hashing overhead across the small batch IDs used here.
+    local_cache: HashMap<BatchID, ArrayRef, RandomState>,
     /// Statistics to report on the Cache behavior
     metrics: ArrowReaderMetrics,
 }
@@ -109,7 +111,7 @@ impl CachedArrayReader {
             batch_size,
             selections: BooleanBufferBuilder::new(0),
             role,
-            local_cache: HashMap::new(),
+            local_cache: HashMap::default(),
             metrics,
         }
     }
