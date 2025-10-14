@@ -87,6 +87,7 @@ struct Page {
     num_values: i32,
 }
 
+#[allow(deprecated)]
 fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
     let metadata = ParquetMetaDataReader::new().parse_and_finish(reader)?;
     let schema = metadata.file_metadata().schema_descr();
@@ -171,6 +172,7 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
 
 /// Reads the page header at `offset` from `reader`, returning
 /// both the `PageHeader` and its length in bytes
+#[allow(deprecated)]
 fn read_page_header<C: ChunkReader>(reader: &C, offset: u64) -> Result<(usize, PageHeader)> {
     struct TrackedRead<R>(R, usize);
 
