@@ -14,6 +14,9 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+//! Codec for Mapping Avro and Arrow types.
+
 use crate::schema::{
     AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_NAME_METADATA_KEY,
     AVRO_NAMESPACE_METADATA_KEY, Array, Attributes, ComplexType, Enum, Fixed, Map, Nullability,
@@ -460,6 +463,8 @@ impl AvroDataType {
                 };
                 default_encoding.parse_default_literal(default_json)?
             }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::RunEndEncoded(values, _) => values.parse_default_literal(default_json)?,
         };
         Ok(lit)
     }
@@ -685,6 +690,8 @@ pub(crate) enum Codec {
     /// Represents Avro custom logical type to map to Arrow Duration(TimeUnit::Second)
     #[cfg(feature = "avro_custom_types")]
     DurationSeconds,
+    #[cfg(feature = "avro_custom_types")]
+    RunEndEncoded(Arc<AvroDataType>, u8),
 }
 
 impl Codec {
@@ -765,6 +772,19 @@ impl Codec {
             Self::DurationMillis => DataType::Duration(TimeUnit::Millisecond),
             #[cfg(feature = "avro_custom_types")]
             Self::DurationSeconds => DataType::Duration(TimeUnit::Second),
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(values, bits) => {
+                let run_ends_dt = match *bits {
+                    16 => DataType::Int16,
+                    32 => DataType::Int32,
+                    64 => DataType::Int64,
+                    _ => unreachable!(),
+                };
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", run_ends_dt, false)),
+                    Arc::new(Field::new("values", values.codec().data_type(), true)),
+                )
+            }
         }
     }
 
@@ -935,6 +955,8 @@ impl From<&Codec> for UnionFieldKind {
             Codec::Map(_) => Self::Map,
             Codec::Uuid => Self::Uuid,
             Codec::Union(..) => Self::Union,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::RunEndEncoded(values, _) => UnionFieldKind::from(values.codec()),
             #[cfg(feature = "avro_custom_types")]
             Codec::DurationNanos
             | Codec::DurationMicros
@@ -1141,6 +1163,16 @@ impl<'a> Maker<'a> {
         }
     }
 
+    #[cfg(feature = "avro_custom_types")]
+    #[inline]
+    fn propagate_nullability_into_ree(dt: &mut AvroDataType, nb: Nullability) {
+        if let Codec::RunEndEncoded(values, bits) = dt.codec.clone() {
+            let mut inner = (*values).clone();
+            inner.nullability = Some(nb);
+            dt.codec = Codec::RunEndEncoded(Arc::new(inner), bits);
+        }
+    }
+
     fn make_data_type<'s>(
         &mut self,
         writer_schema: &'s Schema<'a>,
@@ -1185,6 +1217,8 @@ impl<'a> Maker<'a> {
                     (true, Some(0)) => {
                         let mut field = self.parse_type(&f[1], namespace)?;
                         field.nullability = Some(Nullability::NullFirst);
+                        #[cfg(feature = "avro_custom_types")]
+                        Self::propagate_nullability_into_ree(&mut field, Nullability::NullFirst);
                         return Ok(field);
                     }
                     (true, Some(1)) => {
@@ -1196,6 +1230,8 @@ impl<'a> Maker<'a> {
                         }
                         let mut field = self.parse_type(&f[0], namespace)?;
                         field.nullability = Some(Nullability::NullSecond);
+                        #[cfg(feature = "avro_custom_types")]
+                        Self::propagate_nullability_into_ree(&mut field, Nullability::NullSecond);
                         return Ok(field);
                     }
                     _ => {}
@@ -1374,6 +1410,27 @@ impl<'a> Maker<'a> {
                     (Some("arrow.duration-seconds"), c @ Codec::Int64) => {
                         *c = Codec::DurationSeconds
                     }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.run-end-encoded"), _) => {
+                        let bits_u8: u8 = t
+                            .attributes
+                            .additional
+                            .get("arrow.runEndIndexBits")
+                            .and_then(|v| v.as_u64())
+                            .and_then(|n| u8::try_from(n).ok())
+                            .ok_or_else(|| ArrowError::ParseError(
+                                "arrow.run-end-encoded requires 'arrow.runEndIndexBits' (one of 16, 32, or 64)"
+                                    .to_string(),
+                            ))?;
+                        if bits_u8 != 16 && bits_u8 != 32 && bits_u8 != 64 {
+                            return Err(ArrowError::ParseError(format!(
+                                "Invalid 'arrow.runEndIndexBits' value {bits_u8}; must be 16, 32, or 64"
+                            )));
+                        }
+                        // Wrap the parsed underlying site as REE
+                        let values_site = field.clone();
+                        field.codec = Codec::RunEndEncoded(Arc::new(values_site), bits_u8);
+                    }
                     (Some(logical), _) => {
                         // Insert unrecognized logical type into metadata map
                         field.metadata.insert("logicalType".into(), logical.into());
@@ -1412,6 +1469,8 @@ impl<'a> Maker<'a> {
                     (Some((w_nb, w_nonnull)), Some((_r_nb, r_nonnull))) => {
                         let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
                         dt.nullability = Some(w_nb);
+                        #[cfg(feature = "avro_custom_types")]
+                        Self::propagate_nullability_into_ree(&mut dt, w_nb);
                         Ok(dt)
                     }
                     _ => self.resolve_unions(writer_variants, reader_variants, namespace),

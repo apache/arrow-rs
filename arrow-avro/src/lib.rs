@@ -95,7 +95,7 @@
 //!   "fields":[{"name":"id","type":"long"},{"name":"name","type":"string"}]
 //! }"#;
 //!
-//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
 //! let id: u32 = 1;
 //! store.set(Fingerprint::Id(id), AvroSchema::new(avro_json.to_string()))?;
 //!
