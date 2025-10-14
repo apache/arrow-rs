@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
+use crate::util::bit_pack::{unpack8, unpack16, unpack32, unpack64};
 
 #[inline]
 fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
@@ -589,22 +589,6 @@ impl BitReader {
         }
 
         values_to_read
-    }
-
-    #[inline]
-    pub fn skip_aligned_bytes(&mut self, n: usize) {
-        // We do not care about the returned value, only about advancing the cursor.
-        // Callers use this from the RLE `reload_for_skip` path, which guarantees byte alignment
-        // by rounding the bit width to `ceil(bit_width, 8)`.
-        // Drop the bytes in chunks of up to eight bytes using `get_aligned::<u64>()`.
-        let mut left = n;
-        while left > 0 {
-            let chunk = left.min(8);
-            // Ignore the return value. If the source ends early, this mirrors the original
-            // "stop at the end" behavior.
-            let _ = self.get_aligned::<u64>(chunk);
-            left -= chunk;
-        }
     }
 
     /// Skip num_value values with num_bits bit width
