@@ -22,7 +22,7 @@ use crate::encryption::encrypt::{FileEncryptor, encrypt_thrift_object};
 use crate::encryption::modules::{ModuleType, create_module_aad};
 use crate::errors::ParquetError;
 use crate::errors::Result;
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use bytes::Bytes;
 use std::io::Write;
 use std::sync::Arc;

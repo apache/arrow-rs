@@ -22,12 +22,13 @@ extern crate criterion;
 extern crate once_cell;
 
 use arrow_array::{
-    ArrayRef, BinaryArray, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array,
-    Decimal256Array, FixedSizeBinaryArray, Float32Array, Float64Array, ListArray, PrimitiveArray,
-    RecordBatch, StringArray, StructArray,
+    ArrayRef, BinaryArray, BooleanArray, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
+    Float32Array, Float64Array, ListArray, PrimitiveArray, RecordBatch, StringArray, StructArray,
     builder::{ListBuilder, StringBuilder},
     types::{Int32Type, Int64Type, IntervalMonthDayNanoType, TimestampMicrosecondType},
 };
+#[cfg(feature = "small_decimals")]
+use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_avro::writer::AvroWriter;
 use arrow_buffer::{Buffer, i256};
 use arrow_schema::{DataType, Field, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode};
@@ -177,11 +178,13 @@ fn make_ts_micros_array_with_tag(n: usize, tag: u64) -> PrimitiveArray<Timestamp
 // === Decimal helpers & generators ===
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn pow10_i32(p: u8) -> i32 {
     (0..p).fold(1i32, |acc, _| acc.saturating_mul(10))
 }
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn pow10_i64(p: u8) -> i64 {
     (0..p).fold(1i64, |acc, _| acc.saturating_mul(10))
 }
@@ -192,6 +195,7 @@ fn pow10_i128(p: u8) -> i128 {
 }
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn make_decimal32_array_with_tag(n: usize, tag: u64, precision: u8, scale: i8) -> Decimal32Array {
     let mut rng = rng_for(tag, n);
     let max = pow10_i32(precision).saturating_sub(1);
@@ -202,6 +206,7 @@ fn make_decimal32_array_with_tag(n: usize, tag: u64, precision: u8, scale: i8) -
 }
 
 #[inline]
+#[cfg(feature = "small_decimals")]
 fn make_decimal64_array_with_tag(n: usize, tag: u64, precision: u8, scale: i8) -> Decimal64Array {
     let mut rng = rng_for(tag, n);
     let max = pow10_i64(precision).saturating_sub(1);
@@ -539,6 +544,7 @@ static STRUCT_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
+#[cfg(feature = "small_decimals")]
 static DECIMAL32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
     // Choose a representative precision/scale within Decimal32 limits
     let precision: u8 = 7;
@@ -554,6 +560,7 @@ static DECIMAL32_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
         .collect()
 });
 
+#[cfg(feature = "small_decimals")]
 static DECIMAL64_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
     let precision: u8 = 13;
     let scale: i8 = 3;
@@ -821,7 +828,9 @@ fn criterion_benches(c: &mut Criterion) {
     bench_writer_scenario(c, "write-FixedSizeBinary16", &FIXED16_DATA);
     bench_writer_scenario(c, "write-UUID(logicalType)", &UUID16_DATA);
     bench_writer_scenario(c, "write-IntervalMonthDayNanoDuration", &INTERVAL_MDN_DATA);
+    #[cfg(feature = "small_decimals")]
     bench_writer_scenario(c, "write-Decimal32(bytes)", &DECIMAL32_DATA);
+    #[cfg(feature = "small_decimals")]
     bench_writer_scenario(c, "write-Decimal64(bytes)", &DECIMAL64_DATA);
     bench_writer_scenario(c, "write-Decimal128(bytes)", &DECIMAL128_BYTES_DATA);
     bench_writer_scenario(c, "write-Decimal128(fixed16)", &DECIMAL128_FIXED16_DATA);

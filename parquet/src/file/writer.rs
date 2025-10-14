@@ -18,7 +18,7 @@
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
@@ -392,6 +392,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         &self.descr
     }
 
+    /// Returns a reference to schema descriptor Arc.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn schema_descr_ptr(&self) -> &SchemaDescPtr {
+        &self.descr
+    }
+
     /// Returns a reference to the writer properties
     pub fn properties(&self) -> &WriterPropertiesPtr {
         &self.props
@@ -412,6 +418,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// because it will ensure that the buffering and byte‐counting layers are used.
     pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.buf.write_all(buf)
+    }
+
+    /// Flushes underlying writer
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.buf.flush()
     }
 
     /// Returns a mutable reference to the underlying writer.
@@ -706,7 +717,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
             .set_compression(metadata.compression())
-            .set_encodings(metadata.encodings().clone())
+            .set_encodings_mask(*metadata.encodings_mask())
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())
@@ -722,6 +733,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         }
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
+        }
+        if let Some(geo_statistics) = metadata.geo_statistics() {
+            builder = builder.set_geo_statistics(Box::new(geo_statistics.clone()))
         }
         if let Some(page_encoding_stats) = metadata.page_encoding_stats() {
             builder = builder.set_page_encoding_stats(page_encoding_stats.clone())
@@ -2387,6 +2401,7 @@ mod tests {
                     .row_group(0)
                     .column(x)
                     .encodings()
+                    .collect::<Vec<_>>()
                     .contains(&Encoding::BYTE_STREAM_SPLIT)
             );
         };

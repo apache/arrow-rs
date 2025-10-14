@@ -45,7 +45,7 @@ use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::PageStatistics;
+use crate::file::metadata::thrift::PageStatistics;
 use crate::util::bit_util::FromBytes;
 
 pub(crate) mod private {
