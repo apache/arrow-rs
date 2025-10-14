@@ -126,8 +126,7 @@ impl ChunkReader for Bytes {
         let start = start as usize;
         if start > self.len() {
             return Err(eof_err!(
-                "Expected to read at offset {}, while file has length {}",
-                start,
+                "Expected to read at offset {start}, while file has length {}",
                 self.len()
             ));
         }
