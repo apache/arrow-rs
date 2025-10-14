@@ -384,7 +384,7 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
         let bit_width = data.as_ref()[0];
         if bit_width > 32 {
             return Err(general_err!(
-                "Invalid or corrupted Bit width {}. Max allowed is 32",
+                "Invalid or corrupted RLE bit width {}. Max allowed is 32",
                 bit_width
             ));
         }
