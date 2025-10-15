@@ -1472,11 +1472,10 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     pub unsafe fn from_trusted_len_iter<I, P>(iter: I) -> Self
     where
         P: std::borrow::Borrow<Option<<T as ArrowPrimitiveType>::Native>>,
-        I: ExactSizeIterator<Item = P>,
+        I: IntoIterator<Item = P, IntoIter: ExactSizeIterator>,
     {
         let iterator = iter.into_iter();
-        let (_, upper) = iterator.size_hint();
-        let len = upper.expect("trusted_len_unzip requires an upper limit");
+        let len = iterator.len();
 
         let (null, buffer) = unsafe { trusted_len_unzip(iterator) };
 

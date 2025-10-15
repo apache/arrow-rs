@@ -331,7 +331,7 @@ where
         //     20% performance improvement
         // Soundness:
         //     The iterator is trustedLen because it comes from an `StringArray`.
-        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(vec.into_iter()) }
+        unsafe { PrimitiveArray::<ArrowType>::from_trusted_len_iter(vec) }
     };
     Ok(Arc::new(interval_array) as ArrayRef)
 }

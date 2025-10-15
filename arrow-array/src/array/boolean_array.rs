@@ -511,8 +511,9 @@ impl BooleanArray {
     pub unsafe fn from_trusted_len_iter<I, P>(iter: I) -> Self
     where
         P: Into<BooleanAdapter>,
-        I: ExactSizeIterator<Item = P>,
+        I: IntoIterator<Item = P, IntoIter: ExactSizeIterator>,
     {
+        let iter = iter.into_iter();
         let data_len = iter.len();
 
         let num_bytes = bit_util::ceil(data_len, 8);
