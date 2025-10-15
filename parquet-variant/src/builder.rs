@@ -1437,8 +1437,10 @@ impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
     }
 }
 
-impl<'a, 'm, 'v, S: BuilderSpecificState, V: Into<Variant<'m, 'v>>> Extend<V>
-    for ListBuilder<'a, S>
+impl<'a, 'm, 'v, S, V> Extend<V> for ListBuilder<'a, S>
+where
+    S: BuilderSpecificState,
+    V: Into<Variant<'m, 'v>>,
 {
     fn extend<T: IntoIterator<Item = V>>(&mut self, iter: T) {
         for v in iter.into_iter() {
@@ -1697,8 +1699,11 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
     }
 }
 
-impl<'a, 'm, 'v, S: BuilderSpecificState, K: AsRef<str>, V: Into<Variant<'m, 'v>>> Extend<(K, V)>
-    for ObjectBuilder<'a, S>
+impl<'a, 'm, 'v, S, K, V> Extend<(K, V)> for ObjectBuilder<'a, S>
+where
+    S: BuilderSpecificState,
+    K: AsRef<str>,
+    V: Into<Variant<'m, 'v>>,
 {
     fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
         for (key, value) in iter.into_iter() {
