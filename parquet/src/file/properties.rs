@@ -458,7 +458,7 @@ pub struct WriterPropertiesBuilder {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     #[cfg(feature = "encryption")]
-    file_encryption_properties: Option<FileEncryptionProperties>,
+    file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
 
 impl Default for WriterPropertiesBuilder {
@@ -506,7 +506,7 @@ impl WriterPropertiesBuilder {
             statistics_truncate_length: self.statistics_truncate_length,
             coerce_types: self.coerce_types,
             #[cfg(feature = "encryption")]
-            file_encryption_properties: self.file_encryption_properties.map(Arc::new),
+            file_encryption_properties: self.file_encryption_properties,
         }
     }
 
@@ -709,7 +709,7 @@ impl WriterPropertiesBuilder {
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
         mut self,
-        file_encryption_properties: FileEncryptionProperties,
+        file_encryption_properties: Arc<FileEncryptionProperties>,
     ) -> Self {
         self.file_encryption_properties = Some(file_encryption_properties);
         self
@@ -965,7 +965,7 @@ impl From<WriterProperties> for WriterPropertiesBuilder {
             statistics_truncate_length: props.statistics_truncate_length,
             coerce_types: props.coerce_types,
             #[cfg(feature = "encryption")]
-            file_encryption_properties: props.file_encryption_properties.map(Arc::unwrap_or_clone),
+            file_encryption_properties: props.file_encryption_properties,
         }
     }
 }

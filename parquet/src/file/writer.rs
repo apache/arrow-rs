@@ -318,7 +318,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Writes magic bytes at the beginning of the file.
     #[cfg(feature = "encryption")]
     fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
-        let magic = get_file_magic(properties.file_encryption_properties.as_deref());
+        let magic = get_file_magic(properties.file_encryption_properties.as_ref());
 
         buf.write_all(magic)?;
         Ok(())
@@ -1020,7 +1020,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
 /// as a Parquet file.
 #[cfg(feature = "encryption")]
 pub(crate) fn get_file_magic(
-    file_encryption_properties: Option<&FileEncryptionProperties>,
+    file_encryption_properties: Option<&Arc<FileEncryptionProperties>>,
 ) -> &'static [u8; 4] {
     match file_encryption_properties.as_ref() {
         Some(encryption_properties) if encryption_properties.encrypt_footer() => {

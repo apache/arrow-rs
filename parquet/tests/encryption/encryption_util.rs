@@ -235,7 +235,7 @@ pub(crate) fn read_encrypted_file(
 pub(crate) fn read_and_roundtrip_to_encrypted_file(
     file: &File,
     decryption_properties: Arc<FileDecryptionProperties>,
-    encryption_properties: FileEncryptionProperties,
+    encryption_properties: Arc<FileEncryptionProperties>,
 ) {
     // read example data
     let (batches, metadata) =
