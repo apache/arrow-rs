@@ -2852,13 +2852,15 @@ mod test {
     fn get_decimal32_rescaled_to_scale2() {
         // Build unshredded variant values with different scales
         let mut builder = crate::VariantArrayBuilder::new(5);
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 2).unwrap())); // 12.34
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 3).unwrap())); // 1.234
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1234, 0).unwrap())); // 1234
+        builder.append_variant(VariantDecimal4::try_new(1234, 2).unwrap().into()); // 12.34
+        builder.append_variant(VariantDecimal4::try_new(1234, 3).unwrap().into()); // 1.234
+        builder.append_variant(VariantDecimal4::try_new(1234, 0).unwrap().into()); // 1234
         builder.append_null();
-        builder.append_variant(Variant::from(
-            VariantDecimal8::try_new((VariantDecimal4::MAX_UNSCALED_VALUE as i64) + 1, 3).unwrap(),
-        )); // should fit into Decimal32
+        builder.append_variant(
+            VariantDecimal8::try_new((VariantDecimal4::MAX_UNSCALED_VALUE as i64) + 1, 3)
+                .unwrap()
+                .into(),
+        ); // should fit into Decimal32
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal32(9, 2), true);
@@ -2881,13 +2883,13 @@ mod test {
     #[test]
     fn get_decimal32_scale_down_rounding() {
         let mut builder = crate::VariantArrayBuilder::new(7);
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(-1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 2).unwrap())); // 12.35 rounded down to 10 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(1235, 3).unwrap())); // 1.235 rounded down to 0 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal4::try_new(5235, 3).unwrap())); // 5.235 rounded up to 10 for scale -1
+        builder.append_variant(VariantDecimal4::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal4::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal4::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal32(9, -1), true);
@@ -2910,12 +2912,16 @@ mod test {
     #[test]
     fn get_decimal32_large_scale_reduction() {
         let mut builder = crate::VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(-VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
-        builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
+        builder.append_variant(
+            VariantDecimal4::try_new(-VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal32(9, -9), true);
@@ -2945,12 +2951,16 @@ mod test {
     fn get_decimal32_precision_overflow_safe() {
         // Exceed Decimal32 after scaling and rounding
         let mut builder = crate::VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
-        builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 9).unwrap(),
-        )); // integer value round up overflows
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 9)
+                .unwrap()
+                .into(),
+        ); // integer value round up overflows
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal32(2, 2), true);
@@ -2965,9 +2975,11 @@ mod test {
     #[test]
     fn get_decimal32_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal32(9, 2), true);
@@ -2990,14 +3002,15 @@ mod test {
     #[test]
     fn get_decimal64_rescaled_to_scale2() {
         let mut builder = crate::VariantArrayBuilder::new(5);
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 2).unwrap())); // 12.34
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 3).unwrap())); // 1.234
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1234, 0).unwrap())); // 1234
+        builder.append_variant(VariantDecimal8::try_new(1234, 2).unwrap().into()); // 12.34
+        builder.append_variant(VariantDecimal8::try_new(1234, 3).unwrap().into()); // 1.234
+        builder.append_variant(VariantDecimal8::try_new(1234, 0).unwrap().into()); // 1234
         builder.append_null();
-        builder.append_variant(Variant::from(
+        builder.append_variant(
             VariantDecimal16::try_new((VariantDecimal8::MAX_UNSCALED_VALUE as i128) + 1, 3)
-                .unwrap(),
-        )); // should fit into Decimal64
+                .unwrap()
+                .into(),
+        ); // should fit into Decimal64
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal64(18, 2), true);
@@ -3020,13 +3033,13 @@ mod test {
     #[test]
     fn get_decimal64_scale_down_rounding() {
         let mut builder = crate::VariantArrayBuilder::new(7);
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(-1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(-1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1235, 2).unwrap())); // 12.35 rounded down to 10 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(1235, 3).unwrap())); // 1.235 rounded down to 0 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal8::try_new(5235, 3).unwrap())); // 5.235 rounded up to 10 for scale -1
+        builder.append_variant(VariantDecimal8::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal8::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal8::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal64(18, -1), true);
@@ -3049,12 +3062,16 @@ mod test {
     #[test]
     fn get_decimal64_large_scale_reduction() {
         let mut builder = crate::VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(-VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
-        builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
+        builder.append_variant(
+            VariantDecimal8::try_new(-VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal64(18, -18), true);
@@ -3084,12 +3101,16 @@ mod test {
     fn get_decimal64_precision_overflow_safe() {
         // Exceed Decimal64 after scaling and rounding
         let mut builder = crate::VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
-        builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 18).unwrap(),
-        )); // integer value round up overflows
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 18)
+                .unwrap()
+                .into(),
+        ); // integer value round up overflows
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal64(2, 2), true);
@@ -3104,9 +3125,11 @@ mod test {
     #[test]
     fn get_decimal64_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal64(18, 2), true);
@@ -3129,9 +3152,9 @@ mod test {
     #[test]
     fn get_decimal128_rescaled_to_scale2() {
         let mut builder = crate::VariantArrayBuilder::new(4);
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1234, 2).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1234, 3).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1234, 0).unwrap()));
+        builder.append_variant(VariantDecimal16::try_new(1234, 2).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1234, 3).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1234, 0).unwrap().into());
         builder.append_null();
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3151,13 +3174,13 @@ mod test {
     #[test]
     fn get_decimal128_scale_down_rounding() {
         let mut builder = crate::VariantArrayBuilder::new(7);
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(-1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(-1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 2).unwrap())); // 12.35 rounded down to 10 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 3).unwrap())); // 1.235 rounded down to 0 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(5235, 3).unwrap())); // 5.235 rounded up to 10 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal128(38, -1), true);
@@ -3181,12 +3204,16 @@ mod test {
     fn get_decimal128_precision_overflow_safe() {
         // Exceed Decimal128 after scaling and rounding
         let mut builder = crate::VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
-        builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 38).unwrap(),
-        )); // integer value round up overflows
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 38)
+                .unwrap()
+                .into(),
+        ); // integer value round up overflows
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal128(2, 2), true);
@@ -3201,9 +3228,11 @@ mod test {
     #[test]
     fn get_decimal128_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
-        builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal128(38, 2), true);
@@ -3225,9 +3254,9 @@ mod test {
     fn get_decimal256_rescaled_to_scale2() {
         // Build unshredded variant values with different scales using Decimal16 source
         let mut builder = crate::VariantArrayBuilder::new(4);
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1234, 2).unwrap())); // 12.34
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1234, 3).unwrap())); // 1.234
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1234, 0).unwrap())); // 1234
+        builder.append_variant(VariantDecimal16::try_new(1234, 2).unwrap().into()); // 12.34
+        builder.append_variant(VariantDecimal16::try_new(1234, 3).unwrap().into()); // 1.234
+        builder.append_variant(VariantDecimal16::try_new(1234, 0).unwrap().into()); // 1234
         builder.append_null();
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3247,13 +3276,13 @@ mod test {
     #[test]
     fn get_decimal256_scale_down_rounding() {
         let mut builder = crate::VariantArrayBuilder::new(7);
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(-1235, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(-1245, 0).unwrap()));
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 2).unwrap())); // 12.35 rounded down to 10 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(1235, 3).unwrap())); // 1.235 rounded down to 0 for scale -1
-        builder.append_variant(Variant::from(VariantDecimal16::try_new(5235, 3).unwrap())); // 5.235 rounded up to 10 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal256(76, -1), true);
@@ -3277,12 +3306,16 @@ mod test {
     fn get_decimal256_precision_overflow_safe() {
         // Exceed Decimal128 max precision (38) after scaling
         let mut builder = crate::VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1).unwrap(),
-        ));
-        builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal256(76, 39), true);
@@ -3305,12 +3338,16 @@ mod test {
     fn get_decimal256_precision_overflow_unsafe_errors() {
         // Exceed Decimal128 max precision (38) after scaling
         let mut builder = crate::VariantArrayBuilder::new(2);
-        builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1).unwrap(),
-        ));
-        builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
-        ));
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
         let field = Field::new("result", DataType::Decimal256(76, 39), true);
