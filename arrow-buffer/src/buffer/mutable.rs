@@ -26,12 +26,12 @@ use crate::{
     util::bit_util,
 };
 
-use super::Buffer;
-use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 #[cfg(feature = "pool")]
 use crate::pool::{MemoryPool, MemoryReservation};
 #[cfg(feature = "pool")]
 use std::sync::Mutex;
+
+use super::Buffer;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
 ///
@@ -513,19 +513,6 @@ impl MutableBuffer {
 
         buffer.truncate(bit_util::ceil(len, 8));
         buffer
-    }
-
-    /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
-    /// in larger chunks and starting at arbitrary bit offsets.
-    /// Note that both `offset` and `length` are measured in bits.
-    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks<'_> {
-        BitChunks::new(self.as_slice(), offset, len)
-    }
-
-    /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
-    /// inspected. Note that both `offset` and `length` are measured in bits.
-    pub fn count_set_bits_offset(&self, offset: usize, len: usize) -> usize {
-        UnalignedBitChunk::new(self.as_slice(), offset, len).count_ones()
     }
 
     /// Register this [`MutableBuffer`] with the provided [`MemoryPool`]
