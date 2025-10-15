@@ -805,20 +805,29 @@ pub fn cast_with_options(
                 ))),
             }
         }
-        (_, RunEndEncoded(index_type, value_type)) => match index_type.data_type() {
-            Int16 => {
-                cast_to_run_end_encoded::<Int16Type>(array, value_type.data_type(), cast_options)
+        (_, RunEndEncoded(index_type, value_type)) => {
+            let array_ref = make_array(array.to_data());
+            match index_type.data_type() {
+                Int16 => cast_to_run_end_encoded::<Int16Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    &cast_options,
+                ),
+                Int32 => cast_to_run_end_encoded::<Int32Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    &cast_options,
+                ),
+                Int64 => cast_to_run_end_encoded::<Int64Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    &cast_options,
+                ),
+                _ => Err(ArrowError::CastError(format!(
+                    "Casting from type {from_type:?} to run end encoded type {to_type:?} not supported",
+                ))),
             }
-            Int32 => {
-                cast_to_run_end_encoded::<Int32Type>(array, value_type.data_type(), cast_options)
-            }
-            Int64 => {
-                cast_to_run_end_encoded::<Int64Type>(array, value_type.data_type(), cast_options)
-            }
-            _ => Err(ArrowError::CastError(format!(
-                "Casting from type {from_type:?} to run end encoded type {to_type:?} not supported",
-            ))),
-        },
+        }
         (Dictionary(index_type, _), _) => match **index_type {
             Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
             Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
