@@ -442,7 +442,9 @@ impl From<VariantArray> for ArrayRef {
 
 impl<'m, 'v> FromIterator<Option<Variant<'m, 'v>>> for VariantArray {
     fn from_iter<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(iter: T) -> Self {
-        let mut b = VariantArrayBuilder::new(0);
+        let iter = iter.into_iter();
+
+        let mut b = VariantArrayBuilder::new(iter.size_hint().0);
         b.extend(iter);
         b.build()
     }
