@@ -114,6 +114,15 @@ impl_timestamp_from_variant!(
     |timestamp| Self::make_value(timestamp.naive_utc())
 );
 
+/// Returns the unscaled integer representation for Arrow decimal type `O`
+/// from a `Variant`.
+///
+/// - `precision` and `scale` specify the target Arrow decimal parameters
+/// - Integer variants (`Int8/16/32/64`) are treated as decimals with scale 0
+/// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
+///
+/// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` and
+/// returns `None` if it cannot fit the requested precision.
 pub(crate) fn variant_to_unscaled_decimal<O>(
     variant: &Variant<'_, '_>,
     precision: u8,
