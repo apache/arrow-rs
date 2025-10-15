@@ -313,7 +313,7 @@ mod test {
     use chrono::DateTime;
     use parquet_variant::{
         EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
-        VariantPath,
+        VariantDecimalType, VariantPath,
     };
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
@@ -2874,7 +2874,7 @@ mod test {
         assert!(result.is_null(3));
         assert_eq!(
             result.value(4),
-            (VariantDecimal4::MAX_UNSCALED_VALUE as i32) / 10 + 1
+            VariantDecimal4::MAX_UNSCALED_VALUE / 10 + 1
         ); // should not be null as the final result fits into Decimal32
     }
 
@@ -2911,10 +2911,10 @@ mod test {
     fn get_decimal32_large_scale_reduction() {
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(-(VariantDecimal4::MAX_UNSCALED_VALUE as i32), 0).unwrap(),
+            VariantDecimal4::try_new(-VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -2946,10 +2946,10 @@ mod test {
         // Exceed Decimal32 after scaling and rounding
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 9).unwrap(),
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 9).unwrap(),
         )); // integer value round up overflows
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -2966,7 +2966,7 @@ mod test {
     fn get_decimal32_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE as i32, 0).unwrap(),
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3013,7 +3013,7 @@ mod test {
         assert!(result.is_null(3));
         assert_eq!(
             result.value(4),
-            (VariantDecimal8::MAX_UNSCALED_VALUE as i64) / 10 + 1
+            VariantDecimal8::MAX_UNSCALED_VALUE / 10 + 1
         ); // should not be null as the final result fits into Decimal64
     }
 
@@ -3050,10 +3050,10 @@ mod test {
     fn get_decimal64_large_scale_reduction() {
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(-(VariantDecimal8::MAX_UNSCALED_VALUE as i64), 0).unwrap(),
+            VariantDecimal8::try_new(-VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 0).unwrap(),
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3085,10 +3085,10 @@ mod test {
         // Exceed Decimal64 after scaling and rounding
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 0).unwrap(),
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 18).unwrap(),
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 18).unwrap(),
         )); // integer value round up overflows
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3105,7 +3105,7 @@ mod test {
     fn get_decimal64_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE as i64, 0).unwrap(),
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3182,10 +3182,10 @@ mod test {
         // Exceed Decimal128 after scaling and rounding
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 38).unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 38).unwrap(),
         )); // integer value round up overflows
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3202,7 +3202,7 @@ mod test {
     fn get_decimal128_precision_overflow_unsafe_errors() {
         let mut builder = crate::VariantArrayBuilder::new(1);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3278,10 +3278,10 @@ mod test {
         // Exceed Decimal128 max precision (38) after scaling
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 1).unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
@@ -3294,7 +3294,7 @@ mod test {
         // So expected integer is (10^38-1) * 10^(39-1) = (10^38-1) * 10^38
         let base = i256::from_i128(10);
         let factor = base.checked_pow(38).unwrap();
-        let expected = i256::from_i128(VariantDecimal16::MAX_UNSCALED_VALUE as i128)
+        let expected = i256::from_i128(VariantDecimal16::MAX_UNSCALED_VALUE)
             .checked_mul(factor)
             .unwrap();
         assert_eq!(result.value(0), expected);
@@ -3306,10 +3306,10 @@ mod test {
         // Exceed Decimal128 max precision (38) after scaling
         let mut builder = crate::VariantArrayBuilder::new(2);
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 1).unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1).unwrap(),
         ));
         builder.append_variant(Variant::from(
-            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE as i128, 0).unwrap(),
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0).unwrap(),
         ));
         let variant_array: ArrayRef = ArrayRef::from(builder.build());
 
