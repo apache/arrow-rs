@@ -206,6 +206,7 @@ enum Decoder {
     TimeMicros(Vec<i64>),
     TimestampMillis(bool, Vec<i64>),
     TimestampMicros(bool, Vec<i64>),
+    TimestampNanos(bool, Vec<i64>),
     Int32ToInt64(Vec<i64>),
     Int32ToFloat32(Vec<f32>),
     Int32ToFloat64(Vec<f64>),
@@ -323,6 +324,9 @@ impl Decoder {
             }
             (Codec::TimestampMicros(is_utc), _) => {
                 Self::TimestampMicros(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
+            }
+            (Codec::TimestampNanos(is_utc), _) => {
+                Self::TimestampNanos(*is_utc, Vec::with_capacity(DEFAULT_CAPACITY))
             }
             #[cfg(feature = "avro_custom_types")]
             (Codec::DurationNanos, _) => {
@@ -530,7 +534,8 @@ impl Decoder {
             | Self::Int32ToInt64(v)
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
-            | Self::TimestampMicros(_, v) => v.push(0),
+            | Self::TimestampMicros(_, v)
+            | Self::TimestampNanos(_, v) => v.push(0),
             #[cfg(feature = "avro_custom_types")]
             Self::DurationSecond(v)
             | Self::DurationMillisecond(v)
@@ -643,7 +648,8 @@ impl Decoder {
             | Self::Int32ToInt64(v)
             | Self::TimeMicros(v)
             | Self::TimestampMillis(_, v)
-            | Self::TimestampMicros(_, v) => match lit {
+            | Self::TimestampMicros(_, v)
+            | Self::TimestampNanos(_, v) => match lit {
                 AvroLiteral::Long(i) => {
                     v.push(*i);
                     Ok(())
@@ -854,7 +860,8 @@ impl Decoder {
             Self::Int64(values)
             | Self::TimeMicros(values)
             | Self::TimestampMillis(_, values)
-            | Self::TimestampMicros(_, values) => values.push(buf.get_long()?),
+            | Self::TimestampMicros(_, values)
+            | Self::TimestampNanos(_, values) => values.push(buf.get_long()?),
             #[cfg(feature = "avro_custom_types")]
             Self::DurationSecond(values)
             | Self::DurationMillisecond(values)
@@ -1068,6 +1075,10 @@ impl Decoder {
             ),
             Self::TimestampMicros(is_utc, values) => Arc::new(
                 flush_primitive::<TimestampMicrosecondType>(values, nulls)
+                    .with_timezone_opt(is_utc.then(|| "+00:00")),
+            ),
+            Self::TimestampNanos(is_utc, values) => Arc::new(
+                flush_primitive::<TimestampNanosecondType>(values, nulls)
                     .with_timezone_opt(is_utc.then(|| "+00:00")),
             ),
             #[cfg(feature = "avro_custom_types")]
@@ -1959,6 +1970,7 @@ enum Skipper {
     TimeMicros,
     TimestampMillis,
     TimestampMicros,
+    TimestampNanos,
     Fixed(usize),
     Decimal(Option<usize>),
     UuidString,
@@ -1983,6 +1995,7 @@ impl Skipper {
             Codec::TimeMicros => Self::TimeMicros,
             Codec::TimestampMillis(_) => Self::TimestampMillis,
             Codec::TimestampMicros(_) => Self::TimestampMicros,
+            Codec::TimestampNanos(_) => Self::TimestampNanos,
             #[cfg(feature = "avro_custom_types")]
             Codec::DurationNanos
             | Codec::DurationMicros
@@ -2044,7 +2057,11 @@ impl Skipper {
                 buf.get_int()?;
                 Ok(())
             }
-            Self::Int64 | Self::TimeMicros | Self::TimestampMillis | Self::TimestampMicros => {
+            Self::Int64
+            | Self::TimeMicros
+            | Self::TimestampMillis
+            | Self::TimestampMicros
+            | Self::TimestampNanos => {
                 buf.get_long()?;
                 Ok(())
             }
@@ -4646,5 +4663,94 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("Int32Array");
         assert_eq!(a.values(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_timestamp_nanos_decoding_utc() {
+        let avro_type = avro_from_codec(Codec::TimestampNanos(true));
+        let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
+        let mut data = Vec::new();
+        for v in [0_i64, 1_i64, -1_i64, 1_234_567_890_i64] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cur = AvroCursor::new(&data);
+        for _ in 0..4 {
+            decoder.decode(&mut cur).expect("decode nanos ts");
+        }
+        let array = decoder.flush(None).expect("flush nanos ts");
+        let ts = array
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("TimestampNanosecondArray");
+        assert_eq!(ts.values(), &[0, 1, -1, 1_234_567_890]);
+        match ts.data_type() {
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.as_deref(), Some("+00:00"));
+            }
+            other => panic!("expected Timestamp(Nanosecond, Some(\"+00:00\")), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_timestamp_nanos_decoding_local() {
+        let avro_type = avro_from_codec(Codec::TimestampNanos(false));
+        let mut decoder = Decoder::try_new(&avro_type).expect("create TimestampNanos decoder");
+        let mut data = Vec::new();
+        for v in [10_i64, 20_i64, -30_i64] {
+            data.extend_from_slice(&encode_avro_long(v));
+        }
+        let mut cur = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cur).expect("decode nanos ts");
+        }
+        let array = decoder.flush(None).expect("flush nanos ts");
+        let ts = array
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("TimestampNanosecondArray");
+        assert_eq!(ts.values(), &[10, 20, -30]);
+        match ts.data_type() {
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.as_deref(), None);
+            }
+            other => panic!("expected Timestamp(Nanosecond, None), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_timestamp_nanos_decoding_with_nulls() {
+        let avro_type = AvroDataType::new(
+            Codec::TimestampNanos(false),
+            Default::default(),
+            Some(Nullability::NullFirst),
+        );
+        let mut decoder = Decoder::try_new(&avro_type).expect("create nullable TimestampNanos");
+        let mut data = Vec::new();
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&encode_avro_long(42));
+        data.extend_from_slice(&encode_avro_long(0));
+        data.extend_from_slice(&encode_avro_long(1));
+        data.extend_from_slice(&encode_avro_long(-7));
+        let mut cur = AvroCursor::new(&data);
+        for _ in 0..3 {
+            decoder.decode(&mut cur).expect("decode nullable nanos ts");
+        }
+        let array = decoder.flush(None).expect("flush nullable nanos ts");
+        let ts = array
+            .as_any()
+            .downcast_ref::<TimestampNanosecondArray>()
+            .expect("TimestampNanosecondArray");
+        assert_eq!(ts.len(), 3);
+        assert!(ts.is_valid(0));
+        assert!(ts.is_null(1));
+        assert!(ts.is_valid(2));
+        assert_eq!(ts.value(0), 42);
+        assert_eq!(ts.value(2), -7);
+        match ts.data_type() {
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, tz) => {
+                assert_eq!(tz.as_deref(), None);
+            }
+            other => panic!("expected Timestamp(Nanosecond, None), got {other:?}"),
+        }
     }
 }
