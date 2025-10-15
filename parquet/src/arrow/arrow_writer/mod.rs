@@ -450,11 +450,11 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
-    /// This can be useful to provide more control over how files are written.
-    #[deprecated(
-        since = "57.0.0",
-        note = "Construct a `SerializedFileWriter` and `ArrowRowGroupWriterFactory` directly instead"
-    )]
+    ///
+    /// Flushes any outstanding data before returning.
+    ///
+    /// This can be useful to provide more control over how files are written, for example
+    /// to write columns in parallel. See the example on [`ArrowColumnWriter`].
     pub fn into_serialized_writer(
         mut self,
     ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
@@ -872,6 +872,11 @@ impl ArrowColumnWriter {
 }
 
 /// Encodes [`RecordBatch`] to a parquet row group
+///
+/// You can create this structure via an [`ArrowRowGroupWriterFactory`]
+///
+/// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
+#[derive(Debug)]
 struct ArrowRowGroupWriter {
     writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
@@ -907,6 +912,10 @@ impl ArrowRowGroupWriter {
 }
 
 /// Factory that creates new column writers for each row group in the Parquet file.
+///
+/// You can create this structure via an [`ArrowWriter::into_serialized_writer`].
+/// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
+#[derive(Debug)]
 pub struct ArrowRowGroupWriterFactory {
     schema: SchemaDescPtr,
     arrow_schema: SchemaRef,
