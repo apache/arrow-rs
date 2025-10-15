@@ -395,17 +395,23 @@ mod tests {
     use crate::reader::ReaderBuilder;
     use crate::schema::{AvroSchema, SchemaStore};
     use crate::test_util::arrow_test_data;
+    use arrow::datatypes::TimeUnit;
     #[cfg(feature = "avro_custom_types")]
     use arrow_array::types::{Int16Type, Int32Type, Int64Type};
+    use arrow_array::types::{
+        Time32MillisecondType, Time64MicrosecondType, TimestampMicrosecondType,
+        TimestampMillisecondType, TimestampNanosecondType,
+    };
     use arrow_array::{
-        Array, ArrayRef, BinaryArray, Int32Array, RecordBatch, StructArray, UnionArray,
+        Array, ArrayRef, BinaryArray, Date32Array, Int32Array, PrimitiveArray, RecordBatch,
+        StructArray, UnionArray,
     };
     #[cfg(feature = "avro_custom_types")]
     use arrow_array::{Int16Array, Int64Array, RunArray, StringArray};
     #[cfg(not(feature = "avro_custom_types"))]
     use arrow_schema::{DataType, Field, Schema};
     #[cfg(feature = "avro_custom_types")]
-    use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    use arrow_schema::{DataType, Field, Schema};
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs::File;
@@ -758,8 +764,8 @@ mod tests {
     }
 
     // Strict equality (schema + values) only when canonical extension types are enabled
-    #[cfg(feature = "canonical_extension_types")]
     #[test]
+    #[cfg(feature = "canonical_extension_types")]
     fn test_round_trip_duration_and_uuid_ocf() -> Result<(), ArrowError> {
         use arrow_schema::{DataType, IntervalUnit};
         let in_file =
@@ -806,8 +812,8 @@ mod tests {
     }
 
     // Feature OFF: only values are asserted equal; schema may legitimately differ (uuid as fixed(16))
-    #[cfg(not(feature = "canonical_extension_types"))]
     #[test]
+    #[cfg(not(feature = "canonical_extension_types"))]
     fn test_duration_and_uuid_ocf_without_extensions_round_trips_values() -> Result<(), ArrowError>
     {
         use arrow::datatypes::{DataType, IntervalUnit};
@@ -869,8 +875,9 @@ mod tests {
         let uuid_rt = rt_schema.field_with_name("uuid_field")?;
         assert_eq!(uuid_rt.data_type(), &DataType::FixedSizeBinary(16));
         assert_eq!(
-            uuid_rt.metadata().get("avro.name").map(|s| s.as_str()),
-            Some("uuid_field")
+            uuid_rt.metadata().get("logicalType").map(|s| s.as_str()),
+            Some("uuid"),
+            "expected `logicalType = \"uuid\"` on round-tripped field metadata"
         );
 
         // 3) Duration remains Interval(MonthDayNano)
@@ -1857,6 +1864,313 @@ mod tests {
             .expect("Int32Array");
         let expected = Int32Array::from(vec![Some(1), Some(1), Some(2), Some(2), None, None]);
         assert_eq!(got, &expected);
+        Ok(())
+    }
+
+    #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
+    fn test_nullable_impala_roundtrip() -> Result<(), ArrowError> {
+        let path = arrow_test_data("avro/nullable.impala.avro");
+        let rdr_file = File::open(&path).expect("open avro/nullable.impala.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for nullable.impala.avro");
+        let in_schema = reader.schema();
+        assert!(
+            in_schema.fields().iter().any(|f| f.is_nullable()),
+            "expected at least one nullable field in avro/nullable.impala.avro"
+        );
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        let buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(buffer, in_schema.as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let out_bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(out_bytes))
+            .expect("build reader for round-tripped in-memory OCF");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+        assert_eq!(
+            roundtrip, original,
+            "Round-trip Avro data mismatch for nullable.impala.avro"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "snappy")]
+    fn test_datapage_v2_roundtrip() -> Result<(), ArrowError> {
+        let path = arrow_test_data("avro/datapage_v2.snappy.avro");
+        let rdr_file = File::open(&path).expect("open avro/datapage_v2.snappy.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for datapage_v2.snappy.avro");
+        let in_schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), in_schema.as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build round-trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+        assert_eq!(
+            round_trip, original,
+            "Round-trip batch mismatch for datapage_v2.snappy.avro"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "snappy")]
+    fn test_single_nan_roundtrip() -> Result<(), ArrowError> {
+        let path = arrow_test_data("avro/single_nan.avro");
+        let in_file = File::open(&path).expect("open avro/single_nan.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(in_file))
+            .expect("build reader for single_nan.avro");
+        let in_schema = reader.schema();
+        let in_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &in_batches).expect("concat input");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+        assert_eq!(
+            round_trip, original,
+            "Round-trip batch mismatch for avro/single_nan.avro"
+        );
+        Ok(())
+    }
+    #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
+    fn test_dict_pages_offset_zero_roundtrip() -> Result<(), ArrowError> {
+        let path = arrow_test_data("avro/dict-page-offset-zero.avro");
+        let rdr_file = File::open(&path).expect("open avro/dict-page-offset-zero.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for dict-page-offset-zero.avro");
+        let in_schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        let buffer: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(buffer, original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build reader for round-trip");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+        assert_eq!(
+            roundtrip, original,
+            "Round-trip batch mismatch for avro/dict-page-offset-zero.avro"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[cfg(feature = "snappy")]
+    fn test_repeated_no_annotation_roundtrip() -> Result<(), ArrowError> {
+        let path = arrow_test_data("avro/repeated_no_annotation.avro");
+        let in_file = File::open(&path).expect("open avro/repeated_no_annotation.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(in_file))
+            .expect("build reader for repeated_no_annotation.avro");
+        let in_schema = reader.schema();
+        let in_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &in_batches).expect("concat input");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build reader for round-trip buffer");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round-trip");
+        assert_eq!(
+            round_trip, original,
+            "Round-trip batch mismatch for avro/repeated_no_annotation.avro"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_nested_record_type_reuse_roundtrip() -> Result<(), ArrowError> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test/data/nested_record_reuse.avro")
+            .to_string_lossy()
+            .into_owned();
+        let in_file = File::open(&path).expect("open avro/nested_record_reuse.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(in_file))
+            .expect("build reader for nested_record_reuse.avro");
+        let in_schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let input =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), in_schema.as_ref().clone())?;
+        writer.write(&input)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+        assert_eq!(
+            round_trip, input,
+            "Round-trip batch mismatch for nested_record_reuse.avro"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_enum_type_reuse_roundtrip() -> Result<(), ArrowError> {
+        let path =
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test/data/enum_reuse.avro");
+        let rdr_file = std::fs::File::open(&path).expect("open test/data/enum_reuse.avro");
+        let reader = ReaderBuilder::new()
+            .build(std::io::BufReader::new(rdr_file))
+            .expect("build reader for enum_reuse.avro");
+        let in_schema = reader.schema();
+        let input_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &input_batches).expect("concat input");
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(std::io::Cursor::new(bytes))
+            .expect("build round_trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let round_trip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat round_trip");
+        assert_eq!(
+            round_trip, original,
+            "Avro enum type reuse round-trip mismatch"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn comprehensive_e2e_test_roundtrip() -> Result<(), ArrowError> {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("test/data/comprehensive_e2e.avro");
+        let rdr_file = File::open(&path).expect("open test/data/comprehensive_e2e.avro");
+        let reader = ReaderBuilder::new()
+            .build(BufReader::new(rdr_file))
+            .expect("build reader for comprehensive_e2e.avro");
+        let in_schema = reader.schema();
+        let in_batches = reader.collect::<Result<Vec<_>, _>>()?;
+        let original =
+            arrow::compute::concat_batches(&in_schema, &in_batches).expect("concat input");
+        let sink: Vec<u8> = Vec::new();
+        let mut writer = AvroWriter::new(sink, original.schema().as_ref().clone())?;
+        writer.write(&original)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(Cursor::new(bytes))
+            .expect("build round-trip reader");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+        assert_eq!(
+            roundtrip, original,
+            "Round-trip batch mismatch for comprehensive_e2e.avro"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_roundtrip_new_time_encoders_writer() -> Result<(), ArrowError> {
+        let schema = Schema::new(vec![
+            Field::new("d32", DataType::Date32, false),
+            Field::new("t32_ms", DataType::Time32(TimeUnit::Millisecond), false),
+            Field::new("t64_us", DataType::Time64(TimeUnit::Microsecond), false),
+            Field::new(
+                "ts_ms",
+                DataType::Timestamp(TimeUnit::Millisecond, None),
+                false,
+            ),
+            Field::new(
+                "ts_us",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                false,
+            ),
+            Field::new(
+                "ts_ns",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                false,
+            ),
+        ]);
+        let d32 = Date32Array::from(vec![0, 1, -1]);
+        let t32_ms: PrimitiveArray<Time32MillisecondType> =
+            vec![0_i32, 12_345_i32, 86_399_999_i32].into();
+        let t64_us: PrimitiveArray<Time64MicrosecondType> =
+            vec![0_i64, 1_234_567_i64, 86_399_999_999_i64].into();
+        let ts_ms: PrimitiveArray<TimestampMillisecondType> =
+            vec![0_i64, -1_i64, 1_700_000_000_000_i64].into();
+        let ts_us: PrimitiveArray<TimestampMicrosecondType> = vec![0_i64, 1_i64, -1_i64].into();
+        let ts_ns: PrimitiveArray<TimestampNanosecondType> = vec![0_i64, 1_i64, -1_i64].into();
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(d32) as ArrayRef,
+                Arc::new(t32_ms) as ArrayRef,
+                Arc::new(t64_us) as ArrayRef,
+                Arc::new(ts_ms) as ArrayRef,
+                Arc::new(ts_us) as ArrayRef,
+                Arc::new(ts_ns) as ArrayRef,
+            ],
+        )?;
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), schema.clone())?;
+        writer.write(&batch)?;
+        writer.finish()?;
+        let bytes = writer.into_inner();
+        let rt_reader = ReaderBuilder::new()
+            .build(std::io::Cursor::new(bytes))
+            .expect("build reader for round-trip of new time encoders");
+        let rt_schema = rt_reader.schema();
+        let rt_batches = rt_reader.collect::<Result<Vec<_>, _>>()?;
+        let roundtrip =
+            arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
+        assert_eq!(roundtrip, batch);
         Ok(())
     }
 }
