@@ -457,6 +457,7 @@ fn read_column_metadata<'a>(
             11 => {
                 column.dictionary_page_offset = Some(i64::read_thrift(&mut *prot)?);
             }
+            /*
             12 => {
                 column.statistics =
                     convert_stats(column_descr, Some(Statistics::read_thrift(&mut *prot)?))?;
@@ -466,12 +467,14 @@ fn read_column_metadata<'a>(
                     read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
                 column.encoding_stats = Some(val);
             }
+             */
             14 => {
                 column.bloom_filter_offset = Some(i64::read_thrift(&mut *prot)?);
             }
             15 => {
                 column.bloom_filter_length = Some(i32::read_thrift(&mut *prot)?);
             }
+            /*
             16 => {
                 let val = SizeStatistics::read_thrift(&mut *prot)?;
                 column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
@@ -484,6 +487,7 @@ fn read_column_metadata<'a>(
                 let val = GeospatialStatistics::read_thrift(&mut *prot)?;
                 column.geo_statistics = convert_geo_stats(Some(val));
             }
+             */
             _ => {
                 prot.skip(field_ident.field_type)?;
             }
@@ -537,6 +541,7 @@ fn read_column_chunk<'a>(
             3 => {
                 col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
             }
+            /**
             4 => {
                 col.offset_index_offset = Some(i64::read_thrift(&mut *prot)?);
             }
@@ -549,6 +554,7 @@ fn read_column_chunk<'a>(
             7 => {
                 col.column_index_length = Some(i32::read_thrift(&mut *prot)?);
             }
+            **/
             #[cfg(feature = "encryption")]
             8 => {
                 let val = ColumnCryptoMetaData::read_thrift(&mut *prot)?;
