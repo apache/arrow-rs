@@ -212,11 +212,7 @@ fn gen_option_iter<TItem: Clone + 'static>(
 ) -> Box<dyn ExactSizeIterator<Item = Option<TItem>>> {
     hint::black_box(Box::new(repeat_n(item, len).enumerate().map(
         |(idx, item)| {
-            if idx % 3 == 0 {
-                None
-            } else {
-                Some(item)
-            }
+            if idx % 3 == 0 { None } else { Some(item) }
         },
     )))
 }
