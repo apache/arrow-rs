@@ -17,18 +17,16 @@
 
 use std::alloc::{Layout, handle_alloc_error};
 use std::mem;
-use std::ops::AddAssign;
 use std::ptr::NonNull;
 
 use crate::alloc::{ALIGNMENT, Deallocation};
-use crate::{bitwise_unary_op_helper, bytes::Bytes, native::{ArrowNativeType, ToByteSlice}, util::bit_util};
+use crate::{bytes::Bytes, native::{ArrowNativeType, ToByteSlice}, util::bit_util};
 
 #[cfg(feature = "pool")]
 use crate::pool::{MemoryPool, MemoryReservation};
 #[cfg(feature = "pool")]
 use std::sync::Mutex;
 use crate::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::bit_util::ceil;
 use super::Buffer;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.

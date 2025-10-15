@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util, left_mutable_buffer_bin_and, both_mutable_buffer_bin_and, left_mutable_buffer_bin_or, both_mutable_buffer_bin_or, left_mutable_buffer_bin_xor, both_mutable_buffer_bin_xor, mutable_buffer_unary_not};
+use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util, mutable_buffer_bin_and, mutable_buffer_bin_or, mutable_buffer_bin_xor, mutable_buffer_unary_not, MutableOpsBufferSupportedLhs};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Range};
 
 /// Builder for [`BooleanBuffer`]
@@ -256,32 +256,12 @@ impl BooleanBufferBuilder {
     pub fn finish_cloned(&self) -> BooleanBuffer {
         BooleanBuffer::new(Buffer::from_slice_ref(self.as_slice()), 0, self.len)
     }
+}
 
-    /// Returns a reference to the inner [`MutableBuffer`]
-    ///
-    /// only in tests and not public API to avoid misuse as the length of the buffer
-    /// is not updated when modifying the inner buffer directly
-    #[cfg(test)]
-    pub(crate) fn inner_mut(&mut self) -> &mut MutableBuffer {
+/// This trait is not public API so it does not leak the inner mutable buffer
+impl MutableOpsBufferSupportedLhs for BooleanBufferBuilder {
+    fn inner_mutable_buffer(&mut self) -> &mut MutableBuffer {
         &mut self.buffer
-    }
-
-    /// Get the inner [`MutableBuffer`]
-    /// 
-    /// Note: it might be larger than the actual length of initialized bits
-    /// as the bits are packed.
-    pub fn into_inner(self) -> MutableBuffer {
-        self.buffer
-    }
-    
-    
-    pub fn fixed_slice(&mut self, range: Range<usize>) -> BooleanBuffer {
-        assert!(range.end <= self.len);
-        BooleanBuffer::new(
-            Buffer::from_slice_ref(self.as_slice()),
-            range.start,
-            range.end - range.start,
-        )
     }
 }
 
@@ -321,7 +301,7 @@ impl BitAndAssign<&BooleanBuffer> for BooleanBufferBuilder {
     fn bitand_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
 
-        left_mutable_buffer_bin_and(&mut self.buffer, 0, &rhs.inner(), rhs.offset(), self.len);
+        mutable_buffer_bin_and(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
     }
 }
 
@@ -329,7 +309,7 @@ impl BitAndAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
     fn bitand_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
 
-        both_mutable_buffer_bin_and(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+        mutable_buffer_bin_and(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
     }
 }
 
@@ -357,7 +337,7 @@ impl BitOrAssign<&BooleanBuffer> for BooleanBufferBuilder {
     fn bitor_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
 
-        left_mutable_buffer_bin_or(&mut self.buffer, 0, &rhs.inner(), rhs.offset(), self.len);
+        mutable_buffer_bin_or(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
     }
 }
 
@@ -365,7 +345,7 @@ impl BitOrAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
     fn bitor_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
 
-        both_mutable_buffer_bin_or(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+        mutable_buffer_bin_or(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
     }
 }
 
@@ -393,7 +373,7 @@ impl BitXorAssign<&BooleanBuffer> for BooleanBufferBuilder {
     fn bitxor_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
 
-        left_mutable_buffer_bin_xor(&mut self.buffer, 0, &rhs.inner(), rhs.offset(), self.len);
+        mutable_buffer_bin_xor(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
     }
 }
 
@@ -401,7 +381,7 @@ impl BitXorAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
     fn bitxor_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
 
-        both_mutable_buffer_bin_xor(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+        mutable_buffer_bin_xor(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
     }
 }
 
