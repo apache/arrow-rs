@@ -716,7 +716,7 @@ mod tests {
         let expected = v.clone().into_iter().collect::<BooleanArray>();
         let actual = unsafe {
             // SAFETY: `v` has trusted length
-            BooleanArray::from_trusted_len_iter(v.into_iter())
+            BooleanArray::from_trusted_len_iter(v)
         };
         assert_eq!(expected, actual);
     }
