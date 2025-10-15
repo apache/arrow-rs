@@ -19,7 +19,7 @@ use arrow::array::{
     ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder, builder::BooleanBuilder,
 };
 use arrow::compute::CastOptions;
-use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
+use arrow::datatypes::{self, DataType};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantPath};
 
@@ -325,27 +325,6 @@ impl<'a> VariantPathRowBuilder<'a> {
     }
 }
 
-/// Helper function to get a user-friendly type name
-fn get_type_name<T: ArrowPrimitiveType>() -> &'static str {
-    match std::any::type_name::<T>() {
-        "arrow_array::types::Int32Type" => "Int32",
-        "arrow_array::types::Int16Type" => "Int16",
-        "arrow_array::types::Int8Type" => "Int8",
-        "arrow_array::types::Int64Type" => "Int64",
-        "arrow_array::types::UInt32Type" => "UInt32",
-        "arrow_array::types::UInt16Type" => "UInt16",
-        "arrow_array::types::UInt8Type" => "UInt8",
-        "arrow_array::types::UInt64Type" => "UInt64",
-        "arrow_array::types::Float32Type" => "Float32",
-        "arrow_array::types::Float64Type" => "Float64",
-        "arrow_array::types::Float16Type" => "Float16",
-        "arrow_array::types::TimestampMicrosecondType" => "Timestamp(Microsecond)",
-        "arrow_array::types::TimestampNanosecondType" => "Timestamp(Nanosecond)",
-        "arrow_array::types::Date32Type" => "Date32",
-        _ => "Unknown",
-    }
-}
-
 macro_rules! define_variant_to_primitive_builder {
     (struct $name:ident<$lifetime:lifetime $(, $generic:ident: $bound:path )?>
     |$array_param:ident $(, $field:ident: $field_type:ty)?| -> $builder_name:ident $(< $array_type:ty >)? { $init_expr: expr },
@@ -405,21 +384,21 @@ define_variant_to_primitive_builder!(
     struct VariantToBooleanArrowRowBuilder<'a>
     |capacity| -> BooleanBuilder { BooleanBuilder::with_capacity(capacity) },
     |value|  value.as_boolean(),
-    type_name: "Boolean"
+    type_name: datatypes::BooleanType::DATA_TYPE
 );
 
 define_variant_to_primitive_builder!(
     struct VariantToPrimitiveArrowRowBuilder<'a, T:PrimitiveFromVariant>
     |capacity| -> PrimitiveBuilder<T> { PrimitiveBuilder::<T>::with_capacity(capacity) },
     |value| T::from_variant(value),
-    type_name: get_type_name::<T>()
+    type_name: T::DATA_TYPE
 );
 
 define_variant_to_primitive_builder!(
     struct VariantToTimestampNtzArrowRowBuilder<'a, T:TimestampFromVariant<true>>
     |capacity| -> PrimitiveBuilder<T> { PrimitiveBuilder::<T>::with_capacity(capacity) },
     |value| T::from_variant(value),
-    type_name: get_type_name::<T>()
+    type_name: T::DATA_TYPE
 );
 
 define_variant_to_primitive_builder!(
@@ -428,7 +407,7 @@ define_variant_to_primitive_builder!(
         PrimitiveBuilder::<T>::with_capacity(capacity).with_timezone_opt(tz)
     },
     |value| T::from_variant(value),
-    type_name: get_type_name::<T>()
+    type_name: T::DATA_TYPE
 );
 
 /// Builder for creating VariantArray output (for path extraction without type conversion)

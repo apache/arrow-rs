@@ -293,12 +293,9 @@ impl<'a> GetOptions<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
     use super::{GetOptions, variant_get};
-    use crate::VariantArray;
-    use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+    use crate::{VariantArray, VariantArrayBuilder, json_to_variant};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float32Array,
         Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, StringArray, StructArray,
@@ -306,10 +303,11 @@ mod test {
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
-    use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
+    use arrow_schema::DataType::{Boolean, Float32, Float64, Int8, Timestamp};
     use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantPath};
+    use std::sync::Arc;
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -2097,6 +2095,73 @@ mod test {
                 .to_string()
                 .contains("Cannot access field 'nonexistent_field' on non-struct type")
         );
+    }
+
+    #[test]
+    fn test_error_message_boolean_type_display() {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::Int32(123));
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        // Request Boolean with strict casting to force an error
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", DataType::Boolean, true))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array, options).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to extract primitive of type Boolean"));
+    }
+
+    #[test]
+    fn test_error_message_numeric_type_display() {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::BooleanTrue);
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        // Request Boolean with strict casting to force an error
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", DataType::Float32, true))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array, options).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to extract primitive of type Float32"));
+    }
+
+    #[test]
+    fn test_error_message_temporal_type_display() {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::BooleanFalse);
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        // Request Boolean with strict casting to force an error
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new(
+                "result",
+                Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array, options).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to extract primitive of type Timestamp(ns)"));
     }
 
     #[test]
