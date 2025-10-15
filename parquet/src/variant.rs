@@ -142,8 +142,8 @@ pub use parquet_variant_compute::*;
 
 #[cfg(test)]
 mod tests {
-    use crate::arrow::arrow_reader::ArrowReaderBuilder;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::ArrowReaderBuilder;
     use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
     use crate::file::reader::ChunkReader;
     use arrow::util::test_util::parquet_test_data;
@@ -199,7 +199,9 @@ mod tests {
         // data should have been written with the Variant logical type
         assert_eq!(
             field.get_basic_info().logical_type(),
-            Some(crate::basic::LogicalType::Variant)
+            Some(crate::basic::LogicalType::Variant {
+                specification_version: None
+            })
         );
     }
 

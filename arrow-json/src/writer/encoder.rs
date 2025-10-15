@@ -26,7 +26,7 @@ use arrow_cast::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use half::f16;
 use lexical_core::FormattedSize;
-use serde::Serializer;
+use serde_core::Serializer;
 
 /// Configuration options for the JSON encoder.
 #[derive(Debug, Clone, Default)]

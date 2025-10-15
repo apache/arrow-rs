@@ -25,7 +25,7 @@ use crate::basic::Type as PhysicalType;
 use crate::data_type::{ByteArray, FixedLenByteArray};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData};
-use crate::file::page_index::index::{Index, PageIndex};
+use crate::file::page_index::column_index::{ColumnIndexIterators, ColumnIndexMetaData};
 use crate::file::statistics::Statistics as ParquetStatistics;
 use crate::schema::types::SchemaDescriptor;
 use arrow_array::builder::{
@@ -33,12 +33,12 @@ use arrow_array::builder::{
     StringViewBuilder,
 };
 use arrow_array::{
-    new_empty_array, new_null_array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array,
-    Decimal128Array, Decimal256Array, Decimal32Array, Decimal64Array, Float16Array, Float32Array,
-    Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
-    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
-    TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
+    ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, Decimal32Array, Decimal64Array,
+    Decimal128Array, Decimal256Array, Float16Array, Float32Array, Float64Array, Int8Array,
+    Int16Array, Int32Array, Int64Array, LargeBinaryArray, Time32MillisecondArray,
+    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array, new_empty_array, new_null_array,
 };
 use arrow_buffer::i256;
 use arrow_schema::{DataType, Field, Schema, TimeUnit};
@@ -597,17 +597,17 @@ macro_rules! get_statistics {
 }
 
 macro_rules! make_data_page_stats_iterator {
-    ($iterator_type: ident, $func: expr, $index_type: path, $stat_value_type: ty) => {
+    ($iterator_type: ident, $func: ident, $stat_value_type: ty) => {
         struct $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             iter: I,
         }
 
         impl<'a, I> $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             fn new(iter: I) -> Self {
                 Self { iter }
@@ -616,7 +616,7 @@ macro_rules! make_data_page_stats_iterator {
 
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             type Item = Vec<Option<$stat_value_type>>;
 
@@ -624,16 +624,14 @@ macro_rules! make_data_page_stats_iterator {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
-                        $index_type(native_index) => {
-                            Some(native_index.indexes.iter().map($func).collect::<Vec<_>>())
-                        }
                         // No matching `Index` found;
                         // thus no statistics that can be extracted.
                         // We return vec![None; len] to effectively
                         // create an arrow null-array with the length
                         // corresponding to the number of entries in
                         // `ParquetOffsetIndex` per row group per column.
-                        _ => Some(vec![None; len]),
+                        ColumnIndexMetaData::NONE => Some(vec![None; len]),
+                        _ => Some(<$stat_value_type>::$func(&index).collect::<Vec<_>>()),
                     },
                     _ => None,
                 }
@@ -646,101 +644,45 @@ macro_rules! make_data_page_stats_iterator {
     };
 }
 
-make_data_page_stats_iterator!(
-    MinBooleanDataPageStatsIterator,
-    |x: &PageIndex<bool>| { x.min },
-    Index::BOOLEAN,
-    bool
-);
-make_data_page_stats_iterator!(
-    MaxBooleanDataPageStatsIterator,
-    |x: &PageIndex<bool>| { x.max },
-    Index::BOOLEAN,
-    bool
-);
-make_data_page_stats_iterator!(
-    MinInt32DataPageStatsIterator,
-    |x: &PageIndex<i32>| { x.min },
-    Index::INT32,
-    i32
-);
-make_data_page_stats_iterator!(
-    MaxInt32DataPageStatsIterator,
-    |x: &PageIndex<i32>| { x.max },
-    Index::INT32,
-    i32
-);
-make_data_page_stats_iterator!(
-    MinInt64DataPageStatsIterator,
-    |x: &PageIndex<i64>| { x.min },
-    Index::INT64,
-    i64
-);
-make_data_page_stats_iterator!(
-    MaxInt64DataPageStatsIterator,
-    |x: &PageIndex<i64>| { x.max },
-    Index::INT64,
-    i64
-);
+make_data_page_stats_iterator!(MinBooleanDataPageStatsIterator, min_values_iter, bool);
+make_data_page_stats_iterator!(MaxBooleanDataPageStatsIterator, max_values_iter, bool);
+make_data_page_stats_iterator!(MinInt32DataPageStatsIterator, min_values_iter, i32);
+make_data_page_stats_iterator!(MaxInt32DataPageStatsIterator, max_values_iter, i32);
+make_data_page_stats_iterator!(MinInt64DataPageStatsIterator, min_values_iter, i64);
+make_data_page_stats_iterator!(MaxInt64DataPageStatsIterator, max_values_iter, i64);
 make_data_page_stats_iterator!(
     MinFloat16DataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
+    min_values_iter,
     FixedLenByteArray
 );
 make_data_page_stats_iterator!(
     MaxFloat16DataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
+    max_values_iter,
     FixedLenByteArray
 );
-make_data_page_stats_iterator!(
-    MinFloat32DataPageStatsIterator,
-    |x: &PageIndex<f32>| { x.min },
-    Index::FLOAT,
-    f32
-);
-make_data_page_stats_iterator!(
-    MaxFloat32DataPageStatsIterator,
-    |x: &PageIndex<f32>| { x.max },
-    Index::FLOAT,
-    f32
-);
-make_data_page_stats_iterator!(
-    MinFloat64DataPageStatsIterator,
-    |x: &PageIndex<f64>| { x.min },
-    Index::DOUBLE,
-    f64
-);
-make_data_page_stats_iterator!(
-    MaxFloat64DataPageStatsIterator,
-    |x: &PageIndex<f64>| { x.max },
-    Index::DOUBLE,
-    f64
-);
+make_data_page_stats_iterator!(MinFloat32DataPageStatsIterator, min_values_iter, f32);
+make_data_page_stats_iterator!(MaxFloat32DataPageStatsIterator, max_values_iter, f32);
+make_data_page_stats_iterator!(MinFloat64DataPageStatsIterator, min_values_iter, f64);
+make_data_page_stats_iterator!(MaxFloat64DataPageStatsIterator, max_values_iter, f64);
 make_data_page_stats_iterator!(
     MinByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.min.clone() },
-    Index::BYTE_ARRAY,
+    min_values_iter,
     ByteArray
 );
 make_data_page_stats_iterator!(
     MaxByteArrayDataPageStatsIterator,
-    |x: &PageIndex<ByteArray>| { x.max.clone() },
-    Index::BYTE_ARRAY,
+    max_values_iter,
     ByteArray
 );
 make_data_page_stats_iterator!(
     MaxFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.max.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
+    max_values_iter,
     FixedLenByteArray
 );
 
 make_data_page_stats_iterator!(
     MinFixedLenByteArrayDataPageStatsIterator,
-    |x: &PageIndex<FixedLenByteArray>| { x.min.clone() },
-    Index::FIXED_LEN_BYTE_ARRAY,
+    min_values_iter,
     FixedLenByteArray
 );
 
@@ -748,14 +690,14 @@ macro_rules! get_decimal_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $stat_value_type: ident, $convert_func: ident) => {
         struct $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             iter: I,
         }
 
         impl<'a, I> $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             fn new(iter: I) -> Self {
                 Self { iter }
@@ -764,44 +706,37 @@ macro_rules! get_decimal_page_stats_iterator {
 
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a Index)>,
+            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
         {
             type Item = Vec<Option<$stat_value_type>>;
 
+            // Some(native_index.$func().map(|v| v.map($conv)).collect::<Vec<_>>())
             fn next(&mut self) -> Option<Self::Item> {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
-                        Index::INT32(native_index) => Some(
+                        ColumnIndexMetaData::INT32(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| x.$func.and_then(|x| Some($stat_value_type::from(x))))
+                                .$func()
+                                .map(|x| x.map(|x| $stat_value_type::from(*x)))
                                 .collect::<Vec<_>>(),
                         ),
-                        Index::INT64(native_index) => Some(
+                        ColumnIndexMetaData::INT64(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| x.$func.and_then(|x| $stat_value_type::try_from(x).ok()))
+                                .$func()
+                                .map(|x| x.map(|x| $stat_value_type::try_from(*x).unwrap()))
                                 .collect::<Vec<_>>(),
                         ),
-                        Index::BYTE_ARRAY(native_index) => Some(
+                        ColumnIndexMetaData::BYTE_ARRAY(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| {
-                                    x.clone().$func.and_then(|x| Some($convert_func(x.data())))
-                                })
+                                .$func()
+                                .map(|x| x.map(|x| $convert_func(x)))
                                 .collect::<Vec<_>>(),
                         ),
-                        Index::FIXED_LEN_BYTE_ARRAY(native_index) => Some(
+                        ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(native_index) => Some(
                             native_index
-                                .indexes
-                                .iter()
-                                .map(|x| {
-                                    x.clone().$func.and_then(|x| Some($convert_func(x.data())))
-                                })
+                                .$func()
+                                .map(|x| x.map(|x| $convert_func(x)))
                                 .collect::<Vec<_>>(),
                         ),
                         _ => Some(vec![None; len]),
@@ -819,56 +754,56 @@ macro_rules! get_decimal_page_stats_iterator {
 
 get_decimal_page_stats_iterator!(
     MinDecimal32DataPageStatsIterator,
-    min,
+    min_values_iter,
     i32,
     from_bytes_to_i32
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal32DataPageStatsIterator,
-    max,
+    max_values_iter,
     i32,
     from_bytes_to_i32
 );
 
 get_decimal_page_stats_iterator!(
     MinDecimal64DataPageStatsIterator,
-    min,
+    min_values_iter,
     i64,
     from_bytes_to_i64
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal64DataPageStatsIterator,
-    max,
+    max_values_iter,
     i64,
     from_bytes_to_i64
 );
 
 get_decimal_page_stats_iterator!(
     MinDecimal128DataPageStatsIterator,
-    min,
+    min_values_iter,
     i128,
     from_bytes_to_i128
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal128DataPageStatsIterator,
-    max,
+    max_values_iter,
     i128,
     from_bytes_to_i128
 );
 
 get_decimal_page_stats_iterator!(
     MinDecimal256DataPageStatsIterator,
-    min,
+    min_values_iter,
     i256,
     from_bytes_to_i256
 );
 
 get_decimal_page_stats_iterator!(
     MaxDecimal256DataPageStatsIterator,
-    max,
+    max_values_iter,
     i256,
     from_bytes_to_i256
 );
@@ -1174,77 +1109,44 @@ fn max_statistics<'a, I: Iterator<Item = Option<&'a ParquetStatistics>>>(
 }
 
 /// Extracts the min statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
 pub(crate) fn min_page_statistics<'a, I>(
     data_type: &DataType,
     iterator: I,
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a Index)>,
+    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
 {
     get_data_page_statistics!(Min, data_type, iterator, physical_type)
 }
 
 /// Extracts the max statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
 pub(crate) fn max_page_statistics<'a, I>(
     data_type: &DataType,
     iterator: I,
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a Index)>,
+    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
 {
     get_data_page_statistics!(Max, data_type, iterator, physical_type)
 }
 
 /// Extracts the null count statistics from an iterator
-/// of parquet page [`Index`]'es to an [`ArrayRef`]
+/// of parquet page [`ColumnIndexMetaData`]'s to an [`ArrayRef`]
 ///
 /// The returned Array is an [`UInt64Array`]
 pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
 where
-    I: Iterator<Item = (usize, &'a Index)>,
+    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
 {
     let iter = iterator.flat_map(|(len, index)| match index {
-        Index::NONE => vec![None; len],
-        Index::BOOLEAN(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::INT32(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::INT64(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::FLOAT(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::DOUBLE(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::FIXED_LEN_BYTE_ARRAY(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        Index::BYTE_ARRAY(native_index) => native_index
-            .indexes
-            .iter()
-            .map(|x| x.null_count.map(|x| x as u64))
-            .collect::<Vec<_>>(),
-        _ => unimplemented!(),
+        ColumnIndexMetaData::NONE => vec![None; len],
+        column_index => column_index.null_counts().map_or(vec![None; len], |v| {
+            v.iter().map(|i| Some(*i as u64)).collect::<Vec<_>>()
+        }),
     });
 
     Ok(UInt64Array::from_iter(iter))
@@ -1573,7 +1475,7 @@ impl<'a> StatisticsConverter<'a> {
     /// page level statistics can prune at a finer granularity.
     ///
     /// However since they are stored in a separate metadata
-    /// structure ([`Index`]) there is different code to extract them as
+    /// structure ([`ColumnIndexMetaData`]) there is different code to extract them as
     /// compared to arrow statistics.
     ///
     /// # Parameters:

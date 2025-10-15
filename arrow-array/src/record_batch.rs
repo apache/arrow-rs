@@ -445,14 +445,16 @@ impl RecordBatch {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        RecordBatch::try_new_with_options(
-            SchemaRef::new(projected_schema),
-            batch_fields,
-            &RecordBatchOptions {
-                match_field_names: true,
-                row_count: Some(self.row_count),
-            },
-        )
+        unsafe {
+            // Since we're starting from a valid RecordBatch and project
+            // creates a strict subset of the original, there's no need to
+            // redo the validation checks in `try_new_with_options`.
+            Ok(RecordBatch::new_unchecked(
+                SchemaRef::new(projected_schema),
+                batch_fields,
+                self.row_count,
+            ))
+        }
     }
 
     /// Normalize a semi-structured [`RecordBatch`] into a flat table.

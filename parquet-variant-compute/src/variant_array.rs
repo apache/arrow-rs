@@ -26,13 +26,11 @@ use arrow::datatypes::{
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{
-    ArrowError, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
-    DataType, Field, FieldRef, Fields, TimeUnit,
-};
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use chrono::DateTime;
-use parquet_variant::Uuid;
-use parquet_variant::Variant;
+use parquet_variant::{
+    Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
+};
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -422,6 +420,11 @@ impl VariantArray {
     pub fn is_valid(&self, index: usize) -> bool {
         !self.is_null(index)
     }
+
+    /// Returns an iterator over the values in this array
+    pub fn iter(&self) -> VariantArrayIter<'_> {
+        VariantArrayIter::new(self)
+    }
 }
 
 impl From<VariantArray> for StructArray {
@@ -435,6 +438,89 @@ impl From<VariantArray> for ArrayRef {
         Arc::new(variant_array.into_inner())
     }
 }
+
+/// An iterator over [`VariantArray`]
+///
+/// This iterator returns `Option<Option<Variant<'a, 'a>>>` where:
+/// - `None` indicates the end of iteration
+/// - `Some(None)` indicates a null value at this position
+/// - `Some(Some(variant))` indicates a valid variant value
+///
+/// # Example
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArrayBuilder;
+/// let mut builder = VariantArrayBuilder::new(10);
+/// builder.append_variant(Variant::from(42));
+/// builder.append_null();
+/// builder.append_variant(Variant::from("hello"));
+/// let array = builder.build();
+///
+/// let values = array.iter().collect::<Vec<_>>();
+/// assert_eq!(values.len(), 3);
+/// assert_eq!(values[0], Some(Variant::from(42)));
+/// assert_eq!(values[1], None);
+/// assert_eq!(values[2], Some(Variant::from("hello")));
+/// ```
+#[derive(Debug)]
+pub struct VariantArrayIter<'a> {
+    array: &'a VariantArray,
+    head_i: usize,
+    tail_i: usize,
+}
+
+impl<'a> VariantArrayIter<'a> {
+    /// Creates a new iterator over the given [`VariantArray`]
+    pub fn new(array: &'a VariantArray) -> Self {
+        Self {
+            array,
+            head_i: 0,
+            tail_i: array.len(),
+        }
+    }
+
+    fn value_opt(&self, i: usize) -> Option<Variant<'a, 'a>> {
+        self.array.is_valid(i).then(|| self.array.value(i))
+    }
+}
+
+impl<'a> Iterator for VariantArrayIter<'a> {
+    type Item = Option<Variant<'a, 'a>>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        let out = self.value_opt(self.head_i);
+
+        self.head_i += 1;
+
+        Some(out)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remainder = self.tail_i - self.head_i;
+
+        (remainder, Some(remainder))
+    }
+}
+
+impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        self.tail_i -= 1;
+
+        Some(self.value_opt(self.tail_i))
+    }
+}
+
+impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
 
 /// One shredded field of a partially or prefectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is
@@ -937,18 +1023,6 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
     cast(array, new_type.as_ref())
 }
 
-/// Validates whether a given arrow decimal is a valid variant decimal
-///
-/// NOTE: By a strict reading of the "decimal table" in the [shredding spec], each decimal type
-/// should have a width-dependent lower bound on precision as well as an upper bound (i.e. Decimal16
-/// with precision 5 is invalid because Decimal4 "covers" it). But the variant shredding integration
-/// tests specifically expect such cases to succeed, so we only enforce the upper bound here.
-///
-/// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
-fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
-    (1..=max_precision).contains(p) && (0..=*p as i8).contains(s)
-}
-
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
 /// appear in a (possibly shredded) variant array. It also replaces Binary fields with BinaryView,
 /// since that's what comes back from the parquet reader and what the variant code expects to find.
@@ -984,16 +1058,16 @@ fn canonicalize_and_verify_data_type(
         // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
         // requires using the narrowest decimal type for a given precision. Fix those up first.
         Decimal64(p, s) | Decimal128(p, s)
-            if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) =>
+            if VariantDecimal4::is_valid_precision_and_scale(p, s) =>
         {
             Cow::Owned(Decimal32(*p, *s))
         }
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => {
+        Decimal128(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
             Cow::Owned(Decimal64(*p, *s))
         }
-        Decimal32(p, s) if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL128_MAX_PRECISION) => borrow!(),
+        Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed
@@ -1062,6 +1136,8 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
 
 #[cfg(test)]
 mod test {
+    use crate::VariantArrayBuilder;
+
     use super::*;
     use arrow::array::{BinaryViewArray, Int32Array};
     use arrow_schema::{Field, Fields};
@@ -1243,5 +1319,90 @@ mod test {
                 typed_value: None
             }
         ));
+    }
+
+    #[test]
+    fn test_variant_array_iterable() {
+        let mut b = VariantArrayBuilder::new(6);
+
+        b.append_null();
+        b.append_variant(Variant::from(1_i8));
+        b.append_variant(Variant::Null);
+        b.append_variant(Variant::from(2_i32));
+        b.append_variant(Variant::from(3_i64));
+        b.append_null();
+
+        let v = b.build();
+
+        let variants = v.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            variants,
+            vec![
+                None,
+                Some(Variant::Int8(1)),
+                Some(Variant::Null),
+                Some(Variant::Int32(2)),
+                Some(Variant::Int64(3)),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_double_ended() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from(0_i32));
+        b.append_null();
+        b.append_variant(Variant::from(2_i32));
+        b.append_null();
+        b.append_variant(Variant::from(4_i32));
+
+        let array = b.build();
+        let mut iter = array.iter();
+
+        assert_eq!(iter.next(), Some(Some(Variant::from(0_i32))));
+        assert_eq!(iter.next(), Some(None));
+
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(4_i32))));
+        assert_eq!(iter.next_back(), Some(None));
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(2_i32))));
+
+        assert_eq!(iter.next_back(), None);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_variant_array_iter_reverse() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from("a"));
+        b.append_null();
+        b.append_variant(Variant::from("aaa"));
+        b.append_null();
+        b.append_variant(Variant::from("aaaaa"));
+
+        let array = b.build();
+
+        let result: Vec<_> = array.iter().rev().collect();
+        assert_eq!(
+            result,
+            vec![
+                Some(Variant::from("aaaaa")),
+                None,
+                Some(Variant::from("aaa")),
+                None,
+                Some(Variant::from("a")),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_empty() {
+        let v = VariantArrayBuilder::new(0).build();
+        let mut i = v.iter();
+        assert!(i.next().is_none());
+        assert!(i.next_back().is_none());
     }
 }

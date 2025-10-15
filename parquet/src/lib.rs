@@ -142,7 +142,9 @@ macro_rules! experimental {
     feature = "flate2",
     not(any(feature = "flate2-zlib-rs", feature = "flate2-rust_backened"))
 ))]
-compile_error!("When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`.");
+compile_error!(
+    "When enabling `flate2` you must enable one of the features: `flate2-zlib-rs` or `flate2-rust_backened`."
+);
 
 #[macro_use]
 pub mod errors;
@@ -158,6 +160,10 @@ pub mod basic;
 // Don't try clippy and format auto generated code
 #[allow(clippy::all, missing_docs)]
 #[rustfmt::skip]
+#[deprecated(
+    since = "57.0.0",
+    note = "The `format` module is no longer maintained, and will be removed in `59.0.0`"
+)]
 pub mod format;
 
 #[macro_use]
@@ -188,6 +194,8 @@ pub mod file;
 pub mod record;
 pub mod schema;
 
+mod parquet_macros;
+mod parquet_thrift;
 pub mod thrift;
 /// What data is needed to read the next item from a decoder.
 ///

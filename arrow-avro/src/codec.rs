@@ -14,14 +14,17 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+
+//! Codec for Mapping Avro and Arrow types.
+
 use crate::schema::{
-    make_full_name, Array, Attributes, ComplexType, Enum, Fixed, Map, Nullability, PrimitiveType,
-    Record, Schema, Type, TypeName, AVRO_ENUM_SYMBOLS_METADATA_KEY,
-    AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_NAMESPACE_METADATA_KEY, AVRO_NAME_METADATA_KEY,
+    AVRO_ENUM_SYMBOLS_METADATA_KEY, AVRO_FIELD_DEFAULT_METADATA_KEY, AVRO_NAME_METADATA_KEY,
+    AVRO_NAMESPACE_METADATA_KEY, Array, Attributes, ComplexType, Enum, Fixed, Map, Nullability,
+    PrimitiveType, Record, Schema, Type, TypeName, make_full_name,
 };
 use arrow_schema::{
-    ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode,
-    DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION,
+    ArrowError, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, DataType, Field, Fields,
+    IntervalUnit, TimeUnit, UnionFields, UnionMode,
 };
 #[cfg(feature = "small_decimals")]
 use arrow_schema::{DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION};
@@ -324,14 +327,14 @@ impl AvroDataType {
             Codec::Null => {
                 return Err(ArrowError::SchemaError(
                     "Default for `null` type must be JSON null".to_string(),
-                ))
+                ));
             }
             Codec::Boolean => match default_json {
                 Value::Bool(b) => AvroLiteral::Boolean(*b),
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Boolean default must be a JSON boolean".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Int32 | Codec::Date32 | Codec::TimeMillis => {
@@ -346,7 +349,8 @@ impl AvroDataType {
             Codec::Int64
             | Codec::TimeMicros
             | Codec::TimestampMillis(_)
-            | Codec::TimestampMicros(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
+            | Codec::TimestampMicros(_)
+            | Codec::TimestampNanos(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
             #[cfg(feature = "avro_custom_types")]
             Codec::DurationNanos
             | Codec::DurationMicros
@@ -393,7 +397,7 @@ impl AvroDataType {
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Default value must be a JSON array for Avro array type".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Map(val_dt) => match default_json {
@@ -407,7 +411,7 @@ impl AvroDataType {
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Default value must be a JSON object for Avro map type".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Struct(fields) => match default_json {
@@ -449,7 +453,7 @@ impl AvroDataType {
                 _ => {
                     return Err(ArrowError::SchemaError(
                         "Default value for record/struct must be a JSON object".to_string(),
-                    ))
+                    ));
                 }
             },
             Codec::Union(encodings, _, _) => {
@@ -460,6 +464,8 @@ impl AvroDataType {
                 };
                 default_encoding.parse_default_literal(default_json)?
             }
+            #[cfg(feature = "avro_custom_types")]
+            Codec::RunEndEncoded(values, _) => values.parse_default_literal(default_json)?,
         };
         Ok(lit)
     }
@@ -647,6 +653,11 @@ pub(crate) enum Codec {
     /// Maps to Arrow's Timestamp(TimeUnit::Microsecond) data type
     /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
     TimestampMicros(bool),
+    /// Represents Avro timestamp-nanos or local-timestamp-nanos logical type
+    ///
+    /// Maps to Arrow's Timestamp(TimeUnit::Nanosecond) data type
+    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
+    TimestampNanos(bool),
     /// Represents Avro fixed type, maps to Arrow's FixedSizeBinary data type
     /// The i32 parameter indicates the fixed binary size
     Fixed(i32),
@@ -685,6 +696,8 @@ pub(crate) enum Codec {
     /// Represents Avro custom logical type to map to Arrow Duration(TimeUnit::Second)
     #[cfg(feature = "avro_custom_types")]
     DurationSeconds,
+    #[cfg(feature = "avro_custom_types")]
+    RunEndEncoded(Arc<AvroDataType>, u8),
 }
 
 impl Codec {
@@ -707,6 +720,9 @@ impl Codec {
             }
             Self::TimestampMicros(is_utc) => {
                 DataType::Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
+            }
+            Self::TimestampNanos(is_utc) => {
+                DataType::Timestamp(TimeUnit::Nanosecond, is_utc.then(|| "+00:00".into()))
             }
             Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => DataType::FixedSizeBinary(*size),
@@ -765,6 +781,19 @@ impl Codec {
             Self::DurationMillis => DataType::Duration(TimeUnit::Millisecond),
             #[cfg(feature = "avro_custom_types")]
             Self::DurationSeconds => DataType::Duration(TimeUnit::Second),
+            #[cfg(feature = "avro_custom_types")]
+            Self::RunEndEncoded(values, bits) => {
+                let run_ends_dt = match *bits {
+                    16 => DataType::Int16,
+                    32 => DataType::Int32,
+                    64 => DataType::Int64,
+                    _ => unreachable!(),
+                };
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", run_ends_dt, false)),
+                    Arc::new(Field::new("values", values.codec().data_type(), true)),
+                )
+            }
         }
     }
 
@@ -897,6 +926,8 @@ enum UnionFieldKind {
     TimestampMillisLocal,
     TimestampMicrosUtc,
     TimestampMicrosLocal,
+    TimestampNanosUtc,
+    TimestampNanosLocal,
     Duration,
     Fixed,
     Decimal,
@@ -926,6 +957,8 @@ impl From<&Codec> for UnionFieldKind {
             Codec::TimestampMillis(false) => Self::TimestampMillisLocal,
             Codec::TimestampMicros(true) => Self::TimestampMicrosUtc,
             Codec::TimestampMicros(false) => Self::TimestampMicrosLocal,
+            Codec::TimestampNanos(true) => Self::TimestampNanosUtc,
+            Codec::TimestampNanos(false) => Self::TimestampNanosLocal,
             Codec::Interval => Self::Duration,
             Codec::Fixed(_) => Self::Fixed,
             Codec::Decimal(..) => Self::Decimal,
@@ -935,6 +968,8 @@ impl From<&Codec> for UnionFieldKind {
             Codec::Map(_) => Self::Map,
             Codec::Uuid => Self::Uuid,
             Codec::Union(..) => Self::Union,
+            #[cfg(feature = "avro_custom_types")]
+            Codec::RunEndEncoded(values, _) => UnionFieldKind::from(values.codec()),
             #[cfg(feature = "avro_custom_types")]
             Codec::DurationNanos
             | Codec::DurationMicros
@@ -1141,6 +1176,16 @@ impl<'a> Maker<'a> {
         }
     }
 
+    #[cfg(feature = "avro_custom_types")]
+    #[inline]
+    fn propagate_nullability_into_ree(dt: &mut AvroDataType, nb: Nullability) {
+        if let Codec::RunEndEncoded(values, bits) = dt.codec.clone() {
+            let mut inner = (*values).clone();
+            inner.nullability = Some(nb);
+            dt.codec = Codec::RunEndEncoded(Arc::new(inner), bits);
+        }
+    }
+
     fn make_data_type<'s>(
         &mut self,
         writer_schema: &'s Schema<'a>,
@@ -1185,6 +1230,8 @@ impl<'a> Maker<'a> {
                     (true, Some(0)) => {
                         let mut field = self.parse_type(&f[1], namespace)?;
                         field.nullability = Some(Nullability::NullFirst);
+                        #[cfg(feature = "avro_custom_types")]
+                        Self::propagate_nullability_into_ree(&mut field, Nullability::NullFirst);
                         return Ok(field);
                     }
                     (true, Some(1)) => {
@@ -1196,6 +1243,8 @@ impl<'a> Maker<'a> {
                         }
                         let mut field = self.parse_type(&f[0], namespace)?;
                         field.nullability = Some(Nullability::NullSecond);
+                        #[cfg(feature = "avro_custom_types")]
+                        Self::propagate_nullability_into_ree(&mut field, Nullability::NullSecond);
                         return Ok(field);
                     }
                     _ => {}
@@ -1363,7 +1412,17 @@ impl<'a> Maker<'a> {
                     (Some("local-timestamp-micros"), c @ Codec::Int64) => {
                         *c = Codec::TimestampMicros(false)
                     }
-                    (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
+                    (Some("timestamp-nanos"), c @ Codec::Int64) => *c = Codec::TimestampNanos(true),
+                    (Some("local-timestamp-nanos"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampNanos(false)
+                    }
+                    (Some("uuid"), c @ Codec::Utf8) => {
+                        // Map Avro string+logicalType=uuid into the UUID Codec,
+                        // and preserve the logicalType in Arrow field metadata
+                        // so writers can round-trip it correctly.
+                        *c = Codec::Uuid;
+                        field.metadata.insert("logicalType".into(), "uuid".into());
+                    }
                     #[cfg(feature = "avro_custom_types")]
                     (Some("arrow.duration-nanos"), c @ Codec::Int64) => *c = Codec::DurationNanos,
                     #[cfg(feature = "avro_custom_types")]
@@ -1374,11 +1433,44 @@ impl<'a> Maker<'a> {
                     (Some("arrow.duration-seconds"), c @ Codec::Int64) => {
                         *c = Codec::DurationSeconds
                     }
+                    #[cfg(feature = "avro_custom_types")]
+                    (Some("arrow.run-end-encoded"), _) => {
+                        let bits_u8: u8 = t
+                            .attributes
+                            .additional
+                            .get("arrow.runEndIndexBits")
+                            .and_then(|v| v.as_u64())
+                            .and_then(|n| u8::try_from(n).ok())
+                            .ok_or_else(|| ArrowError::ParseError(
+                                "arrow.run-end-encoded requires 'arrow.runEndIndexBits' (one of 16, 32, or 64)"
+                                    .to_string(),
+                            ))?;
+                        if bits_u8 != 16 && bits_u8 != 32 && bits_u8 != 64 {
+                            return Err(ArrowError::ParseError(format!(
+                                "Invalid 'arrow.runEndIndexBits' value {bits_u8}; must be 16, 32, or 64"
+                            )));
+                        }
+                        // Wrap the parsed underlying site as REE
+                        let values_site = field.clone();
+                        field.codec = Codec::RunEndEncoded(Arc::new(values_site), bits_u8);
+                    }
                     (Some(logical), _) => {
                         // Insert unrecognized logical type into metadata map
                         field.metadata.insert("logicalType".into(), logical.into());
                     }
                     (None, _) => {}
+                }
+                if matches!(field.codec, Codec::Int64) {
+                    if let Some(unit) = t
+                        .attributes
+                        .additional
+                        .get("arrowTimeUnit")
+                        .and_then(|v| v.as_str())
+                    {
+                        if unit == "nanosecond" {
+                            field.codec = Codec::TimestampNanos(false);
+                        }
+                    }
                 }
                 if !t.attributes.additional.is_empty() {
                     for (k, v) in &t.attributes.additional {
@@ -1412,6 +1504,8 @@ impl<'a> Maker<'a> {
                     (Some((w_nb, w_nonnull)), Some((_r_nb, r_nonnull))) => {
                         let mut dt = self.make_data_type(w_nonnull, Some(r_nonnull), namespace)?;
                         dt.nullability = Some(w_nb);
+                        #[cfg(feature = "avro_custom_types")]
+                        Self::propagate_nullability_into_ree(&mut dt, w_nb);
                         Ok(dt)
                     }
                     _ => self.resolve_unions(writer_variants, reader_variants, namespace),
@@ -1622,7 +1716,7 @@ impl<'a> Maker<'a> {
             _ => {
                 return Err(ArrowError::ParseError(format!(
                     "Illegal promotion {write_primitive:?} to {read_primitive:?}"
-                )))
+                )));
             }
         };
         let mut datatype = self.parse_type(reader_schema, None)?;
@@ -1894,8 +1988,8 @@ impl<'a> Maker<'a> {
 mod tests {
     use super::*;
     use crate::schema::{
-        Array, Attributes, ComplexType, Field as AvroFieldSchema, Fixed, PrimitiveType, Record,
-        Schema, Type, TypeName, AVRO_ROOT_RECORD_DEFAULT_NAME,
+        AVRO_ROOT_RECORD_DEFAULT_NAME, Array, Attributes, ComplexType, Field as AvroFieldSchema,
+        Fixed, PrimitiveType, Record, Schema, Type, TypeName,
     };
     use indexmap::IndexMap;
     use serde_json::{self, Value};

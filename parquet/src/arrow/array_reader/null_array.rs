@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::record_reader::RecordReader;
 use crate::column::page::PageIterator;
 use crate::data_type::DataType;

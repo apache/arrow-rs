@@ -46,10 +46,10 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
-use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
-use parquet::file::properties::WriterProperties;
 use parquet::file::FOOTER_SIZE;
-use parquet::format::PageLocation;
+use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
+use parquet::file::page_index::offset_index::PageLocation;
+use parquet::file::properties::WriterProperties;
 use parquet::schema::types::SchemaDescriptor;
 use std::collections::BTreeMap;
 use std::fmt::Display;
@@ -287,8 +287,7 @@ impl TestRowGroups {
                     .enumerate()
                     .map(|(col_idx, col_meta)| {
                         let column_name = col_meta.column_descr().name().to_string();
-                        let page_locations =
-                            offset_index[rg_index][col_idx].page_locations().to_vec();
+                        let page_locations = offset_index[rg_index][col_idx].page_locations();
                         let dictionary_page_location = col_meta.dictionary_page_offset();
 
                         // We can find the byte range of the entire column chunk
@@ -300,7 +299,7 @@ impl TestRowGroups {
                             name: column_name.clone(),
                             location: start_offset..end_offset,
                             dictionary_page_location,
-                            page_locations,
+                            page_locations: page_locations.clone(),
                         }
                     })
                     .map(|test_column_chunk| {
