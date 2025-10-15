@@ -112,9 +112,9 @@ impl AvroFormat for AvroOcfFormat {
 /// See: <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
 /// See: <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
 #[derive(Debug, Default)]
-pub struct AvroBinaryFormat {}
+pub struct AvroSoeFormat {}
 
-impl AvroFormat for AvroBinaryFormat {
+impl AvroFormat for AvroSoeFormat {
     const NEEDS_PREFIX: bool = true;
     fn start_stream<W: Write>(
         &mut self,
@@ -124,10 +124,9 @@ impl AvroFormat for AvroBinaryFormat {
     ) -> Result<(), ArrowError> {
         if compression.is_some() {
             return Err(ArrowError::InvalidArgumentError(
-                "Compression not supported for Avro binary streaming".to_string(),
+                "Compression not supported for Avro SOE streaming".to_string(),
             ));
         }
-
         Ok(())
     }
 
