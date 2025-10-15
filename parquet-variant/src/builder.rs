@@ -277,11 +277,7 @@ impl ValueBuilder {
 
     fn append_object<S: BuilderSpecificState>(state: ParentState<'_, S>, obj: VariantObject) {
         let mut object_builder = ObjectBuilder::new(state, false);
-
-        for (field_name, value) in obj.iter() {
-            object_builder.insert(field_name, value);
-        }
-
+        object_builder.extend(obj.iter());
         object_builder.finish();
     }
 
@@ -302,9 +298,7 @@ impl ValueBuilder {
 
     fn append_list<S: BuilderSpecificState>(state: ParentState<'_, S>, list: VariantList) {
         let mut list_builder = ListBuilder::new(state, false);
-        for value in list.iter() {
-            list_builder.append_value(value);
-        }
+        list_builder.extend(list.iter());
         list_builder.finish();
     }
 
@@ -1443,6 +1437,16 @@ impl<'a, S: BuilderSpecificState> ListBuilder<'a, S> {
     }
 }
 
+impl<'a, 'm, 'v, S: BuilderSpecificState, V: Into<Variant<'m, 'v>>> Extend<V>
+    for ListBuilder<'a, S>
+{
+    fn extend<T: IntoIterator<Item = V>>(&mut self, iter: T) {
+        for v in iter.into_iter() {
+            self.append_value(v);
+        }
+    }
+}
+
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
@@ -1690,6 +1694,16 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
                 offset_size,
             );
         self.parent_state.finish();
+    }
+}
+
+impl<'a, 'm, 'v, S: BuilderSpecificState, K: AsRef<str>, V: Into<Variant<'m, 'v>>> Extend<(K, V)>
+    for ObjectBuilder<'a, S>
+{
+    fn extend<T: IntoIterator<Item = (K, V)>>(&mut self, iter: T) {
+        for (key, value) in iter.into_iter() {
+            self.insert(key.as_ref(), value);
+        }
     }
 }
 
