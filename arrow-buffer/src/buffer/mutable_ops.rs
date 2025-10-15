@@ -18,7 +18,7 @@
 use super::{Buffer, MutableBuffer};
 use crate::BooleanBufferBuilder;
 use crate::bit_chunk_iterator::BitChunks;
-use crate::util::bit_util::ceil;
+use crate::util::bit_util;
 
 /// What can be used as the right-hand side (RHS) buffer in mutable operations.
 ///
@@ -268,25 +268,21 @@ fn read_up_to_byte_from_offset(
     bit_offset: usize,
 ) -> u8 {
     assert!(number_of_bits_to_read <= 8);
+    assert_ne!(number_of_bits_to_read, 0);
+    assert_ne!(slice.len(), 0);
 
-    let bit_len = number_of_bits_to_read;
-    if bit_len == 0 {
-        0
-    } else {
+    let number_of_bytes_to_read = bit_util::ceil(number_of_bits_to_read + bit_offset, 8);
+
         // number of bytes to read
         // might be one more than sizeof(u64) if the offset is in the middle of a byte
-        let byte_len = ceil(bit_len + bit_offset, 8);
-        // pointer to remainder bytes after all complete chunks
-        let base = slice.as_ptr();
+        assert!(slice.len() >= number_of_bytes_to_read);
 
-        let mut bits = unsafe { std::ptr::read(base) } >> bit_offset;
-        for i in 1..byte_len {
-            let byte = unsafe { std::ptr::read(base.add(i)) };
-            bits |= (byte) << (i * 8 - bit_offset);
+        let mut bits = slice[0] >> bit_offset;
+        for (i, &byte) in slice.iter().take(number_of_bytes_to_read).enumerate().skip(1) {
+            bits |= byte << (i * 8 - bit_offset);
         }
 
-        bits & ((1 << bit_len) - 1)
-    }
+        bits & ((1 << number_of_bits_to_read) - 1)
 }
 
 /// Perform bitwise binary operation on byte-aligned buffers (i.e. not offsetting into a middle of a byte).
@@ -321,66 +317,199 @@ fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
     );
 
     // 1. Prepare the buffers
+    let (complete_u64_chunks, remainder_bytes) =
+      U64UnalignedSlice::split(left, left_offset_in_bits, len_in_bits);
+
     let right_chunks = BitChunks::new(right.as_slice(), right_offset_in_bits, len_in_bits);
-    let left_buffer_mut: &mut [u8] = {
-        assert!(ceil(left_offset_in_bits + len_in_bits, 8) <= left.len());
+    assert_eq!(
+        bit_util::ceil(right_chunks.remainder_len(), 8),
+        remainder_bytes.len()
+    );
 
-        let byte_offset = left_offset_in_bits / 8;
-
-        // number of complete u64 chunks
-        let chunk_len = len_in_bits / 64;
-
-        assert_eq!(right_chunks.chunk_len(), chunk_len);
-
-        &mut left.as_slice_mut()[byte_offset..]
-    };
-
-    // cast to *const u64 should be fine since we are using read_unaligned below
-    #[allow(clippy::cast_ptr_alignment)]
-    let mut left_buffer_mut_u64_ptr = left_buffer_mut.as_mut_ptr() as *mut u64;
-
-    let mut right_chunks_iter = right_chunks.iter();
-
-    // If not only remainder bytes
-    let had_any_chunks = right_chunks_iter.len() > 0;
+    let right_chunks_iter = right_chunks.iter();
+    assert_eq!(right_chunks_iter.len(), complete_u64_chunks.len());
 
     // 2. Process complete u64 chunks
-    {
-        // Process the first chunk outside the loop to avoid incrementing
-        // the pointer after the last read
-        if let Some(right) = right_chunks_iter.next() {
-            unsafe {
-                run_op_on_mutable_pointer_and_single_value(&mut op, left_buffer_mut_u64_ptr, right);
-            }
-        }
-
-        for right in right_chunks_iter {
-            // Increase the pointer for the next iteration
-            // we are increasing the pointer before reading because we already read the first chunk above
-            left_buffer_mut_u64_ptr = unsafe { left_buffer_mut_u64_ptr.add(1) };
-
-            unsafe {
-                run_op_on_mutable_pointer_and_single_value(&mut op, left_buffer_mut_u64_ptr, right);
-            }
-        }
-    }
+    complete_u64_chunks.zip_modify(right_chunks_iter, &mut op);
 
     // Handle remainder bits if any
     if right_chunks.remainder_len() > 0 {
-        {
-            // If we had any chunks we only advance the pointer at the start.
-            // so we need to advance it again if we have a remainder
-            let advance_pointer_count = if had_any_chunks { 1 } else { 0 };
-            left_buffer_mut_u64_ptr = unsafe { left_buffer_mut_u64_ptr.add(advance_pointer_count) }
-        }
-        let left_buffer_mut_u8_ptr = left_buffer_mut_u64_ptr as *mut u8;
-
         handle_mutable_buffer_remainder(
             &mut op,
-            left_buffer_mut_u8_ptr,
+            remainder_bytes,
             right_chunks.remainder_bits(),
             right_chunks.remainder_len(),
         )
+    }
+}
+
+
+/// Centralized structure to handle a mutable u8 slice as a mutable u64 pointer.
+///
+/// Handle the following:
+/// 1. the lifetime is correct
+/// 2. we read/write within the bounds
+/// 3. We read and write using unaligned
+///
+/// This does not deallocate the underlying pointer when dropped
+///
+/// This is the only place that uses unsafe code to read and write unaligned
+///
+struct U64UnalignedSlice<'a> {
+    /// Pointer to the start of the u64 data
+    ///
+    /// We are using raw pointer as the data came from a u8 slice so we need to read and write unaligned
+    ptr: *mut u64,
+
+    /// Number of u64 elements
+    len: usize,
+
+    /// Marker to tie the lifetime of the pointer to the lifetime of the u8 slice
+    _marker: std::marker::PhantomData<&'a u8>,
+}
+
+impl<'a> U64UnalignedSlice<'a> {
+    /// Create a new [`U64UnalignedSlice`] from a [`MutableBuffer`]
+    ///
+    /// return the [`U64UnalignedSlice`] and slice of bytes that are not part of the u64 chunks (guaranteed to be less than 8 bytes)
+    ///
+    fn split(
+        mutable_buffer: &'a mut MutableBuffer,
+        offset_in_bits: usize,
+        len_in_bits: usize,
+    ) -> (Self, &'a mut [u8]) {
+        // 1. Prepare the buffers
+        let left_buffer_mut: &mut [u8] = {
+            let last_offset = bit_util::ceil(offset_in_bits + len_in_bits, 8);
+            assert!(last_offset <= mutable_buffer.len());
+
+            let byte_offset = offset_in_bits / 8;
+
+            &mut mutable_buffer.as_slice_mut()[byte_offset..last_offset]
+        };
+
+        const U64_SIZE_IN_BITS: usize = size_of::<u64>() * 8;
+        let number_of_u64_we_can_fit = len_in_bits / U64_SIZE_IN_BITS;
+
+        // 2. Split
+        let u64_len_in_bytes = number_of_u64_we_can_fit * size_of::<u64>();
+
+        assert!(u64_len_in_bytes <= left_buffer_mut.len());
+        let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(
+            u64_len_in_bytes
+        );
+
+        let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
+
+        let this = Self {
+            ptr,
+            len: number_of_u64_we_can_fit,
+            _marker: std::marker::PhantomData,
+        };
+
+        (this, remainder)
+    }
+
+
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    /// Modify the underlying u64 data in place using a binary operation
+    /// with another iterator.
+    fn zip_modify(
+        mut self,
+        mut zip_iter: impl ExactSizeIterator<Item = u64>,
+        mut map: impl FnMut(u64, u64) -> u64,
+    ) {
+        assert_eq!(self.len, zip_iter.len());
+
+        // In order to avoid advancing the pointer at the end of the loop which will
+        // make the last pointer invalid, we handle the first element outside the loop
+        // and then advance the pointer at the start of the loop
+        // making sure that the iterator is not empty
+        if let Some(right) = zip_iter.next() {
+            // SAFETY: We asserted that the iterator length and the current length are the same
+            // and the iterator is not empty, so the pointer is valid
+            unsafe {
+                self.modify_self(right, &mut map);
+            }
+
+            // Because this consumes self we don't update the length
+        }
+
+        for right in zip_iter {
+            // Advance the pointer
+            //
+            // SAFETY: We asserted that the iterator length and the current length are the same
+            self.ptr = unsafe { self.ptr.add(1) };
+
+            // SAFETY: the pointer is valid as we are within the length
+            unsafe {
+                self.modify_self(right, &mut map);
+            }
+
+            // Because this consumes self we don't update the length
+        }
+    }
+
+    /// Centralized function to correctly read the current u64 value and write back the result
+    ///
+    /// # SAFETY
+    /// the caller must ensure that the pointer is valid for reads and writes
+    ///
+    #[inline]
+    unsafe fn modify_self(&mut self, right: u64, mut map: impl FnMut(u64, u64) -> u64) {
+        // Safety the caller must ensure pointer point to a valid u64
+        let current_input = unsafe {
+            self.ptr
+                // Reading unaligned as we came from u8 slice
+                .read_unaligned()
+                // bit-packed buffers are stored starting with the least-significant byte first
+                // so when reading as u64 on a big-endian machine, the bytes need to be swapped
+                .to_le()
+        };
+
+        let combined = map(current_input, right);
+
+        // Write the result back
+        //
+        // The pointer came from mutable u8 slice so the pointer is valid for writes,
+        // and we need to write unaligned
+        unsafe { self.ptr.write_unaligned(combined) }
+    }
+
+    /// Modify the underlying u64 data in place using a unary operation.
+    fn modify(mut self, mut map: impl FnMut(u64) -> u64) {
+        if self.len == 0 {
+            return;
+        }
+
+        // In order to avoid advancing the pointer at the end of the loop which will
+        // make the last pointer invalid, we handle the first element outside the loop
+        // and then advance the pointer at the start of the loop
+        // making sure that the iterator is not empty
+        unsafe {
+            // I hope the function get inlined and the compiler remove the dead right parameter
+            self.modify_self(0, &mut |left, _| map(left));
+
+            // Because this consumes self we don't update the length
+        }
+
+        for _ in 1..self.len {
+            // Advance the pointer
+            //
+            // SAFETY: we only advance the pointer within the length and not beyond
+            self.ptr = unsafe { self.ptr.add(1) };
+
+            // SAFETY: the pointer is valid as we are within the length
+            unsafe {
+                // I hope the function get inlined and the compiler remove the dead right parameter
+                self.modify_self(0, &mut |left, _| map(left));
+            }
+
+            // Because this consumes self we don't update the length
+        }
     }
 }
 
@@ -398,20 +527,20 @@ fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
 #[inline]
 fn handle_mutable_buffer_remainder<F>(
     op: &mut F,
-    start_remainder_mut_ptr: *mut u8,
+    start_remainder_mut_slice: &mut [u8],
     right_remainder_bits: u64,
     remainder_len: usize,
 ) where
     F: FnMut(u64, u64) -> u64,
 {
     // Only read from mut pointer the number of remainder bits
-    let left_remainder_bits = get_remainder_bits(start_remainder_mut_ptr, remainder_len);
+    let left_remainder_bits = get_remainder_bits(start_remainder_mut_slice, remainder_len);
 
     // Apply the operation
     let rem = op(left_remainder_bits, right_remainder_bits);
 
     // Write only the relevant bits back the result to the mutable pointer
-    set_remainder_bits(start_remainder_mut_ptr, rem, remainder_len);
+    set_remainder_bits(start_remainder_mut_slice, rem, remainder_len);
 }
 
 /// Write remainder bits back to buffer while preserving bits outside the range.
@@ -421,11 +550,13 @@ fn handle_mutable_buffer_remainder<F>(
 ///
 /// # Arguments
 ///
-/// * `start_remainder_mut_ptr` - Pointer to the start of remainder bytes
+/// * `start_remainder_mut_slice` - the slice of bytes to write the remainder bits to
 /// * `rem` - The result bits to write
 /// * `remainder_len` - Number of bits to write
 #[inline]
-fn set_remainder_bits(start_remainder_mut_ptr: *mut u8, rem: u64, remainder_len: usize) {
+fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_len: usize) {
+    assert_ne!(start_remainder_mut_slice.len(), 0, "start_remainder_mut_slice must not be empty");
+    assert!(remainder_len < 64, "remainder_len must be less than 64");
     // Need to update the remainder bytes in the mutable buffer
     // but not override the bits outside the remainder
 
@@ -433,12 +564,11 @@ fn set_remainder_bits(start_remainder_mut_ptr: *mut u8, rem: u64, remainder_len:
     // to preserve the bits outside the remainder
     let rem = {
         // 1. Read the byte that we will override
-        let current = {
-            let last_byte_position = remainder_len / 8;
-            let last_byte_ptr = unsafe { start_remainder_mut_ptr.add(last_byte_position) };
+        let current = start_remainder_mut_slice.last()
+          // Unwrap as we already validated the slice is not empty
+          .unwrap();
 
-            unsafe { std::ptr::read(last_byte_ptr) as u64 }
-        };
+        let current = *current as u64;
 
         // Mask where the bits that are inside the remainder are 1
         // and the bits outside the remainder are 0
@@ -459,16 +589,16 @@ fn set_remainder_bits(start_remainder_mut_ptr: *mut u8, rem: u64, remainder_len:
 
     // Write back the result to the mutable pointer
     {
-        let remainder_bytes = ceil(remainder_len, 8);
+        let remainder_bytes = bit_util::ceil(remainder_len, 8);
 
         // we are counting starting from the least significant bit, so to_le_bytes should be correct
         let rem = &rem.to_le_bytes()[0..remainder_bytes];
 
         // this assumes that `[ToByteSlice]` can be copied directly
         // without calling `to_byte_slice` for each element,
-        // which is correct for all ArrowNativeType implementations.
+        // which is correct for all ArrowNativeType implementations including u64.
         let src = rem.as_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(src, start_remainder_mut_ptr, remainder_bytes) };
+        unsafe { std::ptr::copy_nonoverlapping(src, start_remainder_mut_slice.as_mut_ptr(), remainder_bytes) };
     }
 }
 
@@ -485,56 +615,15 @@ fn set_remainder_bits(start_remainder_mut_ptr: *mut u8, rem: u64, remainder_len:
 ///
 /// A u64 containing the bits in the least significant positions
 #[inline]
-fn get_remainder_bits(remainder_ptr: *const u8, remainder_len: usize) -> u64 {
-    let bit_len = remainder_len;
-    // number of bytes to read
-    let byte_len = ceil(bit_len, 8);
-    // pointer to remainder bytes after all complete chunks
-    let base = remainder_ptr;
+fn get_remainder_bits(remainder: &[u8], remainder_len: usize) -> u64 {
+    assert!(remainder.len() < 64, "remainder_len must be less than 64");
+    assert_eq!(remainder.len(), bit_util::ceil(remainder_len, 8), "remainder and remainder len ceil must be the same");
 
-    let mut bits = unsafe { std::ptr::read(base) } as u64;
-    for i in 1..byte_len {
-        let byte = unsafe { std::ptr::read(base.add(i)) };
-        bits |= (byte as u64) << (i * 8);
-    }
+    let bits = remainder.iter().enumerate().fold(0_u64, |acc, (index, &byte)|  {
+        acc | (byte as u64) << (index * 8)
+    });
 
-    bits & ((1 << bit_len) - 1)
-}
-
-/// Apply a binary operation to a u64 in memory.
-///
-/// Reads a u64 from the pointer, applies the operation with the right operand,
-/// and writes the result back. Handles endianness correctly for bit-packed buffers.
-///
-/// # Safety
-///
-/// The pointer must be valid for reads and writes of u64 values.
-/// Unaligned access is handled correctly via `read_unaligned` and `write_unaligned`.
-///
-/// # Arguments
-///
-/// * `op` - Binary operation to apply
-/// * `left_buffer_mut_ptr` - Pointer to the left operand u64
-/// * `right` - Right operand value
-#[inline]
-unsafe fn run_op_on_mutable_pointer_and_single_value<F>(
-    op: &mut F,
-    left_buffer_mut_ptr: *mut u64,
-    right: u64,
-) where
-    F: FnMut(u64, u64) -> u64,
-{
-    // 1. Read the current value from the mutable buffer
-    //
-    // bit-packed buffers are stored starting with the least-significant byte first
-    // so when reading as u64 on a big-endian machine, the bytes need to be swapped
-    let current = unsafe { std::ptr::read_unaligned(left_buffer_mut_ptr).to_le() };
-
-    // 2. Get the new value by applying the operation
-    let combined = op(current, right);
-
-    // 3. Write the new value back to the mutable buffer
-    unsafe { std::ptr::write_unaligned(left_buffer_mut_ptr, combined) };
+    bits & ((1 << remainder_len) - 1)
 }
 
 /// Perform bitwise unary operation on byte-aligned buffer.
@@ -564,82 +653,20 @@ fn mutable_byte_aligned_bitwise_unary_op_helper<F>(
         "left_offset_in_bits must be byte aligned"
     );
 
-    let number_of_u64_chunks = len_in_bits / 64;
     let remainder_len = len_in_bits % 64;
 
-    let left_buffer_mut: &mut [u8] = {
-        assert!(ceil(left_offset_in_bits + len_in_bits, 8) <= left.len());
+    let (complete_u64_chunks, remainder_bytes) =
+      U64UnalignedSlice::split(left, left_offset_in_bits, len_in_bits);
 
-        let byte_offset = left_offset_in_bits / 8;
+    assert_eq!(bit_util::ceil(remainder_len, 8), remainder_bytes.len());
 
-        &mut left.as_slice_mut()[byte_offset..]
-    };
-
-    // cast to *const u64 should be fine since we are using read_unaligned below
-    #[allow(clippy::cast_ptr_alignment)]
-    let mut left_buffer_mut_u64_ptr = left_buffer_mut.as_mut_ptr() as *mut u64;
-
-    // If not only remainder bytes
-    let had_any_chunks = number_of_u64_chunks > 0;
-
-    // Process the first chunk outside the loop
-    if had_any_chunks {
-        unsafe {
-            run_op_on_mutable_pointer(&mut op, left_buffer_mut_u64_ptr);
-        }
-    }
-
-    for _ in 1..number_of_u64_chunks {
-        // Increase the pointer for the next iteration
-        left_buffer_mut_u64_ptr = unsafe { left_buffer_mut_u64_ptr.add(1) };
-
-        unsafe {
-            run_op_on_mutable_pointer(&mut op, left_buffer_mut_u64_ptr);
-        }
-    }
+    // 2. Process complete u64 chunks
+    complete_u64_chunks.modify(&mut op);
 
     // Handle remainder bits if any
     if remainder_len > 0 {
-        {
-            // If we had any chunks we only advance the pointer at the start,
-            // so we need to advance it again if we have a remainder
-            let advance_pointer_count = if had_any_chunks { 1 } else { 0 };
-            left_buffer_mut_u64_ptr = unsafe { left_buffer_mut_u64_ptr.add(advance_pointer_count) }
-        }
-        let left_buffer_mut_u8_ptr = left_buffer_mut_u64_ptr as *mut u8;
-
-        handle_mutable_buffer_remainder_unary(&mut op, left_buffer_mut_u8_ptr, remainder_len);
+        handle_mutable_buffer_remainder_unary(&mut op, remainder_bytes, remainder_len)
     }
-}
-
-/// Apply a unary operation to a u64 in memory.
-///
-/// Reads a u64 from the pointer, applies the operation, and writes the result back.
-///
-/// # Safety
-///
-/// The pointer must be valid for reads and writes of u64 values.
-///
-/// # Arguments
-///
-/// * `op` - Unary operation to apply
-/// * `buffer_mut_ptr` - Pointer to the u64
-#[inline]
-unsafe fn run_op_on_mutable_pointer<F>(op: &mut F, buffer_mut_ptr: *mut u64)
-where
-    F: FnMut(u64) -> u64,
-{
-    // 1. Read the current value from the mutable buffer
-    //
-    // bit-packed buffers are stored starting with the least-significant byte first
-    // so when reading as u64 on a big-endian machine, the bytes need to be swapped
-    let current = unsafe { std::ptr::read_unaligned(buffer_mut_ptr).to_le() };
-
-    // 2. Get the new value by applying the operation
-    let result = op(current);
-
-    // 3. Write the new value back to the mutable buffer
-    unsafe { std::ptr::write_unaligned(buffer_mut_ptr, result) };
 }
 
 /// Handle remainder bits (< 64 bits) for unary operations.
@@ -650,24 +677,24 @@ where
 /// # Arguments
 ///
 /// * `op` - Unary operation to apply
-/// * `start_remainder_mut_ptr` - Pointer to the start of remainder bytes
+/// * `start_remainder_mut` - Slice of bytes to write the remainder bits to
 /// * `remainder_len` - Number of remainder bits
 #[inline]
 fn handle_mutable_buffer_remainder_unary<F>(
     op: &mut F,
-    start_remainder_mut_ptr: *mut u8,
+    start_remainder_mut: &mut [u8],
     remainder_len: usize,
 ) where
     F: FnMut(u64) -> u64,
 {
     // Only read from mut pointer the number of remainder bits
-    let left_remainder_bits = get_remainder_bits(start_remainder_mut_ptr, remainder_len);
+    let left_remainder_bits = get_remainder_bits(start_remainder_mut, remainder_len);
 
     // Apply the operation
     let rem = op(left_remainder_bits);
 
     // Write only the relevant bits back the result to the mutable pointer
-    set_remainder_bits(start_remainder_mut_ptr, rem, remainder_len);
+    set_remainder_bits(start_remainder_mut, rem, remainder_len);
 }
 
 /// Apply a bitwise operation to a mutable buffer and update it in-place.
