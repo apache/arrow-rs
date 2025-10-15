@@ -16,21 +16,20 @@
 // under the License.
 
 use super::{Buffer, MutableBuffer};
-use crate::bit_chunk_iterator::BitChunks;
 use crate::BooleanBufferBuilder;
+use crate::bit_chunk_iterator::BitChunks;
 use crate::util::bit_util::ceil;
 
-
 /// What can be used as the right-hand side (RHS) buffer in mutable operations.
-/// 
+///
 /// this is not mutated.
-/// 
+///
 /// # Implementation notes
-/// 
+///
 /// ## Why `pub(crate)`?
 /// This is because we don't want this trait to expose the inner buffer to the public.
 /// this is the trait implementor choice.
-/// 
+///
 pub(crate) trait BufferSupportedRhs {
     fn as_slice(&self) -> &[u8];
 }
@@ -59,7 +58,7 @@ impl BufferSupportedRhs for BooleanBufferBuilder {
 /// 1. It will not change the length of the buffer.
 ///
 /// # Implementation notes
-/// 
+///
 /// ## Why is this trait `pub(crate)`?
 /// Because we don't wanna expose the inner mutable buffer to the public.
 /// as this is the choice of the implementor of the trait and sometimes it is not desirable
@@ -114,7 +113,7 @@ pub fn mutable_bitwise_bin_op_helper<F>(
     len_in_bits: usize,
     mut op: F,
 ) where
-  F: FnMut(u64, u64) -> u64,
+    F: FnMut(u64, u64) -> u64,
 {
     if len_in_bits == 0 {
         return;
@@ -169,8 +168,16 @@ pub fn mutable_bitwise_bin_op_helper<F>(
         if len_in_bits == 0 {
             // Making sure that our guarantee that the length and capacity of the mutable buffer
             // will not change is upheld
-            assert_eq!(mutable_buffer.len(), mutable_buffer_len, "The length of the mutable buffer must not change");
-            assert_eq!(mutable_buffer.capacity(), mutable_buffer_cap, "The capacity of the mutable buffer must not change");
+            assert_eq!(
+                mutable_buffer.len(),
+                mutable_buffer_len,
+                "The length of the mutable buffer must not change"
+            );
+            assert_eq!(
+                mutable_buffer.capacity(),
+                mutable_buffer_cap,
+                "The capacity of the mutable buffer must not change"
+            );
 
             return;
         }
@@ -188,8 +195,16 @@ pub fn mutable_bitwise_bin_op_helper<F>(
 
     // Making sure that our guarantee that the length and capacity of the mutable buffer
     // will not change is upheld
-    assert_eq!(mutable_buffer.len(), mutable_buffer_len, "The length of the mutable buffer must not change");
-    assert_eq!(mutable_buffer.capacity(), mutable_buffer_cap, "The capacity of the mutable buffer must not change");
+    assert_eq!(
+        mutable_buffer.len(),
+        mutable_buffer_len,
+        "The length of the mutable buffer must not change"
+    );
+    assert_eq!(
+        mutable_buffer.capacity(),
+        mutable_buffer_cap,
+        "The capacity of the mutable buffer must not change"
+    );
 }
 
 /// Align to byte boundary by applying operation to bits before the next byte boundary.
@@ -204,7 +219,7 @@ pub fn mutable_bitwise_bin_op_helper<F>(
 /// * `offset_in_bits` - Starting bit offset (not byte-aligned)
 fn align_to_byte<F>(op: &mut F, buffer: &mut MutableBuffer, offset_in_bits: usize)
 where
-  F: FnMut(u64) -> u64,
+    F: FnMut(u64) -> u64,
 {
     let byte_offset = offset_in_bits / 8;
     let bit_offset = offset_in_bits % 8;
@@ -226,7 +241,7 @@ where
     let mask_for_first_bit_offset = (1 << bit_offset) - 1;
 
     let result_first_byte =
-      (first_byte & mask_for_first_bit_offset) | (result_first_byte & !mask_for_first_bit_offset);
+        (first_byte & mask_for_first_bit_offset) | (result_first_byte & !mask_for_first_bit_offset);
 
     // 6. write back the result to the buffer
     buffer.as_slice_mut()[byte_offset] = result_first_byte;
@@ -296,7 +311,7 @@ fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
     len_in_bits: usize,
     mut op: F,
 ) where
-  F: FnMut(u64, u64) -> u64,
+    F: FnMut(u64, u64) -> u64,
 {
     // Must not reach here if we not byte aligned
     assert_eq!(
@@ -387,7 +402,7 @@ fn handle_mutable_buffer_remainder<F>(
     right_remainder_bits: u64,
     remainder_len: usize,
 ) where
-  F: FnMut(u64, u64) -> u64,
+    F: FnMut(u64, u64) -> u64,
 {
     // Only read from mut pointer the number of remainder bits
     let left_remainder_bits = get_remainder_bits(start_remainder_mut_ptr, remainder_len);
@@ -507,7 +522,7 @@ unsafe fn run_op_on_mutable_pointer_and_single_value<F>(
     left_buffer_mut_ptr: *mut u64,
     right: u64,
 ) where
-  F: FnMut(u64, u64) -> u64,
+    F: FnMut(u64, u64) -> u64,
 {
     // 1. Read the current value from the mutable buffer
     //
@@ -540,7 +555,7 @@ fn mutable_byte_aligned_bitwise_unary_op_helper<F>(
     len_in_bits: usize,
     mut op: F,
 ) where
-  F: FnMut(u64) -> u64,
+    F: FnMut(u64) -> u64,
 {
     // Must not reach here if we not byte aligned
     assert_eq!(
@@ -612,7 +627,7 @@ fn mutable_byte_aligned_bitwise_unary_op_helper<F>(
 #[inline]
 unsafe fn run_op_on_mutable_pointer<F>(op: &mut F, buffer_mut_ptr: *mut u64)
 where
-  F: FnMut(u64) -> u64,
+    F: FnMut(u64) -> u64,
 {
     // 1. Read the current value from the mutable buffer
     //
@@ -643,7 +658,7 @@ fn handle_mutable_buffer_remainder_unary<F>(
     start_remainder_mut_ptr: *mut u8,
     remainder_len: usize,
 ) where
-  F: FnMut(u64) -> u64,
+    F: FnMut(u64) -> u64,
 {
     // Only read from mut pointer the number of remainder bits
     let left_remainder_bits = get_remainder_bits(start_remainder_mut_ptr, remainder_len);
@@ -679,7 +694,7 @@ pub fn mutable_bitwise_unary_op_helper<F>(
     len_in_bits: usize,
     mut op: F,
 ) where
-  F: FnMut(u64) -> u64,
+    F: FnMut(u64) -> u64,
 {
     if len_in_bits == 0 {
         return;
@@ -696,7 +711,12 @@ pub fn mutable_bitwise_unary_op_helper<F>(
     let is_mutable_buffer_byte_aligned = left_bit_offset == 0;
 
     if is_mutable_buffer_byte_aligned {
-        mutable_byte_aligned_bitwise_unary_op_helper(mutable_buffer, offset_in_bits, len_in_bits, op);
+        mutable_byte_aligned_bitwise_unary_op_helper(
+            mutable_buffer,
+            offset_in_bits,
+            len_in_bits,
+            op,
+        );
     } else {
         // If we are not byte aligned we will read the first few bits
         let bits_to_next_byte = 8 - left_bit_offset;
@@ -709,20 +729,41 @@ pub fn mutable_bitwise_unary_op_helper<F>(
         if len_in_bits == 0 {
             // Making sure that our guarantee that the length and capacity of the mutable buffer
             // will not change is upheld
-            assert_eq!(mutable_buffer.len(), mutable_buffer_len, "The length of the mutable buffer must not change");
-            assert_eq!(mutable_buffer.capacity(), mutable_buffer_cap, "The capacity of the mutable buffer must not change");
+            assert_eq!(
+                mutable_buffer.len(),
+                mutable_buffer_len,
+                "The length of the mutable buffer must not change"
+            );
+            assert_eq!(
+                mutable_buffer.capacity(),
+                mutable_buffer_cap,
+                "The capacity of the mutable buffer must not change"
+            );
 
             return;
         }
 
         // We are now byte aligned
-        mutable_byte_aligned_bitwise_unary_op_helper(mutable_buffer, offset_in_bits, len_in_bits, op);
+        mutable_byte_aligned_bitwise_unary_op_helper(
+            mutable_buffer,
+            offset_in_bits,
+            len_in_bits,
+            op,
+        );
     }
 
     // Making sure that our guarantee that the length and capacity of the mutable buffer
     // will not change is upheld
-    assert_eq!(mutable_buffer.len(), mutable_buffer_len, "The length of the mutable buffer must not change");
-    assert_eq!(mutable_buffer.capacity(), mutable_buffer_cap, "The capacity of the mutable buffer must not change");
+    assert_eq!(
+        mutable_buffer.len(),
+        mutable_buffer_len,
+        "The length of the mutable buffer must not change"
+    );
+    assert_eq!(
+        mutable_buffer.capacity(),
+        mutable_buffer_cap,
+        "The capacity of the mutable buffer must not change"
+    );
 }
 
 /// Apply a bitwise AND operation to two buffers.

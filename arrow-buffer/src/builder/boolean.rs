@@ -15,7 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util, mutable_buffer_bin_and, mutable_buffer_bin_or, mutable_buffer_bin_xor, mutable_buffer_unary_not, MutableOpsBufferSupportedLhs};
+use crate::{
+    BooleanBuffer, Buffer, MutableBuffer, MutableOpsBufferSupportedLhs, bit_mask, bit_util,
+    mutable_buffer_bin_and, mutable_buffer_bin_or, mutable_buffer_bin_xor,
+    mutable_buffer_unary_not,
+};
 use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Range};
 
 /// Builder for [`BooleanBuffer`]
@@ -282,7 +286,7 @@ impl BitAnd<&BooleanBuffer> for BooleanBufferBuilder {
 
     fn bitand(mut self, rhs: &BooleanBuffer) -> Self::Output {
         self &= rhs;
-        
+
         self
     }
 }
@@ -404,7 +408,7 @@ impl From<&[bool]> for BooleanBufferBuilder {
     fn from(source: &[bool]) -> Self {
         let mut builder = BooleanBufferBuilder::new(source.len());
         builder.append_slice(source);
-        
+
         builder
     }
 }
