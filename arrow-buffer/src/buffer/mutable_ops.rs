@@ -273,16 +273,21 @@ fn read_up_to_byte_from_offset(
 
     let number_of_bytes_to_read = bit_util::ceil(number_of_bits_to_read + bit_offset, 8);
 
-        // number of bytes to read
-        // might be one more than sizeof(u64) if the offset is in the middle of a byte
-        assert!(slice.len() >= number_of_bytes_to_read);
+    // number of bytes to read
+    // might be one more than sizeof(u64) if the offset is in the middle of a byte
+    assert!(slice.len() >= number_of_bytes_to_read);
 
-        let mut bits = slice[0] >> bit_offset;
-        for (i, &byte) in slice.iter().take(number_of_bytes_to_read).enumerate().skip(1) {
-            bits |= byte << (i * 8 - bit_offset);
-        }
+    let mut bits = slice[0] >> bit_offset;
+    for (i, &byte) in slice
+        .iter()
+        .take(number_of_bytes_to_read)
+        .enumerate()
+        .skip(1)
+    {
+        bits |= byte << (i * 8 - bit_offset);
+    }
 
-        bits & ((1 << number_of_bits_to_read) - 1)
+    bits & ((1 << number_of_bits_to_read) - 1)
 }
 
 /// Perform bitwise binary operation on byte-aligned buffers (i.e. not offsetting into a middle of a byte).
@@ -318,7 +323,7 @@ fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
 
     // 1. Prepare the buffers
     let (complete_u64_chunks, remainder_bytes) =
-      U64UnalignedSlice::split(left, left_offset_in_bits, len_in_bits);
+        U64UnalignedSlice::split(left, left_offset_in_bits, len_in_bits);
 
     let right_chunks = BitChunks::new(right.as_slice(), right_offset_in_bits, len_in_bits);
     assert_eq!(
@@ -342,7 +347,6 @@ fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
         )
     }
 }
-
 
 /// Centralized structure to handle a mutable u8 slice as a mutable u64 pointer.
 ///
@@ -388,16 +392,13 @@ impl<'a> U64UnalignedSlice<'a> {
             &mut mutable_buffer.as_slice_mut()[byte_offset..last_offset]
         };
 
-        const U64_SIZE_IN_BITS: usize = size_of::<u64>() * 8;
-        let number_of_u64_we_can_fit = len_in_bits / U64_SIZE_IN_BITS;
+        let number_of_u64_we_can_fit = len_in_bits / (u64::BITS as usize);
 
         // 2. Split
         let u64_len_in_bytes = number_of_u64_we_can_fit * size_of::<u64>();
 
         assert!(u64_len_in_bytes <= left_buffer_mut.len());
-        let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(
-            u64_len_in_bytes
-        );
+        let (bytes_for_u64, remainder) = left_buffer_mut.split_at_mut(u64_len_in_bytes);
 
         let ptr = bytes_for_u64.as_mut_ptr() as *mut u64;
 
@@ -409,7 +410,6 @@ impl<'a> U64UnalignedSlice<'a> {
 
         (this, remainder)
     }
-
 
     fn len(&self) -> usize {
         self.len
@@ -555,7 +555,11 @@ fn handle_mutable_buffer_remainder<F>(
 /// * `remainder_len` - Number of bits to write
 #[inline]
 fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_len: usize) {
-    assert_ne!(start_remainder_mut_slice.len(), 0, "start_remainder_mut_slice must not be empty");
+    assert_ne!(
+        start_remainder_mut_slice.len(),
+        0,
+        "start_remainder_mut_slice must not be empty"
+    );
     assert!(remainder_len < 64, "remainder_len must be less than 64");
     // Need to update the remainder bytes in the mutable buffer
     // but not override the bits outside the remainder
@@ -564,9 +568,10 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
     // to preserve the bits outside the remainder
     let rem = {
         // 1. Read the byte that we will override
-        let current = start_remainder_mut_slice.last()
-          // Unwrap as we already validated the slice is not empty
-          .unwrap();
+        let current = start_remainder_mut_slice
+            .last()
+            // Unwrap as we already validated the slice is not empty
+            .unwrap();
 
         let current = *current as u64;
 
@@ -598,7 +603,13 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
         // without calling `to_byte_slice` for each element,
         // which is correct for all ArrowNativeType implementations including u64.
         let src = rem.as_ptr();
-        unsafe { std::ptr::copy_nonoverlapping(src, start_remainder_mut_slice.as_mut_ptr(), remainder_bytes) };
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                src,
+                start_remainder_mut_slice.as_mut_ptr(),
+                remainder_bytes,
+            )
+        };
     }
 }
 
@@ -617,11 +628,18 @@ fn set_remainder_bits(start_remainder_mut_slice: &mut [u8], rem: u64, remainder_
 #[inline]
 fn get_remainder_bits(remainder: &[u8], remainder_len: usize) -> u64 {
     assert!(remainder.len() < 64, "remainder_len must be less than 64");
-    assert_eq!(remainder.len(), bit_util::ceil(remainder_len, 8), "remainder and remainder len ceil must be the same");
+    assert_eq!(
+        remainder.len(),
+        bit_util::ceil(remainder_len, 8),
+        "remainder and remainder len ceil must be the same"
+    );
 
-    let bits = remainder.iter().enumerate().fold(0_u64, |acc, (index, &byte)|  {
-        acc | (byte as u64) << (index * 8)
-    });
+    let bits = remainder
+        .iter()
+        .enumerate()
+        .fold(0_u64, |acc, (index, &byte)| {
+            acc | (byte as u64) << (index * 8)
+        });
 
     bits & ((1 << remainder_len) - 1)
 }
@@ -656,7 +674,7 @@ fn mutable_byte_aligned_bitwise_unary_op_helper<F>(
     let remainder_len = len_in_bits % 64;
 
     let (complete_u64_chunks, remainder_bytes) =
-      U64UnalignedSlice::split(left, left_offset_in_bits, len_in_bits);
+        U64UnalignedSlice::split(left, left_offset_in_bits, len_in_bits);
 
     assert_eq!(bit_util::ceil(remainder_len, 8), remainder_bytes.len());
 
