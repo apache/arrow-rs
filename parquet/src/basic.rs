@@ -30,7 +30,7 @@ use crate::parquet_thrift::{
     ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
     WriteThrift, WriteThriftField,
 };
-use crate::{thrift_enum, thrift_struct, thrift_union_all_empty};
+use crate::{thrift_enum, thrift_struct, thrift_union_all_empty, write_thrift_field};
 
 use crate::errors::{ParquetError, Result};
 
@@ -210,18 +210,7 @@ impl WriteThrift for ConvertedType {
     }
 }
 
-impl WriteThriftField for ConvertedType {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
+write_thrift_field!(ConvertedType, FieldType::I32);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `TimeUnit`
@@ -584,18 +573,7 @@ impl WriteThrift for LogicalType {
     }
 }
 
-impl WriteThriftField for LogicalType {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
+write_thrift_field!(LogicalType, FieldType::Struct);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `FieldRepetitionType`
@@ -928,18 +906,7 @@ impl WriteThrift for Compression {
     }
 }
 
-impl WriteThriftField for Compression {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
+write_thrift_field!(Compression, FieldType::I32);
 
 impl Compression {
     /// Returns the codec type of this compression setting as a string, without the compression
@@ -1116,18 +1083,7 @@ impl WriteThrift for EdgeInterpolationAlgorithm {
     }
 }
 
-impl WriteThriftField for EdgeInterpolationAlgorithm {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
+write_thrift_field!(EdgeInterpolationAlgorithm, FieldType::I32);
 
 impl Default for EdgeInterpolationAlgorithm {
     fn default() -> Self {
