@@ -323,7 +323,7 @@ fn mutable_buffer_byte_aligned_bitwise_bin_op_helper<F>(
     // 1. Prepare the buffers
     let right_chunks = BitChunks::new(right.as_slice(), right_offset_in_bits, len_in_bits);
     let left_buffer_mut: &mut [u8] = {
-        assert!(ceil(left_offset_in_bits + len_in_bits, 8) <= left.len() * 8);
+        assert!(ceil(left_offset_in_bits + len_in_bits, 8) <= left.len());
 
         let byte_offset = left_offset_in_bits / 8;
 
@@ -568,7 +568,7 @@ fn mutable_byte_aligned_bitwise_unary_op_helper<F>(
     let remainder_len = len_in_bits % 64;
 
     let left_buffer_mut: &mut [u8] = {
-        assert!(ceil(left_offset_in_bits + len_in_bits, 8) <= left.len() * 8);
+        assert!(ceil(left_offset_in_bits + len_in_bits, 8) <= left.len());
 
         let byte_offset = left_offset_in_bits / 8;
 
