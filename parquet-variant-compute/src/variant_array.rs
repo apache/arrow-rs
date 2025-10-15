@@ -17,6 +17,7 @@
 
 //! [`VariantArray`] implementation
 
+use crate::VariantArrayBuilder;
 use crate::type_conversion::{generic_conversion_single_value, primitive_conversion_single_value};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
@@ -436,6 +437,20 @@ impl From<VariantArray> for StructArray {
 impl From<VariantArray> for ArrayRef {
     fn from(variant_array: VariantArray) -> Self {
         Arc::new(variant_array.into_inner())
+    }
+}
+
+impl<'m, 'v> FromIterator<Option<Variant<'m, 'v>>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(iter: T) -> Self {
+        let mut b = VariantArrayBuilder::new(0);
+        b.extend(iter);
+        b.build()
+    }
+}
+
+impl<'m, 'v> FromIterator<Variant<'m, 'v>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Variant<'m, 'v>>>(iter: T) -> Self {
+        Self::from_iter(iter.into_iter().map(Some))
     }
 }
 
@@ -1141,6 +1156,7 @@ mod test {
     use super::*;
     use arrow::array::{BinaryViewArray, Int32Array};
     use arrow_schema::{Field, Fields};
+    use parquet_variant::ShortString;
 
     #[test]
     fn invalid_not_a_struct_array() {
@@ -1404,5 +1420,49 @@ mod test {
         let mut i = v.iter();
         assert!(i.next().is_none());
         assert!(i.next_back().is_none());
+    }
+
+    #[test]
+    fn test_from_variant_opts_into_variant_array() {
+        let v = vec![None, Some(Variant::Null), Some(Variant::BooleanFalse), None];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 4);
+
+        assert!(variant_array.is_null(0));
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::Null);
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(variant_array.value(2), Variant::BooleanFalse);
+
+        assert!(variant_array.is_null(3));
+    }
+
+    #[test]
+    fn test_from_variants_into_variant_array() {
+        let v = vec![
+            Variant::Null,
+            Variant::BooleanFalse,
+            Variant::ShortString(ShortString::try_new("norm").unwrap()),
+        ];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(variant_array.value(0), Variant::Null);
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::BooleanFalse);
+
+        assert!(!variant_array.is_null(3));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::ShortString(ShortString::try_new("norm").unwrap())
+        );
     }
 }
