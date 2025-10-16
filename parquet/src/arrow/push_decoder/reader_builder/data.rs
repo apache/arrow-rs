@@ -38,7 +38,7 @@ pub(super) struct DataRequest {
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     /// The ranges of data that are needed next
     ranges: Vec<Range<u64>>,
-    /// Optional page start offsets each requested range. This is used
+    /// Optional page start offsets for each requested range. This is used
     /// to create the relevant InMemoryRowGroup
     page_start_offsets: Option<Vec<Vec<u64>>>,
 }

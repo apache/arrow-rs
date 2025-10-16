@@ -60,20 +60,20 @@ use std::sync::Arc;
 /// # use parquet::arrow::push_decoder::ParquetPushDecoderBuilder;
 /// # use parquet::arrow::ArrowWriter;
 /// # use parquet::file::metadata::ParquetMetaDataPushDecoder;
-///  # let file_bytes = {
-///  #   let mut buffer = vec![];
-///  #   let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
-///  #   let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
-///  #   writer.write(&batch).unwrap();
-///  #   writer.close().unwrap();
-///  #   Bytes::from(buffer)
-///  # };
-///  # // mimic IO by returning a function that returns the bytes for a given range
-///  # let get_range = |range: &Range<u64>| -> Bytes {
-///  #    let start = range.start as usize;
-///  #     let end = range.end as usize;
-///  #    file_bytes.slice(start..end)
-///  # };
+/// # let file_bytes = {
+/// #   let mut buffer = vec![];
+/// #   let batch = record_batch!(("a", Int32, [1, 2, 3])).unwrap();
+/// #   let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+/// #   writer.write(&batch).unwrap();
+/// #   writer.close().unwrap();
+/// #   Bytes::from(buffer)
+/// # };
+/// # // mimic IO by returning a function that returns the bytes for a given range
+/// # let get_range = |range: &Range<u64>| -> Bytes {
+/// #    let start = range.start as usize;
+/// #     let end = range.end as usize;
+/// #    file_bytes.slice(start..end)
+/// # };
 /// # let file_length = file_bytes.len() as u64;
 /// # let mut metadata_decoder = ParquetMetaDataPushDecoder::try_new(file_length).unwrap();
 /// # metadata_decoder.push_ranges(vec![0..file_length], vec![file_bytes.clone()]).unwrap();
@@ -550,7 +550,7 @@ mod test {
         assert_eq!(all_output, *TEST_BATCH);
     }
 
-    /// Decode the entire file incrementally,  simulating partial reads
+    /// Decode the entire file incrementally, simulating partial reads
     #[test]
     fn test_decoder_partial() {
         let mut decoder = ParquetPushDecoderBuilder::try_new_decoder(
@@ -731,7 +731,7 @@ mod test {
 
         // expect the first row group to be filtered out (no filter is evaluated due to row selection)
 
-        // Second row group, first filter (a > 250)
+        // First row group, first filter (a > 250)
         let ranges = expect_needs_data(decoder.try_decode());
         push_ranges_to_decoder(&mut decoder, ranges);
 
@@ -946,7 +946,7 @@ mod test {
         let ranges = expect_needs_data(decoder.try_decode());
         push_ranges_to_decoder(&mut decoder, ranges);
 
-        // expect the first ane only batch to be decoded
+        // expect the first and only batch to be decoded
         let batch1 = expect_data(decoder.try_decode());
         let expected1 = TEST_BATCH.slice(225, 20);
         assert_eq!(batch1, expected1);
@@ -972,7 +972,7 @@ mod test {
         let ranges = expect_needs_data(decoder.try_decode());
         push_ranges_to_decoder(&mut decoder, ranges);
 
-        // expect the first ane only batch to be decoded
+        // expect the first and only batch to be decoded
         let batch1 = expect_data(decoder.try_decode());
         let expected1 = TEST_BATCH.slice(200, 200);
         assert_eq!(batch1, expected1);
