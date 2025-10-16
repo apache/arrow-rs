@@ -17,6 +17,7 @@
 
 //! [`VariantArray`] implementation
 
+use crate::VariantArrayBuilder;
 use crate::type_conversion::{generic_conversion_single_value, primitive_conversion_single_value};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
@@ -420,6 +421,11 @@ impl VariantArray {
     pub fn is_valid(&self, index: usize) -> bool {
         !self.is_null(index)
     }
+
+    /// Returns an iterator over the values in this array
+    pub fn iter(&self) -> VariantArrayIter<'_> {
+        VariantArrayIter::new(self)
+    }
 }
 
 impl From<VariantArray> for StructArray {
@@ -433,6 +439,105 @@ impl From<VariantArray> for ArrayRef {
         Arc::new(variant_array.into_inner())
     }
 }
+
+impl<'m, 'v> FromIterator<Option<Variant<'m, 'v>>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+
+        let mut b = VariantArrayBuilder::new(iter.size_hint().0);
+        b.extend(iter);
+        b.build()
+    }
+}
+
+impl<'m, 'v> FromIterator<Variant<'m, 'v>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Variant<'m, 'v>>>(iter: T) -> Self {
+        Self::from_iter(iter.into_iter().map(Some))
+    }
+}
+
+/// An iterator over [`VariantArray`]
+///
+/// This iterator returns `Option<Option<Variant<'a, 'a>>>` where:
+/// - `None` indicates the end of iteration
+/// - `Some(None)` indicates a null value at this position
+/// - `Some(Some(variant))` indicates a valid variant value
+///
+/// # Example
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArrayBuilder;
+/// let mut builder = VariantArrayBuilder::new(10);
+/// builder.append_variant(Variant::from(42));
+/// builder.append_null();
+/// builder.append_variant(Variant::from("hello"));
+/// let array = builder.build();
+///
+/// let values = array.iter().collect::<Vec<_>>();
+/// assert_eq!(values.len(), 3);
+/// assert_eq!(values[0], Some(Variant::from(42)));
+/// assert_eq!(values[1], None);
+/// assert_eq!(values[2], Some(Variant::from("hello")));
+/// ```
+#[derive(Debug)]
+pub struct VariantArrayIter<'a> {
+    array: &'a VariantArray,
+    head_i: usize,
+    tail_i: usize,
+}
+
+impl<'a> VariantArrayIter<'a> {
+    /// Creates a new iterator over the given [`VariantArray`]
+    pub fn new(array: &'a VariantArray) -> Self {
+        Self {
+            array,
+            head_i: 0,
+            tail_i: array.len(),
+        }
+    }
+
+    fn value_opt(&self, i: usize) -> Option<Variant<'a, 'a>> {
+        self.array.is_valid(i).then(|| self.array.value(i))
+    }
+}
+
+impl<'a> Iterator for VariantArrayIter<'a> {
+    type Item = Option<Variant<'a, 'a>>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        let out = self.value_opt(self.head_i);
+
+        self.head_i += 1;
+
+        Some(out)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remainder = self.tail_i - self.head_i;
+
+        (remainder, Some(remainder))
+    }
+}
+
+impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        self.tail_i -= 1;
+
+        Some(self.value_opt(self.tail_i))
+    }
+}
+
+impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
 
 /// One shredded field of a partially or prefectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is
@@ -1048,9 +1153,12 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
 
 #[cfg(test)]
 mod test {
+    use crate::VariantArrayBuilder;
+
     use super::*;
     use arrow::array::{BinaryViewArray, Int32Array};
     use arrow_schema::{Field, Fields};
+    use parquet_variant::ShortString;
 
     #[test]
     fn invalid_not_a_struct_array() {
@@ -1229,5 +1337,134 @@ mod test {
                 typed_value: None
             }
         ));
+    }
+
+    #[test]
+    fn test_variant_array_iterable() {
+        let mut b = VariantArrayBuilder::new(6);
+
+        b.append_null();
+        b.append_variant(Variant::from(1_i8));
+        b.append_variant(Variant::Null);
+        b.append_variant(Variant::from(2_i32));
+        b.append_variant(Variant::from(3_i64));
+        b.append_null();
+
+        let v = b.build();
+
+        let variants = v.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            variants,
+            vec![
+                None,
+                Some(Variant::Int8(1)),
+                Some(Variant::Null),
+                Some(Variant::Int32(2)),
+                Some(Variant::Int64(3)),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_double_ended() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from(0_i32));
+        b.append_null();
+        b.append_variant(Variant::from(2_i32));
+        b.append_null();
+        b.append_variant(Variant::from(4_i32));
+
+        let array = b.build();
+        let mut iter = array.iter();
+
+        assert_eq!(iter.next(), Some(Some(Variant::from(0_i32))));
+        assert_eq!(iter.next(), Some(None));
+
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(4_i32))));
+        assert_eq!(iter.next_back(), Some(None));
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(2_i32))));
+
+        assert_eq!(iter.next_back(), None);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_variant_array_iter_reverse() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from("a"));
+        b.append_null();
+        b.append_variant(Variant::from("aaa"));
+        b.append_null();
+        b.append_variant(Variant::from("aaaaa"));
+
+        let array = b.build();
+
+        let result: Vec<_> = array.iter().rev().collect();
+        assert_eq!(
+            result,
+            vec![
+                Some(Variant::from("aaaaa")),
+                None,
+                Some(Variant::from("aaa")),
+                None,
+                Some(Variant::from("a")),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_empty() {
+        let v = VariantArrayBuilder::new(0).build();
+        let mut i = v.iter();
+        assert!(i.next().is_none());
+        assert!(i.next_back().is_none());
+    }
+
+    #[test]
+    fn test_from_variant_opts_into_variant_array() {
+        let v = vec![None, Some(Variant::Null), Some(Variant::BooleanFalse), None];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 4);
+
+        assert!(variant_array.is_null(0));
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::Null);
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(variant_array.value(2), Variant::BooleanFalse);
+
+        assert!(variant_array.is_null(3));
+    }
+
+    #[test]
+    fn test_from_variants_into_variant_array() {
+        let v = vec![
+            Variant::Null,
+            Variant::BooleanFalse,
+            Variant::ShortString(ShortString::try_new("norm").unwrap()),
+        ];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(variant_array.value(0), Variant::Null);
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::BooleanFalse);
+
+        assert!(!variant_array.is_null(3));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::ShortString(ShortString::try_new("norm").unwrap())
+        );
     }
 }
