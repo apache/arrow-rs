@@ -1021,9 +1021,9 @@ mod tests {
         let mut builder = VariantBuilder::new();
         builder.append_value(input);
         let (metadata, value) = builder.finish();
-        let variant = Variant::try_new(&metadata, &value).expect(&format!(
-            "Failed to create variant from metadata and value: {metadata:?}, {value:?}"
-        ));
+        let variant = Variant::try_new(&metadata, &value).unwrap_or_else(|_| {
+            panic!("Failed to create variant from metadata and value: {metadata:?}, {value:?}")
+        });
         assert_eq!(variant, expected);
     }
 
