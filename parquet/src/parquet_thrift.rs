@@ -39,7 +39,7 @@ use std::io::Error;
 use std::str::Utf8Error;
 
 #[derive(Debug)]
-pub enum ThriftProtocolError {
+pub(crate) enum ThriftProtocolError {
     Eof,
     IO(Error),
     InvalidFieldType(u8),
@@ -47,20 +47,43 @@ pub enum ThriftProtocolError {
     FieldDeltaOverflow { field_delta: u8, last_field_id: i16 },
     InvalidBoolean(u8),
     Utf8Error,
-    SkipDepth,
+    SkipDepth(FieldType),
     SkipUnsupportedType(FieldType),
 }
 
 impl From<ThriftProtocolError> for ParquetError {
-    #[cold]
+    #[inline(never)]
     fn from(e: ThriftProtocolError) -> Self {
-        // TODO: match on variant and create same error message as before
-        ParquetError::General(format!("{e:?}"))
+        match e {
+            ThriftProtocolError::Eof => eof_err!("Unexpected EOF"),
+            ThriftProtocolError::IO(e) => e.into(),
+            ThriftProtocolError::InvalidFieldType(value) => {
+                general_err!("Unexpected struct field type {}", value)
+            }
+            ThriftProtocolError::InvalidElementType(value) => {
+                general_err!("Unexpected list/set element type{}", value)
+            }
+            ThriftProtocolError::FieldDeltaOverflow {
+                field_delta,
+                last_field_id,
+            } => general_err!("cannot add {} to {}", field_delta, last_field_id),
+            ThriftProtocolError::InvalidBoolean(value) => {
+                general_err!("cannot convert {} into bool", value)
+            }
+            ThriftProtocolError::Utf8Error => general_err!("invalid utf8"),
+            ThriftProtocolError::SkipDepth(field_type) => {
+                general_err!("cannot parse past {:?}", field_type)
+            }
+            ThriftProtocolError::SkipUnsupportedType(field_type) => {
+                general_err!("cannot skip field type {:?}", field_type)
+            }
+        }
     }
 }
 
 impl From<Utf8Error> for ThriftProtocolError {
     fn from(_: Utf8Error) -> Self {
+        // ignore error payload to reduce the size of ThriftProtocolError
         Self::Utf8Error
     }
 }
@@ -435,7 +458,7 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     /// Skip a field with type `field_type` recursively up to `depth` levels.
     fn skip_till_depth(&mut self, field_type: FieldType, depth: i8) -> ThriftProtocolResult<()> {
         if depth == 0 {
-            return Err(ThriftProtocolError::SkipDepth);
+            return Err(ThriftProtocolError::SkipDepth(field_type));
         }
 
         match field_type {
