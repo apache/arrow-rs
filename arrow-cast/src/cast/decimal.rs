@@ -180,7 +180,6 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = input_scale - output_scale;
     // if the reduction of the input number through scaling (dividing) is greater
     // than a possible precision loss (plus potential increase via rounding)
@@ -224,14 +223,13 @@ where
     };
 
     Ok(if is_infallible_cast {
-        // make sure we don't perform calculations that don't make sense w/o validation
-        validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
         let g = |x: I::Native| f(x).unwrap(); // unwrapping is safe since the result is guaranteed
         // to fit into the target type
         array.unary(g)
     } else if cast_options.safe {
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
+        let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
         array.try_unary(|x| {
             f(x).ok_or_else(|| error(x)).and_then(|v| {
                 O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
@@ -254,12 +252,7 @@ where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
-    let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
     let delta_scale = output_scale - input_scale;
-    let mul = O::Native::from_decimal(10_i128)
-        .unwrap()
-        .pow_checked(delta_scale as u32)?;
-
     // if the gain in precision (digits) is greater than the multiplication due to scaling
     // every number will fit into the output type
     // Example: If we are starting with any number of precision 5 [xxxxx],
@@ -267,17 +260,23 @@ where
     // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
     // needs to provide at least 8 digits precision
     let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
+
+    // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
+    // Adding 1 yields exactly 10^k without computing a power at runtime.
+    // Using the precomputed table avoids pow(10, k) and its checked/overflow
+    // handling, which is faster and simpler for scaling by 10^delta_scale.
+    let max = O::MAX_FOR_EACH_PRECISION[delta_scale as usize];
+    let mul = max.add_wrapping(O::Native::ONE);
     let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
     Ok(if is_infallible_cast {
-        // make sure we don't perform calculations that don't make sense w/o validation
-        validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
         // unwrapping is safe since the result is guaranteed to fit into the target type
         let f = |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul);
         array.unary(f)
     } else if cast_options.safe {
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
+        let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
         array.try_unary(|x| {
             f(x).ok_or_else(|| error(x)).and_then(|v| {
                 O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
