@@ -31,6 +31,7 @@
 //! [Thrift compact]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
 //! [THRIFT.md]: https://github.com/apache/arrow-rs/blob/main/parquet/THRIFT.md
 
+#[doc(hidden)]
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 /// Macro used to generate rust enums from a Thrift `enum` definition.
@@ -91,6 +92,7 @@ macro_rules! thrift_enum {
 /// The resulting Rust enum will have all unit variants.
 ///
 /// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[doc(hidden)]
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_all_empty {
@@ -163,6 +165,7 @@ macro_rules! thrift_union_all_empty {
 /// This macro allows for specifying lifetime annotations for the resulting `enum` and its fields.
 ///
 /// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[doc(hidden)]
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union {
@@ -228,6 +231,7 @@ macro_rules! thrift_union {
 /// This macro allows for specifying lifetime annotations for the resulting `struct` and its fields.
 ///
 /// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[doc(hidden)]
 #[macro_export]
 macro_rules! thrift_struct {
     ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
