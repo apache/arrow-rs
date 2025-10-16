@@ -275,14 +275,14 @@ impl EncryptionPropertiesBuilder {
     }
 
     /// Build the encryption properties
-    pub fn build(self) -> Result<FileEncryptionProperties> {
-        Ok(FileEncryptionProperties {
+    pub fn build(self) -> Result<Arc<FileEncryptionProperties>> {
+        Ok(Arc::new(FileEncryptionProperties {
             encrypt_footer: self.encrypt_footer,
             footer_key: self.footer_key,
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
             store_aad_prefix: self.store_aad_prefix,
-        })
+        }))
     }
 }
 
@@ -314,7 +314,7 @@ impl FileEncryptor {
     }
 
     /// Get the encryptor's file encryption properties
-    pub fn properties(&self) -> &FileEncryptionProperties {
+    pub fn properties(&self) -> &Arc<FileEncryptionProperties> {
         &self.properties
     }
 
@@ -416,7 +416,7 @@ pub(crate) fn encrypt_thrift_object_to_vec<T: WriteThrift>(
 
 /// Get the crypto metadata for a column from the file encryption properties
 pub(crate) fn get_column_crypto_metadata(
-    properties: &FileEncryptionProperties,
+    properties: &Arc<FileEncryptionProperties>,
     column: &ColumnDescPtr,
 ) -> Option<ColumnCryptoMetaData> {
     if properties.column_keys.is_empty() {

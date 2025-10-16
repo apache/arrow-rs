@@ -471,7 +471,7 @@ async fn verify_encryption_test_file_read_async(
 async fn read_and_roundtrip_to_encrypted_file_async(
     path: &str,
     decryption_properties: Arc<FileDecryptionProperties>,
-    encryption_properties: FileEncryptionProperties,
+    encryption_properties: Arc<FileEncryptionProperties>,
 ) -> Result<(), ParquetError> {
     let temp_file = tempfile::tempfile().unwrap();
     let mut file = File::open(&path).await.unwrap();
