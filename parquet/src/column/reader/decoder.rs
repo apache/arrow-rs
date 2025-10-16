@@ -263,13 +263,11 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             self.decoders
                 .get_mut(encoding)
                 .expect("Decoder for dict should have been set")
+        } else if let Some(decoder) = self.decoders.get_mut(encoding) {
+            decoder
         } else {
-            if let Some(decoder) = self.decoders.get_mut(encoding) {
-                decoder
-            } else {
-                let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
-                self.decoders.insert_and_get_mut(encoding, data_decoder)
-            }
+            let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
+            self.decoders.insert_and_get_mut(encoding, data_decoder)
         };
 
         decoder.set_data(data, num_values.unwrap_or(num_levels))?;
