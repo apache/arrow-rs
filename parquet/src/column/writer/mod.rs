@@ -27,7 +27,7 @@ use std::collections::{BTreeSet, VecDeque};
 use std::str;
 
 use crate::basic::{
-    BoundaryOrder, Compression, ConvertedType, Encoding, LogicalType, PageType, Type,
+    BoundaryOrder, Compression, ConvertedType, Encoding, EncodingMask, LogicalType, PageType, Type,
 };
 use crate::column::page::{CompressedPage, Page, PageWriteSpec, PageWriter};
 use crate::column::writer::encoder::{ColumnValueEncoder, ColumnValueEncoderImpl, ColumnValues};
@@ -1190,7 +1190,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
 
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
-            .set_encodings(self.encodings.iter().cloned().collect())
+            .set_encodings_mask(EncodingMask::new_from_encodings(self.encodings.iter()))
             .set_page_encoding_stats(self.encoding_stats.clone())
             .set_total_compressed_size(total_compressed_size)
             .set_total_uncompressed_size(total_uncompressed_size)
@@ -1734,7 +1734,10 @@ mod tests {
         assert_eq!(r.rows_written, 4);
 
         let metadata = r.metadata;
-        assert_eq!(metadata.encodings(), &vec![Encoding::PLAIN, Encoding::RLE]);
+        assert_eq!(
+            metadata.encodings().collect::<Vec<_>>(),
+            vec![Encoding::PLAIN, Encoding::RLE]
+        );
         assert_eq!(metadata.num_values(), 4); // just values
         assert_eq!(metadata.dictionary_page_offset(), None);
     }
@@ -2095,8 +2098,8 @@ mod tests {
 
         let metadata = r.metadata;
         assert_eq!(
-            metadata.encodings(),
-            &vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+            metadata.encodings().collect::<Vec<_>>(),
+            vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
@@ -2221,8 +2224,8 @@ mod tests {
 
         let metadata = r.metadata;
         assert_eq!(
-            metadata.encodings(),
-            &vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
+            metadata.encodings().collect::<Vec<_>>(),
+            vec![Encoding::PLAIN, Encoding::RLE, Encoding::RLE_DICTIONARY]
         );
         assert_eq!(metadata.num_values(), 4);
         assert_eq!(metadata.compressed_size(), 20);
@@ -4100,7 +4103,7 @@ mod tests {
             .build();
         let meta = column_write_and_get_metadata::<T>(props, data);
         assert_eq!(meta.dictionary_page_offset(), dictionary_page_offset);
-        assert_eq!(meta.encodings(), encodings);
+        assert_eq!(meta.encodings().collect::<Vec<_>>(), encodings);
         assert_eq!(meta.page_encoding_stats().unwrap(), page_encoding_stats);
     }
 

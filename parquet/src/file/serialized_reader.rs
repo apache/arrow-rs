@@ -25,7 +25,7 @@ use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics;
 use crate::file::{
@@ -769,7 +769,7 @@ impl SerializedPageReaderContext {
                 if self.read_stats {
                     Ok(PageHeader::read_thrift(&mut prot)?)
                 } else {
-                    use crate::file::metadata::thrift_gen::PageHeader;
+                    use crate::file::metadata::thrift::PageHeader;
 
                     Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
                 }

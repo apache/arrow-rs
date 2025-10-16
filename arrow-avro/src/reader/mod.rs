@@ -42,7 +42,7 @@
 //! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
 //!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
 //!   `RecordBatchReader`.
-//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes raw Avro bytes and yields ready
+//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes SOE framed Avro bytes and yields ready
 //!   `RecordBatch` values when batches fill. This is suitable for integrating with async
 //!   byte streams, network protocols, or other custom data sources.
 //!
@@ -167,7 +167,7 @@
 //! use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 //! use arrow_schema::{DataType, Field, Schema};
 //! use arrow_avro::schema::{AvroSchema, SchemaStore, SCHEMA_METADATA_KEY, FingerprintStrategy};
-//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -187,7 +187,7 @@
 //! )?;
 //! let mut w = WriterBuilder::new(arrow)
 //!     .with_fingerprint_strategy(FingerprintStrategy::Rabin) // SOE prefix
-//!     .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!     .build::<_, AvroSoeFormat>(Vec::new())?;
 //! w.write(&batch)?;
 //! w.finish()?;
 //! let frame = w.into_inner(); // C3 01 + fp + Avro body
@@ -220,7 +220,7 @@
 //! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
 //! use arrow_schema::{DataType, Field, Schema};
 //! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY, FingerprintStrategy};
-//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -248,7 +248,7 @@
 //!     )?;
 //!     let mut w = WriterBuilder::new(arrow)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id)) // 0x00 + ID + body
-//!         .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, AvroSoeFormat>(Vec::new())?;
 //!     w.write(&batch)?; w.finish()?;
 //!     Ok(w.into_inner())
 //! }
@@ -402,7 +402,7 @@
 //!              Arc::new(StringArray::from(vec!["v0-alice"])) as ArrayRef])?;
 //!     let mut w0 = arrow_avro::writer::WriterBuilder::new(arrow0)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v0))
-//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, arrow_avro::writer::format::AvroSoeFormat>(Vec::new())?;
 //!     w0.write(&batch0)?; w0.finish()?;
 //!     let frame0 = w0.into_inner(); // 0x00 + id_v0 + body
 //!
@@ -420,7 +420,7 @@
 //!              Arc::new(StringArray::from(vec![Some("bob@example.com")])) as ArrayRef])?;
 //!     let mut w1 = arrow_avro::writer::WriterBuilder::new(arrow1)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v1))
-//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, arrow_avro::writer::format::AvroSoeFormat>(Vec::new())?;
 //!     w1.write(&batch1)?; w1.finish()?;
 //!     let frame1 = w1.into_inner(); // 0x00 + id_v1 + body
 //!
@@ -563,7 +563,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
-/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 /// # let mut md = HashMap::new();
 /// # md.insert(SCHEMA_METADATA_KEY.to_string(),
 /// #     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string());
@@ -571,7 +571,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef])?;
 /// # let mut w = WriterBuilder::new(arrow)
 /// #     .with_fingerprint_strategy(fp.into())
-/// #     .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #     .build::<_, AvroSoeFormat>(Vec::new())?;
 /// # w.write(&batch)?; w.finish()?; let frame = w.into_inner();
 ///
 /// let mut decoder = ReaderBuilder::new()
@@ -605,7 +605,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
-/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 /// # fn msg(x: i64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 /// #   let mut md = HashMap::new();
 /// #   md.insert(SCHEMA_METADATA_KEY.to_string(),
@@ -614,7 +614,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// #   let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![x])) as ArrayRef])?;
 /// #   let mut w = WriterBuilder::new(arrow)
 /// #       .with_fingerprint_strategy(FingerprintStrategy::Id(1234))
-/// #       .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #       .build::<_, AvroSoeFormat>(Vec::new())?;
 /// #   w.write(&batch)?; w.finish()?; Ok(w.into_inner())
 /// # }
 /// # let m1 = msg(1)?;
@@ -7437,7 +7437,6 @@ mod test {
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
     }
-
     #[test]
     fn comprehensive_e2e_resolution_test() {
         use serde_json::Value;
@@ -7593,6 +7592,7 @@ mod test {
         let batch = read_alltypes_with_reader_schema(path, reader_schema.clone());
 
         const UUID_EXT_KEY: &str = "ARROW:extension:name";
+        const UUID_LOGICAL_KEY: &str = "logicalType";
 
         let uuid_md_top: Option<HashMap<String, String>> = batch
             .schema()
@@ -7600,7 +7600,12 @@ mod test {
             .ok()
             .and_then(|f| {
                 let md = f.metadata();
-                if md.get(UUID_EXT_KEY).is_some() {
+                let has_ext = md.get(UUID_EXT_KEY).is_some();
+                let is_uuid_logical = md
+                    .get(UUID_LOGICAL_KEY)
+                    .map(|v| v.trim_matches('"') == "uuid")
+                    .unwrap_or(false);
+                if has_ext || is_uuid_logical {
                     Some(md.clone())
                 } else {
                     None
@@ -7617,7 +7622,12 @@ mod test {
                     .find(|(_, child)| child.name() == "uuid")
                     .and_then(|(_, child)| {
                         let md = child.metadata();
-                        if md.get(UUID_EXT_KEY).is_some() {
+                        let has_ext = md.get(UUID_EXT_KEY).is_some();
+                        let is_uuid_logical = md
+                            .get(UUID_LOGICAL_KEY)
+                            .map(|v| v.trim_matches('"') == "uuid")
+                            .unwrap_or(false);
+                        if has_ext || is_uuid_logical {
                             Some(md.clone())
                         } else {
                             None
