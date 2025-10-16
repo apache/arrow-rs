@@ -1479,13 +1479,7 @@ mod test {
         }
 
         {
-            let v_iter_reversed = {
-                let mut v = v_iter.clone();
-                v.reverse();
-
-                v
-            };
-
+            let v_iter_reversed = v_iter.iter().cloned().rev();
             let v_reversed = VariantArray::from_iter(v_iter_reversed);
 
             assert_ne!(v, v_reversed);
