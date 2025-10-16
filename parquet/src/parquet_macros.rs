@@ -295,6 +295,21 @@ macro_rules! thrift_struct {
 
 #[doc(hidden)]
 #[macro_export]
+/// Generate `WriteThriftField` implementation for a struct.
+macro_rules! write_thrift_field {
+    ($identifier:ident $(< $lt:lifetime >)?, $fld_type:expr) => {
+        impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin($fld_type, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
+    }
+}
+
+#[doc(hidden)]
+#[macro_export]
 macro_rules! __thrift_write_required_or_optional_field {
     (required $field_name:ident, $field_id:literal, $field_type:ident, $self:tt, $writer:tt, $last_id:tt) => {
         $crate::__thrift_write_required_field!(

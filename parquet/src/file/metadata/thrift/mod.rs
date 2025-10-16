@@ -58,6 +58,7 @@ use crate::{
     },
     thrift_struct,
     util::bit_util::FromBytes,
+    write_thrift_field,
 };
 
 // this needs to be visible to the schema conversion code
@@ -1521,18 +1522,9 @@ impl WriteThrift for crate::geospatial::statistics::GeospatialStatistics {
     }
 }
 
-impl WriteThriftField for crate::geospatial::statistics::GeospatialStatistics {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
+// macro cannot handle qualified names
+use crate::geospatial::statistics::GeospatialStatistics as RustGeospatialStatistics;
+write_thrift_field!(RustGeospatialStatistics, FieldType::Struct);
 
 // struct BoundingBox {
 //   1: required double xmin;
@@ -1570,18 +1562,9 @@ impl WriteThrift for crate::geospatial::bounding_box::BoundingBox {
     }
 }
 
-impl WriteThriftField for crate::geospatial::bounding_box::BoundingBox {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
-        self.write_thrift(writer)?;
-        Ok(field_id)
-    }
-}
+// macro cannot handle qualified names
+use crate::geospatial::bounding_box::BoundingBox as RustBoundingBox;
+write_thrift_field!(RustBoundingBox, FieldType::Struct);
 
 #[cfg(test)]
 pub(crate) mod tests {
