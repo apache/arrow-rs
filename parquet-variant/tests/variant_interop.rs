@@ -434,10 +434,7 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             // Generate a list
             let mut list_builder = builder.new_list();
             let list_len = rng.random_range(0..10);
-
-            for _ in 0..list_len {
-                list_builder.append_value(rng.random::<i32>());
-            }
+            list_builder.extend(std::iter::repeat_with(|| rng.random::<i32>()).take(list_len));
             list_builder.finish();
         }
         14 => {
@@ -445,10 +442,9 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             let mut object_builder = builder.new_object();
             let obj_size = rng.random_range(0..10);
 
-            for i in 0..obj_size {
-                let key = format!("field_{i}");
-                object_builder.insert(&key, rng.random::<i32>());
-            }
+            object_builder
+                .extend((0..obj_size).map(|i| (format!("field_{i}"), rng.random::<i32>())));
+
             object_builder.finish();
         }
         15 => {
