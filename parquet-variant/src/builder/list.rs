@@ -40,6 +40,8 @@ fn append_packed_u32(dest: &mut Vec<u8>, value: u32, value_size: usize) {
 /// A builder for creating [`Variant::List`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
+///
+/// [`VariantBuilder`]: crate::VariantBuilder
 #[derive(Debug)]
 pub struct ListBuilder<'a, S: BuilderSpecificState> {
     parent_state: ParentState<'a, S>,

@@ -31,6 +31,8 @@ fn write_offset(buf: &mut Vec<u8>, value: usize, nbytes: u8) {
 /// A trait for building variant metadata dictionaries, to be used in conjunction with a
 /// [`ValueBuilder`]. The trait provides methods for managing field names and their IDs, as well as
 /// rolling back a failed builder operation that might have created new field ids.
+///
+/// [`ValueBuilder`]: crate::builder::ValueBuilder
 pub trait MetadataBuilder: std::fmt::Debug {
     /// Attempts to register a field name, returning the corresponding (possibly newly-created)
     /// field id on success. Attempting to register the same field name twice will _generally_
@@ -131,6 +133,9 @@ impl MetadataBuilder for ReadOnlyMetadataBuilder<'_> {
 /// This is used internally by the [`VariantBuilder`] to construct the metadata
 ///
 /// You can use an existing `Vec<u8>` as the metadata buffer by using the `from` impl.
+///
+/// [`Variant`]: crate::Variant
+/// [`VariantBuilder`]: crate::VariantBuilder
 #[derive(Default, Debug)]
 pub struct WritableMetadataBuilder {
     pub(crate) field_names: IndexSet<String>,

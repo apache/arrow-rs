@@ -35,6 +35,8 @@ fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
 /// A builder for creating [`Variant::Object`] values.
 ///
 /// See the examples on [`VariantBuilder`] for usage.
+///
+/// [`VariantBuilder`]: crate::VariantBuilder
 #[derive(Debug)]
 pub struct ObjectBuilder<'a, S: BuilderSpecificState> {
     parent_state: ParentState<'a, S>,
