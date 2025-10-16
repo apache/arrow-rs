@@ -873,7 +873,8 @@ impl ArrowColumnWriter {
 
 /// Encodes [`RecordBatch`] to a parquet row group
 ///
-/// You can create this structure via an [`ArrowRowGroupWriterFactory`]
+/// Note: this structure is created by [`ArrowRowGroupWriterFactory`] internally used to
+/// create [`ArrowRowGroupWriter`]s, but it is not exposed publicly.
 ///
 /// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
 #[derive(Debug)]
@@ -946,7 +947,7 @@ impl ArrowRowGroupWriterFactory {
         Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
     }
 
-    /// Create column writers for a new row group.
+    /// Create column writers for a new row group, with the given row group index
     pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
         let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
         let mut leaves = self.schema.columns().iter();
