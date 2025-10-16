@@ -18,7 +18,7 @@
 //! Module for parsing JSON strings as Variant
 
 use arrow_schema::ArrowError;
-use parquet_variant::{Variant, VariantBuilderExt};
+use parquet_variant::{ObjectFieldBuilder, Variant, VariantBuilderExt};
 use serde_json::{Number, Value};
 
 /// Converts a JSON string to Variant using a [`VariantBuilderExt`], such as

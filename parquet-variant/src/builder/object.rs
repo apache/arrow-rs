@@ -1,5 +1,3 @@
-use crate::builder::list::ListBuilder;
-use crate::builder::metadata::MetadataBuilder;
 // Licensed to the Apache Software Foundation (ASF) under one
 // or more contributor license agreements.  See the NOTICE file
 // distributed with this work for additional information
@@ -16,6 +14,8 @@ use crate::builder::metadata::MetadataBuilder;
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
+use crate::builder::list::ListBuilder;
+use crate::builder::metadata::MetadataBuilder;
 use crate::decoder::VariantBasicType;
 use crate::{
     BASIC_TYPE_BITS, BuilderSpecificState, ParentState, ValueBuilder, Variant, VariantBuilderExt,
