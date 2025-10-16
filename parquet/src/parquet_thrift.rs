@@ -313,6 +313,14 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
         })
     }
 
+    // Full field ids are uncommon.
+    // Not inlining this method reduces the code size of `read_field_begin`, which then ideally gets
+    // inlined everywhere.
+    #[cold]
+    fn read_full_field_id(&mut self) -> ThriftProtocolResult<i16> {
+        self.read_i16()
+    }
+
     /// Read the [`FieldIdentifier`] for a field in a Thrift encoded struct.
     fn read_field_begin(&mut self, last_field_id: i16) -> ThriftProtocolResult<FieldIdentifier> {
         // we can read at least one byte, which is:
@@ -337,17 +345,14 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
                     bool_val = Some(true);
                 }
                 let field_id = if field_delta != 0 {
-                    last_field_id.checked_add(field_delta as i16).map_or_else(
-                        || {
-                            Err(ThriftProtocolError::FieldDeltaOverflow {
-                                field_delta,
-                                last_field_id,
-                            })
+                    last_field_id.checked_add(field_delta as i16).ok_or(
+                        ThriftProtocolError::FieldDeltaOverflow {
+                            field_delta,
+                            last_field_id,
                         },
-                        Ok,
                     )?
                 } else {
-                    self.read_i16()?
+                    self.read_full_field_id()?
                 };
 
                 Ok(FieldIdentifier {
