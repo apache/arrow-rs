@@ -255,6 +255,7 @@ Rust Arrow Crates:
 (cd arrow-row && cargo publish)
 (cd arrow-pyarrow && cargo publish)
 (cd arrow && cargo publish)
+(cd arrow-avro && cargo publish)
 (cd arrow-flight && cargo publish)
 (cd parquet-variant && cargo publish)
 (cd parquet-variant-json && cargo publish)

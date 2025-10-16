@@ -31,7 +31,10 @@ use std::{
     io::{Read, Write},
 };
 
-use crate::errors::{ParquetError, Result};
+use crate::{
+    errors::{ParquetError, Result},
+    write_thrift_field,
+};
 
 /// Wrapper for thrift `double` fields. This is used to provide
 /// an implementation of `Eq` for floats. This implementation
@@ -913,6 +916,7 @@ pub(crate) trait WriteThriftField {
     ) -> Result<i16>;
 }
 
+// bool struct fields are written differently to bool values
 impl WriteThriftField for bool {
     fn write_thrift_field<W: Write>(
         &self,
@@ -929,83 +933,13 @@ impl WriteThriftField for bool {
     }
 }
 
-impl WriteThriftField for i8 {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Byte, field_id, last_field_id)?;
-        writer.write_i8(*self)?;
-        Ok(field_id)
-    }
-}
-
-impl WriteThriftField for i16 {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::I16, field_id, last_field_id)?;
-        writer.write_i16(*self)?;
-        Ok(field_id)
-    }
-}
-
-impl WriteThriftField for i32 {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::I32, field_id, last_field_id)?;
-        writer.write_i32(*self)?;
-        Ok(field_id)
-    }
-}
-
-impl WriteThriftField for i64 {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::I64, field_id, last_field_id)?;
-        writer.write_i64(*self)?;
-        Ok(field_id)
-    }
-}
-
-impl WriteThriftField for OrderedF64 {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Double, field_id, last_field_id)?;
-        writer.write_double(self.0)?;
-        Ok(field_id)
-    }
-}
-
-impl WriteThriftField for f64 {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Double, field_id, last_field_id)?;
-        writer.write_double(*self)?;
-        Ok(field_id)
-    }
-}
+write_thrift_field!(i8, FieldType::Byte);
+write_thrift_field!(i16, FieldType::I16);
+write_thrift_field!(i32, FieldType::I32);
+write_thrift_field!(i64, FieldType::I64);
+write_thrift_field!(OrderedF64, FieldType::Double);
+write_thrift_field!(f64, FieldType::Double);
+write_thrift_field!(String, FieldType::Binary);
 
 impl WriteThriftField for &[u8] {
     fn write_thrift_field<W: Write>(
@@ -1021,19 +955,6 @@ impl WriteThriftField for &[u8] {
 }
 
 impl WriteThriftField for &str {
-    fn write_thrift_field<W: Write>(
-        &self,
-        writer: &mut ThriftCompactOutputProtocol<W>,
-        field_id: i16,
-        last_field_id: i16,
-    ) -> Result<i16> {
-        writer.write_field_begin(FieldType::Binary, field_id, last_field_id)?;
-        writer.write_bytes(self.as_bytes())?;
-        Ok(field_id)
-    }
-}
-
-impl WriteThriftField for String {
     fn write_thrift_field<W: Write>(
         &self,
         writer: &mut ThriftCompactOutputProtocol<W>,
