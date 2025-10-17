@@ -125,19 +125,17 @@ pub(crate) fn from_thrift_page_stats(
 ) -> Result<Option<Statistics>> {
     Ok(match thrift_stats {
         Some(stats) => {
-            // Number of nulls recorded, when it is not available, we just mark it as 0.
-            // TODO this should be `None` if there is no information about NULLS.
-            // see https://github.com/apache/arrow-rs/pull/6216/files
-            let null_count = stats.null_count.unwrap_or(0);
-
-            if null_count < 0 {
-                return Err(ParquetError::General(format!(
-                    "Statistics null count is negative {null_count}",
-                )));
-            }
-
-            // Generic null count.
-            let null_count = Some(null_count as u64);
+            let null_count = match stats.null_count {
+                Some(null_count) => {
+                    if null_count < 0 {
+                        return Err(ParquetError::General(format!(
+                            "Statistics null count is negative {null_count}",
+                        )));
+                    }
+                    Some(null_count as u64)
+                }
+                None => None,
+            };
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
@@ -1062,21 +1060,7 @@ mod tests {
         let round_tripped = from_thrift_page_stats(Type::BOOLEAN, Some(thrift_stats))
             .unwrap()
             .unwrap();
-        // TODO: remove branch when we no longer support assuming null_count==None in the thrift
-        // means null_count = Some(0)
-        if null_count.is_none() {
-            assert_ne!(round_tripped, statistics);
-            assert!(round_tripped.null_count_opt().is_some());
-            assert_eq!(round_tripped.null_count_opt(), Some(0));
-            assert_eq!(round_tripped.min_bytes_opt(), statistics.min_bytes_opt());
-            assert_eq!(round_tripped.max_bytes_opt(), statistics.max_bytes_opt());
-            assert_eq!(
-                round_tripped.distinct_count_opt(),
-                statistics.distinct_count_opt()
-            );
-        } else {
-            assert_eq!(round_tripped, statistics);
-        }
+        assert_eq!(round_tripped, statistics);
     }
 
     fn make_bool_stats(distinct_count: Option<u64>, null_count: Option<u64>) -> Statistics {
@@ -1092,6 +1076,25 @@ mod tests {
             null_count,
             is_min_max_deprecated,
         ))
+    }
+
+    #[test]
+    fn test_from_thrift_null_count() {
+        let thrift_stats = PageStatistics {
+            max: None,
+            min: None,
+            null_count: None,
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+
+        let stats = from_thrift_page_stats(Type::BOOLEAN, Some(thrift_stats))
+            .unwrap()
+            .unwrap();
+        assert_eq!(stats.null_count_opt(), None);
     }
 
     #[test]
