@@ -456,10 +456,7 @@ impl<'a> MutableArrayData<'a> {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
-            (
-                DataType::ListView(_) | DataType::LargeListView(_),
-                Capacities::List(capacity, _),
-            ) => {
+            (DataType::ListView(_) | DataType::LargeListView(_), Capacities::List(capacity, _)) => {
                 array_capacity = *capacity;
                 new_buffers(data_type, *capacity)
             }
