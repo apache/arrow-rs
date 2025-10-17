@@ -1390,6 +1390,16 @@ mod tests {
         test_plain_skip::<FixedLenByteArrayType>(Bytes::from(data_bytes), 3, 6, 4, &[]);
     }
 
+    #[test]
+    fn test_dict_decoder_empty_data() {
+        let mut decoder = DictDecoder::<Int32Type>::new();
+        let err = decoder.set_data(Bytes::new(), 10).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Not enough bytes to decode bit_width"
+        );
+    }
+
     fn test_plain_decode<T: DataType>(
         data: Bytes,
         num_values: usize,

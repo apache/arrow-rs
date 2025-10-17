@@ -1143,6 +1143,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_decode_page_invalid_offset() {
+        use crate::file::metadata::thrift_gen::DataPageHeaderV2;
+
+        let mut page_header = PageHeader::default();
+        page_header.r#type = PageType::DATA_PAGE_V2;
+        page_header.uncompressed_page_size = 10;
+        page_header.compressed_page_size = 10;
+        let mut data_page_header_v2 = DataPageHeaderV2::default();
+        data_page_header_v2.definition_levels_byte_length = 11; // offset > uncompressed_page_size
+        page_header.data_page_header_v2 = Some(data_page_header_v2);
+
+        let buffer = Bytes::new();
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert_eq!(err.to_string(), "Parquet error: Invalid page header");
+    }
+
+    #[test]
+    fn test_decode_unsupported_page() {
+        let mut page_header = PageHeader::default();
+        page_header.r#type = PageType::INDEX_PAGE;
+        let buffer = Bytes::new();
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Page type INDEX_PAGE is not supported"
+        );
+    }
+
+    #[test]
     fn test_cursor_and_file_has_the_same_behaviour() {
         let mut buf: Vec<u8> = Vec::new();
         get_test_file("alltypes_plain.parquet")

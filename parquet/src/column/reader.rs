@@ -601,6 +601,25 @@ mod tests {
     use crate::util::test_common::page_util::InMemoryPageReader;
     use crate::util::test_common::rand_gen::make_pages;
 
+    #[test]
+    fn test_parse_v1_level_invalid_length() {
+        // Say length is 10, but buffer is only 4
+        let buf = Bytes::from(vec![10, 0, 0, 0]);
+        let err = parse_v1_level(1, 100, Encoding::RLE, buf).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: not enough data to read levels"
+        );
+
+        // Say length is 4, but buffer is only 3
+        let buf = Bytes::from(vec![4, 0, 0]);
+        let err = parse_v1_level(1, 100, Encoding::RLE, buf).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: not enough data to read levels"
+        );
+    }
+
     const NUM_LEVELS: usize = 128;
     const NUM_PAGES: usize = 2;
     const MAX_DEF_LEVEL: i16 = 5;

@@ -88,7 +88,7 @@ fn test_arrow_gh_41321() {
     let err = read_file("ARROW-GH-41321.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: Parquet error: Invalid or corrupted Bit width 254. Max allowed is 32"
+        "External: Parquet argument error: Parquet error: Invalid or corrupted RLE bit width 254. Max allowed is 32"
     );
 }
 
