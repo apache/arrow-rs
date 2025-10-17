@@ -166,14 +166,15 @@ where
     }
 }
 
-fn convert_to_smaller_scale_decimal<I: DecimalType, O: DecimalType>(
-    array: &PrimitiveArray<I>,
+fn make_downscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
     output_precision: u8,
     output_scale: i8,
-    cast_options: &CastOptions,
-) -> Result<PrimitiveArray<O>, ArrowError>
+) -> Option<(
+    impl Fn(I::Native) -> Option<O::Native>,
+    Option<impl Fn(I::Native) -> O::Native>,
+)>
 where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
@@ -186,16 +187,13 @@ where
     // possible result is 999999999/10000000000 = 0.0999999999, which rounds to zero. Smaller values
     // (e.g. 1/10000000000) or larger delta_scale (e.g. 999999999/10000000000000) produce even
     // smaller results, which also round to zero. In that case, just return an array of zeros.
-    let Some(max) = I::MAX_FOR_EACH_PRECISION.get(delta_scale as usize) else {
-        let zeros = vec![O::Native::ZERO; array.len()];
-        return Ok(PrimitiveArray::new(zeros.into(), array.nulls().cloned()));
-    };
+    let max = I::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
 
     let div = max.add_wrapping(I::Native::ONE);
     let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
     let half_neg = half.neg_wrapping();
 
-    let f = |x: I::Native| {
+    let f = move |x: I::Native| {
         // div is >= 10 and so this cannot overflow
         let d = x.div_wrapping(div);
         let r = x.mod_wrapping(div);
@@ -220,19 +218,11 @@ where
     // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
     // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
     let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
-    let f_infallible = is_infallible_cast.then_some(|x| f(x).unwrap());
-
-    apply_decimal_cast::<I, O>(
-        array,
-        output_precision,
-        output_scale,
-        f,
-        f_infallible,
-        cast_options,
-    )
+    let f_infallible = is_infallible_cast.then_some(move |x| f(x).unwrap());
+    Some((f, f_infallible))
 }
 
-fn convert_to_bigger_or_equal_scale_decimal<I: DecimalType, O: DecimalType>(
+fn convert_to_smaller_scale_decimal<I, O>(
     array: &PrimitiveArray<I>,
     input_precision: u8,
     input_scale: i8,
@@ -240,6 +230,39 @@ fn convert_to_bigger_or_equal_scale_decimal<I: DecimalType, O: DecimalType>(
     output_scale: i8,
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    if let Some((f, f_infallible)) =
+        make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
+    {
+        apply_decimal_cast(
+            array,
+            output_precision,
+            output_scale,
+            f,
+            f_infallible,
+            cast_options,
+        )
+    } else {
+        // Scale reduction exceeds supported precision; result mathematically rounds to zero
+        let zeros = vec![O::Native::ZERO; array.len()];
+        Ok(PrimitiveArray::new(zeros.into(), array.nulls().cloned()))
+    }
+}
+
+fn make_upscaler<I: DecimalType, O: DecimalType>(
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+) -> Option<(
+    impl Fn(I::Native) -> Option<O::Native>,
+    Option<impl Fn(I::Native) -> O::Native>,
+)>
 where
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
@@ -250,9 +273,9 @@ where
     // Adding 1 yields exactly 10^k without computing a power at runtime.
     // Using the precomputed table avoids pow(10, k) and its checked/overflow
     // handling, which is faster and simpler for scaling by 10^delta_scale.
-    let max = O::MAX_FOR_EACH_PRECISION[delta_scale as usize];
+    let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
     let mul = max.add_wrapping(O::Native::ONE);
-    let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+    let f = move |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
     // if the gain in precision (digits) is greater than the multiplication due to scaling
     // every number will fit into the output type
@@ -261,17 +284,45 @@ where
     // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
     // needs to provide at least 8 digits precision
     let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
-    let f_infallible =
-        is_infallible_cast.then_some(|x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
+    let f_infallible = is_infallible_cast
+        .then_some(move |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
+    Some((f, f_infallible))
+}
 
-    apply_decimal_cast::<I, O>(
-        array,
-        output_precision,
-        output_scale,
-        f,
-        f_infallible,
-        cast_options,
-    )
+fn convert_to_bigger_or_equal_scale_decimal<I, O>(
+    array: &PrimitiveArray<I>,
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    if let Some((f, f_infallible)) =
+        make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
+    {
+        apply_decimal_cast(
+            array,
+            output_precision,
+            output_scale,
+            f,
+            f_infallible,
+            cast_options,
+        )
+    } else {
+        // Scale increase exceeds supported precision; return overflow error
+        Err(ArrowError::CastError(format!(
+            "Cannot cast to {}({}, {}). Value overflows for output scale",
+            O::PREFIX,
+            output_precision,
+            output_scale
+        )))
+    }
 }
 
 fn apply_decimal_cast<I: DecimalType, O: DecimalType>(
