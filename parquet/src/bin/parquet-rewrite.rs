@@ -48,6 +48,61 @@ use parquet::{
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum CompressionArgs {
+    /// No compression.
+    None,
+
+    /// Snappy
+    Snappy,
+
+    /// GZip
+    Gzip,
+
+    /// LZO
+    Lzo,
+
+    /// Brotli
+    Brotli,
+
+    /// LZ4
+    Lz4,
+
+    /// Zstd
+    Zstd,
+
+    /// LZ4 Raw
+    Lz4Raw,
+}
+
+fn compression_from_args(codec: CompressionArgs, level: Option<u32>) -> Compression {
+    match codec {
+        CompressionArgs::None => Compression::UNCOMPRESSED,
+        CompressionArgs::Snappy => Compression::SNAPPY,
+        CompressionArgs::Gzip => match level {
+            Some(lvl) => {
+                Compression::GZIP(GzipLevel::try_new(lvl).expect("invalid gzip compression level"))
+            }
+            None => Compression::GZIP(Default::default()),
+        },
+        CompressionArgs::Lzo => Compression::LZO,
+        CompressionArgs::Brotli => match level {
+            Some(lvl) => Compression::BROTLI(
+                BrotliLevel::try_new(lvl).expect("invalid brotli compression level"),
+            ),
+            None => Compression::BROTLI(Default::default()),
+        },
+        CompressionArgs::Lz4 => Compression::LZ4,
+        CompressionArgs::Zstd => match level {
+            Some(lvl) => Compression::ZSTD(
+                ZstdLevel::try_new(lvl as i32).expect("invalid zstd compression level"),
+            ),
+            None => Compression::ZSTD(Default::default()),
+        },
+        CompressionArgs::Lz4Raw => Compression::LZ4_RAW,
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 enum EncodingArgs {
     /// Default byte encoding.
     Plain,
@@ -159,61 +214,6 @@ impl From<BloomFilterPositionArgs> for BloomFilterPosition {
             BloomFilterPositionArgs::AfterRowGroup => Self::AfterRowGroup,
             BloomFilterPositionArgs::End => Self::End,
         }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-enum CompressionArgs {
-    /// No compression.
-    None,
-
-    /// Snappy
-    Snappy,
-
-    /// GZip
-    Gzip,
-
-    /// LZO
-    Lzo,
-
-    /// Brotli
-    Brotli,
-
-    /// LZ4
-    Lz4,
-
-    /// Zstd
-    Zstd,
-
-    /// LZ4 Raw
-    Lz4Raw,
-}
-
-fn compression_from_args(codec: CompressionArgs, level: Option<u32>) -> Compression {
-    match codec {
-        CompressionArgs::None => Compression::UNCOMPRESSED,
-        CompressionArgs::Snappy => Compression::SNAPPY,
-        CompressionArgs::Gzip => match level {
-            Some(lvl) => {
-                Compression::GZIP(GzipLevel::try_new(lvl).expect("invalid gzip compression level"))
-            }
-            None => Compression::GZIP(Default::default()),
-        },
-        CompressionArgs::Lzo => Compression::LZO,
-        CompressionArgs::Brotli => match level {
-            Some(lvl) => Compression::BROTLI(
-                BrotliLevel::try_new(lvl).expect("invalid brotli compression level"),
-            ),
-            None => Compression::BROTLI(Default::default()),
-        },
-        CompressionArgs::Lz4 => Compression::LZ4,
-        CompressionArgs::Zstd => match level {
-            Some(lvl) => Compression::ZSTD(
-                ZstdLevel::try_new(lvl as i32).expect("invalid zstd compression level"),
-            ),
-            None => Compression::ZSTD(Default::default()),
-        },
-        CompressionArgs::Lz4Raw => Compression::LZ4_RAW,
     }
 }
 
