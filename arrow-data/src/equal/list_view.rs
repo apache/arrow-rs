@@ -63,7 +63,7 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
         let lhs_nulls = lhs.nulls().unwrap().slice(lhs_start, len);
         let rhs_nulls = rhs.nulls().unwrap().slice(rhs_start, len);
 
-        if lhs_range_sizes.len() != rhs_range_sizes.len() {
+        if lhs_range_sizes.len() != rhs_range_sizes.len() || lhs_range_sizes != rhs_range_sizes {
             return false;
         }
 

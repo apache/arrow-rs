@@ -58,6 +58,13 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
     *unsafe { offsets.get_unchecked(offsets.len() - 1) }
 }
 
+#[inline]
+pub(super) fn get_last_value_or_default<T: ArrowNativeType>(offset_buffer: &MutableBuffer) -> T {
+    let (prefix, offsets, suffix) = unsafe { offset_buffer.as_slice().align_to::<T>() };
+    debug_assert!(prefix.is_empty() && suffix.is_empty());
+    offsets.last().copied().unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::transform::utils::extend_offsets;
