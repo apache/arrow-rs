@@ -208,7 +208,7 @@ impl ExtensionType for VariantType {
 /// assert_eq!(variant_array.value(0), Variant::from("such wow"));
 /// ```
 ///
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
@@ -741,7 +741,7 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 /// (partial shredding).
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShreddingState {
     value: Option<BinaryViewArray>,
     typed_value: Option<ArrayRef>,
@@ -1466,5 +1466,28 @@ mod test {
             variant_array.value(2),
             Variant::ShortString(ShortString::try_new("norm").unwrap())
         );
+    }
+
+    #[test]
+    fn test_variant_equality() {
+        let v_iter = [None, Some(Variant::BooleanFalse), Some(Variant::Null), None];
+        let v = VariantArray::from_iter(v_iter.clone());
+
+        {
+            let v_copy = v.clone();
+            assert_eq!(v, v_copy);
+        }
+
+        {
+            let v_iter_reversed = v_iter.iter().cloned().rev();
+            let v_reversed = VariantArray::from_iter(v_iter_reversed);
+
+            assert_ne!(v, v_reversed);
+        }
+
+        {
+            let v_sliced = v.slice(0, 1);
+            assert_ne!(v, v_sliced);
+        }
     }
 }
