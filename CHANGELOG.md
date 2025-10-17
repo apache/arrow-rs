@@ -41,60 +41,60 @@
 
 **Implemented enhancements:**
 
-- Error not panic when int96 stastistics aren't size 12 [\#8614](https://github.com/apache/arrow-rs/issues/8614)
+- Error not panic when int96 stastistics aren't size 12 [\#8614](https://github.com/apache/arrow-rs/issues/8614) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Make `VariantArray` iterable [\#8612](https://github.com/apache/arrow-rs/issues/8612)
 - \[Variant\] impl `PartialEq` for `VariantArray` [\#8610](https://github.com/apache/arrow-rs/issues/8610)
 - \[Variant\] Remove potential panics when probing `VariantArray` [\#8609](https://github.com/apache/arrow-rs/issues/8609)
 - \[Variant\] Remove ceremony of going from list of `Variant` to `VariantArray` [\#8606](https://github.com/apache/arrow-rs/issues/8606)
-- Eliminate redundant validation in `RecordBatch::project` [\#8591](https://github.com/apache/arrow-rs/issues/8591)
-- \[PARQUET\]\[BENCH\] Arrow writer bench with compression and/or page v2 [\#8559](https://github.com/apache/arrow-rs/issues/8559)
-- \[Variant\] casting functions are confusingly named [\#8531](https://github.com/apache/arrow-rs/issues/8531)
-- Support writing GeospatialStatistics in Parquet writer [\#8523](https://github.com/apache/arrow-rs/issues/8523)
-- \[thrift-remodel\] Optimize `convert_row_groups` [\#8517](https://github.com/apache/arrow-rs/issues/8517)
+- Eliminate redundant validation in `RecordBatch::project` [\#8591](https://github.com/apache/arrow-rs/issues/8591) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[PARQUET\]\[BENCH\] Arrow writer bench with compression and/or page v2 [\#8559](https://github.com/apache/arrow-rs/issues/8559) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] casting functions are confusingly named [\#8531](https://github.com/apache/arrow-rs/issues/8531) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Support writing GeospatialStatistics in Parquet writer [\#8523](https://github.com/apache/arrow-rs/issues/8523) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[thrift-remodel\] Optimize `convert_row_groups` [\#8517](https://github.com/apache/arrow-rs/issues/8517) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Add variant to arrow primitive support for boolean/timestamp/time [\#8515](https://github.com/apache/arrow-rs/issues/8515)
-- Test `thrift-remodel` branch with DataFusion [\#8513](https://github.com/apache/arrow-rs/issues/8513)
-- Make `UnionArray::is_dense` Method Public [\#8503](https://github.com/apache/arrow-rs/issues/8503)
-- Add `append_n` method to `FixedSizeBinaryDictionaryBuilder` [\#8497](https://github.com/apache/arrow-rs/issues/8497)
+- Test `thrift-remodel` branch with DataFusion [\#8513](https://github.com/apache/arrow-rs/issues/8513) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Make `UnionArray::is_dense` Method Public [\#8503](https://github.com/apache/arrow-rs/issues/8503) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add `append_n` method to `FixedSizeBinaryDictionaryBuilder` [\#8497](https://github.com/apache/arrow-rs/issues/8497) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Parquet\] Reduce size of ParquetMetadata when encryption feature is enabled [\#8469](https://github.com/apache/arrow-rs/issues/8469) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Parquet\] Remove useless mut requirements in geting bloom filter function [\#8461](https://github.com/apache/arrow-rs/issues/8461) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Change `serde` dependency to `serde_core` where applicable [\#8451](https://github.com/apache/arrow-rs/issues/8451)
-- \[Parquet\] Split `ParquetMetadataReader` into IO/decoder state machine and thrift parsing [\#8439](https://github.com/apache/arrow-rs/issues/8439)
-- Remove compiler warning for redundant config enablement [\#8412](https://github.com/apache/arrow-rs/issues/8412)
-- Add geospatial statistics creation support for GEOMETRY/GEOGRAPHY Parquet logical types [\#8411](https://github.com/apache/arrow-rs/issues/8411)
-- `arrow_json` lacks  `with_timestamp_format` functions like `arrow_csv` had offered [\#8398](https://github.com/apache/arrow-rs/issues/8398)
+- Change `serde` dependency to `serde_core` where applicable [\#8451](https://github.com/apache/arrow-rs/issues/8451) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Parquet\] Split `ParquetMetadataReader` into IO/decoder state machine and thrift parsing [\#8439](https://github.com/apache/arrow-rs/issues/8439) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Remove compiler warning for redundant config enablement [\#8412](https://github.com/apache/arrow-rs/issues/8412) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add geospatial statistics creation support for GEOMETRY/GEOGRAPHY Parquet logical types [\#8411](https://github.com/apache/arrow-rs/issues/8411) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- `arrow_json` lacks  `with_timestamp_format` functions like `arrow_csv` had offered [\#8398](https://github.com/apache/arrow-rs/issues/8398) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Unify API for writing column chunks / row groups in parallel [\#8389](https://github.com/apache/arrow-rs/issues/8389) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Reuse zstd context in arrow IPC writer [\#8386](https://github.com/apache/arrow-rs/issues/8386)
+- Reuse zstd context in arrow IPC writer [\#8386](https://github.com/apache/arrow-rs/issues/8386) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)]
 - \[Variant\] Support reading/writing Parquet Variant LogicalType [\#8370](https://github.com/apache/arrow-rs/issues/8370) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Implement a `shred_variant` function [\#8361](https://github.com/apache/arrow-rs/issues/8361)
-- \[Parquet\] Expose ReadPlan and ReadPlanBuilder [\#8347](https://github.com/apache/arrow-rs/issues/8347)
-- \[Variant\] \[Shredding\] Support typed\_access for `List` [\#8337](https://github.com/apache/arrow-rs/issues/8337)
-- \[Variant\] \[Shredding\] Support typed\_access for `Struct` [\#8336](https://github.com/apache/arrow-rs/issues/8336)
-- \[Variant\] \[Shredding\] Support typed\_access for `Time64(Microsecond)` [\#8334](https://github.com/apache/arrow-rs/issues/8334)
-- \[Variant\] \[Shredding\] Support typed\_access for `Decimal128` [\#8332](https://github.com/apache/arrow-rs/issues/8332)
-- \[Variant\] \[Shredding\] Support typed\_access for `Timestamp(Microsecond, _)` and `Timestamp(Nanosecond, _)` [\#8331](https://github.com/apache/arrow-rs/issues/8331)
-- \[Variant\] \[Shredding\] Support typed\_access for `Date32` [\#8330](https://github.com/apache/arrow-rs/issues/8330)
+- \[Parquet\] Expose ReadPlan and ReadPlanBuilder [\#8347](https://github.com/apache/arrow-rs/issues/8347) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] \[Shredding\] Support typed\_access for `List` [\#8337](https://github.com/apache/arrow-rs/issues/8337) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] \[Shredding\] Support typed\_access for `Struct` [\#8336](https://github.com/apache/arrow-rs/issues/8336) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] \[Shredding\] Support typed\_access for `Time64(Microsecond)` [\#8334](https://github.com/apache/arrow-rs/issues/8334) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] \[Shredding\] Support typed\_access for `Decimal128` [\#8332](https://github.com/apache/arrow-rs/issues/8332) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] \[Shredding\] Support typed\_access for `Timestamp(Microsecond, _)` and `Timestamp(Nanosecond, _)` [\#8331](https://github.com/apache/arrow-rs/issues/8331) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] \[Shredding\] Support typed\_access for `Date32` [\#8330](https://github.com/apache/arrow-rs/issues/8330) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Support strict casting for all data types [\#8303](https://github.com/apache/arrow-rs/issues/8303)
 - \[Variant\] Support typed access for string types in variant\_get [\#8285](https://github.com/apache/arrow-rs/issues/8285)
 - \[Variant\]: Implement `DataType::FixedSizeList` support for `cast_to_variant` kernel [\#8281](https://github.com/apache/arrow-rs/issues/8281)
 
 **Fixed bugs:**
 
-- Fix arrow-avro Writer Documentation related to AvroBinaryFormat [\#8631](https://github.com/apache/arrow-rs/issues/8631)
-- Decimal -\> Decimal cast wrongly fails for large scale reduction [\#8579](https://github.com/apache/arrow-rs/issues/8579)
-- \[Parquet\] Avoid fetching multiple pages when `max_predicate_cache_size`is 0 [\#8542](https://github.com/apache/arrow-rs/issues/8542)
-- DataType parsing no longer works correctly for old formatted timestamps [\#8539](https://github.com/apache/arrow-rs/issues/8539)
-- \[Parquet\] ArrowWriter flush does not work [\#8534](https://github.com/apache/arrow-rs/issues/8534)
-- `arrow::compute::interleave` fails with struct arrays with no fields [\#8533](https://github.com/apache/arrow-rs/issues/8533)
-- \[Parquet\] Over memory consumation for writer page v1 compressed [\#8526](https://github.com/apache/arrow-rs/issues/8526)
-- Incorrect Behavior of Collecting a filtered iterator to a BooleanArray [\#8505](https://github.com/apache/arrow-rs/issues/8505)
+- Fix arrow-avro Writer Documentation related to AvroBinaryFormat [\#8631](https://github.com/apache/arrow-rs/issues/8631) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Decimal -\> Decimal cast wrongly fails for large scale reduction [\#8579](https://github.com/apache/arrow-rs/issues/8579) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Parquet\] Avoid fetching multiple pages when `max_predicate_cache_size`is 0 [\#8542](https://github.com/apache/arrow-rs/issues/8542) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- DataType parsing no longer works correctly for old formatted timestamps [\#8539](https://github.com/apache/arrow-rs/issues/8539) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Parquet\] ArrowWriter flush does not work [\#8534](https://github.com/apache/arrow-rs/issues/8534) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- `arrow::compute::interleave` fails with struct arrays with no fields [\#8533](https://github.com/apache/arrow-rs/issues/8533) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Parquet\] Over memory consumation for writer page v1 compressed [\#8526](https://github.com/apache/arrow-rs/issues/8526) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Incorrect Behavior of Collecting a filtered iterator to a BooleanArray [\#8505](https://github.com/apache/arrow-rs/issues/8505) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Parquet\] ProjectionMask::columns name handling is bug prone [\#8443](https://github.com/apache/arrow-rs/issues/8443) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- \[Variant\] Shredded typed\_value columns must have valid variant types [\#8435](https://github.com/apache/arrow-rs/issues/8435)
-- cargo test -p parquet fails with default `ulimit` [\#8406](https://github.com/apache/arrow-rs/issues/8406)
-- Column with List\(Struct\) causes failed to decode level data for struct array [\#8404](https://github.com/apache/arrow-rs/issues/8404)
-- Binaryview Utf8 Cast Issue [\#8403](https://github.com/apache/arrow-rs/issues/8403)
-- Decimal precision validation displays value without accounting for scale [\#8382](https://github.com/apache/arrow-rs/issues/8382)
-- \[Variant\] `VariantArray::data_type` returns `StructType`, causing `Array::as_struct` to panic [\#8319](https://github.com/apache/arrow-rs/issues/8319)
-- \[Variant\] writing a VariantArray to parquet panics [\#8296](https://github.com/apache/arrow-rs/issues/8296)
+- \[Variant\] Shredded typed\_value columns must have valid variant types [\#8435](https://github.com/apache/arrow-rs/issues/8435) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- cargo test -p parquet fails with default `ulimit` [\#8406](https://github.com/apache/arrow-rs/issues/8406) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Column with List\(Struct\) causes failed to decode level data for struct array [\#8404](https://github.com/apache/arrow-rs/issues/8404) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Binaryview Utf8 Cast Issue [\#8403](https://github.com/apache/arrow-rs/issues/8403) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Decimal precision validation displays value without accounting for scale [\#8382](https://github.com/apache/arrow-rs/issues/8382) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Variant\] `VariantArray::data_type` returns `StructType`, causing `Array::as_struct` to panic [\#8319](https://github.com/apache/arrow-rs/issues/8319) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Variant\] writing a VariantArray to parquet panics [\#8296](https://github.com/apache/arrow-rs/issues/8296) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
 
@@ -102,6 +102,7 @@
 
 **Performance improvements:**
 
+- \[parquet\] Improve encoding mask API \(wrap bare  i32 in a struct w/ docs\) [\#8588](https://github.com/apache/arrow-rs/issues/8588) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Skip redundant validation checks in RecordBatch\#project [\#8583](https://github.com/apache/arrow-rs/pull/8583) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([pepijnve](https://github.com/pepijnve))
 - \[thrift-remodel\] Remove conversion functions for row group and column metadata [\#8574](https://github.com/apache/arrow-rs/pull/8574) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - \[PARQUET\] Improve memory efficency for compressed writer parquet 1.0 [\#8527](https://github.com/apache/arrow-rs/pull/8527) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([lilianm](https://github.com/lilianm))
@@ -110,12 +111,11 @@
 **Closed issues:**
 
 - Utf-8, LargeUtf8, Utf8View [\#8601](https://github.com/apache/arrow-rs/issues/8601)
-- \[parquet\] Improve encoding mask API \(wrap bare  i32 in a struct w/ docs\) [\#8588](https://github.com/apache/arrow-rs/issues/8588)
 - \[Variant\] Improve the get type logic for DataType in variant to arrow row builder [\#8538](https://github.com/apache/arrow-rs/issues/8538)
-- Add a README.md for arrow-avro [\#8504](https://github.com/apache/arrow-rs/issues/8504)
-- Fix UnionArray references to "positive" values [\#8418](https://github.com/apache/arrow-rs/issues/8418)
-- \[Variant\] `metadata` field should be marked is non-nullable [\#8410](https://github.com/apache/arrow-rs/issues/8410)
-- \[Avro\] Example read\_with\_utf8view.rs fails to run with error "Error: ParseError\("Unexpected EOF while reading Avro header"\)" [\#8380](https://github.com/apache/arrow-rs/issues/8380)
+- Add a README.md for arrow-avro [\#8504](https://github.com/apache/arrow-rs/issues/8504) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Fix UnionArray references to "positive" values [\#8418](https://github.com/apache/arrow-rs/issues/8418) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Variant\] `metadata` field should be marked is non-nullable [\#8410](https://github.com/apache/arrow-rs/issues/8410) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- \[Avro\] Example read\_with\_utf8view.rs fails to run with error "Error: ParseError\("Unexpected EOF while reading Avro header"\)" [\#8380](https://github.com/apache/arrow-rs/issues/8380) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Geospatial\]: Add CI checks for `parquet-geospatial` crate [\#8377](https://github.com/apache/arrow-rs/issues/8377)
 - \[Geospatial\] Create new `parquet-geometry` crate [\#8374](https://github.com/apache/arrow-rs/issues/8374)
 
