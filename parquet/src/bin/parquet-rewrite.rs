@@ -39,7 +39,7 @@ use arrow_array::RecordBatchReader;
 use clap::{Parser, ValueEnum, builder::PossibleValue};
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
-    basic::{Compression, Encoding},
+    basic::{BrotliLevel, Compression, Encoding, GzipLevel, ZstdLevel},
     file::{
         properties::{BloomFilterPosition, EnabledStatistics, WriterProperties, WriterVersion},
         reader::FileReader,
@@ -162,6 +162,61 @@ impl From<BloomFilterPositionArgs> for BloomFilterPosition {
     }
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
+enum CompressionArgs {
+    /// No compression.
+    None,
+
+    /// Snappy
+    Snappy,
+
+    /// GZip
+    Gzip,
+
+    /// LZO
+    Lzo,
+
+    /// Brotli
+    Brotli,
+
+    /// LZ4
+    Lz4,
+
+    /// Zstd
+    Zstd,
+
+    /// LZ4 Raw
+    Lz4Raw,
+}
+
+fn compression_from_args(codec: CompressionArgs, level: Option<u32>) -> Compression {
+    match codec {
+        CompressionArgs::None => Compression::UNCOMPRESSED,
+        CompressionArgs::Snappy => Compression::SNAPPY,
+        CompressionArgs::Gzip => match level {
+            Some(lvl) => {
+                Compression::GZIP(GzipLevel::try_new(lvl).expect("invalid gzip compression level"))
+            }
+            None => Compression::GZIP(Default::default()),
+        },
+        CompressionArgs::Lzo => Compression::LZO,
+        CompressionArgs::Brotli => match level {
+            Some(lvl) => Compression::BROTLI(
+                BrotliLevel::try_new(lvl).expect("invalid brotli compression level"),
+            ),
+            None => Compression::BROTLI(Default::default()),
+        },
+        CompressionArgs::Lz4 => Compression::LZ4,
+        CompressionArgs::Zstd => match level {
+            Some(lvl) => Compression::ZSTD(
+                ZstdLevel::try_new(lvl as i32).expect("invalid zstd compression level"),
+            ),
+            None => Compression::ZSTD(Default::default()),
+        },
+        CompressionArgs::Lz4Raw => Compression::LZ4_RAW,
+    }
+}
+
 #[derive(Debug, Parser)]
 #[clap(author, version, about("Read and write parquet file with potentially different settings"), long_about = None)]
 struct Args {
@@ -174,8 +229,12 @@ struct Args {
     output: String,
 
     /// Compression used for all columns.
+    #[clap(long, value_enum)]
+    compression: Option<CompressionArgs>,
+
+    /// Compression level for gzip/brotli/zstd.
     #[clap(long)]
-    compression: Option<Compression>,
+    compression_level: Option<u32>,
 
     /// Encoding used for all columns, if dictionary is not enabled.
     #[clap(long, value_enum)]
@@ -275,8 +334,10 @@ fn main() {
     .expect("parquet open");
 
     let mut writer_properties_builder = WriterProperties::builder().set_key_value_metadata(kv_md);
+
     if let Some(value) = args.compression {
-        writer_properties_builder = writer_properties_builder.set_compression(value);
+        let compression = compression_from_args(value, args.compression_level);
+        writer_properties_builder = writer_properties_builder.set_compression(compression);
     }
 
     // setup encoding
