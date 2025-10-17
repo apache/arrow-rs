@@ -715,7 +715,6 @@ mod test {
                 let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
                 let result = variant_get(&array, options).unwrap();
                 let expected_array: ArrayRef = Arc::new($expected_array);
-                println!("{:?}/{:?}", expected_array, result);
                 assert_eq!(&result, &expected_array);
             }
         };
