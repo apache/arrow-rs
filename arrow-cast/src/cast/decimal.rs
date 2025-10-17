@@ -145,7 +145,7 @@ impl DecimalCast for i256 {
     }
 }
 
-pub(crate) fn cast_decimal_to_decimal_error<I, O>(
+fn cast_decimal_to_decimal_error<I, O>(
     output_precision: u8,
     output_scale: i8,
 ) -> impl Fn(<I as ArrowPrimitiveType>::Native) -> ArrowError
@@ -166,7 +166,7 @@ where
     }
 }
 
-pub(crate) fn convert_to_smaller_scale_decimal<I, O>(
+fn convert_to_smaller_scale_decimal<I: DecimalType, O: DecimalType>(
     array: &PrimitiveArray<I>,
     input_precision: u8,
     input_scale: i8,
@@ -175,23 +175,10 @@ pub(crate) fn convert_to_smaller_scale_decimal<I, O>(
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<O>, ArrowError>
 where
-    I: DecimalType,
-    O: DecimalType,
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let delta_scale = input_scale - output_scale;
-    // if the reduction of the input number through scaling (dividing) is greater
-    // than a possible precision loss (plus potential increase via rounding)
-    // every input number will fit into the output type
-    // Example: If we are starting with any number of precision 5 [xxxxx],
-    // then and decrease the scale by 3 will have the following effect on the representation:
-    // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
-    // The rounding may add an additional digit, so the cast to be infallible,
-    // the output type needs to have at least 3 digits of precision.
-    // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
-    // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
-    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
 
     // delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION. If so, the
     // scale change divides out more digits than the input has precision and the result of the cast
@@ -222,23 +209,30 @@ where
         O::Native::from_decimal(adjusted)
     };
 
-    Ok(if is_infallible_cast {
-        let g = |x: I::Native| f(x).unwrap(); // unwrapping is safe since the result is guaranteed
-        // to fit into the target type
-        array.unary(g)
-    } else if cast_options.safe {
-        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
-    } else {
-        let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
-        array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
-            })
-        })?
-    })
+    // if the reduction of the input number through scaling (dividing) is greater
+    // than a possible precision loss (plus potential increase via rounding)
+    // every input number will fit into the output type
+    // Example: If we are starting with any number of precision 5 [xxxxx],
+    // then and decrease the scale by 3 will have the following effect on the representation:
+    // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
+    // The rounding may add a digit, so the cast to be infallible,
+    // the output type needs to have at least 3 digits of precision.
+    // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
+    // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
+    let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
+    let f_infallible = is_infallible_cast.then_some(|x| f(x).unwrap());
+
+    apply_decimal_cast::<I, O>(
+        array,
+        output_precision,
+        output_scale,
+        f,
+        f_infallible,
+        cast_options,
+    )
 }
 
-pub(crate) fn convert_to_bigger_or_equal_scale_decimal<I, O>(
+fn convert_to_bigger_or_equal_scale_decimal<I: DecimalType, O: DecimalType>(
     array: &PrimitiveArray<I>,
     input_precision: u8,
     input_scale: i8,
@@ -247,19 +241,10 @@ pub(crate) fn convert_to_bigger_or_equal_scale_decimal<I, O>(
     cast_options: &CastOptions,
 ) -> Result<PrimitiveArray<O>, ArrowError>
 where
-    I: DecimalType,
-    O: DecimalType,
     I::Native: DecimalCast + ArrowNativeTypeOp,
     O::Native: DecimalCast + ArrowNativeTypeOp,
 {
     let delta_scale = output_scale - input_scale;
-    // if the gain in precision (digits) is greater than the multiplication due to scaling
-    // every number will fit into the output type
-    // Example: If we are starting with any number of precision 5 [xxxxx],
-    // then an increase of scale by 3 will have the following effect on the representation:
-    // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
-    // needs to provide at least 8 digits precision
-    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
 
     // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
     // Adding 1 yields exactly 10^k without computing a power at runtime.
@@ -269,10 +254,40 @@ where
     let mul = max.add_wrapping(O::Native::ONE);
     let f = |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
 
-    Ok(if is_infallible_cast {
-        // unwrapping is safe since the result is guaranteed to fit into the target type
-        let f = |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul);
-        array.unary(f)
+    // if the gain in precision (digits) is greater than the multiplication due to scaling
+    // every number will fit into the output type
+    // Example: If we are starting with any number of precision 5 [xxxxx],
+    // then an increase of scale by 3 will have the following effect on the representation:
+    // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
+    // needs to provide at least 8 digits precision
+    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
+    let f_infallible =
+        is_infallible_cast.then_some(|x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
+
+    apply_decimal_cast::<I, O>(
+        array,
+        output_precision,
+        output_scale,
+        f,
+        f_infallible,
+        cast_options,
+    )
+}
+
+fn apply_decimal_cast<I: DecimalType, O: DecimalType>(
+    array: &PrimitiveArray<I>,
+    output_precision: u8,
+    output_scale: i8,
+    f: impl Fn(I::Native) -> Option<O::Native>,
+    f_infallible: Option<impl Fn(I::Native) -> O::Native>,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let array = if let Some(f_infallible) = f_infallible {
+        array.unary(f_infallible)
     } else if cast_options.safe {
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
@@ -282,7 +297,8 @@ where
                 O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
             })
         })?
-    })
+    };
+    Ok(array)
 }
 
 // Only support one type of decimal cast operations
