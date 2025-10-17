@@ -48,48 +48,6 @@ use parquet::{
 };
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
-enum CompressionArgs {
-    /// No compression.
-    None,
-
-    /// Snappy
-    Snappy,
-
-    /// GZip
-    Gzip,
-
-    /// LZO
-    Lzo,
-
-    /// Brotli
-    Brotli,
-
-    /// LZ4
-    Lz4,
-
-    /// Zstd
-    Zstd,
-
-    /// LZ4 Raw
-    Lz4Raw,
-}
-
-impl From<CompressionArgs> for Compression {
-    fn from(value: CompressionArgs) -> Self {
-        match value {
-            CompressionArgs::None => Self::UNCOMPRESSED,
-            CompressionArgs::Snappy => Self::SNAPPY,
-            CompressionArgs::Gzip => Self::GZIP(Default::default()),
-            CompressionArgs::Lzo => Self::LZO,
-            CompressionArgs::Brotli => Self::BROTLI(Default::default()),
-            CompressionArgs::Lz4 => Self::LZ4,
-            CompressionArgs::Zstd => Self::ZSTD(Default::default()),
-            CompressionArgs::Lz4Raw => Self::LZ4_RAW,
-        }
-    }
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Debug)]
 enum EncodingArgs {
     /// Default byte encoding.
     Plain,
@@ -216,8 +174,8 @@ struct Args {
     output: String,
 
     /// Compression used for all columns.
-    #[clap(long, value_enum)]
-    compression: Option<CompressionArgs>,
+    #[clap(long)]
+    compression: Option<Compression>,
 
     /// Encoding used for all columns, if dictionary is not enabled.
     #[clap(long, value_enum)]
@@ -286,6 +244,10 @@ struct Args {
     #[clap(long)]
     writer_version: Option<WriterVersionArgs>,
 
+    /// Sets write batch size.
+    #[clap(long)]
+    write_batch_size: Option<usize>,
+
     /// Sets whether to coerce Arrow types to match Parquet specification
     #[clap(long)]
     coerce_types: Option<bool>,
@@ -314,7 +276,7 @@ fn main() {
 
     let mut writer_properties_builder = WriterProperties::builder().set_key_value_metadata(kv_md);
     if let Some(value) = args.compression {
-        writer_properties_builder = writer_properties_builder.set_compression(value.into());
+        writer_properties_builder = writer_properties_builder.set_compression(value);
     }
 
     // setup encoding
@@ -381,6 +343,9 @@ fn main() {
     }
     if let Some(value) = args.coerce_types {
         writer_properties_builder = writer_properties_builder.set_coerce_types(value);
+    }
+    if let Some(value) = args.write_batch_size {
+        writer_properties_builder = writer_properties_builder.set_write_batch_size(value);
     }
     let writer_properties = writer_properties_builder.build();
     let mut parquet_writer = ArrowWriter::try_new(
