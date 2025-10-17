@@ -392,6 +392,9 @@ pub(crate) fn decode_page(
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
+            if offset > buffer.len() || offset > uncompressed_page_size {
+                return Err(general_err!("Invalid page header"));
+            }
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
@@ -458,7 +461,7 @@ pub(crate) fn decode_page(
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            unimplemented!("Page type {:?} is not supported", page_header.r#type)
+            return Err(general_err!("Page type {:?} is not supported", page_header.r#type));
         }
     };
 
@@ -1138,6 +1141,35 @@ mod tests {
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
 
     use super::*;
+
+    #[test]
+    fn test_decode_page_invalid_offset() {
+        use crate::file::metadata::thrift_gen::DataPageHeaderV2;
+
+        let mut page_header = PageHeader::default();
+        page_header.r#type = PageType::DATA_PAGE_V2;
+        page_header.uncompressed_page_size = 10;
+        page_header.compressed_page_size = 10;
+        let mut data_page_header_v2 = DataPageHeaderV2::default();
+        data_page_header_v2.definition_levels_byte_length = 11; // offset > uncompressed_page_size
+        page_header.data_page_header_v2 = Some(data_page_header_v2);
+
+        let buffer = Bytes::new();
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert_eq!(err.to_string(), "Parquet error: Invalid page header");
+    }
+
+    #[test]
+    fn test_decode_unsupported_page() {
+        let mut page_header = PageHeader::default();
+        page_header.r#type = PageType::INDEX_PAGE;
+        let buffer = Bytes::new();
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Page type INDEX_PAGE is not supported"
+        );
+    }
 
     #[test]
     fn test_cursor_and_file_has_the_same_behaviour() {

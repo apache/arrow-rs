@@ -513,7 +513,10 @@ impl RleDecoder {
                 self.rle_left = (indicator_value >> 1) as u32;
                 let value_width = bit_util::ceil(self.bit_width as usize, 8);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                assert!(self.current_value.is_some());
+                assert!(
+                    self.current_value.is_some(),
+                    "parquet_data_error: not enough data for RLE decoding"
+                );
             }
             true
         } else {
