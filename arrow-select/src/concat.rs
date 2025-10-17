@@ -37,7 +37,9 @@ use arrow_array::builder::{
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBufferBuilder, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+};
 use arrow_data::ArrayDataBuilder;
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
@@ -199,6 +201,65 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
     let array = GenericListArray::<OffsetSize>::try_new(
         Arc::clone(field),
         value_offset_buffer,
+        concatenated_values,
+        lists_nulls,
+    )?;
+
+    Ok(Arc::new(array))
+}
+
+fn concat_list_view<OffsetSize: OffsetSizeTrait>(
+    arrays: &[&dyn Array],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let mut output_len = 0;
+    let mut list_has_nulls = false;
+
+    let lists = arrays
+        .iter()
+        .map(|x| x.as_list_view::<OffsetSize>())
+        .inspect(|l| {
+            output_len += l.len();
+            list_has_nulls |= l.null_count() != 0;
+        })
+        .collect::<Vec<_>>();
+
+    let lists_nulls = list_has_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(output_len);
+        for l in &lists {
+            match l.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(l.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    // If any of the lists have slices, we need to slice the values
+    // to ensure that the offsets are correct
+    let values: Vec<&dyn Array> = lists.iter().map(|l| l.values().as_ref()).collect();
+
+    let concatenated_values = concat(values.as_slice())?;
+
+    let sizes: ScalarBuffer<OffsetSize> = lists.iter().flat_map(|x| x.sizes()).copied().collect();
+
+    let mut offsets = MutableBuffer::with_capacity(lists.iter().map(|l| l.offsets().len()).sum());
+    let mut global_offset = OffsetSize::zero();
+    for l in lists.iter() {
+        for &offset in l.offsets() {
+            offsets.push(offset + global_offset);
+        }
+
+        // advance the offsets
+        global_offset += OffsetSize::from_usize(l.values().len()).unwrap();
+    }
+
+    let offsets = ScalarBuffer::from(offsets);
+
+    let array = GenericListViewArray::try_new(
+        field.clone(),
+        offsets,
+        sizes,
         concatenated_values,
         lists_nulls,
     )?;
@@ -422,6 +483,8 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::ListView(field) => concat_list_view::<i32>(arrays, field),
+        DataType::LargeListView(field) => concat_list_view::<i64>(arrays, field),
         DataType::Struct(fields) => concat_structs(arrays, fields),
         DataType::Utf8 => concat_bytes::<Utf8Type>(arrays),
         DataType::LargeUtf8 => concat_bytes::<LargeUtf8Type>(arrays),
