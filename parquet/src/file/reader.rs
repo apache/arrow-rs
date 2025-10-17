@@ -288,3 +288,34 @@ impl Iterator for FilePageIterator {
 }
 
 impl PageIterator for FilePageIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bytes_chunk_reader_get_read_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_read(5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Expected to read at offset 5, while file has length 4"
+        );
+    }
+
+    #[test]
+    fn test_bytes_chunk_reader_get_bytes_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_bytes(5, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Expected to read 1 bytes at offset 5, while file has length 4"
+        );
+
+        let err = data.get_bytes(2, 3).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Expected to read 3 bytes at offset 2, while file has length 4"
+        );
+    }
+}
