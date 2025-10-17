@@ -23,12 +23,13 @@ use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float16Type, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType,
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
-use chrono::DateTime;
+use chrono::{DateTime, NaiveTime};
 use parquet_variant::{
     Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
 };
@@ -539,7 +540,7 @@ impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
 
 impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
 
-/// One shredded field of a partially or prefectly shredded variant. For example, suppose the
+/// One shredded field of a partially or perfectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is
 /// itself a struct with the single field `b` of type INT. Then the physical layout of the column
 /// is:
@@ -920,16 +921,11 @@ fn typed_value_to_variant<'a>(
         panic!("Invalid variant, conflicting value and typed_value");
     }
     match data_type {
+        DataType::Null => Variant::Null,
         DataType::Boolean => {
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
             Variant::from(value)
-        }
-        DataType::Date32 => {
-            let array = typed_value.as_primitive::<Date32Type>();
-            let value = array.value(index);
-            let date = Date32Type::to_naive_date(value);
-            Variant::from(date)
         }
         // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
@@ -968,6 +964,42 @@ fn typed_value_to_variant<'a>(
         DataType::Float64 => {
             primitive_conversion_single_value!(Float64Type, typed_value, index)
         }
+        DataType::Decimal32(_, s) => {
+            generic_conversion_single_value!(
+                Decimal32Type,
+                as_primitive,
+                |v| VariantDecimal4::try_new(v, *s as u8).unwrap(),
+                typed_value,
+                index
+            )
+        }
+        DataType::Decimal64(_, s) => {
+            generic_conversion_single_value!(
+                Decimal64Type,
+                as_primitive,
+                |v| VariantDecimal8::try_new(v, *s as u8).unwrap(),
+                typed_value,
+                index
+            )
+        }
+        DataType::Decimal128(_, s) => {
+            generic_conversion_single_value!(
+                Decimal128Type,
+                as_primitive,
+                |v| VariantDecimal16::try_new(v, *s as u8).unwrap(),
+                typed_value,
+                index
+            )
+        }
+        DataType::Date32 => {
+            generic_conversion_single_value!(
+                Date32Type,
+                as_primitive,
+                Date32Type::to_naive_date,
+                typed_value,
+                index
+            )
+        }
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
             generic_conversion_single_value!(
                 TimestampMicrosecondType,
@@ -1000,6 +1032,19 @@ fn typed_value_to_variant<'a>(
                 TimestampNanosecondType,
                 as_primitive,
                 |v| DateTime::from_timestamp_nanos(v).naive_utc(),
+                typed_value,
+                index
+            )
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            generic_conversion_single_value!(
+                Time64MicrosecondType,
+                as_primitive,
+                |v| NaiveTime::from_num_seconds_from_midnight_opt(
+                    (v / 1_000_000) as u32,
+                    (v % 1_000_000) as u32 * 1000
+                )
+                .unwrap(),
                 typed_value,
                 index
             )
