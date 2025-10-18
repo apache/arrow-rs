@@ -93,6 +93,14 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses list field name: `field: 'field_name'`
+    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
+        self.expect_token(Token::Field)?;
+        self.expect_token(Token::Colon)?;
+        let field_name = self.parse_single_quoted_string(context)?;
+        Ok(field_name)
+    }
+
     /// Parses the List type
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
@@ -100,18 +108,16 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
 
         match self.next_token()? {
-            // default field name
+            // list with default field name
             Token::RParen => Ok(DataType::List(Arc::new(Field::new_list_field(
                 data_type, nullable,
             )))),
-            // expects:      field: 'field_name'
+            // list with field name
             Token::Comma => {
-                self.expect_token(Token::Field)?;
-                self.expect_token(Token::Colon)?;
-                let field_name = self.parse_single_quoted_string("List's field")?;
+                let field = self.parse_list_field_name("List's field")?;
                 self.expect_token(Token::RParen)?;
                 Ok(DataType::List(Arc::new(Field::new(
-                    field_name, data_type, nullable,
+                    field, data_type, nullable,
                 ))))
             }
             tok => Err(make_error(
