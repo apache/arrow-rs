@@ -980,7 +980,15 @@ impl ArrayData {
     ) -> Result<(), ArrowError> {
         let offsets: &[T] = self.typed_buffer(0, self.len)?;
         let sizes: &[T] = self.typed_buffer(1, self.len)?;
-        for i in 0..values_length {
+        if offsets.len() != sizes.len() {
+            return Err(ArrowError::ComputeError(format!(
+                "ListView offsets len {} does not match sizes len {}",
+                offsets.len(),
+                sizes.len()
+            )));
+        }
+
+        for i in 0..sizes.len() {
             let size = sizes[i].to_usize().ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
                     "Error converting size[{}] ({}) to usize for {}",

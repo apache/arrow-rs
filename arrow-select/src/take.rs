@@ -218,6 +218,12 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         DataType::LargeList(_) => {
             Ok(Arc::new(take_list::<_, Int64Type>(values.as_list(), indices)?))
         }
+        DataType::ListView(_) => {
+            Ok(Arc::new(take_list_view::<_, Int32Type>(values.as_list_view(), indices)?))
+        }
+        DataType::LargeListView(_) => {
+            Ok(Arc::new(take_list_view::<_, Int64Type>(values.as_list_view(), indices)?))
+        }
         DataType::FixedSizeList(_, length) => {
             let values = values
                 .as_any()
@@ -619,6 +625,59 @@ where
     let list_data = unsafe { list_data.build_unchecked() };
 
     Ok(GenericListArray::<OffsetType::Native>::from(list_data))
+}
+
+fn take_list_view<IndexType, OffsetType>(
+    values: &GenericListViewArray<OffsetType::Native>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericListViewArray<OffsetType::Native>, ArrowError>
+where
+    IndexType: ArrowPrimitiveType,
+    OffsetType: ArrowPrimitiveType,
+    OffsetType::Native: OffsetSizeTrait,
+{
+    // Take executes only over the views.
+    let mut taken_offsets: Vec<OffsetType::Native> = Vec::with_capacity(indices.len());
+    let mut taken_sizes: Vec<OffsetType::Native> = Vec::with_capacity(indices.len());
+
+    // Initialize null buffer
+    let num_bytes = bit_util::ceil(indices.len(), 8);
+    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
+    let null_slice = null_buf.as_slice_mut();
+
+    for i in 0..indices.len() {
+        if indices.is_valid(i) {
+            let idx = indices
+                .value(i)
+                .to_usize()
+                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
+            taken_offsets.push(values.value_offset(idx));
+            taken_sizes.push(values.value_size(idx));
+
+            if !values.is_valid(idx) {
+                bit_util::unset_bit(null_slice, i);
+            }
+        } else {
+            // null pathway
+            bit_util::unset_bit(null_slice, i);
+            taken_offsets.push(OffsetType::default_value());
+            taken_sizes.push(OffsetType::default_value());
+        }
+    }
+
+    let list_view_data = ArrayDataBuilder::new(values.data_type().clone())
+        .len(indices.len())
+        .null_bit_buffer(Some(null_buf.into()))
+        .offset(0)
+        .buffers(vec![taken_offsets.into(), taken_sizes.into()])
+        .child_data(vec![values.values().to_data()]);
+
+    // SAFETY: all buffers and child nodes for ListView added in constructor
+    let list_view_data = unsafe { list_view_data.build_unchecked() };
+
+    Ok(GenericListViewArray::<OffsetType::Native>::from(
+        list_view_data,
+    ))
 }
 
 /// `take` implementation for `FixedSizeListArray`
@@ -1821,6 +1880,67 @@ mod tests {
         }};
     }
 
+    macro_rules! test_take_list_view {
+        ($offset_type:ty, $list_view_data_type:ident, $list_view_array_type:ident) => {{
+            // Construct a value array, [[0,0,0], [-1,-2,-1], [], [2,3]]
+            let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]).into_data();
+            // Construct offsets
+            let value_offsets: [$offset_type; 4] = [0, 3, 0, 6];
+            let value_offsets = Buffer::from_slice_ref(&value_offsets);
+            let value_sizes: [$offset_type; 4] = [3, 3, 0, 2];
+            let value_sizes = Buffer::from_slice_ref(&value_sizes);
+            // Construct a list array from the above two
+            let list_view_data_type = DataType::$list_view_data_type(Arc::new(
+                Field::new_list_field(DataType::Int32, false),
+            ));
+            let list_view_data = ArrayData::builder(list_view_data_type.clone())
+                .len(4)
+                .add_buffers(vec![value_offsets, value_sizes])
+                .child_data(vec![value_data])
+                .build()
+                .unwrap();
+            let list_view_array = $list_view_array_type::from(list_view_data);
+
+            // index returns: [[2,3], null, [-1,-2,-1], [], [0,0,0]]
+            let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(2), Some(0)]);
+
+            let a = take(&list_view_array, &index, None).unwrap();
+            let a: &$list_view_array_type =
+                a.as_any().downcast_ref::<$list_view_array_type>().unwrap();
+
+            // construct a value array with expected results:
+            // [[2,3], null, [-1,-2,-1], [], [0,0,0]]
+            let expected_data = Int32Array::from(vec![
+                Some(2),
+                Some(3),
+                Some(-1),
+                Some(-2),
+                Some(-1),
+                Some(0),
+                Some(0),
+                Some(0),
+            ])
+            .into_data();
+            // construct offsets
+            let expected_offsets: [$offset_type; 5] = [0, 0, 2, 0, 5];
+            let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
+            let expected_sizes: [$offset_type; 5] = [2, 0, 3, 0, 3];
+            let expected_sizes = Buffer::from_slice_ref(&expected_sizes);
+            // construct expected list view array
+            let expected_list_data = ArrayData::builder(list_view_data_type)
+                .len(5)
+                // null buffer remains the same as only the indices have nulls
+                .nulls(index.nulls().cloned())
+                .buffers(vec![expected_offsets, expected_sizes])
+                .child_data(vec![expected_data])
+                .build()
+                .unwrap();
+            let expected_list_array = $list_view_array_type::from(expected_list_data);
+
+            assert_eq!(a, &expected_list_array);
+        }};
+    }
+
     fn do_take_fixed_size_list_test<T>(
         length: <Int32Type as ArrowPrimitiveType>::Native,
         input_data: Vec<Option<Vec<Option<T::Native>>>>,
@@ -1869,6 +1989,11 @@ mod tests {
     #[test]
     fn test_test_take_large_list_with_nulls() {
         test_take_list_with_nulls!(i64, LargeList, LargeListArray);
+    }
+
+    #[test]
+    fn test_test_take_list_view() {
+        test_take_list_view!(i32, ListView, ListViewArray);
     }
 
     #[test]
