@@ -95,22 +95,21 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses list field name, return `None` if the list doesn't have field name.
-    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<Option<String>> {
-        // `field` must be after a comma
+    /// Parses list field name
+    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
+        // field must be after a comma
         if self
             .tokenizer
             .next_if(|next| matches!(next, Ok(Token::Comma)))
             .is_none()
         {
-            return Ok(None);
+            return Ok(Field::LIST_FIELD_DEFAULT_NAME.into());
         }
 
-        // field name: `field: 'field_name'`.
+        // expects: `field: 'field_name'`.
         self.expect_token(Token::Field)?;
         self.expect_token(Token::Colon)?;
-        let field_name = self.parse_single_quoted_string(context)?;
-        Ok(Some(field_name))
+        self.parse_single_quoted_string(context)
     }
 
     /// Parses the List type
@@ -120,15 +119,9 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("List's field")?;
         self.expect_token(Token::RParen)?;
-
-        match field {
-            Some(field) => Ok(DataType::List(Arc::new(Field::new(
-                field, data_type, nullable,
-            )))),
-            None => Ok(DataType::List(Arc::new(Field::new_list_field(
-                data_type, nullable,
-            )))),
-        }
+        Ok(DataType::List(Arc::new(Field::new(
+            field, data_type, nullable,
+        ))))
     }
 
     /// Parses the ListView type
@@ -138,15 +131,9 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("ListView's field")?;
         self.expect_token(Token::RParen)?;
-
-        match field {
-            Some(field) => Ok(DataType::ListView(Arc::new(Field::new(
-                field, data_type, nullable,
-            )))),
-            None => Ok(DataType::ListView(Arc::new(Field::new_list_field(
-                data_type, nullable,
-            )))),
-        }
+        Ok(DataType::ListView(Arc::new(Field::new(
+            field, data_type, nullable,
+        ))))
     }
 
     /// Parses the LargeList type
@@ -156,15 +143,9 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("LargeList's field")?;
         self.expect_token(Token::RParen)?;
-
-        match field {
-            Some(field) => Ok(DataType::LargeList(Arc::new(Field::new(
-                field, data_type, nullable,
-            )))),
-            None => Ok(DataType::LargeList(Arc::new(Field::new_list_field(
-                data_type, nullable,
-            )))),
-        }
+        Ok(DataType::LargeList(Arc::new(Field::new(
+            field, data_type, nullable,
+        ))))
     }
 
     /// Parses the LargeListView type
@@ -174,15 +155,9 @@ impl<'a> Parser<'a> {
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("LargeListView's field")?;
         self.expect_token(Token::RParen)?;
-
-        match field {
-            Some(field) => Ok(DataType::LargeListView(Arc::new(Field::new(
-                field, data_type, nullable,
-            )))),
-            None => Ok(DataType::LargeListView(Arc::new(Field::new_list_field(
-                data_type, nullable,
-            )))),
-        }
+        Ok(DataType::LargeListView(Arc::new(Field::new(
+            field, data_type, nullable,
+        ))))
     }
 
     /// Parses the FixedSizeList type
