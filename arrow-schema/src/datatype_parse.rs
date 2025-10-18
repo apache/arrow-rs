@@ -117,7 +117,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("List's field")?;
+        let field = self.parse_list_field_name("List")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::List(Arc::new(Field::new(
             field, data_type, nullable,
@@ -129,7 +129,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("ListView's field")?;
+        let field = self.parse_list_field_name("ListView")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::ListView(Arc::new(Field::new(
             field, data_type, nullable,
@@ -141,7 +141,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("LargeList's field")?;
+        let field = self.parse_list_field_name("LargeList")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::LargeList(Arc::new(Field::new(
             field, data_type, nullable,
@@ -153,7 +153,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("LargeListView's field")?;
+        let field = self.parse_list_field_name("LargeListView")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::LargeListView(Arc::new(Field::new(
             field, data_type, nullable,
