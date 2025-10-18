@@ -563,7 +563,9 @@ pub fn concat_batches<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{GenericListBuilder, StringDictionaryBuilder};
+    use arrow_array::builder::{
+        GenericListBuilder, Int64Builder, ListViewBuilder, StringDictionaryBuilder,
+    };
     use arrow_schema::{Field, Schema};
     use std::fmt::Debug;
 
@@ -944,6 +946,49 @@ mod tests {
         let expected = list1.into_iter().chain(list2).chain(list3);
         let array_expected =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(expected, 2);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_list_view_arrays() {
+        let list1 = vec![
+            (Some(vec![Some(-1), None])),
+            None,
+            Some(vec![Some(10), Some(20)]),
+        ];
+        let mut list1_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list1.iter() {
+            list1_array.append_option(v.clone());
+        }
+        let list1_array = list1_array.finish();
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None]),
+            Some(vec![Some(102), Some(103)]),
+        ];
+        let mut list2_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list2.iter() {
+            list2_array.append_option(v.clone());
+        }
+        let list2_array = list2_array.finish();
+
+        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let mut list3_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list3.iter() {
+            list3_array.append_option(v.clone());
+        }
+        let list3_array = list3_array.finish();
+
+        let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
+
+        let expected: Vec<_> = list1.into_iter().chain(list2).chain(list3).collect();
+        let mut array_expected = ListViewBuilder::new(Int64Builder::new());
+        for v in expected.iter() {
+            array_expected.append_option(v.clone());
+        }
+        let array_expected = array_expected.finish();
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
     }
