@@ -793,18 +793,14 @@ pub fn cast_with_options(
             | Map(_, _)
             | Dictionary(_, _),
         ) => Ok(new_null_array(to_type, array.len())),
-        (RunEndEncoded(index_type, _), _) => {
-            let mut cast_options = cast_options.clone();
-            cast_options.safe = false;
-            match index_type.data_type() {
-                Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, &cast_options),
-                Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, &cast_options),
-                Int64 => run_end_encoded_cast::<Int64Type>(array, to_type, &cast_options),
-                _ => Err(ArrowError::CastError(format!(
-                    "Casting from run end encoded type {from_type:?} to {to_type:?} not supported",
-                ))),
-            }
-        }
+        (RunEndEncoded(index_type, _), _) => match index_type.data_type() {
+            Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, &cast_options),
+            Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, &cast_options),
+            Int64 => run_end_encoded_cast::<Int64Type>(array, to_type, &cast_options),
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from run end encoded type {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
         (_, RunEndEncoded(index_type, value_type)) => {
             let array_ref = make_array(array.to_data());
             match index_type.data_type() {
