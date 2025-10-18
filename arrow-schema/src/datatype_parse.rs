@@ -165,7 +165,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         // expects: `length x #data_type [field]`
         let length = self.parse_i32("FixedSizeList")?;
-        self.expect_token(Token::Count)?;
+        self.expect_token(Token::X)?;
         let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("FixedSizeList")?;
@@ -604,7 +604,7 @@ impl<'a> Tokenizer<'a> {
 
             "nullable" => Token::Nullable,
             "field" => Token::Field,
-            "x" => Token::Count,
+            "x" => Token::X,
 
             "Struct" => Token::Struct,
 
@@ -750,7 +750,7 @@ enum Token {
     Struct,
     Nullable,
     Field,
-    Count,
+    X,
 }
 
 impl Display for Token {
@@ -787,7 +787,7 @@ impl Display for Token {
             Token::Struct => write!(f, "Struct"),
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
-            Token::Count => write!(f, "x"),
+            Token::X => write!(f, "x"),
         }
     }
 }
