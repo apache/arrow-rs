@@ -371,23 +371,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             let to_reserve = v.len().max(self.block_size.next_size() as usize);
             self.in_progress.reserve(to_reserve);
         };
-        let offset: u32 = self.in_progress.len().try_into().map_err(|_| {
-            ArrowError::InvalidArgumentError(format!(
-                "In-progress buffer length {} exceeds u32::MAX",
-                self.in_progress.len()
-            ))
-        })?;
-        self.in_progress.extend_from_slice(v);
 
-        let prefix = v
-            .get(0..4)
-            .and_then(|slice| slice.try_into().ok())
-            .map(u32::from_le_bytes)
-            .ok_or_else(|| {
-                ArrowError::InvalidArgumentError(
-                    "String must be at least 4 bytes for non-inline view".to_string(),
-                )
-            })?;
+        let offset = self.in_progress.len() as u32;
+        self.in_progress.extend_from_slice(v);
 
         let buffer_index: u32 = self.completed.len().try_into().map_err(|_| {
             ArrowError::InvalidArgumentError(format!(
@@ -398,7 +384,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
         let view = ByteView {
             length,
-            prefix,
+            // This won't panic as we checked the length of prefix earlier.
+            prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
             buffer_index,
             offset,
         };
@@ -620,7 +607,6 @@ mod tests {
     use core::str;
 
     use super::*;
-    use crate::Array;
 
     #[test]
     fn test_string_view_deduplicate() {
