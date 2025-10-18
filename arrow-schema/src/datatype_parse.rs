@@ -371,6 +371,8 @@ impl<'a> Parser<'a> {
             Box::new(value_type),
         ))
     }
+
+    /// Parses the next Struct (called after `Struct` has been consumed)
     fn parse_struct(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let mut fields = Vec::new();
@@ -410,6 +412,7 @@ impl<'a> Parser<'a> {
         Ok(DataType::Struct(Fields::from(fields)))
     }
 
+    /// return and consume if the next token is `Token::Nullable`
     fn nullable(&mut self) -> bool {
         self.tokenizer
             .next_if(|next| matches!(next, Ok(Token::Nullable)))
