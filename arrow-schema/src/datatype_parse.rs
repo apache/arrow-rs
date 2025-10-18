@@ -96,11 +96,29 @@ impl<'a> Parser<'a> {
     /// Parses the List type
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
+        let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
-        self.expect_token(Token::RParen)?;
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            data_type, true,
-        ))))
+
+        match self.next_token()? {
+            // default field name
+            Token::RParen => Ok(DataType::List(Arc::new(Field::new_list_field(
+                data_type, nullable,
+            )))),
+            // expects:      field: 'field_name'
+            Token::Comma => {
+                self.expect_token(Token::Field)?;
+                self.expect_token(Token::Colon)?;
+                let field_name = self.parse_single_quoted_string("List's field")?;
+                self.expect_token(Token::RParen)?;
+                Ok(DataType::List(Arc::new(Field::new(
+                    field_name, data_type, nullable,
+                ))))
+            }
+            tok => Err(make_error(
+                self.val,
+                &format!("Expected a single string for a field name; got {tok:?}"),
+            )),
+        }
     }
 
     /// Parses the LargeList type
@@ -146,6 +164,19 @@ impl<'a> Parser<'a> {
             Err(make_error(
                 self.val,
                 &format!("expected double quoted string for {context}, got '{token}'"),
+            ))
+        }
+    }
+
+    /// Parses the next single quoted string
+    fn parse_single_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
+        let token = self.next_token()?;
+        if let Token::SingleQuotedString(string) = token {
+            Ok(string)
+        } else {
+            Err(make_error(
+                self.val,
+                &format!("expected single quoted string for {context}, got '{token}'"),
             ))
         }
     }
@@ -354,16 +385,13 @@ impl<'a> Parser<'a> {
                 tok => {
                     return Err(make_error(
                         self.val,
-                        &format!("Expected a quoted string for a field name; got {tok:?}"),
+                        &format!("Expected a double quoted string for a field name; got {tok:?}"),
                     ));
                 }
             };
             self.expect_token(Token::Colon)?;
 
-            let nullable = self
-                .tokenizer
-                .next_if(|next| matches!(next, Ok(Token::Nullable)))
-                .is_some();
+            let nullable = self.nullable();
             let field_type = self.parse_next_type()?;
             fields.push(Arc::new(Field::new(field_name, field_type, nullable)));
             match self.next_token()? {
@@ -380,6 +408,12 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(DataType::Struct(Fields::from(fields)))
+    }
+
+    fn nullable(&mut self) -> bool {
+        self.tokenizer
+            .next_if(|next| matches!(next, Ok(Token::Nullable)))
+            .is_some()
     }
 
     /// return the next token, or an error if there are none left
@@ -404,6 +438,11 @@ impl<'a> Parser<'a> {
 /// returns true if this character is a separator
 fn is_separator(c: char) -> bool {
     c == '(' || c == ')' || c == ',' || c == ':' || c == ' '
+}
+
+enum QuoteType {
+    Double,
+    Single,
 }
 
 #[derive(Debug)]
@@ -527,6 +566,7 @@ impl<'a> Tokenizer<'a> {
             "None" => Token::None,
 
             "nullable" => Token::Nullable,
+            "field" => Token::Field,
 
             "Struct" => Token::Struct,
 
@@ -537,9 +577,14 @@ impl<'a> Tokenizer<'a> {
         Ok(token)
     }
 
-    /// Parses e.g. `"foo bar"`
-    fn parse_quoted_string(&mut self) -> ArrowResult<Token> {
-        if self.next_char() != Some('\"') {
+    /// Parses e.g. `"foo bar"`, `'foo bar'`
+    fn parse_quoted_string(&mut self, quote_type: QuoteType) -> ArrowResult<Token> {
+        let quote = match quote_type {
+            QuoteType::Double => '\"',
+            QuoteType::Single => '\'',
+        };
+
+        if self.next_char() != Some(quote) {
             return Err(make_error(self.val, "Expected \""));
         }
 
@@ -561,7 +606,7 @@ impl<'a> Tokenizer<'a> {
                         is_escaped = true;
                         self.word.push(c);
                     }
-                    '"' => {
+                    c if c == quote => {
                         if is_escaped {
                             self.word.push(c);
                             is_escaped = false;
@@ -585,7 +630,10 @@ impl<'a> Tokenizer<'a> {
             return Err(make_error(self.val, "empty strings aren't allowed"));
         }
 
-        Ok(Token::DoubleQuotedString(val))
+        match quote_type {
+            QuoteType::Double => Ok(Token::DoubleQuotedString(val)),
+            QuoteType::Single => Ok(Token::SingleQuotedString(val)),
+        }
     }
 }
 
@@ -601,7 +649,10 @@ impl Iterator for Tokenizer<'_> {
                     continue;
                 }
                 '"' => {
-                    return Some(self.parse_quoted_string());
+                    return Some(self.parse_quoted_string(QuoteType::Double));
+                }
+                '\'' => {
+                    return Some(self.parse_quoted_string(QuoteType::Single));
                 }
                 '(' => {
                     self.next_char();
@@ -652,11 +703,13 @@ enum Token {
     None,
     Integer(i64),
     DoubleQuotedString(String),
+    SingleQuotedString(String),
     List,
     LargeList,
     FixedSizeList,
     Struct,
     Nullable,
+    Field,
 }
 
 impl Display for Token {
@@ -687,8 +740,10 @@ impl Display for Token {
             Token::Dictionary => write!(f, "Dictionary"),
             Token::Integer(v) => write!(f, "Integer({v})"),
             Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
+            Token::SingleQuotedString(s) => write!(f, "SingleQuotedString({s})"),
             Token::Struct => write!(f, "Struct"),
             Token::Nullable => write!(f, "nullable"),
+            Token::Field => write!(f, "field"),
         }
     }
 }
@@ -828,7 +883,16 @@ mod test {
                 ),
             ])),
             DataType::Struct(Fields::empty()),
-            // TODO support more structured types (List, LargeList, Union, Map, RunEndEncoded, etc)
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::List(Arc::new(Field::new(
+                "nested_list",
+                DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            // TODO support more structured types (LargeList, Union, Map, RunEndEncoded, etc)
         ]
     }
 
