@@ -95,7 +95,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses list field name
+    /// Parses list field name. Returns default field name if not found.
     fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
         // field must be after a comma
         if self
@@ -112,7 +112,8 @@ impl<'a> Parser<'a> {
         self.parse_single_quoted_string(context)
     }
 
-    /// Parses the List type
+    /// Parses the List type (called after `List` has been consumed)
+    /// E.g: List(nullable Int64, field: 'foo')
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
@@ -124,7 +125,8 @@ impl<'a> Parser<'a> {
         ))))
     }
 
-    /// Parses the ListView type
+    /// Parses the ListView type (called after `ListView` has been consumed)
+    /// E.g: ListView(nullable Int64, field: 'foo')
     fn parse_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
@@ -136,7 +138,8 @@ impl<'a> Parser<'a> {
         ))))
     }
 
-    /// Parses the LargeList type
+    /// Parses the LargeList type (called after `LargeList` has been consumed)
+    /// E.g: LargeList(nullable Int64, field: 'foo')
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
@@ -148,7 +151,8 @@ impl<'a> Parser<'a> {
         ))))
     }
 
-    /// Parses the LargeListView type
+    /// Parses the LargeListView type (called after `LargeListView` has been consumed)
+    /// E.g: LargeListView(nullable Int64, field: 'foo')
     fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
@@ -160,10 +164,10 @@ impl<'a> Parser<'a> {
         ))))
     }
 
-    /// Parses the FixedSizeList type
+    /// Parses the FixedSizeList type (called after `FixedSizeList` has been consumed)
+    /// E.g: FixedSizeList(5 x nullable Int64, field: 'foo')
     fn parse_fixed_size_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        // expects: `length x #data_type [field]`
         let length = self.parse_i32("FixedSizeList")?;
         self.expect_token(Token::X)?;
         let nullable = self.nullable();
