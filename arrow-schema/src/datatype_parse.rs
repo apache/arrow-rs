@@ -163,12 +163,15 @@ impl<'a> Parser<'a> {
     /// Parses the FixedSizeList type
     fn parse_fixed_size_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
+        // expects: `length x #data_type [field]`
         let length = self.parse_i32("FixedSizeList")?;
-        self.expect_token(Token::Comma)?;
+        self.expect_token(Token::Count)?;
+        let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("FixedSizeList")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::FixedSizeList(
-            Arc::new(Field::new_list_field(data_type, true)),
+            Arc::new(Field::new(field, data_type, nullable)),
             length,
         ))
     }
@@ -601,6 +604,7 @@ impl<'a> Tokenizer<'a> {
 
             "nullable" => Token::Nullable,
             "field" => Token::Field,
+            "x" => Token::Count,
 
             "Struct" => Token::Struct,
 
@@ -746,6 +750,7 @@ enum Token {
     Struct,
     Nullable,
     Field,
+    Count,
 }
 
 impl Display for Token {
@@ -782,6 +787,7 @@ impl Display for Token {
             Token::Struct => write!(f, "Struct"),
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
+            Token::Count => write!(f, "x"),
         }
     }
 }
@@ -957,7 +963,22 @@ mod test {
                 DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
                 true,
             ))),
-            // TODO support more structured types (LargeList, Union, Map, RunEndEncoded, etc)
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 2),
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, false)), 2),
+            DataType::FixedSizeList(Arc::new(Field::new("Int64", DataType::Int64, true)), 2),
+            DataType::FixedSizeList(Arc::new(Field::new("Int64", DataType::Int64, false)), 2),
+            DataType::FixedSizeList(
+                Arc::new(Field::new(
+                    "nested_large_list_view",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("Int64", DataType::Int64, true)),
+                        2,
+                    ),
+                    true,
+                )),
+                2,
+            ),
+            // TODO support more structured types (Union, Map, RunEndEncoded, etc)
         ]
     }
 
