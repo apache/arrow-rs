@@ -166,14 +166,14 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     }
 
     // Partition the array to identify runs of consecutive equal values
-    let partitions = partition(&[array.clone()])?;
+    let partitions = partition(&[Arc::clone(array)])?;
     let mut run_ends = Vec::new();
     let mut values_indexes = Vec::new();
-    let mut array_idx = 0;
+    let mut last_partition_end = 0;
     for partition in partitions.ranges() {
-        values_indexes.push(array_idx);
-        array_idx += partition.end - partition.start;
-        run_ends.push(array_idx);
+        values_indexes.push(last_partition_end);
+        run_ends.push(partition.end);
+        last_partition_end = partition.end;
     }
 
     // Build the run_ends array
