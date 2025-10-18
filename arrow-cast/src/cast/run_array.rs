@@ -236,17 +236,25 @@ pub(crate) fn can_cast_to_run_end_encoded(from_type: &DataType, to_type: &DataTy
                 | DataType::Time64(_)
                 | DataType::Duration(_)
                 | DataType::Interval(_) => true,
-
-                // Decimal types - support equality
                 DataType::Decimal32(_, _)
                 | DataType::Decimal64(_, _)
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _) => true,
-
-                // Already REE-encoded - can be re-encoded
                 DataType::RunEndEncoded(_, _) => true,
 
-                _ => false,
+                // Dictionary types are supported
+                DataType::Dictionary(_, _) => true,
+
+                // Unsupported types
+                DataType::Null
+                | DataType::List(_)
+                | DataType::ListView(_)
+                | DataType::FixedSizeList(_, _)
+                | DataType::LargeList(_)
+                | DataType::LargeListView(_)
+                | DataType::Struct(_)
+                | DataType::Union(_, _)
+                | DataType::Map(_, _) => false,
             }
         }
         _ => false, // Not casting to REE type

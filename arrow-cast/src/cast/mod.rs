@@ -11741,9 +11741,9 @@ mod tests {
         assert!(cast_result.is_err());
     }
 
+    /// Test casting RunEndEncoded<Int64, String> to RunEndEncoded<Int16, String> should fail
     #[test]
     fn test_cast_run_end_encoded_int64_to_int16_should_fail() {
-        // Test casting RunEndEncoded<Int64, String> to RunEndEncoded<Int16, String> should fail
         // Construct a valid REE array with Int64 run-ends
         let run_ends = Int64Array::from(vec![100_000, 400_000, 700_000]); // values too large for Int16
         let values = StringArray::from(vec!["a", "b", "c"]);
@@ -11772,13 +11772,9 @@ mod tests {
         );
     }
 
+    /// Test casting RunEndEncoded<Int16, String> to RunEndEncoded<Int64, String> should succeed
     #[test]
     fn test_cast_run_end_encoded_int16_to_int64_should_succeed() {
-        /// Test casting RunEndEncoded<Int16, String> to RunEndEncoded<Int64, String> should succeed
-        use arrow_array::{Int16Array, RunArray, StringArray};
-        use arrow_schema::{DataType, Field};
-        use std::sync::Arc;
-
         // Construct a valid REE array with Int16 run-ends
         let run_ends = Int16Array::from(vec![2, 5, 8]); // values that fit in Int16
         let values = StringArray::from(vec!["a", "b", "c"]);
@@ -11815,13 +11811,9 @@ mod tests {
         assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
     }
 
+    /// Test casting RunEndEncoded<Int32, String> to RunEndEncoded<Int16, String> should fail
     #[test]
     fn test_cast_run_end_encoded_int32_to_int16_should_fail() {
-        /// Test casting RunEndEncoded<Int32, String> to RunEndEncoded<Int16, String> should fail
-        use arrow_array::{Int32Array, RunArray, StringArray};
-        use arrow_schema::{DataType, Field};
-        use std::sync::Arc;
-
         // Construct a valid REE array with Int32 run-ends
         let run_ends = Int32Array::from(vec![1000, 50000, 80000]); // values too large for Int16
         let values = StringArray::from(vec!["x", "y", "z"]);
@@ -11848,5 +11840,40 @@ mod tests {
             .err()
             .expect("Cast should have failed due to overflow but succeeded");
         assert!(e.to_string().contains("Can't cast value"));
+    }
+
+    #[test]
+    fn test_cast_run_end_encoded_dictionary_to_run_end_encoded() {
+        // Construct a valid dictionary encoded array
+        let values = StringArray::from_iter([Some("a"), Some("b"), Some("c")]);
+        let keys = UInt64Array::from_iter(vec![1, 1, 1, 0, 0, 0, 2, 2, 2].into_iter());
+        let array_ref = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int64, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        // This should succeed
+        let result = cast_with_options(&array_ref, &target_type, &cast_options)
+            .expect("Cast should have succeeded but failed");
+
+        // Verify the cast worked correctly
+        // Assert the values were cast correctly
+        let run_array = result
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_string::<i32>().value(0), "b");
+        assert_eq!(run_array.values().as_string::<i32>().value(1), "a");
+        assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
+
+        // Verify the run-ends were cast correctly (run ends at 3, 6, 9)
+        assert_eq!(run_array.run_ends().values(), &[3i64, 6i64, 9i64]);
     }
 }
