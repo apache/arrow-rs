@@ -85,6 +85,7 @@ impl<'a> Parser<'a> {
             Token::List => self.parse_list(),
             Token::ListView => self.parse_list_view(),
             Token::LargeList => self.parse_large_list(),
+            Token::LargeListView => self.parse_large_list_view(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
             tok => Err(make_error(
@@ -151,11 +152,37 @@ impl<'a> Parser<'a> {
     /// Parses the LargeList type
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
+        let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("LargeList's field")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::LargeList(Arc::new(Field::new_list_field(
-            data_type, true,
-        ))))
+
+        match field {
+            Some(field) => Ok(DataType::LargeList(Arc::new(Field::new(
+                field, data_type, nullable,
+            )))),
+            None => Ok(DataType::LargeList(Arc::new(Field::new_list_field(
+                data_type, nullable,
+            )))),
+        }
+    }
+
+    /// Parses the LargeListView type
+    fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let nullable = self.nullable();
+        let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("LargeListView's field")?;
+        self.expect_token(Token::RParen)?;
+
+        match field {
+            Some(field) => Ok(DataType::LargeListView(Arc::new(Field::new(
+                field, data_type, nullable,
+            )))),
+            None => Ok(DataType::LargeListView(Arc::new(Field::new_list_field(
+                data_type, nullable,
+            )))),
+        }
     }
 
     /// Parses the FixedSizeList type
@@ -568,6 +595,7 @@ impl<'a> Tokenizer<'a> {
             "List" => Token::List,
             "ListView" => Token::ListView,
             "LargeList" => Token::LargeList,
+            "LargeListView" => Token::LargeListView,
             "FixedSizeList" => Token::FixedSizeList,
 
             "s" | "Second" => Token::TimeUnit(TimeUnit::Second),
@@ -738,6 +766,7 @@ enum Token {
     List,
     ListView,
     LargeList,
+    LargeListView,
     FixedSizeList,
     Struct,
     Nullable,
@@ -751,6 +780,7 @@ impl Display for Token {
             Token::List => write!(f, "List"),
             Token::ListView => write!(f, "ListView"),
             Token::LargeList => write!(f, "LargeList"),
+            Token::LargeListView => write!(f, "LargeListView"),
             Token::FixedSizeList => write!(f, "FixedSizeList"),
             Token::Timestamp => write!(f, "Timestamp"),
             Token::Time32 => write!(f, "Time32"),
@@ -932,6 +962,24 @@ mod test {
             DataType::ListView(Arc::new(Field::new(
                 "nested_list_view",
                 DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::LargeList(Arc::new(Field::new(
+                "nested_large_list",
+                DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::LargeListView(Arc::new(Field::new(
+                "nested_large_list_view",
+                DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
                 true,
             ))),
             // TODO support more structured types (LargeList, Union, Map, RunEndEncoded, etc)
