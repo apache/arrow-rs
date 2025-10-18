@@ -83,6 +83,7 @@ impl<'a> Parser<'a> {
             Token::Decimal256 => self.parse_decimal_256(),
             Token::Dictionary => self.parse_dictionary(),
             Token::List => self.parse_list(),
+            Token::ListView => self.parse_list_view(),
             Token::LargeList => self.parse_large_list(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
@@ -124,6 +125,24 @@ impl<'a> Parser<'a> {
                 field, data_type, nullable,
             )))),
             None => Ok(DataType::List(Arc::new(Field::new_list_field(
+                data_type, nullable,
+            )))),
+        }
+    }
+
+    /// Parses the ListView type
+    fn parse_list_view(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let nullable = self.nullable();
+        let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("ListView's field")?;
+        self.expect_token(Token::RParen)?;
+
+        match field {
+            Some(field) => Ok(DataType::ListView(Arc::new(Field::new(
+                field, data_type, nullable,
+            )))),
+            None => Ok(DataType::ListView(Arc::new(Field::new_list_field(
                 data_type, nullable,
             )))),
         }
@@ -547,6 +566,7 @@ impl<'a> Tokenizer<'a> {
             "Date64" => Token::SimpleType(DataType::Date64),
 
             "List" => Token::List,
+            "ListView" => Token::ListView,
             "LargeList" => Token::LargeList,
             "FixedSizeList" => Token::FixedSizeList,
 
@@ -716,6 +736,7 @@ enum Token {
     DoubleQuotedString(String),
     SingleQuotedString(String),
     List,
+    ListView,
     LargeList,
     FixedSizeList,
     Struct,
@@ -728,6 +749,7 @@ impl Display for Token {
         match self {
             Token::SimpleType(t) => write!(f, "{t}"),
             Token::List => write!(f, "List"),
+            Token::ListView => write!(f, "ListView"),
             Token::LargeList => write!(f, "LargeList"),
             Token::FixedSizeList => write!(f, "FixedSizeList"),
             Token::Timestamp => write!(f, "Timestamp"),
@@ -901,6 +923,15 @@ mod test {
             DataType::List(Arc::new(Field::new(
                 "nested_list",
                 DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::ListView(Arc::new(Field::new(
+                "nested_list_view",
+                DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
                 true,
             ))),
             // TODO support more structured types (LargeList, Union, Map, RunEndEncoded, etc)
