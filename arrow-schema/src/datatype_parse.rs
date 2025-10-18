@@ -973,7 +973,7 @@ mod test {
             DataType::FixedSizeList(Arc::new(Field::new("Int64", DataType::Int64, false)), 2),
             DataType::FixedSizeList(
                 Arc::new(Field::new(
-                    "nested_large_list_view",
+                    "nested_fixed_size_list",
                     DataType::FixedSizeList(
                         Arc::new(Field::new("Int64", DataType::Int64, true)),
                         2,
