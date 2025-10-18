@@ -93,12 +93,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses list field name: `field: 'field_name'`
-    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
+    /// Parses list field name, return `None` if the list doesn't have field name.
+    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<Option<String>> {
+        // `field` must be after a comma
+        if self
+            .tokenizer
+            .next_if(|next| matches!(next, Ok(Token::Comma)))
+            .is_none()
+        {
+            return Ok(None);
+        }
+
+        // field name: `field: 'field_name'`.
         self.expect_token(Token::Field)?;
         self.expect_token(Token::Colon)?;
         let field_name = self.parse_single_quoted_string(context)?;
-        Ok(field_name)
+        Ok(Some(field_name))
     }
 
     /// Parses the List type
@@ -106,24 +116,16 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let nullable = self.nullable();
         let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("List's field")?;
+        self.expect_token(Token::RParen)?;
 
-        match self.next_token()? {
-            // list with default field name
-            Token::RParen => Ok(DataType::List(Arc::new(Field::new_list_field(
+        match field {
+            Some(field) => Ok(DataType::List(Arc::new(Field::new(
+                field, data_type, nullable,
+            )))),
+            None => Ok(DataType::List(Arc::new(Field::new_list_field(
                 data_type, nullable,
             )))),
-            // list with field name
-            Token::Comma => {
-                let field = self.parse_list_field_name("List's field")?;
-                self.expect_token(Token::RParen)?;
-                Ok(DataType::List(Arc::new(Field::new(
-                    field, data_type, nullable,
-                ))))
-            }
-            tok => Err(make_error(
-                self.val,
-                &format!("Expected a single string for a field name; got {tok:?}"),
-            )),
         }
     }
 
