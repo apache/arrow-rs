@@ -660,15 +660,14 @@ where
         } else {
             // null pathway
             bit_util::unset_bit(null_slice, i);
-            taken_offsets.push(OffsetType::default_value());
-            taken_sizes.push(OffsetType::default_value());
+            taken_offsets.push(taken_offsets.last().copied().unwrap_or_default());
+            taken_sizes.push(taken_offsets.last().copied().unwrap_or_default());
         }
     }
 
     let list_view_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
         .null_bit_buffer(Some(null_buf.into()))
-        .offset(0)
         .buffers(vec![taken_offsets.into(), taken_sizes.into()])
         .child_data(vec![values.values().to_data()]);
 
@@ -1039,6 +1038,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
+    use num_traits::ToPrimitive;
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -1941,6 +1941,47 @@ mod tests {
         }};
     }
 
+    fn test_take_list_view_generic<OffsetType: OffsetSizeTrait, ValuesType: ArrowPrimitiveType>(
+        values: Vec<Option<Vec<Option<ValuesType::Native>>>>,
+        take_indices: Vec<Option<usize>>,
+        expected: Vec<Option<Vec<Option<ValuesType::Native>>>>,
+    ) {
+        let mut list_view_array =
+            GenericListViewBuilder::<OffsetType, _>::new(PrimitiveBuilder::<ValuesType>::new());
+
+        for value in values {
+            list_view_array.append_option(value);
+        }
+        let list_view_array = list_view_array.finish();
+
+        let mut indices = UInt64Builder::new();
+        for idx in take_indices {
+            indices.append_option(idx.map(|i| i.to_u64().unwrap()));
+        }
+        let indices = indices.finish();
+
+        let taken = take(&list_view_array, &indices, None)
+            .unwrap()
+            .as_list_view()
+            .clone();
+
+        let mut expected_array =
+            GenericListViewBuilder::<OffsetType, _>::new(PrimitiveBuilder::<ValuesType>::new());
+        for value in expected {
+            expected_array.append_option(value);
+        }
+        let expected_array = expected_array.finish();
+
+        assert_eq!(taken, expected_array);
+    }
+
+    macro_rules! list_view_test_case {
+        (values: $values:expr, indices: $indices:expr, expected: $expected: expr) => {{
+            test_take_list_view_generic::<i32, Int8Type>($values, $indices, $expected);
+            test_take_list_view_generic::<i64, Int8Type>($values, $indices, $expected);
+        }};
+    }
+
     fn do_take_fixed_size_list_test<T>(
         length: <Int32Type as ArrowPrimitiveType>::Native,
         input_data: Vec<Option<Vec<Option<T::Native>>>>,
@@ -1992,8 +2033,49 @@ mod tests {
     }
 
     #[test]
-    fn test_test_take_list_view() {
-        test_take_list_view!(i32, ListView, ListViewArray);
+    fn test_test_take_list_view_reversed() {
+        // Take reversed indices
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1), None, Some(3)]),
+                None,
+                Some(vec![Some(7), Some(8), None]),
+            ],
+            indices: vec![Some(2), Some(1), Some(0)],
+            expected: vec![
+                Some(vec![Some(7), Some(8), None]),
+                None,
+                Some(vec![Some(1), None, Some(3)]),
+            ]
+        };
+    }
+
+    #[test]
+    fn test_take_list_view_null_indices() {
+        // Take with null indices
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1), None, Some(3)]),
+                None,
+                Some(vec![Some(7), Some(8), None]),
+            ],
+            indices: vec![None, Some(0), None],
+            expected: vec![None, Some(vec![Some(1), None, Some(3)]), None]
+        };
+    }
+
+    #[test]
+    fn test_take_list_view_null_values() {
+        // Take at null values
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1), None, Some(3)]),
+                None,
+                Some(vec![Some(7), Some(8), None]),
+            ],
+            indices: vec![Some(1), Some(1), Some(1), None, None],
+            expected: vec![None; 5]
+        };
     }
 
     #[test]
