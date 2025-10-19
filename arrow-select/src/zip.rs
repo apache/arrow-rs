@@ -22,7 +22,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type};
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
+    OffsetBufferBuilder, ScalarBuffer,
 };
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
@@ -433,31 +434,50 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         value: &[u8],
     ) -> (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) {
         let value_length = value.len();
+
+        let number_of_true = predicate.count_set_bits();
+
+        // Fast path for all nulls
+        if number_of_true == 0 {
+            // All values are null
+            let nulls = NullBuffer::new_null(predicate.len());
+
+            return (
+                // Empty bytes
+                Buffer::from(&[]),
+                // All nulls so all lengths are 0
+                OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
+                Some(nulls),
+            );
+        }
+
         let offsets = OffsetBuffer::<T::Offset>::from_lengths(
             predicate.iter().map(|b| if b { value_length } else { 0 }),
         );
 
-        let length = offsets.last().map(|o| o.as_usize()).unwrap_or(0);
-
-        let bytes_iter = predicate
-            .iter()
-            .flat_map(|b| if b { value } else { &[] })
-            .copied();
-
-        let bytes = unsafe {
-            // Safety: the iterator is trusted length as we limit it to the known length
-            MutableBuffer::from_trusted_len_iter(
-                bytes_iter
-                    // Limiting the bytes so the iterator will be trusted length
-                    .take(length),
-            )
-        };
+        let bytes = MutableBuffer::new_repeated(number_of_true, value);
+        let bytes = Buffer::from(bytes);
 
         // If a value is true we need the TRUTHY and the null buffer will have 1 (meaning not null)
         // If a value is false we need the FALSY and the null buffer will have 0 (meaning null)
         let nulls = NullBuffer::new(predicate);
 
         (bytes.into(), offsets, Some(nulls))
+    }
+
+    fn get_bytes_and_offset_for_all_same_value(
+        predicate: &BooleanBuffer,
+        value: &[u8],
+    ) -> (Buffer, OffsetBuffer<T::Offset>) {
+        let value_length = value.len();
+
+        let offsets =
+            OffsetBuffer::<T::Offset>::from_lengths(predicate.iter().map(|b| value_length));
+
+        let bytes = MutableBuffer::new_repeated(predicate.len(), value);
+        let bytes = Buffer::from(bytes);
+
+        (bytes.into(), offsets)
     }
 }
 
@@ -470,40 +490,19 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
         let (bytes, offsets, nulls): (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) =
             match (self.truthy.as_deref(), self.falsy.as_deref()) {
                 (Some(then_val), Some(else_val)) => {
-                    let then_length = then_val.len();
-                    let else_length = else_val.len();
-                    let offsets = OffsetBuffer::<T::Offset>::from_lengths(predicate.iter().map(
-                        |b| {
-                            if b { then_length } else { else_length }
-                        },
-                    ));
+                    let (bytes, offsets) =
+                        Self::create_output_on_non_nulls(&predicate, then_val, else_val);
 
-                    let length = offsets.last().map(|o| o.as_usize()).unwrap_or(0);
-
-                    let bytes_iter = predicate
-                        .iter()
-                        .flat_map(|b| if b { then_val } else { else_val })
-                        .copied();
-
-                    let bytes = unsafe {
-                        // Safety: the iterator is trusted length as we limit it to the known length
-                        MutableBuffer::from_trusted_len_iter(
-                            bytes_iter
-                                // Limiting the bytes so the iterator will be trusted length
-                                .take(length),
-                        )
-                    };
-
-                    (bytes.into(), offsets, None)
+                    (bytes, offsets, None)
                 }
                 (Some(then_val), None) => {
                     Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, then_val)
                 }
                 (None, Some(else_val)) => {
-                    // Flipping the boolean buffer as we want the opposite of the THEN case
+                    // Flipping the boolean buffer as we want the opposite of the TRUE case
                     //
                     // if the condition is true we want null so we need to NOT the value so we get 0 (meaning null)
-                    // if the condition is false we want the ELSE value so we need to NOT the value so we get 1 (meaning not null)
+                    // if the condition is false we want the FALSE value so we need to NOT the value so we get 1 (meaning not null)
                     let predicate = predicate.not();
                     Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, else_val)
                 }
@@ -515,7 +514,7 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
                         // Empty bytes
                         Buffer::from(&[]),
                         // All nulls so all lengths are 0
-                        OffsetBuffer::<T::Offset>::from_lengths(std::iter::repeat_n(0, result_len)),
+                        OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
                         Some(nulls),
                     )
                 }
@@ -528,6 +527,93 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
         };
 
         Ok(Arc::new(output))
+    }
+}
+
+impl<T: ByteArrayType> BytesScalarImpl<T> {
+    fn create_output_on_non_nulls(
+        predicate: &BooleanBuffer,
+        then_val: &[u8],
+        else_val: &[u8],
+    ) -> (Buffer, OffsetBuffer<<T as ByteArrayType>::Offset>) {
+        let true_count = predicate.count_set_bits();
+
+        match true_count {
+            0 => {
+                // All values are falsy
+
+                let (bytes, offsets) =
+                    Self::get_bytes_and_offset_for_all_same_value(predicate, else_val);
+
+                return (bytes, offsets);
+            }
+            n if n == predicate.len() => {
+                // All values are truthy
+                let (bytes, offsets) =
+                    Self::get_bytes_and_offset_for_all_same_value(predicate, then_val);
+
+                return (bytes, offsets);
+            }
+
+            _ => {
+                // Fallback
+            }
+        }
+
+        let total_number_of_bytes =
+            true_count * then_val.len() + (predicate.len() - true_count) * else_val.len();
+        let mut mutable = MutableBuffer::with_capacity(total_number_of_bytes);
+        let mut offset_buffer_builder = OffsetBufferBuilder::<T::Offset>::new(predicate.len());
+
+        // keep track of how much is filled
+        let mut filled = 0;
+
+        let then_len = then_val.len();
+        let else_len = else_val.len();
+
+        SlicesIterator::from(predicate).for_each(|(start, end)| {
+            // the gap needs to be filled with falsy values
+            if start > filled {
+                let false_repeat_count = start - filled;
+                // Push else value `repeat_count` times
+                mutable.push_slice_repeated(
+                    false_repeat_count,
+                    else_val,
+                );
+
+                for _ in 0..false_repeat_count {
+                    offset_buffer_builder.push_length(else_len)
+                }
+            }
+
+            let true_repeat_count = end - start;
+            // fill with truthy values
+            mutable.push_slice_repeated(
+                true_repeat_count,
+                then_val,
+            );
+
+            for _ in 0..true_repeat_count {
+                offset_buffer_builder.push_length(then_len)
+            }
+            filled = end;
+        });
+        // the remaining part is falsy
+        if filled < predicate.len() {
+            let false_repeat_count = predicate.len() - filled;
+            // Copy the first item from the 'falsy' array into the output buffer.
+            mutable.push_slice_repeated(
+                false_repeat_count,
+                else_val,
+            );
+
+            for _ in 0..false_repeat_count {
+                offset_buffer_builder.push_length(else_len)
+            }
+        }
+
+
+        (mutable.into(), offset_buffer_builder.finish())
     }
 }
 

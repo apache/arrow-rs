@@ -222,6 +222,75 @@ impl MutableBuffer {
         }
     }
 
+    /// Creates a new [`MutableBuffer`] by repeating the contents of `slice_to_repeat`
+    /// `repeat_count` times.
+    pub fn new_repeated<T: ArrowNativeType>(repeat_count: usize, slice_to_repeat: &[T]) -> Self {
+        if slice_to_repeat.is_empty() || repeat_count == 0 {
+            return Self::new(0);
+        }
+
+        // If we keep extending from ourself we will reach it pretty fast
+        let value_len = slice_to_repeat.len();
+        let final_len = repeat_count * value_len;
+        let mut mutable = Self::with_capacity(final_len);
+
+        mutable.push_slice_repeated(repeat_count, slice_to_repeat);
+
+        mutable
+    }
+
+    /// Adding to this mutable buffer `slice_to_repeat` repeated `repeat_count` times.
+    pub fn push_slice_repeated<T: ArrowNativeType>(&mut self, repeat_count: usize, slice_to_repeat: &[T]) {
+        if repeat_count == 0 || slice_to_repeat.is_empty() {
+            return;
+        }
+
+        // Ensure capacity
+        let additional = repeat_count * mem::size_of_val(slice_to_repeat);
+        self.reserve(additional);
+
+        // No need to special case small repeat counts
+        if repeat_count <= 3 {
+            for _ in 0..repeat_count {
+                self.extend_from_slice(slice_to_repeat);
+            }
+
+            return;
+        }
+
+        // If we keep extending from ourself we will reach it pretty fast
+        let value_len = slice_to_repeat.len();
+        let final_len_to_repeat = repeat_count * value_len;
+
+        let length_before = self.len;
+
+        self.extend_from_slice(slice_to_repeat);
+        let mut added_repeats_length = mem::size_of_val(slice_to_repeat);
+
+        // Copy in doubling steps to reduce number of copy calls
+        while added_repeats_length * 2 <= final_len_to_repeat {
+            unsafe {
+                let src = self.data.as_ptr().add(length_before) as *const u8;
+                let dst = self.data.as_ptr().add(self.len);
+                std::ptr::copy_nonoverlapping(src, dst, added_repeats_length)
+            }
+            self.len += added_repeats_length;
+            added_repeats_length *= 2;
+        }
+
+        // Copy the rest of the required data in one go
+        let last_amount_to_copy = final_len_to_repeat - added_repeats_length;
+        assert!(last_amount_to_copy <= final_len_to_repeat, "the last copy should not overlap");
+
+        unsafe {
+            let src = self.data.as_ptr().add(length_before) as *const u8;
+            let dst = self.data.as_ptr().add(self.len);
+
+            std::ptr::copy_nonoverlapping(src, dst, last_amount_to_copy)
+        }
+        self.len += last_amount_to_copy;
+    }
+
     #[cold]
     fn reallocate(&mut self, capacity: usize) {
         let new_layout = Layout::from_size_align(capacity, self.layout.align()).unwrap();
