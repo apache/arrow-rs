@@ -19,16 +19,20 @@
 
 # Changelog
 
-## [57.0.0](https://github.com/apache/arrow-rs/tree/57.0.0) (2025-10-17)
+## [57.0.0](https://github.com/apache/arrow-rs/tree/57.0.0) (2025-10-19)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/56.2.0...57.0.0)
 
 **Breaking changes:**
 
 - Use `Arc<FileEncryptionProperties>` everywhere to be be consistent with `FileDecryptionProperties` [\#8626](https://github.com/apache/arrow-rs/pull/8626) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
+- feat: Improve DataType display for `RunEndEncoded` [\#8596](https://github.com/apache/arrow-rs/pull/8596) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
 - Add `ArrowError::AvroError`, remaining types and roundtrip tests to `arrow-avro`,  [\#8595](https://github.com/apache/arrow-rs/pull/8595) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
 - \[thrift-remodel\] Refactor Thrift encryption and store encodings as bitmask [\#8587](https://github.com/apache/arrow-rs/pull/8587) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
+- feat: Enhance `Map` display formatting in DataType [\#8570](https://github.com/apache/arrow-rs/pull/8570) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
+- feat: Enhance DataType display formatting for `ListView` and `LargeListView` variants [\#8569](https://github.com/apache/arrow-rs/pull/8569) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
 - Use custom thrift parser for parquet metadata \(phase 1 of Thrift remodel\) [\#8530](https://github.com/apache/arrow-rs/pull/8530) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
+- refactor: improve display formatting for Union [\#8529](https://github.com/apache/arrow-rs/pull/8529) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
 - Use `Arc<FileDecryptionProperties>` to reduce size of ParquetMetadata and avoid copying when `encryption` is enabled [\#8470](https://github.com/apache/arrow-rs/pull/8470) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Fix for column name based projection mask creation [\#8447](https://github.com/apache/arrow-rs/pull/8447) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - Improve Display formatting of DataType::Timestamp [\#8425](https://github.com/apache/arrow-rs/pull/8425) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([emilk](https://github.com/emilk))
@@ -41,6 +45,7 @@
 
 **Implemented enhancements:**
 
+- parquet-rewrite: supports compression level and write batch size [\#8639](https://github.com/apache/arrow-rs/issues/8639)
 - Error not panic when int96 stastistics aren't size 12 [\#8614](https://github.com/apache/arrow-rs/issues/8614) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Make `VariantArray` iterable [\#8612](https://github.com/apache/arrow-rs/issues/8612)
 - \[Variant\] impl `PartialEq` for `VariantArray` [\#8610](https://github.com/apache/arrow-rs/issues/8610)
@@ -103,6 +108,7 @@
 **Performance improvements:**
 
 - \[parquet\] Improve encoding mask API \(wrap bare  i32 in a struct w/ docs\) [\#8588](https://github.com/apache/arrow-rs/issues/8588) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- bench: create `zip` kernel benchmarks [\#8654](https://github.com/apache/arrow-rs/pull/8654) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
 - Skip redundant validation checks in RecordBatch\#project [\#8583](https://github.com/apache/arrow-rs/pull/8583) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([pepijnve](https://github.com/pepijnve))
 - \[thrift-remodel\] Remove conversion functions for row group and column metadata [\#8574](https://github.com/apache/arrow-rs/pull/8574) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - \[PARQUET\] Improve memory efficency for compressed writer parquet 1.0 [\#8527](https://github.com/apache/arrow-rs/pull/8527) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([lilianm](https://github.com/lilianm))
@@ -121,6 +127,7 @@
 
 **Merged pull requests:**
 
+- parquet-rewrite: add write\_batch\_size and compression\_level config  [\#8642](https://github.com/apache/arrow-rs/pull/8642) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([mapleFU](https://github.com/mapleFU))
 - Introduce a ThriftProtocolError to avoid allocating and formattings strings for error messages [\#8636](https://github.com/apache/arrow-rs/pull/8636) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([jhorstmann](https://github.com/jhorstmann))
 - \[thrift-remodel\] Add macro to reduce boilerplate necessary to implement Thrift serialization [\#8634](https://github.com/apache/arrow-rs/pull/8634) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - Fix Writer docs and rename `AvroBinaryFormat` to `AvroSoeFormat` [\#8633](https://github.com/apache/arrow-rs/pull/8633) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
@@ -139,7 +146,7 @@
 - \[thrift-remodel\] Refactor Parquet Thrift code into new `thrift` module [\#8599](https://github.com/apache/arrow-rs/pull/8599) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
 - \[Parquet\] Remove use of `parquet::format` in metadata bench code [\#8598](https://github.com/apache/arrow-rs/pull/8598) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([lichuang](https://github.com/lichuang))
 - Remove experimental warning from `extension` module [\#8597](https://github.com/apache/arrow-rs/pull/8597) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mbrobbel](https://github.com/mbrobbel))
-- feat: Improve DataType display for `RunEndEncoded` [\#8596](https://github.com/apache/arrow-rs/pull/8596) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
+- Adding `try_append_value` implementation to `ByteViewBuilder` [\#8594](https://github.com/apache/arrow-rs/pull/8594) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([samueleresca](https://github.com/samueleresca))
 - Add RecordBatch::project microbenchmark [\#8592](https://github.com/apache/arrow-rs/pull/8592) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([pepijnve](https://github.com/pepijnve))
 - \[parquet\] Add a sync fn to ArrowWriter that flushes Writer [\#8586](https://github.com/apache/arrow-rs/pull/8586) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([PiotrSrebrny](https://github.com/PiotrSrebrny))
 - chore: use magic number`FOOTER_SIZE` instead of hard code number [\#8585](https://github.com/apache/arrow-rs/pull/8585) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([lichuang](https://github.com/lichuang))
@@ -152,8 +159,6 @@
 - Avoid panics and warnings when building avro without default features [\#8576](https://github.com/apache/arrow-rs/pull/8576) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mbrobbel](https://github.com/mbrobbel))
 - Add support for 64-bit Schema Registry IDs \(Id64\) in arrow-avro [\#8575](https://github.com/apache/arrow-rs/pull/8575) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
 - fix: bug when struct nullability determined from `Dict<_, ByteArray>>` column [\#8573](https://github.com/apache/arrow-rs/pull/8573) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([albertlockett](https://github.com/albertlockett))
-- feat: Enhance `Map` display formatting in DataType [\#8570](https://github.com/apache/arrow-rs/pull/8570) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
-- feat: Enhance DataType display formatting for `ListView` and `LargeListView` variants [\#8569](https://github.com/apache/arrow-rs/pull/8569) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
 - fix: Support `interleave_struct` to handle empty fields [\#8563](https://github.com/apache/arrow-rs/pull/8563) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
 - \[Variant\] Define and use VariantDecimalType trait [\#8562](https://github.com/apache/arrow-rs/pull/8562) ([scovich](https://github.com/scovich))
 - \[PARQUET\] Update parquet writer bench with compression and pagev2 [\#8560](https://github.com/apache/arrow-rs/pull/8560) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([lilianm](https://github.com/lilianm))
@@ -172,7 +177,6 @@
 - \[Variant\] Decimal unshredding support [\#8540](https://github.com/apache/arrow-rs/pull/8540) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([scovich](https://github.com/scovich))
 - \[Variant\] Improve documentation and make kernels consistent [\#8536](https://github.com/apache/arrow-rs/pull/8536) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - feat: support casting from null to float16 [\#8535](https://github.com/apache/arrow-rs/pull/8535) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([chenkovsky](https://github.com/chenkovsky))
-- refactor: improve display formatting for Union [\#8529](https://github.com/apache/arrow-rs/pull/8529) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
 - Add benchmarks for FromIter \(PrimitiveArray and BooleanArray\) [\#8525](https://github.com/apache/arrow-rs/pull/8525) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tobixdev](https://github.com/tobixdev))
 - Support writing GeospatialStatistics in Parquet writer [\#8524](https://github.com/apache/arrow-rs/pull/8524) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([paleolimbot](https://github.com/paleolimbot))
 - Fix some new rustdoc warnings [\#8522](https://github.com/apache/arrow-rs/pull/8522) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
