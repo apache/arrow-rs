@@ -312,18 +312,18 @@ impl<T: ArrowPrimitiveType> Debug for PrimitiveScalarImpl<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PrimitiveScalarImpl")
             .field("data_type", &self.data_type)
-            .field("then_value", &self.truthy)
-            .field("else_value", &self.falsy)
+            .field("truthy", &self.truthy)
+            .field("falsy", &self.falsy)
             .finish()
     }
 }
 
 impl<T: ArrowPrimitiveType> PrimitiveScalarImpl<T> {
-    fn new(then_value: &dyn Array, else_value: &dyn Array) -> Self {
+    fn new(truthy: &dyn Array, falsy: &dyn Array) -> Self {
         Self {
-            data_type: then_value.data_type().clone(),
-            truthy: Self::get_value_from_scalar(then_value),
-            falsy: Self::get_value_from_scalar(else_value),
+            data_type: truthy.data_type().clone(),
+            truthy: Self::get_value_from_scalar(truthy),
+            falsy: Self::get_value_from_scalar(falsy),
         }
     }
 
@@ -359,28 +359,28 @@ impl<T: ArrowPrimitiveType> ZipImpl for PrimitiveScalarImpl<T> {
 
         let (scalars, nulls): (Vec<T::Native>, Option<NullBuffer>) = match (self.truthy, self.falsy)
         {
-            (Some(then_val), Some(else_val)) => {
+            (Some(truthy_val), Some(falsy_val)) => {
                 let scalars: Vec<T::Native> = predicate
                     .iter()
-                    .map(|b| if b { then_val } else { else_val })
+                    .map(|b| if b { truthy_val } else { falsy_val })
                     .collect();
 
                 (scalars, None)
             }
-            (Some(then_val), None) => {
+            (Some(truthy_val), None) => {
                 // If a value is true we need the TRUTHY and the null buffer will have 1 (meaning not null)
                 // If a value is false we need the FALSY and the null buffer will have 0 (meaning null)
 
-                Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, then_val)
+                Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)
             }
-            (None, Some(else_val)) => {
-                // Flipping the boolean buffer as we want the opposite of the THEN case
+            (None, Some(falsy_val)) => {
+                // Flipping the boolean buffer as we want the opposite of the TRUE case
                 //
                 // if the condition is true we want null so we need to NOT the value so we get 0 (meaning null)
                 // if the condition is false we want the FALSY value so we need to NOT the value so we get 1 (meaning not null)
                 let predicate = predicate.not();
 
-                Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, else_val)
+                Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)
             }
             (None, None) => {
                 // All values are null
@@ -411,17 +411,17 @@ struct BytesScalarImpl<T: ByteArrayType> {
 impl<T: ByteArrayType> Debug for BytesScalarImpl<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BytesScalarImpl")
-            .field("then_value", &self.truthy)
-            .field("else_value", &self.falsy)
+            .field("truthy", &self.truthy)
+            .field("falsy", &self.falsy)
             .finish()
     }
 }
 
 impl<T: ByteArrayType> BytesScalarImpl<T> {
-    fn new(then_value: &dyn Array, else_value: &dyn Array) -> Self {
+    fn new(truthy_value: &dyn Array, falsy_value: &dyn Array) -> Self {
         Self {
-            truthy: Self::get_value_from_scalar(then_value),
-            falsy: Self::get_value_from_scalar(else_value),
+            truthy: Self::get_value_from_scalar(truthy_value),
+            falsy: Self::get_value_from_scalar(falsy_value),
             phantom: PhantomData,
         }
     }
@@ -498,22 +498,22 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
 
         let (bytes, offsets, nulls): (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) =
             match (self.truthy.as_deref(), self.falsy.as_deref()) {
-                (Some(then_val), Some(else_val)) => {
+                (Some(truthy_val), Some(falsy_val)) => {
                     let (bytes, offsets) =
-                        Self::create_output_on_non_nulls(&predicate, then_val, else_val);
+                        Self::create_output_on_non_nulls(&predicate, truthy_val, falsy_val);
 
                     (bytes, offsets, None)
                 }
-                (Some(then_val), None) => {
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, then_val)
+                (Some(truthy_val), None) => {
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)
                 }
-                (None, Some(else_val)) => {
+                (None, Some(falsy_val)) => {
                     // Flipping the boolean buffer as we want the opposite of the TRUE case
                     //
                     // if the condition is true we want null so we need to NOT the value so we get 0 (meaning null)
                     // if the condition is false we want the FALSE value so we need to NOT the value so we get 1 (meaning not null)
                     let predicate = predicate.not();
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, else_val)
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)
                 }
                 (None, None) => {
                     // All values are null
@@ -542,8 +542,8 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
 impl<T: ByteArrayType> BytesScalarImpl<T> {
     fn create_output_on_non_nulls(
         predicate: &BooleanBuffer,
-        then_val: &[u8],
-        else_val: &[u8],
+        truthy_val: &[u8],
+        falsy_val: &[u8],
     ) -> (Buffer, OffsetBuffer<<T as ByteArrayType>::Offset>) {
         let true_count = predicate.count_set_bits();
 
@@ -552,14 +552,14 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                 // All values are falsy
 
                 let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate, else_val);
+                    Self::get_bytes_and_offset_for_all_same_value(predicate, falsy_val);
 
                 return (bytes, offsets);
             }
             n if n == predicate.len() => {
                 // All values are truthy
                 let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate, then_val);
+                    Self::get_bytes_and_offset_for_all_same_value(predicate, truthy_val);
 
                 return (bytes, offsets);
             }
@@ -570,34 +570,34 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         }
 
         let total_number_of_bytes =
-            true_count * then_val.len() + (predicate.len() - true_count) * else_val.len();
+            true_count * truthy_val.len() + (predicate.len() - true_count) * falsy_val.len();
         let mut mutable = MutableBuffer::with_capacity(total_number_of_bytes);
         let mut offset_buffer_builder = OffsetBufferBuilder::<T::Offset>::new(predicate.len());
 
         // keep track of how much is filled
         let mut filled = 0;
 
-        let then_len = then_val.len();
-        let else_len = else_val.len();
+        let truthy_len = truthy_val.len();
+        let falsy_len = falsy_val.len();
 
         SlicesIterator::from(predicate).for_each(|(start, end)| {
             // the gap needs to be filled with falsy values
             if start > filled {
                 let false_repeat_count = start - filled;
-                // Push else value `repeat_count` times
-                mutable.push_slice_repeated(false_repeat_count, else_val);
+                // Push false value `repeat_count` times
+                mutable.push_slice_repeated(false_repeat_count, falsy_val);
 
                 for _ in 0..false_repeat_count {
-                    offset_buffer_builder.push_length(else_len)
+                    offset_buffer_builder.push_length(falsy_len)
                 }
             }
 
             let true_repeat_count = end - start;
             // fill with truthy values
-            mutable.push_slice_repeated(true_repeat_count, then_val);
+            mutable.push_slice_repeated(true_repeat_count, truthy_val);
 
             for _ in 0..true_repeat_count {
-                offset_buffer_builder.push_length(then_len)
+                offset_buffer_builder.push_length(truthy_len)
             }
             filled = end;
         });
@@ -605,10 +605,10 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         if filled < predicate.len() {
             let false_repeat_count = predicate.len() - filled;
             // Copy the first item from the 'falsy' array into the output buffer.
-            mutable.push_slice_repeated(false_repeat_count, else_val);
+            mutable.push_slice_repeated(false_repeat_count, falsy_val);
 
             for _ in 0..false_repeat_count {
-                offset_buffer_builder.push_length(else_len)
+                offset_buffer_builder.push_length(falsy_len)
             }
         }
 
