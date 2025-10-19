@@ -240,7 +240,11 @@ impl MutableBuffer {
     }
 
     /// Adding to this mutable buffer `slice_to_repeat` repeated `repeat_count` times.
-    pub fn push_slice_repeated<T: ArrowNativeType>(&mut self, repeat_count: usize, slice_to_repeat: &[T]) {
+    pub fn push_slice_repeated<T: ArrowNativeType>(
+        &mut self,
+        repeat_count: usize,
+        slice_to_repeat: &[T],
+    ) {
         if repeat_count == 0 || slice_to_repeat.is_empty() {
             return;
         }
@@ -280,7 +284,10 @@ impl MutableBuffer {
 
         // Copy the rest of the required data in one go
         let last_amount_to_copy = final_len_to_repeat - added_repeats_length;
-        assert!(last_amount_to_copy <= final_len_to_repeat, "the last copy should not overlap");
+        assert!(
+            last_amount_to_copy <= final_len_to_repeat,
+            "the last copy should not overlap"
+        );
 
         unsafe {
             let src = self.data.as_ptr().add(length_before) as *const u8;

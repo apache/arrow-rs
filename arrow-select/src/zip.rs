@@ -576,10 +576,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             if start > filled {
                 let false_repeat_count = start - filled;
                 // Push else value `repeat_count` times
-                mutable.push_slice_repeated(
-                    false_repeat_count,
-                    else_val,
-                );
+                mutable.push_slice_repeated(false_repeat_count, else_val);
 
                 for _ in 0..false_repeat_count {
                     offset_buffer_builder.push_length(else_len)
@@ -588,10 +585,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
 
             let true_repeat_count = end - start;
             // fill with truthy values
-            mutable.push_slice_repeated(
-                true_repeat_count,
-                then_val,
-            );
+            mutable.push_slice_repeated(true_repeat_count, then_val);
 
             for _ in 0..true_repeat_count {
                 offset_buffer_builder.push_length(then_len)
@@ -602,16 +596,12 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         if filled < predicate.len() {
             let false_repeat_count = predicate.len() - filled;
             // Copy the first item from the 'falsy' array into the output buffer.
-            mutable.push_slice_repeated(
-                false_repeat_count,
-                else_val,
-            );
+            mutable.push_slice_repeated(false_repeat_count, else_val);
 
             for _ in 0..false_repeat_count {
                 offset_buffer_builder.push_length(else_len)
             }
         }
-
 
         (mutable.into(), offset_buffer_builder.finish())
     }
