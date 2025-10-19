@@ -169,7 +169,7 @@ pub struct WriterProperties {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     #[cfg(feature = "encryption")]
-    pub(crate) file_encryption_properties: Option<FileEncryptionProperties>,
+    pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
 
 impl Default for WriterProperties {
@@ -432,7 +432,7 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::with_file_encryption_properties`]
     #[cfg(feature = "encryption")]
-    pub fn file_encryption_properties(&self) -> Option<&FileEncryptionProperties> {
+    pub fn file_encryption_properties(&self) -> Option<&Arc<FileEncryptionProperties>> {
         self.file_encryption_properties.as_ref()
     }
 }
@@ -458,7 +458,7 @@ pub struct WriterPropertiesBuilder {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     #[cfg(feature = "encryption")]
-    file_encryption_properties: Option<FileEncryptionProperties>,
+    file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
 
 impl Default for WriterPropertiesBuilder {
@@ -709,7 +709,7 @@ impl WriterPropertiesBuilder {
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
         mut self,
-        file_encryption_properties: FileEncryptionProperties,
+        file_encryption_properties: Arc<FileEncryptionProperties>,
     ) -> Self {
         self.file_encryption_properties = Some(file_encryption_properties);
         self

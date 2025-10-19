@@ -21,7 +21,7 @@
 //! into the corresponding Rust structures
 
 use crate::errors::ParquetError;
-use crate::file::metadata::thrift_gen::parquet_metadata_from_bytes;
+use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData};
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -72,8 +72,8 @@ mod inner {
             encrypted_footer: bool,
         ) -> Result<ParquetMetaData> {
             if encrypted_footer || self.file_decryption_properties.is_some() {
-                crate::file::metadata::thrift_gen::parquet_metadata_with_encryption(
-                    self.file_decryption_properties.as_deref(),
+                crate::file::metadata::thrift::encryption::parquet_metadata_with_encryption(
+                    self.file_decryption_properties.as_ref(),
                     encrypted_footer,
                     buf,
                 )

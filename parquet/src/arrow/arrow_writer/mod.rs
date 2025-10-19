@@ -48,7 +48,7 @@ use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
-use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
+use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor};
 use levels::{ArrayLevels, calculate_array_levels};
 
 mod byte_array;
@@ -252,7 +252,7 @@ impl<W: Write + Send> ArrowWriter<W> {
             SerializedFileWriter::new(writer, schema.root_schema_ptr(), Arc::clone(&props_ptr))?;
 
         let row_group_writer_factory =
-            ArrowRowGroupWriterFactory::new(&file_writer, schema, arrow_schema.clone(), props_ptr);
+            ArrowRowGroupWriterFactory::new(&file_writer, arrow_schema.clone());
 
         Ok(Self {
             writer: file_writer,
@@ -354,7 +354,15 @@ impl<W: Write + Send> ArrowWriter<W> {
         self.writer.write_all(buf)
     }
 
+    /// Flushes underlying writer
+    pub fn sync(&mut self) -> std::io::Result<()> {
+        self.writer.flush()
+    }
+
     /// Flushes all buffered rows into a new row group
+    ///
+    /// Note the underlying writer is not flushed with this call.
+    /// If this is a desired behavior, please call [`ArrowWriter::sync`].
     pub fn flush(&mut self) -> Result<()> {
         let in_progress = match self.in_progress.take() {
             Some(in_progress) => in_progress,
@@ -415,7 +423,10 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Create a new row group writer and return its column writers.
-    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
+    #[deprecated(
+        since = "56.2.0",
+        note = "Use `ArrowRowGroupWriterFactory` instead, see `ArrowColumnWriter` for an example"
+    )]
     pub fn get_column_writers(&mut self) -> Result<Vec<ArrowColumnWriter>> {
         self.flush()?;
         let in_progress = self
@@ -425,7 +436,10 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Append the given column chunks to the file as a new row group.
-    #[deprecated(since = "56.2.0", note = "Use into_serialized_writer instead")]
+    #[deprecated(
+        since = "56.2.0",
+        note = "Use `SerializedFileWriter` directly instead, see `ArrowColumnWriter` for an example"
+    )]
     pub fn append_row_group(&mut self, chunks: Vec<ArrowColumnChunk>) -> Result<()> {
         let mut row_group_writer = self.writer.next_row_group()?;
         for chunk in chunks {
@@ -436,7 +450,11 @@ impl<W: Write + Send> ArrowWriter<W> {
     }
 
     /// Converts this writer into a lower-level [`SerializedFileWriter`] and [`ArrowRowGroupWriterFactory`].
-    /// This can be useful to provide more control over how files are written.
+    ///
+    /// Flushes any outstanding data before returning.
+    ///
+    /// This can be useful to provide more control over how files are written, for example
+    /// to write columns in parallel. See the example on [`ArrowColumnWriter`].
     pub fn into_serialized_writer(
         mut self,
     ) -> Result<(SerializedFileWriter<W>, ArrowRowGroupWriterFactory)> {
@@ -685,6 +703,8 @@ impl ArrowColumnChunk {
 
 /// Encodes [`ArrowLeafColumn`] to [`ArrowColumnChunk`]
 ///
+/// `ArrowColumnWriter` instances can be created using an [`ArrowRowGroupWriterFactory`];
+///
 /// Note: This is a low-level interface for applications that require
 /// fine-grained control of encoding (e.g. encoding using multiple threads),
 /// see [`ArrowWriter`] for a higher-level interface
@@ -696,7 +716,7 @@ impl ArrowColumnChunk {
 /// # use arrow_array::*;
 /// # use arrow_schema::*;
 /// # use parquet::arrow::ArrowSchemaConverter;
-/// # use parquet::arrow::arrow_writer::{ArrowLeafColumn, compute_leaves, get_column_writers, ArrowColumnChunk};
+/// # use parquet::arrow::arrow_writer::{compute_leaves, ArrowColumnChunk, ArrowLeafColumn, ArrowRowGroupWriterFactory};
 /// # use parquet::file::properties::WriterProperties;
 /// # use parquet::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
 /// #
@@ -712,8 +732,17 @@ impl ArrowColumnChunk {
 ///   .convert(&schema)
 ///   .unwrap();
 ///
-/// // Create writers for each of the leaf columns
-/// let col_writers = get_column_writers(&parquet_schema, &props, &schema).unwrap();
+/// // Create parquet writer
+/// let root_schema = parquet_schema.root_schema_ptr();
+/// // write to memory in the example, but this could be a File
+/// let mut out = Vec::with_capacity(1024);
+/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone())
+///   .unwrap();
+///
+/// // Create a factory for building Arrow column writers
+/// let row_group_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
+/// // Create column writers for the 0th row group
+/// let col_writers = row_group_factory.create_column_writers(0).unwrap();
 ///
 /// // Spawn a worker thread for each column
 /// //
@@ -735,13 +764,6 @@ impl ArrowColumnChunk {
 ///         (handle, send)
 ///     })
 ///     .collect();
-///
-/// // Create parquet writer
-/// let root_schema = parquet_schema.root_schema_ptr();
-/// // write to memory in the example, but this could be a File
-/// let mut out = Vec::with_capacity(1024);
-/// let mut writer = SerializedFileWriter::new(&mut out, root_schema, props.clone())
-///   .unwrap();
 ///
 /// // Start row group
 /// let mut row_group_writer: SerializedRowGroupWriter<'_, _> = writer
@@ -850,6 +872,12 @@ impl ArrowColumnWriter {
 }
 
 /// Encodes [`RecordBatch`] to a parquet row group
+///
+/// Note: this structure is created by [`ArrowRowGroupWriterFactory`] internally used to
+/// create [`ArrowRowGroupWriter`]s, but it is not exposed publicly.
+///
+/// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
+#[derive(Debug)]
 struct ArrowRowGroupWriter {
     writers: Vec<ArrowColumnWriter>,
     schema: SchemaRef,
@@ -885,8 +913,12 @@ impl ArrowRowGroupWriter {
 }
 
 /// Factory that creates new column writers for each row group in the Parquet file.
+///
+/// You can create this structure via an [`ArrowWriter::into_serialized_writer`].
+/// See the example on [`ArrowColumnWriter`] for how to encode columns in parallel
+#[derive(Debug)]
 pub struct ArrowRowGroupWriterFactory {
-    schema: SchemaDescriptor,
+    schema: SchemaDescPtr,
     arrow_schema: SchemaRef,
     props: WriterPropertiesPtr,
     #[cfg(feature = "encryption")]
@@ -894,61 +926,57 @@ pub struct ArrowRowGroupWriterFactory {
 }
 
 impl ArrowRowGroupWriterFactory {
-    #[cfg(feature = "encryption")]
-    fn new<W: Write + Send>(
+    /// Create a new [`ArrowRowGroupWriterFactory`] for the provided file writer and Arrow schema
+    pub fn new<W: Write + Send>(
         file_writer: &SerializedFileWriter<W>,
-        schema: SchemaDescriptor,
         arrow_schema: SchemaRef,
-        props: WriterPropertiesPtr,
     ) -> Self {
+        let schema = Arc::clone(file_writer.schema_descr_ptr());
+        let props = Arc::clone(file_writer.properties());
         Self {
             schema,
             arrow_schema,
             props,
+            #[cfg(feature = "encryption")]
             file_encryptor: file_writer.file_encryptor(),
         }
     }
 
-    #[cfg(not(feature = "encryption"))]
-    fn new<W: Write + Send>(
-        _file_writer: &SerializedFileWriter<W>,
-        schema: SchemaDescriptor,
-        arrow_schema: SchemaRef,
-        props: WriterPropertiesPtr,
-    ) -> Self {
-        Self {
-            schema,
-            arrow_schema,
-            props,
+    fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
+        let writers = self.create_column_writers(row_group_index)?;
+        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
+    }
+
+    /// Create column writers for a new row group, with the given row group index
+    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
+        let mut writers = Vec::with_capacity(self.arrow_schema.fields.len());
+        let mut leaves = self.schema.columns().iter();
+        let column_factory = self.column_writer_factory(row_group_index);
+        for field in &self.arrow_schema.fields {
+            column_factory.get_arrow_column_writer(
+                field.data_type(),
+                &self.props,
+                &mut leaves,
+                &mut writers,
+            )?;
         }
+        Ok(writers)
     }
 
     #[cfg(feature = "encryption")]
-    fn create_row_group_writer(&self, row_group_index: usize) -> Result<ArrowRowGroupWriter> {
-        let writers = get_column_writers_with_encryptor(
-            &self.schema,
-            &self.props,
-            &self.arrow_schema,
-            self.file_encryptor.clone(),
-            row_group_index,
-        )?;
-        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
+    fn column_writer_factory(&self, row_group_idx: usize) -> ArrowColumnWriterFactory {
+        ArrowColumnWriterFactory::new()
+            .with_file_encryptor(row_group_idx, self.file_encryptor.clone())
     }
 
     #[cfg(not(feature = "encryption"))]
-    fn create_row_group_writer(&self, _row_group_index: usize) -> Result<ArrowRowGroupWriter> {
-        let writers = get_column_writers(&self.schema, &self.props, &self.arrow_schema)?;
-        Ok(ArrowRowGroupWriter::new(writers, &self.arrow_schema))
-    }
-
-    /// Create column writers for a new row group.
-    pub fn create_column_writers(&self, row_group_index: usize) -> Result<Vec<ArrowColumnWriter>> {
-        let rg_writer = self.create_row_group_writer(row_group_index)?;
-        Ok(rg_writer.writers)
+    fn column_writer_factory(&self, _row_group_idx: usize) -> ArrowColumnWriterFactory {
+        ArrowColumnWriterFactory::new()
     }
 }
 
 /// Returns [`ArrowColumnWriter`]s for each column in a given schema
+#[deprecated(since = "57.0.0", note = "Use `ArrowRowGroupWriterFactory` instead")]
 pub fn get_column_writers(
     parquet: &SchemaDescriptor,
     props: &WriterPropertiesPtr,
@@ -957,30 +985,6 @@ pub fn get_column_writers(
     let mut writers = Vec::with_capacity(arrow.fields.len());
     let mut leaves = parquet.columns().iter();
     let column_factory = ArrowColumnWriterFactory::new();
-    for field in &arrow.fields {
-        column_factory.get_arrow_column_writer(
-            field.data_type(),
-            props,
-            &mut leaves,
-            &mut writers,
-        )?;
-    }
-    Ok(writers)
-}
-
-/// Returns the [`ArrowColumnWriter`] for a given schema and supports columnar encryption
-#[cfg(feature = "encryption")]
-fn get_column_writers_with_encryptor(
-    parquet: &SchemaDescriptor,
-    props: &WriterPropertiesPtr,
-    arrow: &SchemaRef,
-    file_encryptor: Option<Arc<FileEncryptor>>,
-    row_group_index: usize,
-) -> Result<Vec<ArrowColumnWriter>> {
-    let mut writers = Vec::with_capacity(arrow.fields.len());
-    let mut leaves = parquet.columns().iter();
-    let column_factory =
-        ArrowColumnWriterFactory::new().with_file_encryptor(row_group_index, file_encryptor);
     for field in &arrow.fields {
         column_factory.get_arrow_column_writer(
             field.data_type(),
@@ -1524,7 +1528,7 @@ mod tests {
     use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use crate::column::page::{Page, PageReader};
-    use crate::file::metadata::thrift_gen::PageHeader;
+    use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::reader::SerializedPageReader;
     use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};

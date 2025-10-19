@@ -92,17 +92,17 @@ mod memory;
 mod parser;
 mod push_decoder;
 pub(crate) mod reader;
-pub(crate) mod thrift_gen;
+pub(crate) mod thrift;
 mod writer;
 
-use crate::basic::PageType;
+use crate::basic::{EncodingMask, PageType};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
 #[cfg(feature = "encryption")]
-use crate::file::metadata::thrift_gen::EncryptionAlgorithm;
+use crate::file::metadata::thrift::encryption::EncryptionAlgorithm;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
@@ -782,13 +782,18 @@ impl RowGroupMetaDataBuilder {
 
         Ok(self.0)
     }
+
+    /// Build row group metadata without validation.
+    pub(super) fn build_unchecked(self) -> RowGroupMetaData {
+        self.0
+    }
 }
 
 /// Metadata for a column chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnChunkMetaData {
     column_descr: ColumnDescPtr,
-    encodings: Vec<Encoding>,
+    encodings: EncodingMask,
     file_path: Option<String>,
     file_offset: i64,
     num_values: i64,
@@ -968,7 +973,12 @@ impl ColumnChunkMetaData {
     }
 
     /// All encodings used for this column.
-    pub fn encodings(&self) -> &Vec<Encoding> {
+    pub fn encodings(&self) -> impl Iterator<Item = Encoding> {
+        self.encodings.encodings()
+    }
+
+    /// All encodings used for this column, returned as a bitmask.
+    pub fn encodings_mask(&self) -> &EncodingMask {
         &self.encodings
     }
 
@@ -1148,7 +1158,7 @@ impl ColumnChunkMetaDataBuilder {
     fn new(column_descr: ColumnDescPtr) -> Self {
         Self(ColumnChunkMetaData {
             column_descr,
-            encodings: Vec::new(),
+            encodings: Default::default(),
             file_path: None,
             file_offset: 0,
             num_values: 0,
@@ -1179,6 +1189,12 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets list of encodings for this column chunk.
     pub fn set_encodings(mut self, encodings: Vec<Encoding>) -> Self {
+        self.0.encodings = EncodingMask::new_from_encodings(encodings.iter());
+        self
+    }
+
+    /// Sets the encodings mask for this column chunk.
+    pub fn set_encodings_mask(mut self, encodings: EncodingMask) -> Self {
         self.0.encodings = encodings;
         self
     }
@@ -1587,7 +1603,7 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::metadata::thrift_gen::tests::{read_column_chunk, read_row_group};
+    use crate::file::metadata::thrift::tests::{read_column_chunk, read_row_group};
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1704,9 +1720,10 @@ mod tests {
     #[test]
     fn test_column_chunk_metadata_thrift_conversion() {
         let column_descr = get_test_schema_descr().column(0);
-
         let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
-            .set_encodings(vec![Encoding::PLAIN, Encoding::RLE])
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
             .set_compression(Compression::SNAPPY)
@@ -1858,9 +1875,10 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2312;
+        let base_expected_size = 2248;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2480;
+        // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
+        let base_expected_size = 2416;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1889,9 +1907,10 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2738;
+        let bigger_expected_size = 2674;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 2906;
+        // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
+        let bigger_expected_size = 2842;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
