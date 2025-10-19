@@ -112,7 +112,7 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// assert_eq!(offsets.as_ref(), &[0, 1, 4, 9]);
     /// ```
     ///
-    /// If you want to create an [`OffsetBuffer`] where each slice has the same length,
+    /// If you want to create an [`OffsetBuffer`] where all lengths are the same,
     /// consider using the faster [`OffsetBuffer::from_repeated_length`] instead.
     ///
     /// # Panics
