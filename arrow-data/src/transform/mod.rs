@@ -668,7 +668,7 @@ impl<'a> MutableArrayData<'a> {
                             next_offset += dict_len;
                         }
 
-                        build_extend_dictionary(array, offset, offset + dict_len)
+                        build_extend_dictionary(array, offset, 0.max(offset + dict_len - 1))
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
                     .collect();
