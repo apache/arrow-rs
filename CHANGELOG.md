@@ -45,6 +45,7 @@
 
 **Implemented enhancements:**
 
+- Added Avro support (new `arrow-avro` crate) [\#4886](https://github.com/apache/arrow-rs/issues/4886)
 - parquet-rewrite: supports compression level and write batch size [\#8639](https://github.com/apache/arrow-rs/issues/8639)
 - Error not panic when int96 stastistics aren't size 12 [\#8614](https://github.com/apache/arrow-rs/issues/8614) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Variant\] Make `VariantArray` iterable [\#8612](https://github.com/apache/arrow-rs/issues/8612)
