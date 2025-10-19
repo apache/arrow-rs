@@ -160,6 +160,10 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         }
 
         // Check for overflow
+        // Making sure we don't overflow usize or O when calculating the total length
+        length.checked_mul(n).expect("usize overflow");
+
+        // Check for overflow
         O::from_usize(length * n).expect("offset overflow");
 
         let offsets = (0..=n)
@@ -322,23 +326,29 @@ mod tests {
     #[test]
     #[should_panic(expected = "offset overflow")]
     fn from_repeated_lengths_offset_length_overflow() {
-        OffsetBuffer::<i32>::from_repeated_length(i32::MAX as usize, 1);
+        OffsetBuffer::<i32>::from_repeated_length(i32::MAX as usize / 4, 5);
     }
 
     #[test]
     #[should_panic(expected = "offset overflow")]
     fn from_repeated_lengths_offset_repeat_overflow() {
-        OffsetBuffer::<i32>::from_repeated_length(1, i32::MAX as usize);
+        OffsetBuffer::<i32>::from_repeated_length(1, i32::MAX as usize + 1);
     }
 
     #[test]
-    #[should_panic(expected = "usize overflow")]
+    #[should_panic(expected = "offset overflow")]
     fn from_repeated_lengths_usize_length_overflow() {
         OffsetBuffer::<i32>::from_repeated_length(usize::MAX, 1);
     }
 
     #[test]
     #[should_panic(expected = "usize overflow")]
+    fn from_repeated_lengths_usize_length_usize_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(usize::MAX, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
     fn from_repeated_lengths_usize_repeat_overflow() {
         OffsetBuffer::<i32>::from_repeated_length(1, usize::MAX);
     }
@@ -382,5 +392,77 @@ mod tests {
     fn impl_default() {
         let default = OffsetBuffer::<i32>::default();
         assert_eq!(default.as_ref(), &[0]);
+    }
+
+    #[test]
+    fn from_repeated_length_basic() {
+        // Basic case with length 4, repeated 3 times
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(4, 3);
+        assert_eq!(buffer.as_ref(), &[0, 4, 8, 12]);
+
+        // Verify the lengths are correct
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![4, 4, 4]);
+    }
+
+    #[test]
+    fn from_repeated_length_single_repeat() {
+        // Length 5, repeated once
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(5, 1);
+        assert_eq!(buffer.as_ref(), &[0, 5]);
+
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![5]);
+    }
+
+    #[test]
+    fn from_repeated_length_zero_repeats() {
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(10, 0);
+        assert_eq!(buffer, OffsetBuffer::<i32>::new_empty());
+    }
+
+    #[test]
+    fn from_repeated_length_zero_length() {
+        // Zero length, repeated 5 times (all zeros)
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(0, 5);
+        assert_eq!(buffer.as_ref(), &[0, 0, 0, 0, 0, 0]);
+
+        // All lengths should be 0
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn from_repeated_length_large_values() {
+        // Test with larger values that don't overflow
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(1000, 100);
+        assert_eq!(buffer[0], 0);
+
+        // Verify all lengths are 1000
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths.len(), 100);
+        assert!(lengths.iter().all(|&len| len == 1000));
+    }
+
+    #[test]
+    fn from_repeated_length_unit_length() {
+        // Length 1, repeated multiple times
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(1, 10);
+        assert_eq!(buffer.as_ref(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![1; 10]);
+    }
+
+    #[test]
+    fn from_repeated_length_max_safe_values() {
+        // Test with maximum safe values for i32
+        // i32::MAX / 3 ensures we don't overflow when repeated twice
+        let third_max = (i32::MAX / 3) as usize;
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(third_max, 2);
+        assert_eq!(
+            buffer.as_ref(),
+            &[0, third_max as i32, (third_max * 2) as i32]
+        );
     }
 }
