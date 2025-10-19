@@ -20,6 +20,7 @@ use arrow_buffer::Buffer;
 use arrow_buffer::bit_chunk_iterator::UnalignedBitChunk;
 use bytes::Bytes;
 
+use crate::arrow::buffer::bit_util::count_set_bits;
 use crate::basic::Encoding;
 use crate::column::reader::decoder::{
     ColumnLevelDecoder, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
@@ -168,7 +169,10 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
             (BufferInner::Mask { nulls }, MaybePacked::Packed(decoder)) => {
                 assert_eq!(self.max_level, 1);
 
-                let (values_read, levels_read) = decoder.read(nulls, num_levels)?;
+                let start = nulls.len();
+                let levels_read = decoder.read(nulls, num_levels)?;
+
+                let values_read = count_set_bits(nulls.as_slice(), start..start + levels_read);
                 Ok((values_read, levels_read))
             }
             _ => unreachable!("inconsistent null mask"),
@@ -280,31 +284,20 @@ impl PackedDecoder {
         self.data_offset = 0;
     }
 
-    /// Reads up to `len` definition levels directly into a boolean bitmask.
-    ///
-    /// Returns a tuple of `(values_read, levels_read)`, where `values_read` counts the
-    /// number of `true` bits appended to `buffer`.
-    fn read(&mut self, buffer: &mut BooleanBufferBuilder, len: usize) -> Result<(usize, usize)> {
-        let mut levels_read = 0;
-        let mut values_read = 0;
-        while levels_read != len {
+    fn read(&mut self, buffer: &mut BooleanBufferBuilder, len: usize) -> Result<usize> {
+        let mut read = 0;
+        while read != len {
             if self.rle_left != 0 {
-                let to_read = self.rle_left.min(len - levels_read);
+                let to_read = self.rle_left.min(len - read);
                 buffer.append_n(to_read, self.rle_value);
                 self.rle_left -= to_read;
-                if self.rle_value {
-                    values_read += to_read;
-                }
-                levels_read += to_read;
+                read += to_read;
             } else if self.packed_count != self.packed_offset {
-                let to_read = (self.packed_count - self.packed_offset).min(len - levels_read);
+                let to_read = (self.packed_count - self.packed_offset).min(len - read);
                 let offset = self.data_offset * 8 + self.packed_offset;
                 buffer.append_packed_range(offset..offset + to_read, self.data.as_ref());
-                // Packed runs already encode bits densely; count the ones we just appended.
-                values_read +=
-                    UnalignedBitChunk::new(self.data.as_ref(), offset, to_read).count_ones();
                 self.packed_offset += to_read;
-                levels_read += to_read;
+                read += to_read;
 
                 if self.packed_offset == self.packed_count {
                     self.data_offset += self.packed_count / 8;
@@ -315,7 +308,7 @@ impl PackedDecoder {
                 self.next_rle_block()?
             }
         }
-        Ok((values_read, levels_read))
+        Ok(read)
     }
 
     /// Skips `level_num` definition levels
@@ -367,14 +360,10 @@ mod tests {
 
         let mut expected = BooleanBufferBuilder::new(len);
         let mut encoder = RleEncoder::new(1, 1024);
-        let mut expected_value_count = 0;
         for _ in 0..len {
             let bool = rng.random_bool(0.8);
             encoder.put(bool as u64);
             expected.append(bool);
-            if bool {
-                expected_value_count += 1;
-            }
         }
         assert_eq!(expected.len(), len);
 
@@ -384,8 +373,6 @@ mod tests {
 
         // Decode data in random length intervals
         let mut decoded = BooleanBufferBuilder::new(len);
-        // Track how many `true` bits we appended to validate the returned counts.
-        let mut decoded_value_count = 0;
         loop {
             let remaining = len - decoded.len();
             if remaining == 0 {
@@ -393,18 +380,11 @@ mod tests {
             }
 
             let to_read = rng.random_range(1..=remaining);
-            let offset = decoded.len();
-            let (values_read, levels_read) = decoder.read(&mut decoded, to_read).unwrap();
-            assert_eq!(levels_read, to_read);
-            decoded_value_count += values_read;
-            let expected_chunk_ones =
-                UnalignedBitChunk::new(expected.as_slice(), offset, levels_read).count_ones();
-            assert_eq!(values_read, expected_chunk_ones);
+            decoder.read(&mut decoded, to_read).unwrap();
         }
 
         assert_eq!(decoded.len(), len);
         assert_eq!(decoded.as_slice(), expected.as_slice());
-        assert_eq!(decoded_value_count, expected_value_count);
     }
 
     #[test]
@@ -448,23 +428,18 @@ mod tests {
                 skip_level += skip_level_num
             } else {
                 let mut decoded = BooleanBufferBuilder::new(to_read_or_skip_level);
-                let (read_value_num, read_level_num) =
-                    decoder.read(&mut decoded, to_read_or_skip_level).unwrap();
+                let read_level_num = decoder.read(&mut decoded, to_read_or_skip_level).unwrap();
                 read_level += read_level_num;
-                read_value += read_value_num;
-                // Verify the per-chunk counts match the exact bits we compared below.
-                let mut chunk_value_count = 0;
                 for i in 0..read_level_num {
                     assert!(!decoded.is_empty());
                     //check each read bit
                     let read_bit = decoded.get_bit(i);
                     if read_bit {
-                        chunk_value_count += 1;
+                        read_value += 1;
                     }
                     let expect_bit = expected.get_bit(i + offset);
                     assert_eq!(read_bit, expect_bit);
                 }
-                assert_eq!(chunk_value_count, read_value_num);
             }
         }
         assert_eq!(read_level + skip_level, len);
