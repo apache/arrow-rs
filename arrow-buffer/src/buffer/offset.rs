@@ -112,6 +112,9 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// assert_eq!(offsets.as_ref(), &[0, 1, 4, 9]);
     /// ```
     ///
+    /// If you want to create an [`OffsetBuffer`] where each slice has the same length,
+    /// consider using the faster [`OffsetBuffer::from_repeated_length`] instead.
+    ///
     /// # Panics
     ///
     /// Panics on overflow
@@ -131,6 +134,39 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         // Check for overflow
         O::from_usize(acc).expect("offset overflow");
         Self(out.into())
+    }
+
+    /// Create a new [`OffsetBuffer`] where each slice has the same length
+    /// `length`, repeated `n` times.
+    ///
+    ///
+    /// Example
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_repeated_length(4, 3);
+    /// assert_eq!(offsets.as_ref(), &[0, 4, 8, 12]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
+    pub fn from_repeated_length(length: usize, n: usize) -> Self {
+        if n == 0 {
+            return Self::new_empty();
+        }
+
+        if length == 0 {
+            return Self::new_zeroed(n);
+        }
+
+        // Check for overflow
+        O::from_usize(length * n).expect("offset overflow");
+
+        let offsets = (0..=n)
+            .map(|index| O::usize_as(index * length))
+            .collect::<Vec<O>>();
+
+        Self(ScalarBuffer::from(offsets))
     }
 
     /// Get an Iterator over the lengths of this [`OffsetBuffer`]
@@ -281,6 +317,30 @@ mod tests {
     #[should_panic(expected = "usize overflow")]
     fn from_lengths_usize_overflow() {
         OffsetBuffer::<i32>::from_lengths([usize::MAX, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_repeated_lengths_offset_length_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(i32::MAX as usize, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_repeated_lengths_offset_repeat_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(1, i32::MAX as usize);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn from_repeated_lengths_usize_length_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(usize::MAX, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn from_repeated_lengths_usize_repeat_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(1, usize::MAX);
     }
 
     #[test]
