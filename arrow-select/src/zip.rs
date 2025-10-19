@@ -22,8 +22,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type};
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
-    OffsetBufferBuilder, ScalarBuffer,
+    BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, OffsetBufferBuilder,
+    ScalarBuffer,
 };
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
@@ -206,6 +206,13 @@ pub struct ScalarZipper {
 }
 
 impl ScalarZipper {
+    /// Try to create a new ScalarZipper from two scalar Datum
+    ///
+    /// # Errors
+    /// returns error if:
+    /// - the two Datum have different data types
+    /// - either Datum is not a scalar (or has more than 1 element)
+    ///
     pub fn try_new(truthy: &dyn Datum, falsy: &dyn Datum) -> Result<Self, ArrowError> {
         let (truthy, truthy_is_scalar) = truthy.get();
         let (falsy, falsy_is_scalar) = falsy.get();
@@ -462,7 +469,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         // If a value is false we need the FALSY and the null buffer will have 0 (meaning null)
         let nulls = NullBuffer::new(predicate);
 
-        (bytes.into(), offsets, Some(nulls))
+        (bytes, offsets, Some(nulls))
     }
 
     fn get_bytes_and_offset_for_all_same_value(
@@ -471,13 +478,15 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     ) -> (Buffer, OffsetBuffer<T::Offset>) {
         let value_length = value.len();
 
-        let offsets =
-            OffsetBuffer::<T::Offset>::from_lengths(predicate.iter().map(|b| value_length));
+        let offsets = OffsetBuffer::<T::Offset>::from_lengths(std::iter::repeat_n(
+            value_length,
+            predicate.len(),
+        ));
 
         let bytes = MutableBuffer::new_repeated(predicate.len(), value);
         let bytes = Buffer::from(bytes);
 
-        (bytes.into(), offsets)
+        (bytes, offsets)
     }
 }
 
@@ -523,7 +532,7 @@ impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
         let output = unsafe {
             // Safety: the values are based on valid inputs
             // and `try_new` is expensive for strings as it validate that the input is valid utf8
-            GenericByteArray::<T>::new_unchecked(offsets, Buffer::from(bytes), nulls)
+            GenericByteArray::<T>::new_unchecked(offsets, bytes, nulls)
         };
 
         Ok(Arc::new(output))
