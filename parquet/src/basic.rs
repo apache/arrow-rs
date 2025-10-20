@@ -771,6 +771,11 @@ impl EncodingMask {
         Self(mask)
     }
 
+    /// Mark the given [`Encoding`] as present in this mask.
+    pub fn insert(&mut self, val: Encoding) {
+        self.0 |= 1 << (val as i32);
+    }
+
     /// Test if a given [`Encoding`] is present in this mask.
     pub fn is_set(&self, val: Encoding) -> bool {
         self.0 & (1 << (val as i32)) != 0
