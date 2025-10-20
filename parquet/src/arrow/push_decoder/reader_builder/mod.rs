@@ -148,7 +148,7 @@ pub(crate) struct RowGroupReaderBuilder {
     offset: Option<usize>,
 
     /// The size in bytes of the predicate cache to use
-    /// 
+    ///
     /// See [`RowGroupCache`] for details.
     max_predicate_cache_size: usize,
 
@@ -257,7 +257,9 @@ impl RowGroupReaderBuilder {
     ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
         loop {
             let current_state = self.take_state()?;
+            // Try to transition the decoder.
             match self.try_transition(current_state)? {
+                // Either produced a batch reader, needed input, or finished
                 NextState {
                     next_state,
                     result: Some(result),
@@ -266,6 +268,7 @@ impl RowGroupReaderBuilder {
                     self.state = Some(next_state);
                     return Ok(result);
                 }
+                // completed one internal state, maybe can proceed further
                 NextState {
                     next_state,
                     result: None,
