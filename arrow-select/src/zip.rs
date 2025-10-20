@@ -299,7 +299,7 @@ impl ScalarZipper {
 }
 
 /// Impl for creating output array based on a mask
-trait ZipImpl: Debug {
+trait ZipImpl: Debug + Send + Sync {
     /// Creating output array based on input boolean array
     fn create_output(&self, input: &BooleanArray) -> Result<ArrayRef, ArrowError>;
 }
