@@ -138,7 +138,6 @@ fn shredded_get_path(
                 as_type,
                 cast_options,
                 target.len(),
-                target.inner().get_buffer_memory_size(),
             )?;
             for i in 0..target.len() {
                 if target.is_null(i) {
@@ -300,6 +299,8 @@ mod test {
     use crate::VariantArray;
     use crate::json_to_variant;
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+    use arrow::array::LargeStringArray;
+    use arrow::array::StringViewArray;
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float32Array,
         Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, StringArray, StructArray,
@@ -771,6 +772,20 @@ mod test {
         StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_large_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_large_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_view_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_view_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
     macro_rules! perfectly_shredded_variant_array_fn {
         ($func:ident, $typed_value_gen:expr) => {
             fn $func() -> ArrayRef {
@@ -796,6 +811,14 @@ mod test {
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_variant_array, || {
         StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_large_utf8_variant_array, || {
+        LargeStringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_view_variant_array, || {
+        StringViewArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
     });
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {

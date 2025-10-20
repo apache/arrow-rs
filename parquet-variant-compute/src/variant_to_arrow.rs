@@ -16,9 +16,10 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, BinaryViewArray, LargeStringBuilder, NullBufferBuilder, PrimitiveBuilder,
-    StringBuilder, StringViewBuilder, builder::BooleanBuilder,
+    ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder, StringLikeArrayBuilder,
+    builder::BooleanBuilder,
 };
+use arrow::array::{LargeStringBuilder, StringBuilder, StringViewBuilder};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{self, ArrowPrimitiveType, DataType};
 use arrow::error::{ArrowError, Result};
@@ -53,12 +54,9 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     TimestampNano(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
     TimestampNanoNtz(VariantToTimestampNtzArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
     Date(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date32Type>),
-    StringView(VariantToUtf8ViewArrowBuilder<'a>),
-}
-
-pub(crate) enum StringVariantToArrowRowBuilder<'a> {
-    Utf8(VariantToUtf8ArrowRowBuilder<'a>),
-    LargeUtf8(VariantToLargeUtf8ArrowBuilder<'a>),
+    String(VariantToStringArrowBuilder<'a, StringBuilder>),
+    LargeString(VariantToStringArrowBuilder<'a, LargeStringBuilder>),
+    StringView(VariantToStringArrowBuilder<'a, StringViewBuilder>),
 }
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -68,7 +66,6 @@ pub(crate) enum StringVariantToArrowRowBuilder<'a> {
 pub(crate) enum VariantToArrowRowBuilder<'a> {
     Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
-    String(StringVariantToArrowRowBuilder<'a>),
     // Path extraction wrapper - contains a boxed enum for any of the above
     WithPath(VariantPathRowBuilder<'a>),
 }
@@ -94,6 +91,8 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             TimestampNano(b) => b.append_null(),
             TimestampNanoNtz(b) => b.append_null(),
             Date(b) => b.append_null(),
+            String(b) => b.append_null(),
+            LargeString(b) => b.append_null(),
             StringView(b) => b.append_null(),
         }
     }
@@ -118,6 +117,8 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             TimestampNano(b) => b.append_value(value),
             TimestampNanoNtz(b) => b.append_value(value),
             Date(b) => b.append_value(value),
+            String(b) => b.append_value(value),
+            LargeString(b) => b.append_value(value),
             StringView(b) => b.append_value(value),
         }
     }
@@ -142,33 +143,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             TimestampNano(b) => b.finish(),
             TimestampNanoNtz(b) => b.finish(),
             Date(b) => b.finish(),
+            String(b) => b.finish(),
+            LargeString(b) => b.finish(),
             StringView(b) => b.finish(),
-        }
-    }
-}
-
-impl<'a> StringVariantToArrowRowBuilder<'a> {
-    pub fn append_null(&mut self) -> Result<()> {
-        use StringVariantToArrowRowBuilder::*;
-        match self {
-            Utf8(b) => b.append_null(),
-            LargeUtf8(b) => b.append_null(),
-        }
-    }
-
-    pub fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        use StringVariantToArrowRowBuilder::*;
-        match self {
-            Utf8(b) => b.append_value(value),
-            LargeUtf8(b) => b.append_value(value),
-        }
-    }
-
-    pub fn finish(self) -> Result<ArrayRef> {
-        use StringVariantToArrowRowBuilder::*;
-        match self {
-            Utf8(b) => b.finish(),
-            LargeUtf8(b) => b.finish(),
         }
     }
 }
@@ -178,7 +155,6 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.append_null(),
-            String(b) => b.append_null(),
             BinaryVariant(b) => b.append_null(),
             WithPath(path_builder) => path_builder.append_null(),
         }
@@ -188,7 +164,6 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.append_value(&value),
-            String(b) => b.append_value(&value),
             BinaryVariant(b) => b.append_value(value),
             WithPath(path_builder) => path_builder.append_value(value),
         }
@@ -198,7 +173,6 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.finish(),
-            String(b) => b.finish(),
             BinaryVariant(b) => b.finish(),
             WithPath(path_builder) => path_builder.finish(),
         }
@@ -275,9 +249,11 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             cast_options,
             capacity,
         )),
-        DataType::Utf8View => {
-            StringView(VariantToUtf8ViewArrowBuilder::new(cast_options, capacity))
+        DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
+        DataType::LargeUtf8 => {
+            LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
         }
+        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(cast_options, capacity)),
         _ if data_type.is_primitive() => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Primitive data_type {data_type:?} not yet implemented"
@@ -292,41 +268,12 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
     Ok(builder)
 }
 
-pub(crate) fn make_string_variant_to_arrow_row_builder<'a>(
-    data_type: &'a DataType,
-    cast_options: &'a CastOptions,
-    item_capacity: usize,
-    data_capacity: usize,
-) -> Result<StringVariantToArrowRowBuilder<'a>> {
-    use StringVariantToArrowRowBuilder::{LargeUtf8, Utf8};
-
-    let builder = match data_type {
-        DataType::Utf8 => Utf8(VariantToUtf8ArrowRowBuilder::new(
-            cast_options,
-            item_capacity,
-            data_capacity,
-        )),
-        DataType::LargeUtf8 => LargeUtf8(VariantToLargeUtf8ArrowBuilder::new(
-            cast_options,
-            item_capacity,
-            data_capacity,
-        )),
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Not a string type: {data_type:?}"
-            )));
-        }
-    };
-    Ok(builder)
-}
-
 pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     metadata: &BinaryViewArray,
     path: VariantPath<'a>,
     data_type: Option<&'a DataType>,
     cast_options: &'a CastOptions,
     capacity: usize,
-    data_capacity: usize,
 ) -> Result<VariantToArrowRowBuilder<'a>> {
     use VariantToArrowRowBuilder::*;
 
@@ -336,15 +283,6 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
             metadata.clone(),
             capacity,
         )),
-        Some(dt @ (DataType::Utf8 | DataType::LargeUtf8)) => {
-            let builder = make_string_variant_to_arrow_row_builder(
-                dt,
-                cast_options,
-                capacity,
-                data_capacity,
-            )?;
-            String(builder)
-        }
         Some(DataType::Struct(_)) => {
             return Err(ArrowError::NotYetImplemented(
                 "Converting unshredded variant objects to arrow structs".to_string(),
@@ -557,86 +495,5 @@ impl VariantToBinaryVariantArrowRowBuilder {
         );
 
         Ok(ArrayRef::from(variant_array))
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
-    use arrow::array::{Array, BinaryViewArray, LargeStringArray, StringViewArray};
-    use arrow::compute::CastOptions;
-    use arrow::datatypes::DataType;
-    use parquet_variant::EMPTY_VARIANT_METADATA_BYTES;
-    use parquet_variant::{Variant, VariantPath};
-    use std::sync::Arc;
-
-    #[test]
-    fn test_large_utf8_variant_to_large_utf8_arrow() {
-        let metadata =
-            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
-        let cast_options = CastOptions::default();
-        let path = VariantPath::default();
-        let capacity = 3;
-        let data_capacity = 9usize;
-        let data_type = Some(&DataType::LargeUtf8);
-
-        let mut builder = make_variant_to_arrow_row_builder(
-            &metadata,
-            path,
-            data_type,
-            &cast_options,
-            capacity,
-            data_capacity,
-        )
-        .unwrap();
-
-        builder.append_value(Variant::from("foo")).unwrap();
-        builder.append_value(Variant::from("bar")).unwrap();
-        builder.append_value(Variant::from("baz")).unwrap();
-
-        let output = builder.finish().unwrap();
-
-        let expected = Arc::new(LargeStringArray::from(vec![
-            Some("foo"),
-            Some("bar"),
-            Some("baz"),
-        ]));
-
-        assert_eq!(&output.to_data(), &expected.to_data());
-    }
-
-    #[test]
-    fn test_utf8_view_variant_to_utf8_view_arrow() {
-        let metadata =
-            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
-        let cast_options = CastOptions::default();
-        let path = VariantPath::default();
-        let capacity = 3;
-        let data_capacity = 9usize;
-        let data_type = Some(&DataType::Utf8View);
-
-        let mut builder = make_variant_to_arrow_row_builder(
-            &metadata,
-            path,
-            data_type,
-            &cast_options,
-            capacity,
-            data_capacity,
-        )
-        .unwrap();
-
-        builder.append_value(Variant::from("foo")).unwrap();
-        builder.append_value(Variant::from("bar")).unwrap();
-        builder.append_value(Variant::from("baz")).unwrap();
-
-        let output = builder.finish().unwrap();
-
-        let expected = Arc::new(StringViewArray::from(vec![
-            Some("foo"),
-            Some("bar"),
-            Some("baz"),
-        ]));
-
-        assert_eq!(&output.to_data(), &expected.to_data());
     }
 }

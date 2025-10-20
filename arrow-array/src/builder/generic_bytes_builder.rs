@@ -348,6 +348,40 @@ impl<O: OffsetSizeTrait> std::fmt::Write for GenericStringBuilder<O> {
     }
 }
 
+const AVERAGE_STRING_LENGTH: usize = 16;
+/// Trait for string-like array builders
+///
+/// This trait provides unified interface for builders that append string-like data
+/// such as [`GenericStringBuilder<O>`] and [`crate::builder::StringViewBuilder`]
+pub trait StringLikeArrayBuilder: ArrayBuilder {
+    /// Returns a human-readable type name for the builder.
+    fn type_name() -> &'static str;
+
+    /// Creates a new builder with the given row capacity.
+    fn with_capacity(capacity: usize) -> Self;
+
+    /// Appends a non-null string value to the builder.
+    fn append_value(&mut self, value: &str);
+
+    /// Appends a null value to the builder.
+    fn append_null(&mut self);
+}
+
+impl<O: OffsetSizeTrait> StringLikeArrayBuilder for GenericStringBuilder<O> {
+    fn type_name() -> &'static str {
+        std::any::type_name::<GenericStringBuilder<O>>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity, capacity * AVERAGE_STRING_LENGTH)
+    }
+    fn append_value(&mut self, value: &str) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
+
 ///  Array builder for [`GenericBinaryArray`][crate::GenericBinaryArray]
 ///
 /// Values can be appended using [`GenericByteBuilder::append_value`], and nulls with
