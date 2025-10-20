@@ -575,8 +575,7 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
                 Ok(false)
             }
             None => Err(ArrowError::CastError(format!(
-                "Failed to extract UUID from variant {:?}",
-                value
+                "Failed to extract UUID from variant {value:?}",
             ))),
         }
     }
