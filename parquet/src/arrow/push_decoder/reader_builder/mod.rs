@@ -209,7 +209,7 @@ impl RowGroupReaderBuilder {
     /// call to [`Self::take_state`].
     ///
     /// Any code that calls this method must ensure that the state is put back
-    /// before returning, otherwise the reader error next time it is called
+    /// before returning, otherwise the reader will error next time it is called
     fn take_state(&mut self) -> Result<RowGroupDecoderState, ParquetError> {
         self.state.take().ok_or_else(|| {
             ParquetError::General(String::from(
