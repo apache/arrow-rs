@@ -369,7 +369,7 @@ pub trait StringLikeArrayBuilder: ArrayBuilder {
 
 impl<O: OffsetSizeTrait> StringLikeArrayBuilder for GenericStringBuilder<O> {
     fn type_name() -> &'static str {
-        std::any::type_name::<GenericStringBuilder<O>>()
+        std::any::type_name::<Self>()
     }
     fn with_capacity(capacity: usize) -> Self {
         Self::with_capacity(capacity, capacity * AVERAGE_STRING_LENGTH)
