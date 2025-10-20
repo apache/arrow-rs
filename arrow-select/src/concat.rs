@@ -235,8 +235,6 @@ fn concat_list_view<OffsetSize: OffsetSizeTrait>(
         NullBuffer::new(nulls.finish())
     });
 
-    // If any of the lists have slices, we need to slice the values
-    // to ensure that the offsets are correct
     let values: Vec<&dyn Array> = lists.iter().map(|l| l.values().as_ref()).collect();
 
     let concatenated_values = concat(values.as_slice())?;
