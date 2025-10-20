@@ -47,7 +47,9 @@ pub(super) struct FilterInfo {
 /// but it owns the ProjectionMask and RowGroupCache
 #[derive(Debug)]
 pub(super) struct CacheInfo {
-    /// The columns to cache in the predicate cache
+    /// The columns to cache in the predicate cache.
+    /// Normally these are the columns that filters may look at such that
+    /// if we have a filter like `(a + 10 > 5) AND (a + b = 0)` we cache `a` to avoid re-reading it between evaluating `a + 10 > 5` and `a + b = 0`.
     cache_projection: ProjectionMask,
     row_group_cache: Arc<Mutex<RowGroupCache>>,
 }
@@ -69,9 +71,9 @@ impl CacheInfo {
 }
 
 pub(super) enum AdvanceResult {
-    /// advanced to the next predicate
+    /// Advanced to the next predicate
     Continue(FilterInfo),
-    /// no more predicates returns the row filter and cache info
+    /// No more predicates returns the row filter and cache info
     Done(RowFilter, CacheInfo),
 }
 

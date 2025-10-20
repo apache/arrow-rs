@@ -256,10 +256,14 @@ impl RowGroups for InMemoryRowGroup<'_> {
     }
 }
 
-/// An in-memory column chunk
+/// An in-memory column chunk.
+/// This allows us to hold either dense column chunks or sparse column chunks and easily
+/// access them by offset.
 #[derive(Clone, Debug)]
 pub(crate) enum ColumnChunkData {
-    /// Column chunk data representing only a subset of data pages
+    /// Column chunk data representing only a subset of data pages.
+    /// For example if a row selection (possibly caused by a filter in a query) causes us to read only
+    /// a subset of the rows in the column.
     Sparse {
         /// Length of the full column chunk
         length: usize,
