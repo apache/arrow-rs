@@ -18,7 +18,7 @@
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
@@ -213,12 +213,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         properties: &WriterPropertiesPtr,
         schema_descriptor: &SchemaDescriptor,
     ) -> Result<Option<Arc<FileEncryptor>>> {
-        if let Some(file_encryption_properties) = &properties.file_encryption_properties {
+        if let Some(file_encryption_properties) = properties.file_encryption_properties() {
             file_encryption_properties.validate_encrypted_column_names(schema_descriptor)?;
 
-            Ok(Some(Arc::new(FileEncryptor::new(
-                file_encryption_properties.clone(),
-            )?)))
+            Ok(Some(Arc::new(FileEncryptor::new(Arc::clone(
+                file_encryption_properties,
+            ))?)))
         } else {
             Ok(None)
         }
@@ -392,6 +392,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         &self.descr
     }
 
+    /// Returns a reference to schema descriptor Arc.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn schema_descr_ptr(&self) -> &SchemaDescPtr {
+        &self.descr
+    }
+
     /// Returns a reference to the writer properties
     pub fn properties(&self) -> &WriterPropertiesPtr {
         &self.props
@@ -412,6 +418,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// because it will ensure that the buffering and byte‐counting layers are used.
     pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.buf.write_all(buf)
+    }
+
+    /// Flushes underlying writer
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.buf.flush()
     }
 
     /// Returns a mutable reference to the underlying writer.
@@ -1009,7 +1020,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
 /// as a Parquet file.
 #[cfg(feature = "encryption")]
 pub(crate) fn get_file_magic(
-    file_encryption_properties: Option<&FileEncryptionProperties>,
+    file_encryption_properties: Option<&Arc<FileEncryptionProperties>>,
 ) -> &'static [u8; 4] {
     match file_encryption_properties.as_ref() {
         Some(encryption_properties) if encryption_properties.encrypt_footer() => {
