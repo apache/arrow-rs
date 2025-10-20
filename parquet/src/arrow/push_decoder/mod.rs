@@ -665,7 +665,7 @@ mod test {
             .build()
             .unwrap();
 
-        // First row group,
+        // First row group, evaluating filters
         let ranges = expect_needs_data(decoder.try_decode());
         // only provide half the ranges
         let (ranges1, ranges2) = ranges.split_at(ranges.len() / 2);
@@ -679,7 +679,8 @@ mod test {
         assert_eq!(ranges, ranges2); // should be the remaining ranges
         push_ranges_to_decoder(&mut decoder, ranges2.to_vec());
 
-        // expect the first row group to be filtered out (no rows match)
+        // Since no rows in the first row group pass the filters, there is no
+        // additional requests to read data pages for "b" here
 
         // Second row group
         let ranges = expect_needs_data(decoder.try_decode());
