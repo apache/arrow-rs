@@ -222,38 +222,34 @@ impl MutableBuffer {
         }
     }
 
-    /// Creates a new [`MutableBuffer`] by repeating the contents of `slice_to_repeat`
-    /// `repeat_count` times.
-    pub fn new_repeated<T: ArrowNativeType>(repeat_count: usize, slice_to_repeat: &[T]) -> Self {
-        if slice_to_repeat.is_empty() || repeat_count == 0 {
-            return Self::new(0);
-        }
-
-        // If we keep extending from ourself we will reach it pretty fast
-        let value_len = slice_to_repeat.len();
-        let final_len = repeat_count * value_len;
-        let mut mutable = Self::with_capacity(final_len);
-
-        mutable.push_slice_repeated(repeat_count, slice_to_repeat);
-
-        mutable
-    }
-
     /// Adding to this mutable buffer `slice_to_repeat` repeated `repeat_count` times.
-    pub fn push_slice_repeated<T: ArrowNativeType>(
+    ///
+    /// # Example
+    ///
+    /// ## Repeat the same string bytes multiple times
+    /// ```
+    /// # use arrow_buffer::buffer::MutableBuffer;
+    /// let mut buffer = MutableBuffer::new(0);
+    /// let bytes_to_repeat = b"ab";
+    /// buffer.repeat_slice_n_times(bytes_to_repeat, 3);
+    /// assert_eq!(buffer.as_slice(), b"ababab");
+    /// ```
+    pub fn repeat_slice_n_times<T: ArrowNativeType>(
         &mut self,
-        repeat_count: usize,
         slice_to_repeat: &[T],
+        repeat_count: usize,
     ) {
         if repeat_count == 0 || slice_to_repeat.is_empty() {
             return;
         }
 
-        // Ensure capacity
-        let additional = repeat_count * mem::size_of_val(slice_to_repeat);
-        self.reserve(additional);
+        let bytes_to_repeat = size_of_val(slice_to_repeat);
 
-        // No need to special case small repeat counts
+        // Ensure capacity
+        self.reserve(repeat_count * bytes_to_repeat);
+
+        // For smaller number of repeats, just extend directly as the overhead of the
+        // doubling strategy is not worth it
         if repeat_count <= 3 {
             for _ in 0..repeat_count {
                 self.extend_from_slice(slice_to_repeat);
@@ -262,32 +258,58 @@ impl MutableBuffer {
             return;
         }
 
-        // If we keep extending from ourself we will reach it pretty fast
-        let value_len = slice_to_repeat.len();
-        let final_len_to_repeat = repeat_count * value_len;
+        // We will use doubling strategy to fill the buffer in log(repeat_count) steps
 
+        // If we keep extending from ourself we will reach it pretty fast
+        let final_len_to_repeat = repeat_count * bytes_to_repeat;
+
+        // Save the length before we do all the copies to know where to start from
         let length_before = self.len;
 
+        // Copy the initial slice once
         self.extend_from_slice(slice_to_repeat);
-        let mut added_repeats_length = mem::size_of_val(slice_to_repeat);
 
-        // Copy in doubling steps to reduce number of copy calls
+        // This tracks how much bytes we have added by repeating so far
+        let mut added_repeats_length = bytes_to_repeat;
+        assert_eq!(
+            self.len - length_before,
+            added_repeats_length,
+            "should copy exactly the same number of bytes"
+        );
+
+        // Copy in doubling steps to make the number of calls logarithmic and fast (as we copy large chunks at a time)
         while added_repeats_length * 2 <= final_len_to_repeat {
             unsafe {
+                // Get to the start of the data before we started copying anything
                 let src = self.data.as_ptr().add(length_before) as *const u8;
+
+                // Go to the current location to copy to (end of current data)
                 let dst = self.data.as_ptr().add(self.len);
+
+                // SAFETY: the pointers are not overlapping as there is `added_repeats_length` exactly
+                // between them
                 std::ptr::copy_nonoverlapping(src, dst, added_repeats_length)
             }
+
+            // Advance the length by the amount of data we just copied (doubled)
             self.len += added_repeats_length;
+
+            // Double the amount of data we have added so far
             added_repeats_length *= 2;
         }
 
-        // Copy the rest of the required data in one go
+        // Handle the remainder in single copy.
+
+        // the amount left to copy is guaranteed to be less than what we have already copied
         let last_amount_to_copy = final_len_to_repeat - added_repeats_length;
         assert!(
             last_amount_to_copy <= final_len_to_repeat,
             "the last copy should not overlap"
         );
+
+        if last_amount_to_copy == 0 {
+            return;
+        }
 
         unsafe {
             let src = self.data.as_ptr().add(length_before) as *const u8;
@@ -1259,5 +1281,126 @@ mod tests {
             drop(buffer);
             assert_eq!(pool.used(), 0);
         }
+    }
+
+    fn create_expected_repeated_slice<T: ArrowNativeType>(
+        slice_to_repeat: &[T],
+        repeat_count: usize,
+    ) -> Buffer {
+        let mut expected = MutableBuffer::new(size_of_val(slice_to_repeat) * repeat_count);
+        for _ in 0..repeat_count {
+            // Not using push_slice_repeated as this is the function under test
+            expected.extend_from_slice(slice_to_repeat);
+        }
+        expected.into()
+    }
+
+    // Helper to test a specific repeat count with various slice sizes
+    fn test_repeat_count<T: ArrowNativeType + PartialEq + std::fmt::Debug>(
+        repeat_count: usize,
+        test_data: &[T],
+    ) {
+        let mut buffer = MutableBuffer::new(0);
+        buffer.repeat_slice_n_times(test_data, repeat_count);
+
+        let expected = create_expected_repeated_slice(test_data, repeat_count);
+        let result: Buffer = buffer.into();
+
+        assert_eq!(
+            result,
+            expected,
+            "Failed for repeat_count={}, slice_len={}",
+            repeat_count,
+            test_data.len()
+        );
+    }
+
+    #[test]
+    fn test_repeat_slice_count_edge_cases() {
+        // Empty slice
+        test_repeat_count(100, &[] as &[i32]);
+
+        // Zero repeats
+        test_repeat_count(0, &[1i32, 2, 3]);
+    }
+
+    #[test]
+    fn test_small_repeats_counts() {
+        // test any special implementation for small repeat counts
+        let data = &[1u8, 2, 3, 4, 5];
+
+        for _ in 1..=10 {
+            test_repeat_count(2, data);
+        }
+    }
+
+    #[test]
+    fn test_different_size_of_i32_repeat_slice() {
+        let data: &[i32] = &[1, 2, 3];
+        let data_with_single_item: &[i32] = &[42];
+
+        for data in &[data, data_with_single_item] {
+            for item in 1..=9 {
+                let base_repeat_count = 2_usize.pow(item);
+                test_repeat_count(base_repeat_count - 1, data);
+                test_repeat_count(base_repeat_count, data);
+                test_repeat_count(base_repeat_count + 1, data);
+            }
+        }
+    }
+
+    #[test]
+    fn test_different_size_of_u8_repeat_slice() {
+        let data: &[u8] = &[1, 2, 3];
+        let data_with_single_item: &[u8] = &[10];
+
+        for data in &[data, data_with_single_item] {
+            for item in 1..=9 {
+                let base_repeat_count = 2_usize.pow(item);
+                test_repeat_count(base_repeat_count - 1, data);
+                test_repeat_count(base_repeat_count, data);
+                test_repeat_count(base_repeat_count + 1, data);
+            }
+        }
+    }
+
+    #[test]
+    fn test_different_size_of_u16_repeat_slice() {
+        let data: &[u16] = &[1, 2, 3];
+        let data_with_single_item: &[u16] = &[10];
+
+        for data in &[data, data_with_single_item] {
+            for item in 1..=9 {
+                let base_repeat_count = 2_usize.pow(item);
+                test_repeat_count(base_repeat_count - 1, data);
+                test_repeat_count(base_repeat_count, data);
+                test_repeat_count(base_repeat_count + 1, data);
+            }
+        }
+    }
+
+    #[test]
+    fn test_various_slice_lengths() {
+        // Test different slice lengths with same repeat pattern
+        let repeat_count = 37; // Arbitrary non-power-of-2
+
+        // Single element
+        test_repeat_count(repeat_count, &[42i32]);
+
+        // Small slices
+        test_repeat_count(repeat_count, &[1i32, 2]);
+        test_repeat_count(repeat_count, &[1i32, 2, 3]);
+        test_repeat_count(repeat_count, &[1i32, 2, 3, 4]);
+        test_repeat_count(repeat_count, &[1i32, 2, 3, 4, 5]);
+
+        // Larger slices
+        let data_10: Vec<i32> = (0..10).collect();
+        test_repeat_count(repeat_count, &data_10);
+
+        let data_100: Vec<i32> = (0..100).collect();
+        test_repeat_count(repeat_count, &data_100);
+
+        let data_1000: Vec<i32> = (0..1000).collect();
+        test_repeat_count(repeat_count, &data_1000);
     }
 }
