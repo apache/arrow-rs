@@ -567,6 +567,8 @@ struct ReaderFactory<T> {
     metrics: ArrowReaderMetrics,
 
     /// Maximum size of the predicate cache
+    ///
+    /// See [`RowGroupCache`] for details.
     max_predicate_cache_size: usize,
 }
 

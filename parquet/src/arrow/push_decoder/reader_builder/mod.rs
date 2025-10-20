@@ -147,7 +147,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// Offset to apply to remaining row groups (decremented as rows are read)
     offset: Option<usize>,
 
-    /// The size in bytes of the predicate cache
+    /// The size in bytes of the predicate cache to use
+    /// 
+    /// See [`RowGroupCache`] for details.
     max_predicate_cache_size: usize,
 
     /// The metrics collector
