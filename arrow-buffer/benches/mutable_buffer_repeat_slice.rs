@@ -36,11 +36,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         let slice_to_repeat: &[u8] = slice_to_repeat.as_ref();
 
         for repeat_count in [3, 64, 1024, 8192] {
-            let parameter_string =
-                format!("slice_to_repeat_size={slice_length} repeat_count={repeat_count}");
+            let parameter_string = format!("slice_len={slice_length} n={repeat_count}");
 
             group.bench_with_input(
-                BenchmarkId::new("MutableBuffer::repeat_slice_n_times", &parameter_string),
+                BenchmarkId::new("repeat_slice_n_times", &parameter_string),
                 &(repeat_count),
                 |b, &repeat_count| {
                     b.iter(|| {
@@ -55,7 +54,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 },
             );
             group.bench_with_input(
-                BenchmarkId::new("MutableBuffer::extend_from_slice loop", &parameter_string),
+                BenchmarkId::new("extend_from_slice loop", &parameter_string),
                 &(repeat_count),
                 |b, &repeat_count| {
                     b.iter(|| {
