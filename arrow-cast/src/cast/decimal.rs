@@ -166,6 +166,58 @@ where
     }
 }
 
+/// Construct closures to upscale decimals from `(input_precision, input_scale)` to
+/// `(output_precision, output_scale)`.
+///
+/// Returns `None` if the required scale increase `delta_scale = output_scale - input_scale`
+/// exceeds the supported precomputed precision table `O::MAX_FOR_EACH_PRECISION`.
+/// In that case, the caller should treat this as an overflow for the output scale
+/// and handle it accordingly (e.g., return a cast error).
+#[allow(clippy::type_complexity)]
+fn make_upscaler<I: DecimalType, O: DecimalType>(
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+) -> Option<(
+    impl Fn(I::Native) -> Option<O::Native>,
+    Option<impl Fn(I::Native) -> O::Native>,
+)>
+where
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let delta_scale = output_scale - input_scale;
+
+    // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
+    // Adding 1 yields exactly 10^k without computing a power at runtime.
+    // Using the precomputed table avoids pow(10, k) and its checked/overflow
+    // handling, which is faster and simpler for scaling by 10^delta_scale.
+    let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
+    let mul = max.add_wrapping(O::Native::ONE);
+    let f = move |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
+
+    // if the gain in precision (digits) is greater than the multiplication due to scaling
+    // every number will fit into the output type
+    // Example: If we are starting with any number of precision 5 [xxxxx],
+    // then an increase of scale by 3 will have the following effect on the representation:
+    // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
+    // needs to provide at least 8 digits precision
+    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
+    let f_infallible = is_infallible_cast
+        .then_some(move |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
+    Some((f, f_infallible))
+}
+
+/// Construct closures to downscale decimals from `(input_precision, input_scale)` to
+/// `(output_precision, output_scale)`.
+///
+/// Returns `None` if the required scale reduction `delta_scale = input_scale - output_scale`
+/// exceeds the supported precomputed precision table `I::MAX_FOR_EACH_PRECISION`.
+/// In this scenario, any value would round to zero (e.g., dividing by 10^k where k exceeds the
+/// available precision). Callers should therefore produce zero values (preserving nulls) rather
+/// than returning an error.
+#[allow(clippy::type_complexity)]
 fn make_downscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
@@ -222,6 +274,33 @@ where
     Some((f, f_infallible))
 }
 
+fn apply_decimal_cast<I: DecimalType, O: DecimalType>(
+    array: &PrimitiveArray<I>,
+    output_precision: u8,
+    output_scale: i8,
+    f: impl Fn(I::Native) -> Option<O::Native>,
+    f_infallible: Option<impl Fn(I::Native) -> O::Native>,
+    cast_options: &CastOptions,
+) -> Result<PrimitiveArray<O>, ArrowError>
+where
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    let array = if let Some(f_infallible) = f_infallible {
+        array.unary(f_infallible)
+    } else if cast_options.safe {
+        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
+    } else {
+        let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
+        array.try_unary(|x| {
+            f(x).ok_or_else(|| error(x)).and_then(|v| {
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+            })
+        })?
+    };
+    Ok(array)
+}
+
 fn convert_to_smaller_scale_decimal<I, O>(
     array: &PrimitiveArray<I>,
     input_precision: u8,
@@ -252,41 +331,6 @@ where
         let zeros = vec![O::Native::ZERO; array.len()];
         Ok(PrimitiveArray::new(zeros.into(), array.nulls().cloned()))
     }
-}
-
-fn make_upscaler<I: DecimalType, O: DecimalType>(
-    input_precision: u8,
-    input_scale: i8,
-    output_precision: u8,
-    output_scale: i8,
-) -> Option<(
-    impl Fn(I::Native) -> Option<O::Native>,
-    Option<impl Fn(I::Native) -> O::Native>,
-)>
-where
-    I::Native: DecimalCast + ArrowNativeTypeOp,
-    O::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    let delta_scale = output_scale - input_scale;
-
-    // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
-    // Adding 1 yields exactly 10^k without computing a power at runtime.
-    // Using the precomputed table avoids pow(10, k) and its checked/overflow
-    // handling, which is faster and simpler for scaling by 10^delta_scale.
-    let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
-    let mul = max.add_wrapping(O::Native::ONE);
-    let f = move |x| O::Native::from_decimal(x).and_then(|x| x.mul_checked(mul).ok());
-
-    // if the gain in precision (digits) is greater than the multiplication due to scaling
-    // every number will fit into the output type
-    // Example: If we are starting with any number of precision 5 [xxxxx],
-    // then an increase of scale by 3 will have the following effect on the representation:
-    // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
-    // needs to provide at least 8 digits precision
-    let is_infallible_cast = (input_precision as i8) + delta_scale <= (output_precision as i8);
-    let f_infallible = is_infallible_cast
-        .then_some(move |x| O::Native::from_decimal(x).unwrap().mul_wrapping(mul));
-    Some((f, f_infallible))
 }
 
 fn convert_to_bigger_or_equal_scale_decimal<I, O>(
@@ -323,33 +367,6 @@ where
             output_scale
         )))
     }
-}
-
-fn apply_decimal_cast<I: DecimalType, O: DecimalType>(
-    array: &PrimitiveArray<I>,
-    output_precision: u8,
-    output_scale: i8,
-    f: impl Fn(I::Native) -> Option<O::Native>,
-    f_infallible: Option<impl Fn(I::Native) -> O::Native>,
-    cast_options: &CastOptions,
-) -> Result<PrimitiveArray<O>, ArrowError>
-where
-    I::Native: DecimalCast + ArrowNativeTypeOp,
-    O::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    let array = if let Some(f_infallible) = f_infallible {
-        array.unary(f_infallible)
-    } else if cast_options.safe {
-        array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
-    } else {
-        let error = cast_decimal_to_decimal_error::<I, O>(output_precision, output_scale);
-        array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x)).and_then(|v| {
-                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
-            })
-        })?
-    };
-    Ok(array)
 }
 
 // Only support one type of decimal cast operations
