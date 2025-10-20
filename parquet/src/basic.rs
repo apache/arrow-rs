@@ -678,8 +678,6 @@ enum Encoding {
   /// afterwards. Note that the use of this encoding with FIXED_LEN_BYTE_ARRAY(N) data may
   /// perform poorly for large values of N.
   BYTE_STREAM_SPLIT = 9;
-        SOME_ENCODING = 10;
-        SOME_OTHER11=11;
 }
 );
 
