@@ -462,7 +462,9 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             predicate.iter().map(|b| if b { value_length } else { 0 }),
         );
 
-        let bytes = MutableBuffer::new_repeated(number_of_true, value);
+        let mut bytes = MutableBuffer::with_capacity(0);
+        bytes.repeat_slice_n_times(value, number_of_true);
+
         let bytes = Buffer::from(bytes);
 
         // If a value is true we need the TRUTHY and the null buffer will have 1 (meaning not null)
@@ -483,7 +485,8 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             predicate.len(),
         ));
 
-        let bytes = MutableBuffer::new_repeated(predicate.len(), value);
+        let mut bytes = MutableBuffer::with_capacity(0);
+        bytes.repeat_slice_n_times(value, predicate.len());
         let bytes = Buffer::from(bytes);
 
         (bytes, offsets)
@@ -585,7 +588,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
             if start > filled {
                 let false_repeat_count = start - filled;
                 // Push false value `repeat_count` times
-                mutable.push_slice_repeated(false_repeat_count, falsy_val);
+                mutable.repeat_slice_n_times(falsy_val, false_repeat_count);
 
                 for _ in 0..false_repeat_count {
                     offset_buffer_builder.push_length(falsy_len)
@@ -594,7 +597,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
 
             let true_repeat_count = end - start;
             // fill with truthy values
-            mutable.push_slice_repeated(true_repeat_count, truthy_val);
+            mutable.repeat_slice_n_times(truthy_val, true_repeat_count);
 
             for _ in 0..true_repeat_count {
                 offset_buffer_builder.push_length(truthy_len)
@@ -605,7 +608,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         if filled < predicate.len() {
             let false_repeat_count = predicate.len() - filled;
             // Copy the first item from the 'falsy' array into the output buffer.
-            mutable.push_slice_repeated(false_repeat_count, falsy_val);
+            mutable.repeat_slice_n_times(falsy_val, false_repeat_count);
 
             for _ in 0..false_repeat_count {
                 offset_buffer_builder.push_length(falsy_len)
