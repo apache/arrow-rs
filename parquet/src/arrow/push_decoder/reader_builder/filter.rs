@@ -23,21 +23,21 @@ use crate::arrow::arrow_reader::{ArrowPredicate, RowFilter};
 use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
-/// State machine for evaluating a sequence of predicates
+/// State machine for evaluating a sequence of predicates.
 ///
-/// This is somewhat more complicated than one might expect because the
-/// RowFilter must be owned by the FilterInfo so that predicates can
-/// be evaluated (requires mutable access).
+/// The `FilterInfo` owns the [`RowFilter`] being evaluated and tracks the current
+/// predicate to evaluate.
 #[derive(Debug)]
 pub(super) struct FilterInfo {
     /// The predicates to evaluate, in order
     ///
-    /// These must be owned by FilterInfo because they may be mutated as part of
-    /// evaluation so there is a bunch of complexity of handing them back and forth
+    /// RowFilter is owned by `FilterInfo` because they may be mutated as part
+    /// of evaluation. Specifically, [`ArrowPredicate`] requires &mut self for
+    /// evaluation.
     filter: RowFilter,
     /// The next filter to be evaluated
     next_predicate: NonZeroUsize,
-    /// Stores previously computed filter results
+    /// Previously computed filter results
     cache_info: CacheInfo,
 }
 
@@ -85,8 +85,13 @@ impl FilterInfo {
         }
     }
 
-    /// Advance to the next predicate, returning either the updated FilterInfo
-    /// or the completed RowFilter if there are no more predicates
+    /// Advance to the next predicate
+    ///
+    /// Returns
+    /// * [`AdvanceResult::Continue`] returning the `FilterInfo` if there are
+    ///   more predicate to evaluate.
+    /// * [`AdvanceResult::Done`] with the inner [`RowFilter`] and [`CacheInfo]`
+    ///   if there are no more predicates
     pub(super) fn advance(mut self) -> AdvanceResult {
         if self.next_predicate.get() >= self.filter.predicates.len() {
             AdvanceResult::Done(self.filter, self.cache_info)

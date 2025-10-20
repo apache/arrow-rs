@@ -80,7 +80,7 @@ impl InMemoryRowGroup<'_> {
     /// `projection` and `selection`.
     ///
     /// `cache_mask` indicates which columns, if any, are being cached by
-    /// [`RowGroupCache`](crate::arrow::array_reader::row_group_cache::RowGroupCache).
+    /// [`RowGroupCache`](crate::arrow::array_reader::RowGroupCache).
     /// The `selection` for Cached columns is expanded to batch boundaries to simplify
     /// accounting for what data is cached.
     pub(crate) fn fetch_ranges(
