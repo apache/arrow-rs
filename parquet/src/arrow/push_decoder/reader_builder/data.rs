@@ -126,7 +126,9 @@ pub(super) struct DataRequestBuilder<'a> {
     projection: &'a ProjectionMask,
     /// Optional row selection to apply
     selection: Option<&'a RowSelection>,
-    /// Optional projection mask for caching purposes
+    /// Optional projection mask if using
+    /// [`RowGroupCache`](crate::arrow::array_reader::row_group_cache::RowGroupCache)
+    /// for caching decoded columns.
     cache_projection: Option<&'a ProjectionMask>,
     /// Any previously read column chunks
     column_chunks: Option<Vec<Option<Arc<ColumnChunkData>>>>,

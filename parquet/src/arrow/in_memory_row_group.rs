@@ -78,6 +78,11 @@ impl InMemoryRowGroup<'_> {
 
     /// Returns the byte ranges to fetch for the columns specified in
     /// `projection` and `selection`.
+    ///
+    /// `cache_mask` indicates which columns, if any, are being cached by
+    /// [`RowGroupCache`](crate::arrow::array_reader::row_group_cache::RowGroupCache).
+    /// The `selection` for Cached columns is expanded to batch boundaries to simplify
+    /// accounting for what data is cached.
     pub(crate) fn fetch_ranges(
         &self,
         projection: &ProjectionMask,
@@ -90,8 +95,9 @@ impl InMemoryRowGroup<'_> {
             let expanded_selection =
                 selection.expand_to_batch_boundaries(batch_size, self.row_count);
 
-            // If we have a `RowSelection` and an `OffsetIndex` then only fetch pages required for the
-            // `RowSelection`
+            // If we have a `RowSelection` and an `OffsetIndex` then only fetch
+            // pages required for the `RowSelection`
+            // Consider preallocating outer vec: https://github.com/apache/arrow-rs/issues/8667
             let mut page_start_offsets: Vec<Vec<u64>> = vec![];
 
             let ranges = self
@@ -114,7 +120,8 @@ impl InMemoryRowGroup<'_> {
                         _ => (),
                     }
 
-                    // Expand selection to batch boundaries only for cached columns
+                    // Expand selection to batch boundaries if needed for caching
+                    // (see doc comment for this function for details on `cache_mask`)
                     let use_expanded = cache_mask.map(|m| m.leaf_included(idx)).unwrap_or(false);
                     if use_expanded {
                         ranges.extend(
