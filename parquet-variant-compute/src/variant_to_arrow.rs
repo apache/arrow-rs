@@ -482,24 +482,10 @@ macro_rules! define_variant_to_primitive_builder {
 }
 
 define_variant_to_primitive_builder!(
-    struct VariantToUtf8ArrowRowBuilder<'a>
-    |item_capacity, data_capacity: usize| -> StringBuilder { StringBuilder::with_capacity(item_capacity, data_capacity) },
+    struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder>
+    |capacity| -> B { B::with_capacity(capacity) },
     |value| value.as_string(),
-    type_name: "Utf8"
-);
-
-define_variant_to_primitive_builder!(
-    struct VariantToLargeUtf8ArrowBuilder<'a>
-    |item_capacity, data_capacity: usize| -> LargeStringBuilder {LargeStringBuilder::with_capacity(item_capacity, data_capacity)},
-    |value| value.as_string(),
-    type_name: "LargeUtf8"
-);
-
-define_variant_to_primitive_builder!(
-    struct VariantToUtf8ViewArrowBuilder<'a>
-    |capacity| -> StringViewBuilder {StringViewBuilder::with_capacity(capacity)},
-    |value| value.as_string(),
-    type_name: "Utf8View"
+    type_name: B::type_name()
 );
 
 define_variant_to_primitive_builder!(
