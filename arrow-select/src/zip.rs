@@ -480,10 +480,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     ) -> (Buffer, OffsetBuffer<T::Offset>) {
         let value_length = value.len();
 
-        let offsets = OffsetBuffer::<T::Offset>::from_lengths(std::iter::repeat_n(
-            value_length,
-            predicate.len(),
-        ));
+        let offsets = OffsetBuffer::<T::Offset>::from_repeated_length(value_length, predicate.len());
 
         let mut bytes = MutableBuffer::with_capacity(0);
         bytes.repeat_slice_n_times(value, predicate.len());
