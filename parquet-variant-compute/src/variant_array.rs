@@ -968,7 +968,7 @@ fn typed_value_to_variant<'a>(
             generic_conversion_single_value!(
                 Decimal32Type,
                 as_primitive,
-                |v| VariantDecimal4::try_new(v, *s as u8).unwrap(),
+                |v| VariantDecimal4::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
                 typed_value,
                 index
             )
@@ -977,7 +977,7 @@ fn typed_value_to_variant<'a>(
             generic_conversion_single_value!(
                 Decimal64Type,
                 as_primitive,
-                |v| VariantDecimal8::try_new(v, *s as u8).unwrap(),
+                |v| VariantDecimal8::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
                 typed_value,
                 index
             )
@@ -986,7 +986,7 @@ fn typed_value_to_variant<'a>(
             generic_conversion_single_value!(
                 Decimal128Type,
                 as_primitive,
-                |v| VariantDecimal16::try_new(v, *s as u8).unwrap(),
+                |v| VariantDecimal16::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
                 typed_value,
                 index
             )
@@ -1044,7 +1044,7 @@ fn typed_value_to_variant<'a>(
                     (v / 1_000_000) as u32,
                     (v % 1_000_000) as u32 * 1000
                 )
-                .unwrap(),
+                .map_or(Variant::Null, Variant::from),
                 typed_value,
                 index
             )

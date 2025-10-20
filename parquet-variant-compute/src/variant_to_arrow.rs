@@ -16,7 +16,7 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, BinaryViewArray, BooleanBuilder, NullBufferBuilder, NullBuilder, PrimitiveBuilder,
+    ArrayRef, BinaryViewArray, BooleanBuilder, NullArray, NullBufferBuilder, PrimitiveBuilder,
 };
 use arrow::compute::{CastOptions, DecimalCast};
 use arrow::datatypes::{self, DataType, DecimalType};
@@ -418,6 +418,9 @@ macro_rules! define_variant_to_primitive_builder {
                 }
             }
 
+            // Add this to silence unused mut warning from macro-generated code
+            // This is mainly for `FakeNullBuilder`
+            #[allow(unused_mut)]
             fn finish(mut self) -> Result<ArrayRef> {
                 Ok(Arc::new(self.builder.finish()))
             }
@@ -558,20 +561,23 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 }
 
-trait AppendValueTrait {
-    // NullBuilder will always append `()`
-    fn append_value(&mut self, v: ());
-}
+struct FakeNullBuilder(NullArray);
 
-impl AppendValueTrait for NullBuilder {
-    fn append_value(&mut self, _v: ()) {
-        self.append_null();
+impl FakeNullBuilder {
+    fn new(capacity: usize) -> Self {
+        Self(NullArray::new(capacity))
+    }
+    fn append_value(&mut self, _: ()) {}
+    fn append_null(&mut self) {}
+
+    fn finish(self) -> NullArray {
+        self.0
     }
 }
 
 define_variant_to_primitive_builder!(
     struct VariantToNullArrowRowBuilder<'a>
-    |_capacity| -> NullBuilder { NullBuilder::new() },
-    | v | v.as_null(),
+    |capacity| -> FakeNullBuilder { FakeNullBuilder::new(capacity) },
+    |value|  value.as_null(),
     type_name: "Null"
 );
