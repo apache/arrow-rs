@@ -299,7 +299,8 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
         Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, StringArray, LargeStringArray, StringViewArray, StructArray,
+        Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray,
+        StructArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;

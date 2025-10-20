@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, BinaryViewArray, NullBufferBuilder, PrimitiveBuilder, StringLikeArrayBuilder,
-    builder::BooleanBuilder, LargeStringBuilder, StringBuilder, StringViewBuilder
+    ArrayRef, BinaryViewArray, LargeStringBuilder, NullBufferBuilder, PrimitiveBuilder,
+    StringBuilder, StringLikeArrayBuilder, StringViewBuilder, builder::BooleanBuilder,
 };
 use arrow::compute::{CastOptions, DecimalCast};
 use arrow::datatypes::{self, DataType, DecimalType};
@@ -204,84 +204,6 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
 ) -> Result<PrimitiveVariantToArrowRowBuilder<'a>> {
     use PrimitiveVariantToArrowRowBuilder::*;
 
-    let builder = match data_type {
-        DataType::Boolean => Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity)),
-        DataType::Int8 => Int8(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int16 => Int16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int32 => Int32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int64 => Int64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt8 => UInt8(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt16 => UInt16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt32 => UInt32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt64 => UInt64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float16 => Float16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float32 => Float32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float64 => Float64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => TimestampMicroNtz(
-            VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
-        ),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => TimestampMicro(
-            VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => TimestampNanoNtz(
-            VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
-        ),
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => TimestampNano(
-            VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
-        ),
-        DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
-        DataType::LargeUtf8 => {
-            LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
-        }
-        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(cast_options, capacity)),
-        _ if data_type.is_primitive() => {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "Primitive data_type {data_type:?} not yet implemented"
-            )));
-        }
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Not a primitive type: {data_type:?}"
-            )));
-        }
-    };
     let builder =
         match data_type {
             DataType::Boolean => {
@@ -359,6 +281,13 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                 cast_options,
                 capacity,
             )),
+            DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
+            DataType::LargeUtf8 => {
+                LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
+            }
+            DataType::Utf8View => {
+                StringView(VariantToStringArrowBuilder::new(cast_options, capacity))
+            }
             _ if data_type.is_primitive() => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Primitive data_type {data_type:?} not yet implemented"
