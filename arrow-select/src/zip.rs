@@ -741,4 +741,123 @@ mod test {
         let expected = Int32Array::from(vec![None, None, Some(42), Some(42), None]);
         assert_eq!(actual, &expected);
     }
+
+    #[test]
+    fn test_zip_kernel_scalar_strings() {
+        let scalar_truthy = Scalar::new(StringArray::from(vec!["hello"]));
+        let scalar_falsy = Scalar::new(StringArray::from(vec!["world"]));
+
+        let mask = BooleanArray::from(vec![true, false, true, false, true]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_string::<i32>();
+        let expected = StringArray::from(vec![
+            Some("hello"),
+            Some("world"),
+            Some("hello"),
+            Some("world"),
+            Some("hello"),
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_binary() {
+        let truthy_bytes: &[u8] = b"\xFF\xFE\xFD";
+        let falsy_bytes: &[u8] = b"world";
+        let scalar_truthy = Scalar::new(BinaryArray::from_iter_values(
+            // Non valid UTF8 bytes
+            vec![truthy_bytes],
+        ));
+        let scalar_falsy = Scalar::new(BinaryArray::from_iter_values(vec![falsy_bytes]));
+
+        let mask = BooleanArray::from(vec![true, false, true, false, true]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_binary::<i32>();
+        let expected = BinaryArray::from(vec![
+            Some(truthy_bytes),
+            Some(falsy_bytes),
+            Some(truthy_bytes),
+            Some(falsy_bytes),
+            Some(truthy_bytes),
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    // Test to ensure that the precision and scale are kept when zipping Decimal128 data
+    #[test]
+    fn test_zip_decimal_with_custom_precision_and_scale() {
+        let arr = Decimal128Array::from_iter_values([12345, 456, 7890, -123223423432432])
+            .with_precision_and_scale(20, 2)
+            .unwrap();
+
+        let arr: ArrayRef = Arc::new(arr);
+
+        let scalar_1 = Scalar::new(arr.slice(0, 1));
+        let scalar_2 = Scalar::new(arr.slice(1, 1));
+        let null_scalar = Scalar::new(new_null_array(arr.data_type(), 1));
+        let array_1: ArrayRef = arr.slice(0, 2);
+        let array_2: ArrayRef = arr.slice(2, 2);
+
+        test_zip_output_data_types_for_input(scalar_1, scalar_2, null_scalar, array_1, array_2);
+    }
+
+    // Test to ensure that the timezone is kept when zipping TimestampArray data
+    #[test]
+    fn test_zip_timestamp_with_timezone() {
+        let arr = TimestampSecondArray::from(vec![0, 1000, 2000, 4000])
+            .with_timezone("+01:00".to_string());
+
+        let arr: ArrayRef = Arc::new(arr);
+
+        let scalar_1 = Scalar::new(arr.slice(0, 1));
+        let scalar_2 = Scalar::new(arr.slice(1, 1));
+        let null_scalar = Scalar::new(new_null_array(arr.data_type(), 1));
+        let array_1: ArrayRef = arr.slice(0, 2);
+        let array_2: ArrayRef = arr.slice(2, 2);
+
+        test_zip_output_data_types_for_input(scalar_1, scalar_2, null_scalar, array_1, array_2);
+    }
+
+    fn test_zip_output_data_types_for_input(
+        scalar_1: Scalar<ArrayRef>,
+        scalar_2: Scalar<ArrayRef>,
+        null_scalar: Scalar<ArrayRef>,
+        array_1: ArrayRef,
+        array_2: ArrayRef,
+    ) {
+        // non null Scalar vs non null Scalar
+        test_zip_output_data_type(&scalar_1, &scalar_2, 10);
+
+        // null Scalar vs non-null Scalar (and vice versa)
+        test_zip_output_data_type(&null_scalar, &scalar_1, 10);
+        test_zip_output_data_type(&scalar_1, &null_scalar, 10);
+
+        // non-null Scalar and array (and vice versa)
+        test_zip_output_data_type(&array_1.as_ref(), &scalar_1, array_1.len());
+        test_zip_output_data_type(&scalar_1, &array_1.as_ref(), array_1.len());
+
+        // Array and null scalar (and vice versa)
+        test_zip_output_data_type(&array_1.as_ref(), &null_scalar, array_1.len());
+
+        test_zip_output_data_type(&null_scalar, &array_1.as_ref(), array_1.len());
+
+        // Both arrays
+        test_zip_output_data_type(&array_1.as_ref(), &array_2.as_ref(), array_1.len());
+    }
+
+    fn test_zip_output_data_type(truthy: &dyn Datum, falsy: &dyn Datum, mask_length: usize) {
+        let expected_data_type = truthy.get().0.data_type().clone();
+        assert_eq!(&expected_data_type, falsy.get().0.data_type());
+
+        // Try different masks to test different paths
+        let mask_all_true = BooleanArray::from(vec![true; mask_length]);
+        let mask_all_false = BooleanArray::from(vec![false; mask_length]);
+        let mask_some_true_and_false =
+            BooleanArray::from((0..mask_length).map(|i| i % 2 == 0).collect::<Vec<bool>>());
+
+        for mask in [&mask_all_true, &mask_all_false, &mask_some_true_and_false] {
+            let out = zip(mask, truthy, falsy).unwrap();
+            assert_eq!(out.data_type(), &expected_data_type);
+        }
+    }
 }
