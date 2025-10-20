@@ -42,7 +42,7 @@
 //! * [`Reader`](crate::reader::Reader): a convenient, synchronous iterator over `RecordBatch` decoded from an OCF
 //!   input. Implements [`Iterator<Item = Result<RecordBatch, ArrowError>>`] and
 //!   `RecordBatchReader`.
-//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes raw Avro bytes and yields ready
+//! * [`Decoder`](crate::reader::Decoder): a push‑based row decoder that consumes SOE framed Avro bytes and yields ready
 //!   `RecordBatch` values when batches fill. This is suitable for integrating with async
 //!   byte streams, network protocols, or other custom data sources.
 //!
@@ -60,9 +60,14 @@
 //!   <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
 //! * **Confluent Schema Registry wire format**: A 1‑byte magic `0x00`, a **4‑byte big‑endian**
 //!   schema ID, then the Avro‑encoded body. Use `Decoder` with a `SchemaStore` configured
-//!   for `FingerprintAlgorithm::None` and entries keyed by `Fingerprint::Id`. See
+//!   for `FingerprintAlgorithm::Id` and entries keyed by `Fingerprint::Id`. See
 //!   Confluent’s “Wire format” documentation.
 //!   <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
+//! * **Apicurio Schema Registry wire format**: A 1‑byte magic `0x00`, a **8‑byte big‑endian**
+//!   global schema ID, then the Avro‑encoded body. Use `Decoder` with a `SchemaStore` configured
+//!   for `FingerprintAlgorithm::Id64` and entries keyed by `Fingerprint::Id64`. See
+//!   Apicurio’s “Avro SerDe” documentation.
+//!   <https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry>
 //!
 //! ## Basic file usage (OCF)
 //!
@@ -99,7 +104,7 @@
 //! # Ok(()) }
 //! ```
 //!
-//! ## Streaming usage (single‑object / Confluent)
+//! ## Streaming usage (single‑object / Confluent / Apicurio)
 //!
 //! The `Decoder` lets you integrate Avro decoding with **any** source of bytes by
 //! periodically calling `Decoder::decode` with new data and calling `Decoder::flush`
@@ -162,7 +167,7 @@
 //! use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 //! use arrow_schema::{DataType, Field, Schema};
 //! use arrow_avro::schema::{AvroSchema, SchemaStore, SCHEMA_METADATA_KEY, FingerprintStrategy};
-//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -182,7 +187,7 @@
 //! )?;
 //! let mut w = WriterBuilder::new(arrow)
 //!     .with_fingerprint_strategy(FingerprintStrategy::Rabin) // SOE prefix
-//!     .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!     .build::<_, AvroSoeFormat>(Vec::new())?;
 //! w.write(&batch)?;
 //! w.finish()?;
 //! let frame = w.into_inner(); // C3 01 + fp + Avro body
@@ -215,12 +220,12 @@
 //! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
 //! use arrow_schema::{DataType, Field, Schema};
 //! use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY, FingerprintStrategy};
-//! use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 //! use arrow_avro::reader::ReaderBuilder;
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! // Set up a store keyed by numeric IDs (Confluent).
-//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+//! let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
 //! let schema_id = 7u32;
 //! let avro_schema = AvroSchema::new(r#"{"type":"record","name":"User","fields":[
 //!   {"name":"id","type":"long"}, {"name":"name","type":"string"}]}"#.to_string());
@@ -243,7 +248,7 @@
 //!     )?;
 //!     let mut w = WriterBuilder::new(arrow)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id)) // 0x00 + ID + body
-//!         .build::<_, AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, AvroSoeFormat>(Vec::new())?;
 //!     w.write(&batch)?; w.finish()?;
 //!     Ok(w.into_inner())
 //! }
@@ -380,7 +385,7 @@
 //!     let id_v0: u32 = 0;
 //!     let id_v1: u32 = 1;
 //!
-//!     let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None); // integer IDs
+//!     let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id); // integer IDs
 //!     store.set(Fingerprint::Id(id_v0), writer_v0.clone())?;
 //!     store.set(Fingerprint::Id(id_v1), writer_v1.clone())?;
 //!
@@ -397,7 +402,7 @@
 //!              Arc::new(StringArray::from(vec!["v0-alice"])) as ArrayRef])?;
 //!     let mut w0 = arrow_avro::writer::WriterBuilder::new(arrow0)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v0))
-//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, arrow_avro::writer::format::AvroSoeFormat>(Vec::new())?;
 //!     w0.write(&batch0)?; w0.finish()?;
 //!     let frame0 = w0.into_inner(); // 0x00 + id_v0 + body
 //!
@@ -415,7 +420,7 @@
 //!              Arc::new(StringArray::from(vec![Some("bob@example.com")])) as ArrayRef])?;
 //!     let mut w1 = arrow_avro::writer::WriterBuilder::new(arrow1)
 //!         .with_fingerprint_strategy(FingerprintStrategy::Id(id_v1))
-//!         .build::<_, arrow_avro::writer::format::AvroBinaryFormat>(Vec::new())?;
+//!         .build::<_, arrow_avro::writer::format::AvroSoeFormat>(Vec::new())?;
 //!     w1.write(&batch1)?; w1.finish()?;
 //!     let frame1 = w1.into_inner(); // 0x00 + id_v1 + body
 //!
@@ -558,7 +563,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
-/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 /// # let mut md = HashMap::new();
 /// # md.insert(SCHEMA_METADATA_KEY.to_string(),
 /// #     r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string());
@@ -566,7 +571,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![7])) as ArrayRef])?;
 /// # let mut w = WriterBuilder::new(arrow)
 /// #     .with_fingerprint_strategy(fp.into())
-/// #     .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #     .build::<_, AvroSoeFormat>(Vec::new())?;
 /// # w.write(&batch)?; w.finish()?; let frame = w.into_inner();
 ///
 /// let mut decoder = ReaderBuilder::new()
@@ -591,7 +596,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// use arrow_avro::reader::ReaderBuilder;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
 /// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[{"name":"x","type":"long"}]}"#.to_string()))?;
 ///
 /// // --- Hidden: encode two Confluent-framed messages {x:1} and {x:2} ---
@@ -600,7 +605,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_avro::schema::{SCHEMA_METADATA_KEY, FingerprintStrategy};
-/// # use arrow_avro::writer::{WriterBuilder, format::AvroBinaryFormat};
+/// # use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
 /// # fn msg(x: i64) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 /// #   let mut md = HashMap::new();
 /// #   md.insert(SCHEMA_METADATA_KEY.to_string(),
@@ -609,7 +614,7 @@ fn is_incomplete_data(err: &ArrowError) -> bool {
 /// #   let batch = RecordBatch::try_new(Arc::new(arrow.clone()), vec![Arc::new(Int64Array::from(vec![x])) as ArrayRef])?;
 /// #   let mut w = WriterBuilder::new(arrow)
 /// #       .with_fingerprint_strategy(FingerprintStrategy::Id(1234))
-/// #       .build::<_, AvroBinaryFormat>(Vec::new())?;
+/// #       .build::<_, AvroSoeFormat>(Vec::new())?;
 /// #   w.write(&batch)?; w.finish()?; Ok(w.into_inner())
 /// # }
 /// # let m1 = msg(1)?;
@@ -713,9 +718,12 @@ impl Decoder {
                     Fingerprint::Rabin(u64::from_le_bytes(bytes))
                 })
             }
-            FingerprintAlgorithm::None => {
+            FingerprintAlgorithm::Id => self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
+                Fingerprint::Id(u32::from_be_bytes(bytes))
+            }),
+            FingerprintAlgorithm::Id64 => {
                 self.handle_prefix_common(buf, &CONFLUENT_MAGIC, |bytes| {
-                    Fingerprint::Id(u32::from_be_bytes(bytes))
+                    Fingerprint::Id64(u64::from_be_bytes(bytes))
                 })
             }
             #[cfg(feature = "md5")]
@@ -909,7 +917,7 @@ impl Decoder {
 /// use arrow_avro::schema::{AvroSchema, SchemaStore, Fingerprint, FingerprintAlgorithm};
 /// use arrow_avro::reader::ReaderBuilder;
 ///
-/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+/// let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
 /// store.set(Fingerprint::Id(1234), AvroSchema::new(r#"{"type":"record","name":"E","fields":[]}"#.to_string()))?;
 ///
 /// let decoder = ReaderBuilder::new()
@@ -1273,11 +1281,12 @@ mod test {
     };
     use crate::test_util::arrow_test_data;
     use crate::writer::AvroWriter;
-    use arrow::array::ArrayDataBuilder;
     use arrow_array::builder::{
-        ArrayBuilder, BooleanBuilder, Float32Builder, Float64Builder, Int32Builder, Int64Builder,
-        ListBuilder, MapBuilder, MapFieldNames, StringBuilder, StructBuilder,
+        ArrayBuilder, BooleanBuilder, Float32Builder, Int32Builder, Int64Builder, ListBuilder,
+        MapBuilder, StringBuilder, StructBuilder,
     };
+    #[cfg(feature = "snappy")]
+    use arrow_array::builder::{Float64Builder, MapFieldNames};
     use arrow_array::cast::AsArray;
     #[cfg(not(feature = "avro_custom_types"))]
     use arrow_array::types::Int64Type;
@@ -1288,9 +1297,9 @@ mod test {
     };
     use arrow_array::types::{Int32Type, IntervalMonthDayNanoType};
     use arrow_array::*;
-    use arrow_buffer::{
-        Buffer, IntervalMonthDayNano, NullBuffer, OffsetBuffer, ScalarBuffer, i256,
-    };
+    #[cfg(feature = "snappy")]
+    use arrow_buffer::{Buffer, NullBuffer};
+    use arrow_buffer::{IntervalMonthDayNano, OffsetBuffer, ScalarBuffer, i256};
     #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{
         ArrowError, DataType, Field, FieldRef, Fields, IntervalUnit, Schema, TimeUnit, UnionFields,
@@ -1308,6 +1317,23 @@ mod test {
     use std::fs::File;
     use std::io::{BufReader, Cursor};
     use std::sync::Arc;
+
+    fn files() -> impl Iterator<Item = &'static str> {
+        [
+            // TODO: avoid requiring snappy for this file
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.avro",
+            #[cfg(feature = "snappy")]
+            "avro/alltypes_plain.snappy.avro",
+            #[cfg(feature = "zstd")]
+            "avro/alltypes_plain.zstandard.avro",
+            #[cfg(feature = "bzip2")]
+            "avro/alltypes_plain.bzip2.avro",
+            #[cfg(feature = "xz")]
+            "avro/alltypes_plain.xz.avro",
+        ]
+        .into_iter()
+    }
 
     fn read_file(path: &str, batch_size: usize, utf8_view: bool) -> RecordBatch {
         let file = File::open(path).unwrap();
@@ -1391,6 +1417,9 @@ mod test {
             Fingerprint::Id(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v})");
             }
+            Fingerprint::Id64(v) => {
+                panic!("make_prefix expects a Rabin fingerprint, got ({v})");
+            }
             #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => {
                 panic!("make_prefix expects a Rabin fingerprint, got ({v:?})");
@@ -1423,6 +1452,21 @@ mod test {
     fn make_message_id(id: u32, value: i64) -> Vec<u8> {
         let encoded_value = encode_zigzag(value);
         let mut msg = make_id_prefix(id, encoded_value.len());
+        msg.extend_from_slice(&encoded_value);
+        msg
+    }
+
+    fn make_id64_prefix(id: u64, additional: usize) -> Vec<u8> {
+        let capacity = CONFLUENT_MAGIC.len() + size_of::<u64>() + additional;
+        let mut out = Vec::with_capacity(capacity);
+        out.extend_from_slice(&CONFLUENT_MAGIC);
+        out.extend_from_slice(&id.to_be_bytes());
+        out
+    }
+
+    fn make_message_id64(id: u64, value: i64) -> Vec<u8> {
+        let encoded_value = encode_zigzag(value);
+        let mut msg = make_id64_prefix(id, encoded_value.len());
         msg.extend_from_slice(&encoded_value);
         msg
     }
@@ -1714,14 +1758,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_mixed() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("id", "long");
@@ -1829,14 +1866,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_long_to_float_only() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("bigint_col", "float");
@@ -1933,14 +1963,7 @@ mod test {
 
     #[test]
     fn test_alltypes_schema_promotion_bytes_to_string_only() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
             let mut promotions: HashMap<&str, &str> = HashMap::new();
             promotions.insert("date_string_col", "string");
@@ -2033,6 +2056,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_illegal_promotion_bool_to_double_errors() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let mut promotions: HashMap<&str, &str> = HashMap::new();
@@ -2160,6 +2185,7 @@ mod test {
         let long_bytes = match fp_long {
             Fingerprint::Rabin(v) => v.to_le_bytes(),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            Fingerprint::Id64(id) => panic!("expected Rabin fingerprint, got ({id})"),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             #[cfg(feature = "sha256")]
@@ -2184,6 +2210,7 @@ mod test {
         match fp_long {
             Fingerprint::Rabin(v) => buf.extend_from_slice(&v.to_le_bytes()),
             Fingerprint::Id(id) => panic!("expected Rabin fingerprint, got ({id})"),
+            Fingerprint::Id64(id) => panic!("expected Rabin fingerprint, got ({id})"),
             #[cfg(feature = "md5")]
             Fingerprint::MD5(v) => panic!("expected Rabin fingerprint, got ({v:?})"),
             #[cfg(feature = "sha256")]
@@ -2270,7 +2297,7 @@ mod test {
         let reader_schema = writer_schema.clone();
         let id = 100u32;
         // Set up store with None fingerprint algorithm and register schema by id
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let _ = store
             .set(Fingerprint::Id(id), writer_schema.clone())
             .expect("set id schema");
@@ -2301,7 +2328,7 @@ mod test {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let id_known = 7u32;
         let id_unknown = 9u32;
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let _ = store
             .set(Fingerprint::Id(id_known), writer_schema.clone())
             .expect("set id schema");
@@ -2325,7 +2352,7 @@ mod test {
     fn test_handle_prefix_id_incomplete_magic() {
         let writer_schema = make_value_schema(PrimitiveType::Int);
         let id = 5u32;
-        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
         let _ = store
             .set(Fingerprint::Id(id), writer_schema.clone())
             .expect("set id schema");
@@ -2340,6 +2367,38 @@ mod test {
         let res = decoder.handle_prefix(buf).unwrap();
         assert_eq!(res, Some(0));
         assert!(decoder.pending_schema.is_none());
+    }
+
+    #[test]
+    fn test_two_messages_same_schema_id64() {
+        let writer_schema = make_value_schema(PrimitiveType::Int);
+        let reader_schema = writer_schema.clone();
+        let id = 100u64;
+        // Set up store with None fingerprint algorithm and register schema by id
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
+        let _ = store
+            .set(Fingerprint::Id64(id), writer_schema.clone())
+            .expect("set id schema");
+        let msg1 = make_message_id64(id, 21);
+        let msg2 = make_message_id64(id, 22);
+        let input = [msg1.clone(), msg2.clone()].concat();
+        let mut decoder = ReaderBuilder::new()
+            .with_batch_size(8)
+            .with_reader_schema(reader_schema)
+            .with_writer_schema_store(store)
+            .with_active_fingerprint(Fingerprint::Id64(id))
+            .build_decoder()
+            .unwrap();
+        let _ = decoder.decode(&input).unwrap();
+        let batch = decoder.flush().unwrap().expect("batch");
+        assert_eq!(batch.num_rows(), 2);
+        let col = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(col.value(0), 21);
+        assert_eq!(col.value(1), 22);
     }
 
     #[test]
@@ -2691,6 +2750,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_skip_writer_fields_keep_double_only() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let reader_schema =
@@ -2708,6 +2769,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_skip_writer_fields_reorder_and_skip_many() {
         let file = arrow_test_data("avro/alltypes_plain.avro");
         let reader_schema =
@@ -4470,14 +4533,6 @@ mod test {
 
     #[test]
     fn test_alltypes() {
-        let files = [
-            "avro/alltypes_plain.avro",
-            "avro/alltypes_plain.snappy.avro",
-            "avro/alltypes_plain.zstandard.avro",
-            "avro/alltypes_plain.bzip2.avro",
-            "avro/alltypes_plain.xz.avro",
-        ];
-
         let expected = RecordBatch::try_from_iter_with_nullable([
             (
                 "id",
@@ -4562,7 +4617,7 @@ mod test {
         ])
         .unwrap();
 
-        for file in files {
+        for file in files() {
             let file = arrow_test_data(file);
 
             assert_eq!(read_file(&file, 8, false), expected);
@@ -4571,6 +4626,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_alltypes_dictionary() {
         let file = "avro/alltypes_dictionary.avro";
         let expected = RecordBatch::try_from_iter_with_nullable([
@@ -4693,6 +4750,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_binary() {
         let file = arrow_test_data("avro/binary.avro");
         let batch = read_file(&file, 8, false);
@@ -4719,6 +4778,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for these files
+    #[cfg(feature = "snappy")]
     fn test_decimal() {
         // Choose expected Arrow types depending on the `small_decimals` feature flag.
         // With `small_decimals` enabled, Decimal32/Decimal64 are used where their
@@ -5040,6 +5101,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_dict_pages_offset_zero() {
         let file = arrow_test_data("avro/dict-page-offset-zero.avro");
         let batch = read_file(&file, 32, false);
@@ -5055,6 +5118,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_list_columns() {
         let file = arrow_test_data("avro/list_columns.avro");
         let mut int64_list_builder = ListBuilder::new(Int64Builder::new());
@@ -5117,6 +5182,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_nested_lists() {
         use arrow_data::ArrayDataBuilder;
         let file = arrow_test_data("avro/nested_lists.snappy.avro");
@@ -5314,6 +5380,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_single_nan() {
         let file = arrow_test_data("avro/single_nan.avro");
         let actual = read_file(&file, 1, false);
@@ -5392,6 +5459,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(feature = "snappy")]
     fn test_datapage_v2() {
         let file = arrow_test_data("avro/datapage_v2.snappy.avro");
         let batch = read_file(&file, 8, false);
@@ -5653,7 +5721,10 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_repeated_no_annotation() {
+        use arrow_data::ArrayDataBuilder;
         let file = arrow_test_data("avro/repeated_no_annotation.avro");
         let batch_large = read_file(&file, 8, false);
         // id column
@@ -5742,6 +5813,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nonnullable_impala() {
         let file = arrow_test_data("avro/nonnullable.impala.avro");
         let id = Int64Array::from(vec![Some(8)]);
@@ -6057,6 +6130,8 @@ mod test {
     }
 
     #[test]
+    // TODO: avoid requiring snappy for this file
+    #[cfg(feature = "snappy")]
     fn test_nullable_impala() {
         let file = arrow_test_data("avro/nullable.impala.avro");
         let batch1 = read_file(&file, 3, false);
@@ -7362,7 +7437,6 @@ mod test {
             "entire RecordBatch mismatch (schema, all columns, all rows)"
         );
     }
-
     #[test]
     fn comprehensive_e2e_resolution_test() {
         use serde_json::Value;
@@ -7518,6 +7592,7 @@ mod test {
         let batch = read_alltypes_with_reader_schema(path, reader_schema.clone());
 
         const UUID_EXT_KEY: &str = "ARROW:extension:name";
+        const UUID_LOGICAL_KEY: &str = "logicalType";
 
         let uuid_md_top: Option<HashMap<String, String>> = batch
             .schema()
@@ -7525,7 +7600,12 @@ mod test {
             .ok()
             .and_then(|f| {
                 let md = f.metadata();
-                if md.get(UUID_EXT_KEY).is_some() {
+                let has_ext = md.get(UUID_EXT_KEY).is_some();
+                let is_uuid_logical = md
+                    .get(UUID_LOGICAL_KEY)
+                    .map(|v| v.trim_matches('"') == "uuid")
+                    .unwrap_or(false);
+                if has_ext || is_uuid_logical {
                     Some(md.clone())
                 } else {
                     None
@@ -7542,7 +7622,12 @@ mod test {
                     .find(|(_, child)| child.name() == "uuid")
                     .and_then(|(_, child)| {
                         let md = child.metadata();
-                        if md.get(UUID_EXT_KEY).is_some() {
+                        let has_ext = md.get(UUID_EXT_KEY).is_some();
+                        let is_uuid_logical = md
+                            .get(UUID_LOGICAL_KEY)
+                            .map(|v| v.trim_matches('"') == "uuid")
+                            .unwrap_or(false);
+                        if has_ext || is_uuid_logical {
                             Some(md.clone())
                         } else {
                             None

@@ -67,6 +67,8 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
+pub use decimal::DecimalCast;
+
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CastOptions<'a> {
@@ -3085,6 +3087,32 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal32_to_decimal32_large_scale_reduction() {
+        let array = vec![Some(-999999999), Some(0), Some(999999999), None];
+        let array = create_decimal32_array(array, 9, 3).unwrap();
+
+        // Divide out all digits of precision -- rounding could still produce +/- 1
+        let output_type = DataType::Decimal32(9, -6);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal32Array,
+            &output_type,
+            vec![Some(-1), Some(0), Some(1), None]
+        );
+
+        // Divide out more digits than we have precision -- all-zero result
+        let output_type = DataType::Decimal32(9, -7);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal32Array,
+            &output_type,
+            vec![Some(0), Some(0), Some(0), None]
+        );
+    }
+
+    #[test]
     fn test_cast_decimal64_to_decimal64_overflow() {
         let input_type = DataType::Decimal64(18, 3);
         let output_type = DataType::Decimal64(18, 18);
@@ -3103,6 +3131,37 @@ mod tests {
         assert_eq!(
             "Cast error: Cannot cast to Decimal64(18, 18). Overflowing on 9223372036854775807",
             result.unwrap_err().to_string()
+        );
+    }
+
+    #[test]
+    fn test_cast_decimal64_to_decimal64_large_scale_reduction() {
+        let array = vec![
+            Some(-999999999999999999),
+            Some(0),
+            Some(999999999999999999),
+            None,
+        ];
+        let array = create_decimal64_array(array, 18, 3).unwrap();
+
+        // Divide out all digits of precision -- rounding could still produce +/- 1
+        let output_type = DataType::Decimal64(18, -15);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal64Array,
+            &output_type,
+            vec![Some(-1), Some(0), Some(1), None]
+        );
+
+        // Divide out more digits than we have precision -- all-zero result
+        let output_type = DataType::Decimal64(18, -16);
+        assert!(can_cast_types(array.data_type(), &output_type));
+        generate_cast_test_case!(
+            &array,
+            Decimal64Array,
+            &output_type,
+            vec![Some(0), Some(0), Some(0), None]
         );
     }
 
@@ -8715,7 +8774,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Utf8) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Utf8) }, true) not supported"#
+            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Utf8), unsorted) to Map("entries": Struct("key": Utf8, "value": Utf8), sorted) not supported"#
         );
     }
 
@@ -8766,7 +8825,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map(Field { "entries": Struct("key": Utf8, "value": nullable Interval(DayTime)) }, false) to Map(Field { "entries": Struct("key": Utf8, "value": Duration(s)) }, true) not supported"#
+            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Interval(DayTime)), unsorted) to Map("entries": Struct("key": Utf8, "value": Duration(s)), sorted) not supported"#
         );
     }
 

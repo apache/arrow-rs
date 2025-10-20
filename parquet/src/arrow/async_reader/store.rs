@@ -206,8 +206,9 @@ impl AsyncFileReader for ParquetObjectReader {
 
             #[cfg(feature = "encryption")]
             if let Some(options) = options {
-                metadata = metadata
-                    .with_decryption_properties(options.file_decryption_properties.as_ref());
+                metadata = metadata.with_decryption_properties(
+                    options.file_decryption_properties.as_ref().map(Arc::clone),
+                );
             }
 
             let metadata = if let Some(file_size) = self.file_size {

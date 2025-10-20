@@ -438,16 +438,16 @@ impl DecryptionPropertiesBuilder {
     }
 
     /// Finalize the builder and return created [`FileDecryptionProperties`]
-    pub fn build(self) -> Result<FileDecryptionProperties> {
+    pub fn build(self) -> Result<Arc<FileDecryptionProperties>> {
         let keys = DecryptionKeys::Explicit(ExplicitDecryptionKeys {
             footer_key: self.footer_key,
             column_keys: self.column_keys,
         });
-        Ok(FileDecryptionProperties {
+        Ok(Arc::new(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
-        })
+        }))
     }
 
     /// Specify the expected AAD prefix to be used for decryption.
@@ -509,13 +509,13 @@ impl DecryptionPropertiesBuilderWithRetriever {
     }
 
     /// Finalize the builder and return created [`FileDecryptionProperties`]
-    pub fn build(self) -> Result<FileDecryptionProperties> {
+    pub fn build(self) -> Result<Arc<FileDecryptionProperties>> {
         let keys = DecryptionKeys::ViaRetriever(self.key_retriever);
-        Ok(FileDecryptionProperties {
+        Ok(Arc::new(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
-        })
+        }))
     }
 
     /// Specify the expected AAD prefix to be used for decryption.
@@ -536,7 +536,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FileDecryptor {
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
     footer_decryptor: Arc<dyn BlockDecryptor>,
     file_aad: Vec<u8>,
 }
@@ -549,7 +549,7 @@ impl PartialEq for FileDecryptor {
 
 impl FileDecryptor {
     pub(crate) fn new(
-        decryption_properties: &FileDecryptionProperties,
+        decryption_properties: &Arc<FileDecryptionProperties>,
         footer_key_metadata: Option<&[u8]>,
         aad_file_unique: Vec<u8>,
         aad_prefix: Vec<u8>,
@@ -565,7 +565,7 @@ impl FileDecryptor {
 
         Ok(Self {
             footer_decryptor: Arc::new(footer_decryptor),
-            decryption_properties: decryption_properties.clone(),
+            decryption_properties: Arc::clone(decryption_properties),
             file_aad,
         })
     }

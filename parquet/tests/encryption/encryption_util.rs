@@ -28,7 +28,7 @@ use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::fs::File;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub(crate) fn verify_encryption_double_test_data(
     record_batches: Vec<RecordBatch>,
@@ -219,10 +219,10 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
 
 pub(crate) fn read_encrypted_file(
     file: &File,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) -> std::result::Result<(Vec<RecordBatch>, ArrowReaderMetadata), ParquetError> {
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let metadata = ArrowReaderMetadata::load(file, options.clone())?;
 
     let builder =
@@ -234,11 +234,12 @@ pub(crate) fn read_encrypted_file(
 
 pub(crate) fn read_and_roundtrip_to_encrypted_file(
     file: &File,
-    decryption_properties: FileDecryptionProperties,
-    encryption_properties: FileEncryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
+    encryption_properties: Arc<FileEncryptionProperties>,
 ) {
     // read example data
-    let (batches, metadata) = read_encrypted_file(file, decryption_properties.clone()).unwrap();
+    let (batches, metadata) =
+        read_encrypted_file(file, Arc::clone(&decryption_properties)).unwrap();
 
     // write example data to a temporary file
     let temp_file = tempfile::tempfile().unwrap();
@@ -264,7 +265,7 @@ pub(crate) fn read_and_roundtrip_to_encrypted_file(
 
 pub(crate) fn verify_encryption_test_file_read(
     file: File,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) {
     let options =
         ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);

@@ -24,13 +24,14 @@ use crate::encryption_util::{
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
 use futures::TryStreamExt;
-use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
 use parquet::arrow::arrow_writer::{
     ArrowColumnChunk, ArrowColumnWriter, ArrowLeafColumn, ArrowRowGroupWriterFactory,
     ArrowWriterOptions, compute_leaves,
 };
-use parquet::arrow::{ArrowWriter, AsyncArrowWriter};
+use parquet::arrow::{
+    ArrowSchemaConverter, ArrowWriter, AsyncArrowWriter, ParquetRecordBatchStreamBuilder,
+};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
@@ -432,7 +433,7 @@ async fn test_decrypt_page_index_non_uniform() {
 
 async fn test_decrypt_page_index(
     path: &str,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) -> Result<(), ParquetError> {
     let mut file = File::open(&path).await?;
 
@@ -449,7 +450,7 @@ async fn test_decrypt_page_index(
 
 async fn verify_encryption_test_file_read_async(
     file: &mut tokio::fs::File,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) -> Result<(), ParquetError> {
     let options = ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties);
 
@@ -469,14 +470,14 @@ async fn verify_encryption_test_file_read_async(
 
 async fn read_and_roundtrip_to_encrypted_file_async(
     path: &str,
-    decryption_properties: FileDecryptionProperties,
-    encryption_properties: FileEncryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
+    encryption_properties: Arc<FileEncryptionProperties>,
 ) -> Result<(), ParquetError> {
     let temp_file = tempfile::tempfile().unwrap();
     let mut file = File::open(&path).await.unwrap();
 
-    let options =
-        ArrowReaderOptions::new().with_file_decryption_properties(decryption_properties.clone());
+    let options = ArrowReaderOptions::new()
+        .with_file_decryption_properties(Arc::clone(&decryption_properties));
     let arrow_metadata = ArrowReaderMetadata::load_async(&mut file, options).await?;
     let record_reader = ParquetRecordBatchStreamBuilder::new_with_metadata(
         file.try_clone().await?,
@@ -696,18 +697,22 @@ async fn test_concurrent_encrypted_writing_over_multiple_row_groups() {
         }
     });
 
-    let props = Some(
+    let props = Arc::new(
         WriterPropertiesBuilder::default()
             .with_file_encryption_properties(file_encryption_properties)
             .build(),
     );
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(schema)
+        .unwrap();
 
     // Create a temporary file to write the encrypted data
     let temp_file = tempfile::tempfile().unwrap();
-    let arrow_writer =
-        ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props.clone()).unwrap();
 
-    let (writer, row_group_writer_factory) = arrow_writer.into_serialized_writer().unwrap();
+    let writer =
+        SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(schema));
     let max_row_groups = 1;
 
     let (serialize_tx, serialize_rx) =
@@ -754,22 +759,25 @@ async fn test_multi_threaded_encrypted_writing() {
         .unwrap();
 
     let (record_batches, metadata) =
-        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
     let schema = metadata.schema().clone();
 
-    let props = Some(
+    let props = Arc::new(
         WriterPropertiesBuilder::default()
             .with_file_encryption_properties(file_encryption_properties)
             .build(),
     );
 
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(&schema)
+        .unwrap();
+
     // Create a temporary file to write the encrypted data
     let temp_file = tempfile::tempfile().unwrap();
-    let writer =
-        ArrowWriter::try_new(&temp_file, metadata.schema().clone(), props.clone()).unwrap();
-
-    let (mut serialized_file_writer, row_group_writer_factory) =
-        writer.into_serialized_writer().unwrap();
+    let mut writer =
+        SerializedFileWriter::new(&temp_file, parquet_schema.root_schema_ptr(), props).unwrap();
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, Arc::clone(&schema));
 
     let (serialize_tx, mut serialize_rx) =
         tokio::sync::mpsc::channel::<JoinHandle<RBStreamSerializeResult>>(1);
@@ -805,7 +813,7 @@ async fn test_multi_threaded_encrypted_writing() {
     // Append the finalized row groups to the SerializedFileWriter
     while let Some(task) = serialize_rx.recv().await {
         let (arrow_column_chunks, _) = task.await.unwrap().unwrap();
-        let mut row_group_writer = serialized_file_writer.next_row_group().unwrap();
+        let mut row_group_writer = writer.next_row_group().unwrap();
         for chunk in arrow_column_chunks {
             chunk.append_to_row_group(&mut row_group_writer).unwrap();
         }
@@ -815,14 +823,14 @@ async fn test_multi_threaded_encrypted_writing() {
     // Wait for data generator and serialization task to finish
     data_generator.await.unwrap();
     launch_serialization_task.await.unwrap();
-    let metadata = serialized_file_writer.close().unwrap();
+    let metadata = writer.close().unwrap();
 
     // Close the file writer which writes the footer
     assert_eq!(metadata.file_metadata().num_rows(), 50);
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
-        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&temp_file, decryption_properties).unwrap();
     verify_encryption_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted
@@ -852,7 +860,7 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
         .unwrap();
 
     let (record_batches, metadata) =
-        read_encrypted_file(&file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&file, Arc::clone(&decryption_properties)).unwrap();
     let to_write: Vec<_> = record_batches
         .iter()
         .flat_map(|rb| rb.columns().to_vec())
@@ -912,7 +920,7 @@ async fn test_multi_threaded_encrypted_writing_deprecated() {
 
     // Check that the file was written correctly
     let (read_record_batches, read_metadata) =
-        read_encrypted_file(&temp_file, decryption_properties.clone()).unwrap();
+        read_encrypted_file(&temp_file, decryption_properties).unwrap();
     verify_encryption_double_test_data(read_record_batches, read_metadata.metadata());
 
     // Check that file was encrypted

@@ -24,7 +24,7 @@
 
 pub use arrow_array::types::*;
 pub use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType};
-pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
+pub use arrow_buffer::{ArrowNativeType, ToByteSlice, i256};
 pub use arrow_data::decimal::*;
 pub use arrow_schema::{
     DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaBuilder, SchemaRef, TimeUnit,
