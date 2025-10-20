@@ -217,10 +217,11 @@ where
         // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
         // needs to provide at least 8 digits precision
         let is_infallible_cast = input_precision as i8 + delta_scale <= output_precision as i8;
+        let value = O::Native::from_decimal(value);
         let scaled = if is_infallible_cast {
-            Some(O::Native::from_decimal(value).unwrap().mul_wrapping(mul))
+            Some(value.unwrap().mul_wrapping(mul))
         } else {
-            O::Native::from_decimal(value).and_then(|x| x.mul_checked(mul).ok())
+            value.and_then(|x| x.mul_checked(mul).ok())
         };
         (scaled, is_infallible_cast)
     } else {
@@ -262,7 +263,11 @@ where
         (O::Native::from_decimal(adjusted), is_infallible_cast)
     };
 
-    scaled.filter(|v| is_infallible_cast || O::is_valid_decimal_precision(*v, output_precision))
+    if is_infallible_cast {
+        scaled
+    } else {
+        scaled.filter(|v| O::is_valid_decimal_precision(*v, output_precision))
+    }
 }
 
 /// Convert the value at a specific index in the given array into a `Variant`.
