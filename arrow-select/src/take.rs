@@ -1880,67 +1880,6 @@ mod tests {
         }};
     }
 
-    macro_rules! test_take_list_view {
-        ($offset_type:ty, $list_view_data_type:ident, $list_view_array_type:ident) => {{
-            // Construct a value array, [[0,0,0], [-1,-2,-1], [], [2,3]]
-            let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 3]).into_data();
-            // Construct offsets
-            let value_offsets: [$offset_type; 4] = [0, 3, 0, 6];
-            let value_offsets = Buffer::from_slice_ref(&value_offsets);
-            let value_sizes: [$offset_type; 4] = [3, 3, 0, 2];
-            let value_sizes = Buffer::from_slice_ref(&value_sizes);
-            // Construct a list array from the above two
-            let list_view_data_type = DataType::$list_view_data_type(Arc::new(
-                Field::new_list_field(DataType::Int32, false),
-            ));
-            let list_view_data = ArrayData::builder(list_view_data_type.clone())
-                .len(4)
-                .add_buffers(vec![value_offsets, value_sizes])
-                .child_data(vec![value_data])
-                .build()
-                .unwrap();
-            let list_view_array = $list_view_array_type::from(list_view_data);
-
-            // index returns: [[2,3], null, [-1,-2,-1], [], [0,0,0]]
-            let index = UInt32Array::from(vec![Some(3), None, Some(1), Some(2), Some(0)]);
-
-            let a = take(&list_view_array, &index, None).unwrap();
-            let a: &$list_view_array_type =
-                a.as_any().downcast_ref::<$list_view_array_type>().unwrap();
-
-            // construct a value array with expected results:
-            // [[2,3], null, [-1,-2,-1], [], [0,0,0]]
-            let expected_data = Int32Array::from(vec![
-                Some(2),
-                Some(3),
-                Some(-1),
-                Some(-2),
-                Some(-1),
-                Some(0),
-                Some(0),
-                Some(0),
-            ])
-            .into_data();
-            // construct offsets
-            let expected_offsets: [$offset_type; 5] = [0, 0, 2, 0, 5];
-            let expected_offsets = Buffer::from_slice_ref(&expected_offsets);
-            let expected_sizes: [$offset_type; 5] = [2, 0, 3, 0, 3];
-            let expected_sizes = Buffer::from_slice_ref(&expected_sizes);
-            // construct expected list view array
-            let expected_list_data = ArrayData::builder(list_view_data_type)
-                .len(5)
-                // null buffer remains the same as only the indices have nulls
-                .nulls(index.nulls().cloned())
-                .buffers(vec![expected_offsets, expected_sizes])
-                .child_data(vec![expected_data])
-                .build()
-                .unwrap();
-            let expected_list_array = $list_view_array_type::from(expected_list_data);
-
-            assert_eq!(a, &expected_list_array);
-        }};
-    }
-
     fn test_take_list_view_generic<OffsetType: OffsetSizeTrait, ValuesType: ArrowPrimitiveType>(
         values: Vec<Option<Vec<Option<ValuesType::Native>>>>,
         take_indices: Vec<Option<usize>>,
