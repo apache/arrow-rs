@@ -326,10 +326,11 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use arrow::array::{Array, Float64Array, Int64Array};
+    use arrow::array::{Array, FixedSizeBinaryArray, Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields};
     use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
     use std::sync::Arc;
+    use uuid::Uuid;
 
     #[test]
     fn test_already_shredded_input_error() {
@@ -367,6 +368,73 @@ mod tests {
         let input = VariantArray::from_iter([Variant::from(42)]);
         let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         shred_variant(&input, &list_schema).expect_err("unsupported");
+    }
+
+    #[test]
+    fn test_invalid_fixed_size_binary_shredding() {
+        let mock_uuid_1 = Uuid::new_v4();
+
+        let input = VariantArray::from_iter([Some(Variant::from(mock_uuid_1)), None]);
+
+        // shred_variant only supports FixedSizeBinary(16). Any other length will err.
+        let err = shred_variant(&input, &DataType::FixedSizeBinary(17)).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: FixedSizeBinary(17) is not a valid variant shredding type. Only FixedSizeBinary(16) for UUID is supported."
+        );
+    }
+
+    #[test]
+    fn test_uuid_shredding() {
+        let mock_uuid_1 = Uuid::new_v4();
+        let mock_uuid_2 = Uuid::new_v4();
+
+        let input = VariantArray::from_iter([
+            Some(Variant::from(mock_uuid_1)),
+            None,
+            Some(Variant::from(false)),
+            Some(Variant::from(mock_uuid_2)),
+        ]);
+
+        let variant_array = shred_variant(&input, &DataType::FixedSizeBinary(16)).unwrap();
+
+        // // inspect the typed_value Field and make sure it contains the canonical Uuid extension type
+        // let typed_value_field = variant_array
+        //     .inner()
+        //     .fields()
+        //     .into_iter()
+        //     .find(|f| f.name() == "typed_value")
+        //     .unwrap();
+
+        // assert!(
+        //     typed_value_field
+        //         .try_extension_type::<extension::Uuid>()
+        //         .is_ok()
+        // );
+
+        // probe the downcasted typed_value array to make sure uuids are shredded correctly
+        let uuids = variant_array
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        assert_eq!(uuids.len(), 4);
+
+        assert!(!uuids.is_null(0));
+
+        let got_uuid_1: &[u8] = uuids.value(0);
+        assert_eq!(got_uuid_1, mock_uuid_1.as_bytes());
+
+        assert!(uuids.is_null(1));
+        assert!(uuids.is_null(2));
+
+        assert!(!uuids.is_null(3));
+
+        let got_uuid_2: &[u8] = uuids.value(3);
+        assert_eq!(got_uuid_2, mock_uuid_2.as_bytes());
     }
 
     #[test]
