@@ -248,20 +248,10 @@ impl MutableBuffer {
         // Ensure capacity
         self.reserve(repeat_count * bytes_to_repeat);
 
-        // For smaller number of repeats, just extend directly as the overhead of the
-        // doubling strategy is not worth it
-        if repeat_count <= 3 {
-            for _ in 0..repeat_count {
-                self.extend_from_slice(slice_to_repeat);
-            }
-
-            return;
-        }
-
         // Save the length before we do all the copies to know where to start from
         let length_before = self.len;
 
-        // Copy the initial slice once
+        // Copy the initial slice once so we can use doubling strategy on it
         self.extend_from_slice(slice_to_repeat);
 
         // This tracks how much bytes we have added by repeating so far
