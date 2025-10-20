@@ -196,15 +196,8 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     /// This will panic if value's length multiplied by `repeat_count` overflows usize.
     ///
     pub fn new_repeated(value: impl AsRef<T::Native>, repeat_count: usize) -> Self {
-        Self::try_new_repeated(value, repeat_count).unwrap()
-    }
-
-    /// Try to create [`GenericByteArray`] where `value` is repeated `repeat_count` times.
-    ///
-    /// Return an error if value's length multiplied by `repeat_count` overflows usize.
-    pub fn try_new_repeated(value: impl AsRef<T::Native>, repeat_count: usize) -> Result<Self, ArrowError> {
         let s: &[u8] = value.as_ref().as_ref();
-        let value_offsets = OffsetBuffer::try_from_repeated_length(s.len(), repeat_count)?;
+        let value_offsets = OffsetBuffer::from_repeated_length(s.len(), repeat_count);
         let bytes: Buffer = {
             let mut mutable_buffer = MutableBuffer::with_capacity(0);
             mutable_buffer.repeat_slice_n_times(s, repeat_count);
@@ -212,12 +205,12 @@ impl<T: ByteArrayType> GenericByteArray<T> {
             mutable_buffer.into()
         };
 
-        Ok(Self {
+        Self {
             data_type: T::DATA_TYPE,
             value_data: bytes,
             value_offsets,
             nulls: None,
-        })
+        }
     }
 
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
@@ -686,9 +679,9 @@ mod tests {
     fn create_repeated() {
         let arr = BinaryArray::new_repeated(b"hello", 3);
         assert_eq!(arr.len(), 3);
-        assert_eq!(arr.value(0).as_ref(), b"hello");
-        assert_eq!(arr.value(1).as_ref(), b"hello");
-        assert_eq!(arr.value(2).as_ref(), b"hello");
+        assert_eq!(arr.value(0), b"hello");
+        assert_eq!(arr.value(1), b"hello");
+        assert_eq!(arr.value(2), b"hello");
 
         let arr = StringArray::new_repeated("world", 2);
         assert_eq!(arr.len(), 2);
