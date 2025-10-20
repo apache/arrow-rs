@@ -200,6 +200,23 @@ fn zip_impl(
 ///
 /// Useful for using in `IF <expr> THEN <scalar> ELSE <scalar> END` expressions
 ///
+/// # Example
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{ArrayRef, BooleanArray, Int32Array, Scalar, cast::AsArray, types::Int32Type};
+///
+/// # use arrow_select::zip::ScalarZipper;
+/// let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+/// let scalar_falsy = Scalar::new(Int32Array::from_value(123, 1));
+/// let zipper = ScalarZipper::try_new(&scalar_truthy, &scalar_falsy).unwrap();
+///
+/// // Later when we have a boolean mask
+/// let mask = BooleanArray::from(vec![true, false, true, false, true]);
+/// let result = zipper.zip(&mask).unwrap();
+/// let actual = result.as_primitive::<Int32Type>();
+/// let expected = Int32Array::from(vec![Some(42), Some(123), Some(42), Some(123), Some(42)]);
+/// ```
+///
 #[derive(Debug, Clone)]
 pub struct ScalarZipper {
     zip_impl: Arc<dyn ZipImpl>,
@@ -273,9 +290,15 @@ impl ScalarZipper {
 
         Ok(Self { zip_impl })
     }
+
+    /// Creating output array based on input boolean array and the two scalar values the zipper was created with
+    /// See struct level documentation for examples.
+    pub fn zip(&self, mask: &BooleanArray) -> Result<ArrayRef, ArrowError> {
+        self.zip_impl.create_output(mask)
+    }
 }
 
-/// Impl for creating output array based on input boolean array
+/// Impl for creating output array based on a mask
 trait ZipImpl: Debug {
     /// Creating output array based on input boolean array
     fn create_output(&self, input: &BooleanArray) -> Result<ArrayRef, ArrowError>;
@@ -631,6 +654,7 @@ fn combine_nulls_and_false(predicate: &BooleanArray) -> BooleanBuffer {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow_array::types::Int32Type;
 
     #[test]
     fn test_zip_kernel_one() {
@@ -739,6 +763,27 @@ mod test {
         let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
         let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
         let expected = Int32Array::from(vec![None, None, Some(42), Some(42), None]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_scalar_zipper() {
+        let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+        let scalar_falsy = Scalar::new(Int32Array::from_value(123, 1));
+
+        let mask = BooleanArray::from(vec![false, false, true, true, false]);
+
+        let scalar_zipper = ScalarZipper::try_new(&scalar_truthy, &scalar_falsy).unwrap();
+        let out = scalar_zipper.zip(&mask).unwrap();
+        let actual = out.as_primitive::<Int32Type>();
+        let expected = Int32Array::from(vec![Some(123), Some(123), Some(42), Some(42), Some(123)]);
+        assert_eq!(actual, &expected);
+
+        // test with different mask length as well
+        let mask = BooleanArray::from(vec![true, false, true]);
+        let out = scalar_zipper.zip(&mask).unwrap();
+        let actual = out.as_primitive::<Int32Type>();
+        let expected = Int32Array::from(vec![Some(42), Some(123), Some(42)]);
         assert_eq!(actual, &expected);
     }
 
