@@ -104,23 +104,23 @@ impl FilterInfo {
         }
     }
 
-    /// Return the current predicate to evaluate, mutablely
-    /// Panics if done() is true
+    /// Return a mutable reference to the current predicate
     pub(super) fn current_mut(&mut self) -> &mut dyn ArrowPredicate {
         self.filter
             .predicates
             .get_mut(self.next_predicate.get() - 1)
-            .expect("current predicate out of bounds")
+            // advance ensures next_predicate is always in bounds
+            .unwrap()
             .as_mut()
     }
 
     /// Return the current predicate to evaluate
-    /// Panics if done() is true
     pub(super) fn current(&self) -> &dyn ArrowPredicate {
         self.filter
             .predicates
             .get(self.next_predicate.get() - 1)
-            .expect("current predicate out of bounds")
+            // advance ensures next_predicate is always in bounds
+            .unwrap()
             .as_ref()
     }
 
