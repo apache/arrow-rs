@@ -258,11 +258,6 @@ impl MutableBuffer {
             return;
         }
 
-        // We will use doubling strategy to fill the buffer in log(repeat_count) steps
-
-        // If we keep extending from ourself we will reach it pretty fast
-        let final_len_to_repeat = repeat_count * bytes_to_repeat;
-
         // Save the length before we do all the copies to know where to start from
         let length_before = self.len;
 
@@ -270,15 +265,24 @@ impl MutableBuffer {
         self.extend_from_slice(slice_to_repeat);
 
         // This tracks how much bytes we have added by repeating so far
-        let mut added_repeats_length = bytes_to_repeat;
+        let added_repeats_length = bytes_to_repeat;
         assert_eq!(
             self.len - length_before,
             added_repeats_length,
             "should copy exactly the same number of bytes"
         );
 
-        // Copy in doubling steps to make the number of calls logarithmic and fast (as we copy large chunks at a time)
-        while added_repeats_length * 2 <= final_len_to_repeat {
+        // Number of times the slice was repeated
+        let mut already_repeated_times = 1;
+
+        // We will use doubling strategy to fill the buffer in log(repeat_count) steps
+        while already_repeated_times < repeat_count {
+            // How many slices can we copy in this iteration
+            // (either double what we have, or just the remaining ones)
+            let number_of_slices_to_copy =
+                already_repeated_times.min(repeat_count - already_repeated_times);
+            let number_of_bytes_to_copy = number_of_slices_to_copy * bytes_to_repeat;
+
             unsafe {
                 // Get to the start of the data before we started copying anything
                 let src = self.data.as_ptr().add(length_before) as *const u8;
@@ -286,38 +290,15 @@ impl MutableBuffer {
                 // Go to the current location to copy to (end of current data)
                 let dst = self.data.as_ptr().add(self.len);
 
-                // SAFETY: the pointers are not overlapping as there is `added_repeats_length` exactly
-                // between them
-                std::ptr::copy_nonoverlapping(src, dst, added_repeats_length)
+                // SAFETY: the pointers are not overlapping as there is `number_of_bytes_to_copy` or less between them
+                std::ptr::copy_nonoverlapping(src, dst, number_of_bytes_to_copy)
             }
 
             // Advance the length by the amount of data we just copied (doubled)
-            self.len += added_repeats_length;
+            self.len += number_of_bytes_to_copy;
 
-            // Double the amount of data we have added so far
-            added_repeats_length *= 2;
+            already_repeated_times += number_of_slices_to_copy;
         }
-
-        // Handle the remainder in single copy.
-
-        // the amount left to copy is guaranteed to be less than what we have already copied
-        let last_amount_to_copy = final_len_to_repeat - added_repeats_length;
-        assert!(
-            last_amount_to_copy <= final_len_to_repeat,
-            "the last copy should not overlap"
-        );
-
-        if last_amount_to_copy == 0 {
-            return;
-        }
-
-        unsafe {
-            let src = self.data.as_ptr().add(length_before) as *const u8;
-            let dst = self.data.as_ptr().add(self.len);
-
-            std::ptr::copy_nonoverlapping(src, dst, last_amount_to_copy)
-        }
-        self.len += last_amount_to_copy;
     }
 
     #[cold]
