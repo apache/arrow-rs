@@ -301,7 +301,11 @@ impl HeapSize for DecryptionKeys {
     fn heap_size(&self) -> usize {
         match self {
             Self::Explicit(keys) => keys.heap_size(),
-            Self::ViaRetriever(_) => 0,  // FIXME(ets): how to deal with this???
+            Self::ViaRetriever(_) => {
+                // The retriever is a user-defined type we don't control,
+                // so we can't determine the heap size.
+                0
+            }
         }
     }
 }
@@ -568,6 +572,13 @@ impl PartialEq for FileDecryptor {
     }
 }
 
+/// Estimate the size in bytes required for the file decryptor.
+/// This is important to track the memory usage of cached Parquet meta data,
+/// and is used via [`crate::file::metadata::ParquetMetaData::memory_size`].
+/// Note that when a [`KeyRetriever`] is used, its heap size won't be included
+/// and the result will be an underestimate.
+/// If the [`FileDecryptionProperties`] are shared between multiple files then the
+/// heap size may also be an overestimate.
 impl HeapSize for FileDecryptor {
     fn heap_size(&self) -> usize {
         self.decryption_properties.heap_size()

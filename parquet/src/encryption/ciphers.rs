@@ -53,7 +53,8 @@ impl RingGcmBlockDecryptor {
 
 impl HeapSize for RingGcmBlockDecryptor {
     fn heap_size(&self) -> usize {
-        0 // FIXME(ets): how to even approximate this???
+        // Ring's LessSafeKey doesn't allocate on the heap
+        0
     }
 }
 

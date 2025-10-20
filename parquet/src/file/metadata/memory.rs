@@ -55,9 +55,9 @@ impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
     fn heap_size(&self) -> usize {
         let key_size = std::mem::size_of::<K>();
         let val_size = std::mem::size_of::<V>();
-        (self.capacity() * (key_size + val_size)) +
-        self.keys().map(|k| k.heap_size()).sum::<usize>() +
-        self.values().map(|v| v.heap_size()).sum::<usize>()
+        (self.capacity() * (key_size + val_size))
+            + self.keys().map(|k| k.heap_size()).sum::<usize>()
+            + self.values().map(|v| v.heap_size()).sum::<usize>()
     }
 }
 
