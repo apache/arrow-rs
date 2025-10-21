@@ -289,13 +289,24 @@ impl VariantArray {
         nulls: Option<NullBuffer>,
     ) -> Self {
         let mut builder =
-            StructArrayBuilder::new().with_field("metadata", Arc::new(metadata.clone()), false);
+            StructArrayBuilder::new().with_column("metadata", Arc::new(metadata.clone()), false);
         if let Some(value) = value.clone() {
-            builder = builder.with_field("value", Arc::new(value), true);
+            builder = builder.with_column("value", Arc::new(value), true);
         }
-        if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
-        }
+
+        let typed_value = if let Some(typed_value_array) = typed_value.clone() {
+            let field_ref = Arc::new(Field::new(
+                "typed_value",
+                typed_value_array.data_type().clone(),
+                true,
+            ));
+            builder = builder.with_field(field_ref.clone(), typed_value_array.clone());
+
+            Some((field_ref, typed_value_array))
+        } else {
+            None
+        };
+
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
         }
@@ -345,7 +356,7 @@ impl VariantArray {
     pub fn value(&self, index: usize) -> Variant<'_, '_> {
         match (self.typed_value_field(), self.value_field()) {
             // Always prefer typed_value, if available
-            (Some(typed_value), value) if typed_value.is_valid(index) => {
+            (Some(typed_value), value) if typed_value.1.is_valid(index) => {
                 typed_value_to_variant(typed_value, value, index)
             }
             // Otherwise fall back to value, if available
@@ -369,8 +380,8 @@ impl VariantArray {
     }
 
     /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    pub fn typed_value_field(&self) -> Option<&TypedValue> {
+        self.shredding_state.typed_value()
     }
 
     /// Return a field to represent this VariantArray in a `Schema` with
@@ -627,8 +638,8 @@ impl ShreddedVariantFieldArray {
     }
 
     /// Return a reference to the typed_value field of the `StructArray`, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        self.shredding_state.typed_value_field()
+    pub fn typed_value_field(&self) -> Option<&TypedValue> {
+        self.shredding_state.typed_value()
     }
 
     /// Returns a reference to the underlying [`StructArray`].
@@ -643,11 +654,22 @@ impl ShreddedVariantFieldArray {
     ) -> Self {
         let mut builder = StructArrayBuilder::new();
         if let Some(value) = value.clone() {
-            builder = builder.with_field("value", Arc::new(value), true);
+            builder = builder.with_column("value", Arc::new(value), true);
         }
-        if let Some(typed_value) = typed_value.clone() {
-            builder = builder.with_field("typed_value", typed_value, true);
-        }
+
+        let typed_value = if let Some(typed_value_array) = typed_value.clone() {
+            let field_ref = Arc::new(Field::new(
+                "typed_value",
+                typed_value_array.data_type().clone(),
+                true,
+            ));
+            builder = builder.with_field(field_ref.clone(), typed_value_array.clone());
+
+            Some((field_ref, typed_value_array))
+        } else {
+            None
+        };
+
         if let Some(nulls) = nulls {
             builder = builder.with_nulls(nulls);
         }
@@ -708,6 +730,9 @@ impl From<ShreddedVariantFieldArray> for StructArray {
     }
 }
 
+pub type TypedValue = (FieldRef, ArrayRef);
+pub type BorrowedTypedValue<'a> = (&'a FieldRef, &'a ArrayRef);
+
 /// Represents the shredding state of a [`VariantArray`]
 ///
 /// [`VariantArray`]s can be shredded according to the [Parquet Variant
@@ -744,7 +769,7 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ShreddingState {
     value: Option<BinaryViewArray>,
-    typed_value: Option<ArrayRef>,
+    typed_value: Option<TypedValue>,
 }
 
 impl ShreddingState {
@@ -762,7 +787,7 @@ impl ShreddingState {
     /// let struct_array: StructArray = get_struct_array();
     /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
     /// ```
-    pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
+    pub fn new(value: Option<BinaryViewArray>, typed_value: Option<TypedValue>) -> Self {
         Self { value, typed_value }
     }
 
@@ -772,7 +797,7 @@ impl ShreddingState {
     }
 
     /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&ArrayRef> {
+    pub fn typed_value(&self) -> Option<&TypedValue> {
         self.typed_value.as_ref()
     }
 
@@ -780,7 +805,7 @@ impl ShreddingState {
     pub fn borrow(&self) -> BorrowedShreddingState<'_> {
         BorrowedShreddingState {
             value: self.value_field(),
-            typed_value: self.typed_value_field(),
+            typed_value: self.typed_value().map(|(f, c)| (f, c)),
         }
     }
 
@@ -788,7 +813,10 @@ impl ShreddingState {
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             value: self.value.as_ref().map(|v| v.slice(offset, length)),
-            typed_value: self.typed_value.as_ref().map(|tv| tv.slice(offset, length)),
+            typed_value: self
+                .typed_value
+                .as_ref()
+                .map(|(f, c)| (Arc::clone(f), c.slice(offset, length))),
         }
     }
 }
@@ -798,7 +826,7 @@ impl ShreddingState {
 #[derive(Clone, Debug)]
 pub struct BorrowedShreddingState<'a> {
     value: Option<&'a BinaryViewArray>,
-    typed_value: Option<&'a ArrayRef>,
+    typed_value: Option<BorrowedTypedValue<'a>>,
 }
 
 impl<'a> BorrowedShreddingState<'a> {
@@ -816,7 +844,10 @@ impl<'a> BorrowedShreddingState<'a> {
     /// let struct_array: StructArray = get_struct_array();
     /// let shredding_state = BorrowedShreddingState::try_from(&struct_array).unwrap();
     /// ```
-    pub fn new(value: Option<&'a BinaryViewArray>, typed_value: Option<&'a ArrayRef>) -> Self {
+    pub fn new(
+        value: Option<&'a BinaryViewArray>,
+        typed_value: Option<BorrowedTypedValue<'a>>,
+    ) -> Self {
         Self { value, typed_value }
     }
 
@@ -826,7 +857,7 @@ impl<'a> BorrowedShreddingState<'a> {
     }
 
     /// Return a reference to the typed_value field, if present
-    pub fn typed_value_field(&self) -> Option<&'a ArrayRef> {
+    pub fn typed_value_field(&self) -> Option<BorrowedTypedValue<'a>> {
         self.typed_value
     }
 }
@@ -847,7 +878,26 @@ impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
         } else {
             None
         };
-        let typed_value = inner_struct.column_by_name("typed_value");
+
+        let typed_value = {
+            let typed_value_field = inner_struct
+                .fields()
+                .into_iter()
+                .find(|f| f.name() == "typed_value");
+
+            let typed_value_column = inner_struct.column_by_name("typed_value");
+
+            match (typed_value_field, typed_value_column) {
+                (Some(field), Some(col)) => Some((field, col)),
+                (None, None) => None,
+                _ => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "Inconsistent struct schema: 'typed_value' field and column must both exist or both be absent".into(),
+                    ));
+                }
+            }
+        };
+
         Ok(BorrowedShreddingState::new(value, typed_value))
     }
 }
@@ -864,7 +914,9 @@ impl From<BorrowedShreddingState<'_>> for ShreddingState {
     fn from(state: BorrowedShreddingState<'_>) -> Self {
         ShreddingState {
             value: state.value_field().cloned(),
-            typed_value: state.typed_value_field().cloned(),
+            typed_value: state
+                .typed_value_field()
+                .map(|(f, c)| (f.clone(), c.clone())),
         }
     }
 }
@@ -885,9 +937,15 @@ impl StructArrayBuilder {
     }
 
     /// Add an array to this struct array as a field with the specified name.
-    pub fn with_field(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
+    pub fn with_column(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
         let field = Field::new(field_name, array.data_type().clone(), nullable);
         self.fields.push(Arc::new(field));
+        self.arrays.push(array);
+        self
+    }
+
+    pub fn with_field(mut self, field: FieldRef, array: ArrayRef) -> Self {
+        self.fields.push(field);
         self.arrays.push(array);
         self
     }
@@ -910,70 +968,72 @@ impl StructArrayBuilder {
 
 /// returns the non-null element at index as a Variant
 fn typed_value_to_variant<'a>(
-    typed_value: &'a ArrayRef,
+    typed_value: &'a TypedValue,
     value: Option<&BinaryViewArray>,
     index: usize,
 ) -> Variant<'a, 'a> {
-    let data_type = typed_value.data_type();
+    let (_, typed_value_column) = typed_value;
+
+    let data_type = typed_value_column.data_type();
     if value.is_some_and(|v| !matches!(data_type, DataType::Struct(_)) && v.is_valid(index)) {
         // Only a partially shredded struct is allowed to have values for both columns
         panic!("Invalid variant, conflicting value and typed_value");
     }
     match data_type {
         DataType::Boolean => {
-            let boolean_array = typed_value.as_boolean();
+            let boolean_array = typed_value_column.as_boolean();
             let value = boolean_array.value(index);
             Variant::from(value)
         }
         DataType::Date32 => {
-            let array = typed_value.as_primitive::<Date32Type>();
+            let array = typed_value_column.as_primitive::<Date32Type>();
             let value = array.value(index);
             let date = Date32Type::to_naive_date(value);
             Variant::from(date)
         }
         // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
-            let array = typed_value.as_fixed_size_binary();
+            let array = typed_value_column.as_fixed_size_binary();
             let value = array.value(index);
             Uuid::from_slice(value).unwrap().into() // unwrap is safe: slice is always 16 bytes
         }
         DataType::BinaryView => {
-            let array = typed_value.as_binary_view();
+            let array = typed_value_column.as_binary_view();
             let value = array.value(index);
             Variant::from(value)
         }
         DataType::Utf8 => {
-            let array = typed_value.as_string::<i32>();
+            let array = typed_value_column.as_string::<i32>();
             let value = array.value(index);
             Variant::from(value)
         }
         DataType::Int8 => {
-            primitive_conversion_single_value!(Int8Type, typed_value, index)
+            primitive_conversion_single_value!(Int8Type, typed_value_column, index)
         }
         DataType::Int16 => {
-            primitive_conversion_single_value!(Int16Type, typed_value, index)
+            primitive_conversion_single_value!(Int16Type, typed_value_column, index)
         }
         DataType::Int32 => {
-            primitive_conversion_single_value!(Int32Type, typed_value, index)
+            primitive_conversion_single_value!(Int32Type, typed_value_column, index)
         }
         DataType::Int64 => {
-            primitive_conversion_single_value!(Int64Type, typed_value, index)
+            primitive_conversion_single_value!(Int64Type, typed_value_column, index)
         }
         DataType::Float16 => {
-            primitive_conversion_single_value!(Float16Type, typed_value, index)
+            primitive_conversion_single_value!(Float16Type, typed_value_column, index)
         }
         DataType::Float32 => {
-            primitive_conversion_single_value!(Float32Type, typed_value, index)
+            primitive_conversion_single_value!(Float32Type, typed_value_column, index)
         }
         DataType::Float64 => {
-            primitive_conversion_single_value!(Float64Type, typed_value, index)
+            primitive_conversion_single_value!(Float64Type, typed_value_column, index)
         }
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
             generic_conversion_single_value!(
                 TimestampMicrosecondType,
                 as_primitive,
                 |v| DateTime::from_timestamp_micros(v).unwrap(),
-                typed_value,
+                typed_value_column,
                 index
             )
         }
@@ -982,7 +1042,7 @@ fn typed_value_to_variant<'a>(
                 TimestampMicrosecondType,
                 as_primitive,
                 |v| DateTime::from_timestamp_micros(v).unwrap().naive_utc(),
-                typed_value,
+                typed_value_column,
                 index
             )
         }
@@ -991,7 +1051,7 @@ fn typed_value_to_variant<'a>(
                 TimestampNanosecondType,
                 as_primitive,
                 DateTime::from_timestamp_nanos,
-                typed_value,
+                typed_value_column,
                 index
             )
         }
@@ -1000,7 +1060,7 @@ fn typed_value_to_variant<'a>(
                 TimestampNanosecondType,
                 as_primitive,
                 |v| DateTime::from_timestamp_nanos(v).naive_utc(),
-                typed_value,
+                typed_value_column,
                 index
             )
         }
@@ -1013,7 +1073,7 @@ fn typed_value_to_variant<'a>(
             debug_assert!(
                 false,
                 "Unsupported typed_value type: {}",
-                typed_value.data_type()
+                typed_value_column.data_type()
             );
             Variant::Null
         }
