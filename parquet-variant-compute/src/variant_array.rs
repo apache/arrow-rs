@@ -972,7 +972,7 @@ fn typed_value_to_variant<'a>(
     value: Option<&BinaryViewArray>,
     index: usize,
 ) -> Variant<'a, 'a> {
-    let (typed_value_field, typed_value_column) = typed_value;
+    let (_typed_value_field, typed_value_column) = typed_value;
 
     let data_type = typed_value_column.data_type();
     if value.is_some_and(|v| !matches!(data_type, DataType::Struct(_)) && v.is_valid(index)) {
@@ -992,11 +992,7 @@ fn typed_value_to_variant<'a>(
             Variant::from(date)
         }
         // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
-        DataType::FixedSizeBinary(16)
-            if typed_value_field
-                .try_extension_type::<arrow_schema::extension::Uuid>()
-                .is_ok() =>
-        {
+        DataType::FixedSizeBinary(16) => {
             let array = typed_value_column.as_fixed_size_binary();
             let value = array.value(index);
             Uuid::from_slice(value).unwrap().into() // unwrap is safe: slice is always 16 bytes
