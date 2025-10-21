@@ -60,7 +60,7 @@ use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::ReadPlanBuilder;
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::in_memory_row_group::InMemoryRowGroup;
+use crate::arrow::in_memory_row_group::{FetchRanges, InMemoryRowGroup};
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
@@ -965,6 +965,32 @@ where
     }
 }
 
+impl InMemoryRowGroup<'_> {
+    /// Fetches any additional column data specified in `projection` that is not already
+    /// present in `self.column_chunks`.
+    ///
+    /// If `selection` is provided, only the pages required for the selection
+    /// are fetched. Otherwise, all pages are fetched.
+    pub(crate) async fn fetch<T: AsyncFileReader + Send>(
+        &mut self,
+        input: &mut T,
+        projection: &ProjectionMask,
+        selection: Option<&RowSelection>,
+        batch_size: usize,
+        cache_mask: Option<&ProjectionMask>,
+    ) -> Result<()> {
+        // Figure out what ranges to fetch
+        let FetchRanges {
+            ranges,
+            page_start_offsets,
+        } = self.fetch_ranges(projection, selection, batch_size, cache_mask);
+        // do the actual fetch
+        let chunk_data = input.get_byte_ranges(ranges).await?.into_iter();
+        // update our in memory buffers (self.column_chunks) with the fetched data
+        self.fill_column_chunks(projection, page_start_offsets, chunk_data);
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
