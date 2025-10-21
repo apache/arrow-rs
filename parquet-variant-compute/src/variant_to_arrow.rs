@@ -567,7 +567,7 @@ impl FakeNullBuilder {
     fn new(capacity: usize) -> Self {
         Self(NullArray::new(capacity))
     }
-    fn append_value(&mut self, _: ()) {}
+    fn append_value<T>(&mut self, _: T) {}
     fn append_null(&mut self) {}
 
     fn finish(self) -> NullArray {
@@ -578,6 +578,6 @@ impl FakeNullBuilder {
 define_variant_to_primitive_builder!(
     struct VariantToNullArrowRowBuilder<'a>
     |capacity| -> FakeNullBuilder { FakeNullBuilder::new(capacity) },
-    |value|  value.as_null(),
+    |_value|  Some(Variant::Null),
     type_name: "Null"
 );
