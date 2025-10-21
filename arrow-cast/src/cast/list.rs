@@ -24,7 +24,7 @@ pub(crate) fn cast_values_to_list<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let values = cast_with_options(array, to.data_type(), cast_options)?;
-    let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(1, values.len()));
+    let offsets = OffsetBuffer::from_repeated_length(1, values.len());
     let list = GenericListArray::<O>::try_new(to.clone(), offsets, values, None)?;
     Ok(Arc::new(list))
 }
