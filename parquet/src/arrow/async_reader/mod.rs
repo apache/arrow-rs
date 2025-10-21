@@ -965,6 +965,9 @@ where
     }
 }
 
+// Note this implementation is not with the rest of the InMemoryRowGroup
+// implementation because it relies on several async traits and types
+// that are only available when the "async" feature is enabled.
 impl InMemoryRowGroup<'_> {
     /// Fetches any additional column data specified in `projection` that is not already
     /// present in `self.column_chunks`.
