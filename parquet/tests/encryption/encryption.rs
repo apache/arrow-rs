@@ -801,7 +801,7 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
     let mut record_reader = builder.build().unwrap();
     assert_eq!(
         record_reader.next().unwrap().unwrap_err().to_string(),
-        "Parquet argument error: External: protocol error"
+        "Parquet argument error: Parquet error: Required field type_ is missing"
     );
 }
 
