@@ -348,6 +348,16 @@ impl<O: OffsetSizeTrait> std::fmt::Write for GenericStringBuilder<O> {
     }
 }
 
+/// A byte size value representing the number of bytes to allocate per string in [`GenericStringBuilder`]
+/// 
+/// To create a [`GenericStringBuilder`] using `.with_capacity` we are required to provide: \
+/// - `item_capacity` - the row count \
+/// - `data_capacity` - total string byte count \
+/// 
+/// We will use the `AVERAGE_STRING_LENGTH` * row_count for `data_capacity`. \
+/// 
+/// These capacities are preallocation hints used to improve performance,
+/// but consuquences of passing a hint too large or too small should be negligible.
 const AVERAGE_STRING_LENGTH: usize = 16;
 /// Trait for string-like array builders
 ///

@@ -71,6 +71,7 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
 pub(crate) enum VariantToArrowRowBuilder<'a> {
     Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
     BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
+    
     // Path extraction wrapper - contains a boxed enum for any of the above
     WithPath(VariantPathRowBuilder<'a>),
 }
