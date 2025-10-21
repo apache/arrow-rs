@@ -182,6 +182,7 @@
 experimental!(mod array_reader);
 pub mod arrow_reader;
 pub mod arrow_writer;
+pub mod bloom_filter;
 mod buffer;
 mod decoder;
 
