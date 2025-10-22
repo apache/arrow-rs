@@ -173,7 +173,10 @@ pub fn filter_record_batch(
     predicate: &BooleanArray,
 ) -> Result<RecordBatch, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
-    if record_batch.num_columns() > 1 || multiple_arrays(record_batch.schema().fields()[0].data_type()) {
+    let num_cols = record_batch.num_columns();
+    if num_cols > 1
+        || (num_cols > 0 && multiple_arrays(record_batch.schema_ref().field(0).data_type()))
+    {
         // Only optimize if filtering more than one column
         // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
@@ -298,7 +301,10 @@ impl FilterPredicate {
     /// [`FilterPredicate`].
     ///
     /// This is the equivalent of calling [filter] on each column of the [`RecordBatch`].
-    pub fn filter_record_batch(&self, record_batch: &RecordBatch) -> Result<RecordBatch, ArrowError> {
+    pub fn filter_record_batch(
+        &self,
+        record_batch: &RecordBatch,
+    ) -> Result<RecordBatch, ArrowError> {
         let filtered_arrays = record_batch
             .columns()
             .iter()
@@ -307,7 +313,13 @@ impl FilterPredicate {
 
         // SAFETY: we know that the set of filtered arrays will match the schema of the original
         // record batch
-        unsafe { Ok(RecordBatch::new_unchecked(record_batch.schema(), filtered_arrays, self.count)) }
+        unsafe {
+            Ok(RecordBatch::new_unchecked(
+                record_batch.schema(),
+                filtered_arrays,
+                self.count,
+            ))
+        }
     }
 
     /// Number of rows being selected based on this [`FilterPredicate`]
