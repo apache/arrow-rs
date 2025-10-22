@@ -95,7 +95,8 @@ impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
 
 impl<T: HeapSize> HeapSize for Arc<T> {
     fn heap_size(&self) -> usize {
-        self.as_ref().heap_size()
+        // Arc stores weak and strong counts on the heap alongside an instance of T
+        2 * std::mem::size_of::<usize>() + std::mem::size_of::<T>() + self.as_ref().heap_size()
     }
 }
 
