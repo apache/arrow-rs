@@ -299,7 +299,7 @@ mod tests {
         let err = data.get_read(5).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Expected to read at offset 5, while file has length 4"
+            "EOF: Expected to read at offset 5, while file has length 4"
         );
     }
 
@@ -309,13 +309,13 @@ mod tests {
         let err = data.get_bytes(5, 1).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Expected to read 1 bytes at offset 5, while file has length 4"
+            "EOF: Expected to read 1 bytes at offset 5, while file has length 4"
         );
 
         let err = data.get_bytes(2, 3).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: Expected to read 3 bytes at offset 2, while file has length 4"
+            "EOF: Expected to read 3 bytes at offset 2, while file has length 4"
         );
     }
 }

@@ -1394,10 +1394,7 @@ mod tests {
     fn test_dict_decoder_empty_data() {
         let mut decoder = DictDecoder::<Int32Type>::new();
         let err = decoder.set_data(Bytes::new(), 10).unwrap_err();
-        assert_eq!(
-            err.to_string(),
-            "Parquet error: Not enough bytes to decode bit_width"
-        );
+        assert_eq!(err.to_string(), "EOF: Not enough bytes to decode bit_width");
     }
 
     fn test_plain_decode<T: DataType>(

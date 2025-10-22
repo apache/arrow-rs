@@ -25,7 +25,7 @@ use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift::PageHeader;
+use crate::file::metadata::thrift::{DataPageHeaderV2, PageHeader};
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics;
 use crate::file::{
@@ -1145,10 +1145,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
     fn test_decode_page_invalid_offset() {
-        use crate::file::metadata::thrift_gen::DataPageHeaderV2;
-
         let page_header = PageHeader {
             r#type: PageType::DATA_PAGE_V2,
             uncompressed_page_size: 10,
@@ -1171,18 +1168,44 @@ mod tests {
 
         let buffer = Bytes::new();
         let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
-        assert_eq!(err.to_string(), "Parquet error: Invalid page header");
+        assert!(
+            err.to_string()
+                .contains("DataPage v2 header contains implausible values")
+        );
     }
 
-    #[test]
     fn test_decode_unsupported_page() {
-        let mut page_header = PageHeader::default();
-        page_header.r#type = PageType::INDEX_PAGE;
+        let mut page_header = PageHeader {
+            r#type: PageType::INDEX_PAGE,
+            uncompressed_page_size: 10,
+            compressed_page_size: 10,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            crc: None,
+            data_page_header_v2: None,
+        };
         let buffer = Bytes::new();
-        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        let err = decode_page(page_header.clone(), buffer.clone(), Type::INT32, None).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Parquet error: Page type INDEX_PAGE is not supported"
+        );
+
+        page_header.data_page_header_v2 = Some(DataPageHeaderV2 {
+            num_nulls: 0,
+            num_rows: 0,
+            num_values: 0,
+            encoding: Encoding::PLAIN,
+            definition_levels_byte_length: 11,
+            repetition_levels_byte_length: 0,
+            is_compressed: None,
+            statistics: None,
+        });
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("DataPage v2 header contains implausible values")
         );
     }
 
