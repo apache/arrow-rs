@@ -347,14 +347,17 @@ impl<'a> GetOptions<'a> {
 
 #[cfg(test)]
 mod test {
+    use std::str::FromStr;
+    use std::sync::Arc;
+
     use super::{GetOptions, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::{VariantArray, VariantArrayBuilder, VariantValueArrayBuilder, json_to_variant};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
         Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
-        GenericListArray, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray,
-        StructArray,
+        GenericListArray, Int16Array, Int32Array, Int64Array, NullBuilder, LargeStringArray, StringArray, StringViewArray,
+        StructArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::compute::CastOptions;
@@ -367,7 +370,6 @@ mod test {
         EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
         VariantDecimalType, VariantPath,
     };
-    use std::sync::Arc;
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -1055,6 +1057,158 @@ mod test {
         DataType::Date32,
         perfectly_shredded_date_variant_array,
         Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_time_variant_array, || {
+        Time64MicrosecondArray::from(vec![Some(12345000), Some(87654000), Some(135792000)])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_time_as_time,
+        DataType::Time64(TimeUnit::Microsecond),
+        perfectly_shredded_time_variant_array,
+        Time64MicrosecondArray::from(vec![Some(12345000), Some(87654000), Some(135792000)])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_null_variant_array, || {
+        let mut builder = NullBuilder::new();
+        builder.append_nulls(3);
+        builder.finish()
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_null_as_null,
+        DataType::Null,
+        perfectly_shredded_null_variant_array,
+        arrow::array::NullArray::new(3)
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_decimal4_variant_array, || {
+        Decimal32Array::from(vec![Some(12345), Some(23400), Some(-12342)])
+            .with_precision_and_scale(5, 2)
+            .unwrap()
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_decimal4_as_decimal4,
+        DataType::Decimal32(5, 2),
+        perfectly_shredded_decimal4_variant_array,
+        Decimal32Array::from(vec![Some(12345), Some(23400), Some(-12342)])
+            .with_precision_and_scale(5, 2)
+            .unwrap()
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_decimal8_variant_array_cast2decimal32,
+        || {
+            Decimal64Array::from(vec![Some(123456), Some(145678), Some(-123456)])
+                .with_precision_and_scale(6, 1)
+                .unwrap()
+        }
+    );
+
+    // The input will be cast to Decimal32 when transformed to Variant
+    // This tests will covert the logic DataType::Decimal64(the original array)
+    // -> Variant::Decimal4(VariantArray) -> DataType::Decimal64(the result array)
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_decimal8_through_decimal32_as_decimal8,
+        DataType::Decimal64(6, 1),
+        perfectly_shredded_decimal8_variant_array_cast2decimal32,
+        Decimal64Array::from(vec![Some(123456), Some(145678), Some(-123456)])
+            .with_precision_and_scale(6, 1)
+            .unwrap()
+    );
+
+    // This tests will covert the logic DataType::Decimal64(the original array)
+    //  -> Variant::Decimal8(VariantArray) -> DataType::Decimal64(the result array)
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_decimal8_variant_array, || {
+        Decimal64Array::from(vec![Some(1234567809), Some(1456787000), Some(-1234561203)])
+            .with_precision_and_scale(10, 1)
+            .unwrap()
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_decimal8_as_decimal8,
+        DataType::Decimal64(10, 1),
+        perfectly_shredded_decimal8_variant_array,
+        Decimal64Array::from(vec![Some(1234567809), Some(1456787000), Some(-1234561203)])
+            .with_precision_and_scale(10, 1)
+            .unwrap()
+    );
+
+    // This tests will covert the logic DataType::Decimal128(the original array)
+    //  -> Variant::Decimal4(VariantArray) -> DataType::Decimal128(the result array)
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_decimal16_within_decimal4_variant_array,
+        || {
+            Decimal128Array::from(vec![
+                Some(i128::from(1234589)),
+                Some(i128::from(2344444)),
+                Some(i128::from(-1234789)),
+            ])
+            .with_precision_and_scale(7, 3)
+            .unwrap()
+        }
+    );
+
+    // This tests will covert the logic DataType::Decimal128(the original array)
+    // -> Variant::Decimal4(VariantArray) -> DataType::Decimal128(the result array)
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_decimal16_within_decimal4_as_decimal16,
+        DataType::Decimal128(7, 3),
+        perfectly_shredded_decimal16_within_decimal4_variant_array,
+        Decimal128Array::from(vec![
+            Some(i128::from(1234589)),
+            Some(i128::from(2344444)),
+            Some(i128::from(-1234789)),
+        ])
+        .with_precision_and_scale(7, 3)
+        .unwrap()
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_decimal16_within_decimal8_variant_array,
+        || {
+            Decimal128Array::from(vec![Some(1234567809), Some(1456787000), Some(-1234561203)])
+                .with_precision_and_scale(10, 1)
+                .unwrap()
+        }
+    );
+
+    // This tests will covert the logic DataType::Decimal128(the original array)
+    // -> Variant::Decimal8(VariantArray) -> DataType::Decimal128(the result array)
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_decimal16_within8_as_decimal16,
+        DataType::Decimal128(10, 1),
+        perfectly_shredded_decimal16_within_decimal8_variant_array,
+        Decimal128Array::from(vec![Some(1234567809), Some(1456787000), Some(-1234561203)])
+            .with_precision_and_scale(10, 1)
+            .unwrap()
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_decimal16_variant_array, || {
+        Decimal128Array::from(vec![
+            Some(i128::from_str("12345678901234567899").unwrap()),
+            Some(i128::from_str("23445677483748324300").unwrap()),
+            Some(i128::from_str("-12345678901234567899").unwrap()),
+        ])
+        .with_precision_and_scale(20, 3)
+        .unwrap()
+    });
+
+    // This tests will covert the logic DataType::Decimal128(the original array)
+    // -> Variant::Decimal16(VariantArray) -> DataType::Decimal128(the result array)
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_decimal16_as_decimal16,
+        DataType::Decimal128(20, 3),
+        perfectly_shredded_decimal16_variant_array,
+        Decimal128Array::from(vec![
+            Some(i128::from_str("12345678901234567899").unwrap()),
+            Some(i128::from_str("23445677483748324300").unwrap()),
+            Some(i128::from_str("-12345678901234567899").unwrap())
+        ])
+        .with_precision_and_scale(20, 3)
+        .unwrap()
     );
 
     macro_rules! assert_variant_get_as_variant_array_with_default_option {
