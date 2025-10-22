@@ -908,12 +908,12 @@ impl RowConverter {
     /// [RowConverter]. It will panic if any rows are null. Operations on the returned [Rows] may
     /// panic if the data is malformed.
     pub fn from_binary(&self, array: BinaryArray) -> Rows {
-        let (offsets, values, nulls) = array.into_parts();
         assert_eq!(
-            nulls.map(|n| n.null_count()).unwrap_or(0),
+            array.null_count(),
             0,
             "can't construct Rows instance from array with nulls"
         );
+        let (offsets, values, _) = array.into_parts();
         let offsets = offsets.iter().map(|&i| i.as_usize()).collect();
         // Try zero-copy, if it does not succeed, fall back to copying the values.
         let buffer = values.into_vec().unwrap_or_else(|values| values.to_vec());
