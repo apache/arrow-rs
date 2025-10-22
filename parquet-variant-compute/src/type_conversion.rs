@@ -189,7 +189,7 @@ where
 /// Rescale a decimal from (input_precision, input_scale) to (output_precision, output_scale)
 /// and return the scaled value if it fits the output precision. Similar to the implementation in
 /// decimal.rs in arrow-cast.
-pub(crate) fn rescale_decimal<I, O>(
+pub(crate) fn rescale_decimal<I: DecimalType, O: DecimalType>(
     value: I::Native,
     input_precision: u8,
     input_scale: i8,
@@ -197,32 +197,41 @@ pub(crate) fn rescale_decimal<I, O>(
     output_scale: i8,
 ) -> Option<O::Native>
 where
-    I: DecimalType,
-    O: DecimalType,
     I::Native: DecimalCast,
     O::Native: DecimalCast,
 {
     let delta_scale = output_scale - input_scale;
 
-    // Determine if the cast is infallible based on precision/scale math
-    let is_infallible_cast =
-        is_infallible_decimal_cast(input_precision, input_scale, output_precision, output_scale);
+    let (scaled, is_infallible_cast) = if delta_scale >= 0 {
+        // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
+        // Adding 1 yields exactly 10^k without computing a power at runtime.
+        // Using the precomputed table avoids pow(10, k) and its checked/overflow
+        // handling, which is faster and simpler for scaling by 10^delta_scale.
+        let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
+        let mul = max.add_wrapping(O::Native::ONE);
 
-    let scaled = if delta_scale == 0 {
-        O::Native::from_decimal(value)
-    } else if delta_scale > 0 {
-        let mul = O::Native::from_decimal(10_i128)
-            .and_then(|t| t.pow_checked(delta_scale as u32).ok())?;
-        O::Native::from_decimal(value).and_then(|x| x.mul_checked(mul).ok())
+        // if the gain in precision (digits) is greater than the multiplication due to scaling
+        // every number will fit into the output type
+        // Example: If we are starting with any number of precision 5 [xxxxx],
+        // then an increase of scale by 3 will have the following effect on the representation:
+        // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
+        // needs to provide at least 8 digits precision
+        let is_infallible_cast = input_precision as i8 + delta_scale <= output_precision as i8;
+        let value = O::Native::from_decimal(value);
+        let scaled = if is_infallible_cast {
+            Some(value.unwrap().mul_wrapping(mul))
+        } else {
+            value.and_then(|x| x.mul_checked(mul).ok())
+        };
+        (scaled, is_infallible_cast)
     } else {
-        // delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION. If so, the
-        // scale change divides out more digits than the input has precision and the result of the cast
-        // is always zero. For example, if we try to apply delta_scale=10 a decimal32 value, the largest
-        // possible result is 999999999/10000000000 = 0.0999999999, which rounds to zero. Smaller values
-        // (e.g. 1/10000000000) or larger delta_scale (e.g. 999999999/10000000000000) produce even
-        // smaller results, which also round to zero. In that case, just return an array of zeros.
-        let delta_scale = delta_scale.unsigned_abs() as usize;
-        let Some(max) = I::MAX_FOR_EACH_PRECISION.get(delta_scale) else {
+        // the abs of delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION.
+        // If so, the scale change divides out more digits than the input has precision and the result
+        // of the cast is always zero. For example, if we try to apply delta_scale=10 a decimal32 value,
+        // the largest possible result is 999999999/10000000000 = 0.0999999999, which rounds to zero.
+        // Smaller values (e.g. 1/10000000000) or larger delta_scale (e.g. 999999999/10000000000000)
+        // produce even smaller results, which also round to zero. In that case, just return zero.
+        let Some(max) = I::MAX_FOR_EACH_PRECISION.get(delta_scale.unsigned_abs() as usize) else {
             return Some(O::Native::ZERO);
         };
         let div = max.add_wrapping(I::Native::ONE);
@@ -239,43 +248,25 @@ where
             false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
             _ => d,
         };
-        O::Native::from_decimal(adjusted)
-    };
 
-    scaled.filter(|v| is_infallible_cast || O::is_valid_decimal_precision(*v, output_precision))
-}
-
-/// Returns true if casting from (input_precision, input_scale) to
-/// (output_precision, output_scale) is infallible based on precision/scale math.
-fn is_infallible_decimal_cast(
-    input_precision: u8,
-    input_scale: i8,
-    output_precision: u8,
-    output_scale: i8,
-) -> bool {
-    let delta_scale = output_scale - input_scale;
-    let input_precision = input_precision as i8;
-    let output_precision = output_precision as i8;
-    if delta_scale >= 0 {
-        // if the gain in precision (digits) is greater than the multiplication due to scaling
-        // every number will fit into the output type
-        // Example: If we are starting with any number of precision 5 [xxxxx],
-        // then an increase of scale by 3 will have the following effect on the representation:
-        // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
-        // needs to provide at least 8 digits precision
-        input_precision + delta_scale <= output_precision
-    } else {
         // if the reduction of the input number through scaling (dividing) is greater
         // than a possible precision loss (plus potential increase via rounding)
         // every input number will fit into the output type
         // Example: If we are starting with any number of precision 5 [xxxxx],
         // then and decrease the scale by 3 will have the following effect on the representation:
         // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
-        // The rounding may add an additional digit, so for the cast to be infallible,
+        // The rounding may add a digit, so for the cast to be infallible,
         // the output type needs to have at least 3 digits of precision.
         // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
         // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
-        input_precision + delta_scale < output_precision
+        let is_infallible_cast = input_precision as i8 + delta_scale < output_precision as i8;
+        (O::Native::from_decimal(adjusted), is_infallible_cast)
+    };
+
+    if is_infallible_cast {
+        scaled
+    } else {
+        scaled.filter(|v| O::is_valid_decimal_precision(*v, output_precision))
     }
 }
 
