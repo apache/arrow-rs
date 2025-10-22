@@ -16,7 +16,12 @@
 // under the License.
 
 use arrow_schema::ArrowError;
-use std::io;
+#[cfg(any(
+    feature = "deflate",
+    feature = "zstd",
+    feature = "bzip2",
+    feature = "xz"
+))]
 use std::io::{Read, Write};
 
 /// The metadata key used for storing the JSON encoded [`CompressionCodec`]
@@ -41,6 +46,7 @@ pub enum CompressionCodec {
 }
 
 impl CompressionCodec {
+    #[allow(unused_variables)]
     pub(crate) fn decompress(&self, block: &[u8]) -> Result<Vec<u8>, ArrowError> {
         match self {
             #[cfg(feature = "deflate")]
@@ -113,6 +119,7 @@ impl CompressionCodec {
         }
     }
 
+    #[allow(unused_variables)]
     pub(crate) fn compress(&self, data: &[u8]) -> Result<Vec<u8>, ArrowError> {
         match self {
             #[cfg(feature = "deflate")]

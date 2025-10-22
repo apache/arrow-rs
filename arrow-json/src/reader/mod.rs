@@ -138,11 +138,11 @@ use std::io::BufRead;
 use std::sync::Arc;
 
 use chrono::Utc;
-use serde::Serialize;
+use serde_core::Serialize;
 
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
+use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer, make_array};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
@@ -613,6 +613,8 @@ impl Decoder {
     /// ```
     ///
     /// Note: this ignores any batch size setting, and always decodes all rows
+    ///
+    /// [serde]: https://docs.rs/serde/latest/serde/
     pub fn serialize<S: Serialize>(&mut self, rows: &[S]) -> Result<(), ArrowError> {
         self.tape_decoder.serialize(rows)
     }

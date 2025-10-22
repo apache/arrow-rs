@@ -22,7 +22,7 @@ use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType::FixedSizeBinary;
 use arrow_schema::{ArrowError, DataType};
 use hashbrown::HashTable;
-use num::NumCast;
+use num_traits::NumCast;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -142,7 +142,7 @@ where
 
         let source_keys = source.keys_builder.finish();
         let new_keys: PrimitiveArray<K> = source_keys.try_unary(|value| {
-            num::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
+            num_traits::cast::cast::<K2::Native, K::Native>(value).ok_or_else(|| {
                 ArrowError::CastError(format!(
                     "Can't cast dictionary keys from source type {:?} to type {:?}",
                     K2::DATA_TYPE,
@@ -248,6 +248,28 @@ where
         } else {
             let key = self.get_or_insert_key(value)?;
             self.keys_builder.append_value(key);
+            Ok(key)
+        }
+    }
+
+    /// Append a value multiple times to the array.
+    /// This is the same as [`Self::append`] but allows to append the same value multiple times without doing multiple lookups.
+    ///
+    /// Returns an error if the new index would overflow the key type.
+    pub fn append_n(
+        &mut self,
+        value: impl AsRef<[u8]>,
+        count: usize,
+    ) -> Result<K::Native, ArrowError> {
+        if self.byte_width != value.as_ref().len() as i32 {
+            Err(ArrowError::InvalidArgumentError(format!(
+                "Invalid input length passed to FixedSizeBinaryBuilder. Expected {} got {}",
+                self.byte_width,
+                value.as_ref().len()
+            )))
+        } else {
+            let key = self.get_or_insert_key(value)?;
+            self.keys_builder.append_value_n(key, count);
             Ok(key)
         }
     }
@@ -359,7 +381,7 @@ fn get_bytes(values: &FixedSizeBinaryBuilder, byte_width: i32, idx: usize) -> &[
 mod tests {
     use super::*;
 
-    use crate::types::{Int16Type, Int32Type, Int8Type, UInt16Type, UInt8Type};
+    use crate::types::{Int8Type, Int16Type, Int32Type, UInt8Type, UInt16Type};
     use crate::{ArrowPrimitiveType, FixedSizeBinaryArray, Int8Array};
 
     #[test]
@@ -402,12 +424,56 @@ mod tests {
     }
 
     #[test]
+    fn test_fixed_size_dictionary_builder_append_n() {
+        let values = ["abc", "def"];
+        let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
+        assert_eq!(b.append_n(values[0], 2).unwrap(), 0);
+        assert_eq!(b.append_n(values[1], 3).unwrap(), 1);
+        assert_eq!(b.append_n(values[0], 2).unwrap(), 0);
+        let array = b.finish();
+
+        assert_eq!(
+            array.keys(),
+            &Int8Array::from(vec![
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(0),
+                Some(0),
+            ]),
+        );
+
+        // Values are polymorphic and so require a downcast.
+        let ava = array
+            .values()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        assert_eq!(ava.value(0), values[0].as_bytes());
+        assert_eq!(ava.value(1), values[1].as_bytes());
+    }
+
+    #[test]
     fn test_fixed_size_dictionary_builder_wrong_size() {
         let mut b = FixedSizeBinaryDictionaryBuilder::<Int8Type>::new(3);
         let err = b.append(b"too long").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 8"
+        );
         let err = b.append("").unwrap_err().to_string();
-        assert_eq!(err, "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0");
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 0"
+        );
+        let err = b.append_n("a", 3).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "Invalid argument error: Invalid input length passed to FixedSizeBinaryBuilder. Expected 3 got 1"
+        );
     }
 
     #[test]

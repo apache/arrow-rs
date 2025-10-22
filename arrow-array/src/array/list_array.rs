@@ -18,13 +18,13 @@
 use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
-    ArrowPrimitiveType, FixedSizeListArray,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
+    iterator::GenericListArrayIter, new_empty_array,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use num::Integer;
+use num_integer::Integer;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -38,7 +38,7 @@ use std::sync::Arc;
 /// [`StringArray`]: crate::array::StringArray
 /// [`LargeStringArray`]: crate::array::LargeStringArray
 pub trait OffsetSizeTrait:
-    ArrowNativeType + std::ops::AddAssign + Integer + num::CheckedAdd
+    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd
 {
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
@@ -336,8 +336,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
-        let end = self.value_offsets().get_unchecked(i + 1).as_usize();
-        let start = self.value_offsets().get_unchecked(i).as_usize();
+        let end = unsafe { self.value_offsets().get_unchecked(i + 1).as_usize() };
+        let start = unsafe { self.value_offsets().get_unchecked(i).as_usize() };
         self.values.slice(start, end - start)
     }
 
@@ -635,7 +635,7 @@ mod tests {
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, Int64Array};
-    use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
+    use arrow_buffer::{Buffer, ScalarBuffer, bit_util};
     use arrow_schema::Field;
 
     fn create_from_buffers() -> ListArray {

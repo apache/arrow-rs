@@ -15,20 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use parquet::file::metadata::ParquetMetaDataReader;
+use std::sync::Arc;
+
+use parquet::basic::{Encoding, PageType, Type as PhysicalType};
+use parquet::file::metadata::{
+    ColumnChunkMetaData, FileMetaData, PageEncodingStats, ParquetMetaData, ParquetMetaDataReader,
+    ParquetMetaDataWriter, RowGroupMetaData,
+};
+use parquet::file::statistics::Statistics;
+use parquet::file::writer::TrackedWrite;
+use parquet::schema::parser::parse_message_type;
+use parquet::schema::types::{
+    ColumnDescPtr, ColumnDescriptor, ColumnPath, SchemaDescriptor, Type as SchemaType,
+};
 use rand::Rng;
-use thrift::protocol::TCompactOutputProtocol;
 
 use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
 use criterion::*;
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
-use parquet::format::{
-    ColumnChunk, ColumnMetaData, CompressionCodec, Encoding, FieldRepetitionType, FileMetaData,
-    PageEncodingStats, PageType, RowGroup, SchemaElement, Type,
-};
-use parquet::thrift::TSerializable;
 
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
@@ -36,65 +42,42 @@ const NUM_ROW_GROUPS: usize = 10;
 fn encoded_meta() -> Vec<u8> {
     let mut rng = seedable_rng();
 
-    let mut schema = Vec::with_capacity(NUM_COLUMNS + 1);
-    schema.push(SchemaElement {
-        type_: None,
-        type_length: None,
-        repetition_type: None,
-        name: Default::default(),
-        num_children: Some(NUM_COLUMNS as _),
-        converted_type: None,
-        scale: None,
-        precision: None,
-        field_id: None,
-        logical_type: None,
-    });
+    let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
+    let mut message_type = "message test_schema {".to_string();
     for i in 0..NUM_COLUMNS {
-        schema.push(SchemaElement {
-            type_: Some(Type::FLOAT),
-            type_length: None,
-            repetition_type: Some(FieldRepetitionType::REQUIRED),
-            name: i.to_string(),
-            num_children: None,
-            converted_type: None,
-            scale: None,
-            precision: None,
-            field_id: None,
-            logical_type: None,
-        })
+        message_type.push_str(&format!("REQUIRED FLOAT {};", i));
+        column_desc_ptrs.push(ColumnDescPtr::new(ColumnDescriptor::new(
+            Arc::new(
+                SchemaType::primitive_type_builder(&i.to_string(), PhysicalType::FLOAT)
+                    .build()
+                    .unwrap(),
+            ),
+            0,
+            0,
+            ColumnPath::new(vec![]),
+        )));
     }
+    message_type.push('}');
 
-    let stats = parquet::format::Statistics {
-        min: None,
-        max: None,
-        null_count: Some(0),
-        distinct_count: None,
-        max_value: Some(vec![rng.random(); 8]),
-        min_value: Some(vec![rng.random(); 8]),
-        is_max_value_exact: Some(true),
-        is_min_value_exact: Some(true),
-    };
+    let schema_descr = parse_message_type(&message_type)
+        .map(|t| Arc::new(SchemaDescriptor::new(Arc::new(t))))
+        .unwrap();
+
+    let stats = Statistics::float(Some(rng.random()), Some(rng.random()), None, Some(0), false);
 
     let row_groups = (0..NUM_ROW_GROUPS)
         .map(|i| {
             let columns = (0..NUM_COLUMNS)
-                .map(|_| ColumnChunk {
-                    file_path: None,
-                    file_offset: 0,
-                    meta_data: Some(ColumnMetaData {
-                        type_: Type::FLOAT,
-                        encodings: vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY],
-                        path_in_schema: vec![],
-                        codec: CompressionCodec::UNCOMPRESSED,
-                        num_values: rng.random(),
-                        total_uncompressed_size: rng.random(),
-                        total_compressed_size: rng.random(),
-                        key_value_metadata: None,
-                        data_page_offset: rng.random(),
-                        index_page_offset: Some(rng.random()),
-                        dictionary_page_offset: Some(rng.random()),
-                        statistics: Some(stats.clone()),
-                        encoding_stats: Some(vec![
+                .map(|j| {
+                    ColumnChunkMetaData::builder(column_desc_ptrs[j].clone())
+                        .set_encodings(vec![Encoding::PLAIN, Encoding::RLE_DICTIONARY])
+                        .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+                        .set_num_values(rng.random_range(1..1000000))
+                        .set_total_compressed_size(rng.random_range(50000..5000000))
+                        .set_data_page_offset(rng.random_range(4..2000000000))
+                        .set_dictionary_page_offset(Some(rng.random_range(4..2000000000)))
+                        .set_statistics(stats.clone())
+                        .set_page_encoding_stats(vec![
                             PageEncodingStats {
                                 page_type: PageType::DICTIONARY_PAGE,
                                 encoding: Encoding::PLAIN,
@@ -105,51 +88,44 @@ fn encoded_meta() -> Vec<u8> {
                                 encoding: Encoding::RLE_DICTIONARY,
                                 count: 10,
                             },
-                        ]),
-                        bloom_filter_offset: None,
-                        bloom_filter_length: None,
-                        size_statistics: None,
-                        geospatial_statistics: None,
-                    }),
-                    offset_index_offset: Some(rng.random()),
-                    offset_index_length: Some(rng.random()),
-                    column_index_offset: Some(rng.random()),
-                    column_index_length: Some(rng.random()),
-                    crypto_metadata: None,
-                    encrypted_column_metadata: None,
+                        ])
+                        .set_offset_index_offset(Some(rng.random_range(0..2000000000)))
+                        .set_offset_index_length(Some(rng.random_range(1..100000)))
+                        .set_column_index_offset(Some(rng.random_range(0..2000000000)))
+                        .set_column_index_length(Some(rng.random_range(1..100000)))
+                        .build()
+                        .unwrap()
                 })
                 .collect();
 
-            RowGroup {
-                columns,
-                total_byte_size: rng.random(),
-                num_rows: rng.random(),
-                sorting_columns: None,
-                file_offset: None,
-                total_compressed_size: Some(rng.random()),
-                ordinal: Some(i as _),
-            }
+            RowGroupMetaData::builder(schema_descr.clone())
+                .set_column_metadata(columns)
+                .set_total_byte_size(rng.random_range(1..2000000000))
+                .set_num_rows(rng.random_range(1..10000000000))
+                .set_ordinal(i as i16)
+                .build()
+                .unwrap()
         })
         .collect();
 
-    let file = FileMetaData {
-        schema,
-        row_groups,
-        version: 1,
-        num_rows: rng.random(),
-        key_value_metadata: None,
-        created_by: Some("parquet-rs".into()),
-        column_orders: None,
-        encryption_algorithm: None,
-        footer_signing_key_metadata: None,
-    };
+    let file_metadata = FileMetaData::new(
+        1,
+        rng.random_range(1..2000000000),
+        Some("parquet-rs".into()),
+        None,
+        schema_descr,
+        None,
+    );
 
-    let mut buf = Vec::with_capacity(1024);
+    let metadata = ParquetMetaData::new(file_metadata, row_groups);
+    let mut buffer = Vec::with_capacity(1024);
     {
-        let mut out = TCompactOutputProtocol::new(&mut buf);
-        file.write_to_out_protocol(&mut out).unwrap();
+        let buf = TrackedWrite::new(&mut buffer);
+        let writer = ParquetMetaDataWriter::new_with_tracked(buf, &metadata);
+        writer.finish().unwrap();
     }
-    buf
+
+    buffer
 }
 
 fn get_footer_bytes(data: Bytes) -> Bytes {
@@ -161,36 +137,6 @@ fn get_footer_bytes(data: Bytes) -> Bytes {
     let meta_start = data.len() - footer_len as usize - 8;
     let meta_end = data.len() - 8;
     data.slice(meta_start..meta_end)
-}
-
-#[cfg(feature = "arrow")]
-fn rewrite_file(bytes: Bytes) -> (Bytes, FileMetaData) {
-    use arrow::array::RecordBatchReader;
-    use parquet::arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter};
-    use parquet::file::properties::{EnabledStatistics, WriterProperties};
-
-    let parquet_reader = ParquetRecordBatchReaderBuilder::try_new(bytes)
-        .expect("parquet open")
-        .build()
-        .expect("parquet open");
-    let writer_properties = WriterProperties::builder()
-        .set_statistics_enabled(EnabledStatistics::Page)
-        .set_write_page_header_statistics(true)
-        .build();
-    let mut output = Vec::new();
-    let mut parquet_writer = ArrowWriter::try_new(
-        &mut output,
-        parquet_reader.schema(),
-        Some(writer_properties),
-    )
-    .expect("create arrow writer");
-
-    for maybe_batch in parquet_reader {
-        let batch = maybe_batch.expect("reading batch");
-        parquet_writer.write(&batch).expect("writing data");
-    }
-    let file_meta = parquet_writer.close().expect("finalizing file");
-    (output.into(), file_meta)
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -217,45 +163,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    c.bench_function("decode thrift file metadata", |b| {
-        b.iter(|| {
-            parquet::thrift::bench_file_metadata(&meta_data);
-        })
-    });
-
     let buf: Bytes = black_box(encoded_meta()).into();
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&buf).unwrap();
-        })
-    });
-
-    c.bench_function("decode thrift file metadata (wide)", |b| {
-        b.iter(|| {
-            parquet::thrift::bench_file_metadata(&buf);
-        })
-    });
-
-    // rewrite file with page statistics. then read page headers.
-    #[cfg(feature = "arrow")]
-    let (file_bytes, metadata) = rewrite_file(data.clone());
-    #[cfg(feature = "arrow")]
-    c.bench_function("page headers", |b| {
-        b.iter(|| {
-            metadata.row_groups.iter().for_each(|rg| {
-                rg.columns.iter().for_each(|col| {
-                    if let Some(col_meta) = &col.meta_data {
-                        if let Some(dict_offset) = col_meta.dictionary_page_offset {
-                            parquet::thrift::bench_page_header(
-                                &file_bytes.slice(dict_offset as usize..),
-                            );
-                        }
-                        parquet::thrift::bench_page_header(
-                            &file_bytes.slice(col_meta.data_page_offset as usize..),
-                        );
-                    }
-                });
-            });
         })
     });
 }

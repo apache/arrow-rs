@@ -17,17 +17,21 @@
 
 //! [`VariantArray`] implementation
 
-use crate::type_conversion::primitive_conversion_single_value;
+use crate::VariantArrayBuilder;
+use crate::type_conversion::{generic_conversion_single_value, primitive_conversion_single_value};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Float16Type, Float32Type, Float64Type, Int16Type, Int32Type, Int64Type, Int8Type,
+    Date32Type, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
-use parquet_variant::Uuid;
-use parquet_variant::Variant;
+use chrono::DateTime;
+use parquet_variant::{
+    Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
+};
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -204,7 +208,7 @@ impl ExtensionType for VariantType {
 /// assert_eq!(variant_array.value(0), Variant::from("such wow"));
 /// ```
 ///
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
@@ -270,26 +274,11 @@ impl VariantArray {
             )));
         };
 
-        // Extract value and typed_value fields
-        let value = if let Some(value_col) = inner.column_by_name("value") {
-            if let Some(binary_view) = value_col.as_binary_view_opt() {
-                Some(binary_view.clone())
-            } else {
-                return Err(ArrowError::NotYetImplemented(format!(
-                    "VariantArray 'value' field must be BinaryView, got {}",
-                    value_col.data_type()
-                )));
-            }
-        } else {
-            None
-        };
-        let typed_value = inner.column_by_name("typed_value").cloned();
-
         // Note these clones are cheap, they just bump the ref count
         Ok(Self {
             inner: inner.clone(),
             metadata: metadata.clone(),
-            shredding_state: ShreddingState::new(value, typed_value),
+            shredding_state: ShreddingState::try_from(inner)?,
         })
     }
 
@@ -432,6 +421,11 @@ impl VariantArray {
     pub fn is_valid(&self, index: usize) -> bool {
         !self.is_null(index)
     }
+
+    /// Returns an iterator over the values in this array
+    pub fn iter(&self) -> VariantArrayIter<'_> {
+        VariantArrayIter::new(self)
+    }
 }
 
 impl From<VariantArray> for StructArray {
@@ -445,6 +439,105 @@ impl From<VariantArray> for ArrayRef {
         Arc::new(variant_array.into_inner())
     }
 }
+
+impl<'m, 'v> FromIterator<Option<Variant<'m, 'v>>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+
+        let mut b = VariantArrayBuilder::new(iter.size_hint().0);
+        b.extend(iter);
+        b.build()
+    }
+}
+
+impl<'m, 'v> FromIterator<Variant<'m, 'v>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Variant<'m, 'v>>>(iter: T) -> Self {
+        Self::from_iter(iter.into_iter().map(Some))
+    }
+}
+
+/// An iterator over [`VariantArray`]
+///
+/// This iterator returns `Option<Option<Variant<'a, 'a>>>` where:
+/// - `None` indicates the end of iteration
+/// - `Some(None)` indicates a null value at this position
+/// - `Some(Some(variant))` indicates a valid variant value
+///
+/// # Example
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArrayBuilder;
+/// let mut builder = VariantArrayBuilder::new(10);
+/// builder.append_variant(Variant::from(42));
+/// builder.append_null();
+/// builder.append_variant(Variant::from("hello"));
+/// let array = builder.build();
+///
+/// let values = array.iter().collect::<Vec<_>>();
+/// assert_eq!(values.len(), 3);
+/// assert_eq!(values[0], Some(Variant::from(42)));
+/// assert_eq!(values[1], None);
+/// assert_eq!(values[2], Some(Variant::from("hello")));
+/// ```
+#[derive(Debug)]
+pub struct VariantArrayIter<'a> {
+    array: &'a VariantArray,
+    head_i: usize,
+    tail_i: usize,
+}
+
+impl<'a> VariantArrayIter<'a> {
+    /// Creates a new iterator over the given [`VariantArray`]
+    pub fn new(array: &'a VariantArray) -> Self {
+        Self {
+            array,
+            head_i: 0,
+            tail_i: array.len(),
+        }
+    }
+
+    fn value_opt(&self, i: usize) -> Option<Variant<'a, 'a>> {
+        self.array.is_valid(i).then(|| self.array.value(i))
+    }
+}
+
+impl<'a> Iterator for VariantArrayIter<'a> {
+    type Item = Option<Variant<'a, 'a>>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        let out = self.value_opt(self.head_i);
+
+        self.head_i += 1;
+
+        Some(out)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remainder = self.tail_i - self.head_i;
+
+        (remainder, Some(remainder))
+    }
+}
+
+impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        self.tail_i -= 1;
+
+        Some(self.value_opt(self.tail_i))
+    }
+}
+
+impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
 
 /// One shredded field of a partially or prefectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is
@@ -519,7 +612,7 @@ impl ShreddedVariantFieldArray {
         // Note this clone is cheap, it just bumps the ref count
         Ok(Self {
             inner: inner_struct.clone(),
-            shredding_state: ShreddingState::from(inner_struct),
+            shredding_state: ShreddingState::try_from(inner_struct)?,
         })
     }
 
@@ -627,44 +720,35 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 ///
 /// | value    | typed_value  | Meaning |
 /// |----------|--------------|---------|
-/// | null     | null         | The value is missing; only valid for shredded object fields |
-/// | non-null | null         | The value is present and may be any type, including `null` |
-/// | null     | non-null     | The value is present and is the shredded type |
-/// | non-null | non-null     | The value is present and is a partially shredded object |
+/// | NULL     | NULL         | The value is missing; only valid for shredded object fields |
+/// | non-NULL | NULL         | The value is present and may be any type, including [`Variant::Null`] |
+/// | NULL     | non-NULL     | The value is present and is the shredded type |
+/// | non-NULL | non-NULL     | The value is present and is a partially shredded object |
+///
+///
+/// Applying the above rules to entire columns, we obtain the following:
+///
+/// | value  | typed_value  | Meaning |
+/// |--------|-------------|---------|
+/// | --     | --          | **Missing**: The value is always missing; only valid for shredded object fields |
+/// | exists | --          | **Unshredded**: If present, the value may be any type, including [`Variant::Null`]
+/// | --     | exists      | **Perfectly shredded**: If present, the value is always the shredded type |
+/// | exists | exists      | **Imperfectly shredded**: The value might (not) be present and might (not) be the shredded type |
+///
+/// NOTE: Partial shredding is a row-wise situation that can arise under imperfect shredding (a
+/// column-wise situation): When both columns exist (imperfect shredding) and the typed_value column
+/// is a struct, then both columns can be non-NULL for the same row if value is a variant object
+/// (partial shredding).
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
-#[derive(Clone, Debug)]
-pub enum ShreddingState {
-    /// This variant has no typed_value field
-    Unshredded { value: BinaryViewArray },
-    /// This variant has a typed_value field and no value field
-    /// meaning it is the shredded type
-    Typed { typed_value: ArrayRef },
-    /// Imperfectly shredded: Shredded values reside in `typed_value` while those that failed to
-    /// shred reside in `value`. Missing field values are NULL in both columns, while NULL primitive
-    /// values have NULL `typed_value` and `Variant::Null` in `value`.
-    ///
-    /// NOTE: A partially shredded struct is a special kind of imperfect shredding, where
-    /// `typed_value` and `value` are both non-NULL. The `typed_value` is a struct containing the
-    /// subset of fields for which shredding was attempted (each field will then have its own value
-    /// and/or typed_value sub-fields that indicate how shredding actually turned out). Meanwhile,
-    /// the `value` is a variant object containing the subset of fields for which shredding was
-    /// not even attempted.
-    PartiallyShredded {
-        value: BinaryViewArray,
-        typed_value: ArrayRef,
-    },
-    /// All values are null, only metadata is present.
-    ///
-    /// This state occurs when neither `value` nor `typed_value` fields exist in the schema.
-    /// Note: By strict spec interpretation, this should only be valid for shredded object fields,
-    /// not top-level variants. However, we allow it and treat as Variant::Null for pragmatic
-    /// handling of missing data.
-    AllNull,
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShreddingState {
+    value: Option<BinaryViewArray>,
+    typed_value: Option<ArrayRef>,
 }
 
 impl ShreddingState {
-    /// try to create a new `ShreddingState` from the given `value` and `typed_value` fields
+    /// Create a new `ShreddingState` from the given `value` and `typed_value` fields
     ///
     /// Note you can create a `ShreddingState` from a &[`StructArray`] using
     /// `ShreddingState::try_from(&struct_array)`, for example:
@@ -679,62 +763,109 @@ impl ShreddingState {
     /// let shredding_state = ShreddingState::try_from(&struct_array).unwrap();
     /// ```
     pub fn new(value: Option<BinaryViewArray>, typed_value: Option<ArrayRef>) -> Self {
-        match (value, typed_value) {
-            (Some(value), Some(typed_value)) => Self::PartiallyShredded { value, typed_value },
-            (Some(value), None) => Self::Unshredded { value },
-            (None, Some(typed_value)) => Self::Typed { typed_value },
-            (None, None) => Self::AllNull,
-        }
+        Self { value, typed_value }
     }
 
     /// Return a reference to the value field, if present
     pub fn value_field(&self) -> Option<&BinaryViewArray> {
-        match self {
-            ShreddingState::Unshredded { value, .. } => Some(value),
-            ShreddingState::Typed { .. } => None,
-            ShreddingState::PartiallyShredded { value, .. } => Some(value),
-            ShreddingState::AllNull => None,
-        }
+        self.value.as_ref()
     }
 
     /// Return a reference to the typed_value field, if present
     pub fn typed_value_field(&self) -> Option<&ArrayRef> {
-        match self {
-            ShreddingState::Unshredded { .. } => None,
-            ShreddingState::Typed { typed_value, .. } => Some(typed_value),
-            ShreddingState::PartiallyShredded { typed_value, .. } => Some(typed_value),
-            ShreddingState::AllNull => None,
+        self.typed_value.as_ref()
+    }
+
+    /// Returns a borrowed version of this shredding state
+    pub fn borrow(&self) -> BorrowedShreddingState<'_> {
+        BorrowedShreddingState {
+            value: self.value_field(),
+            typed_value: self.typed_value_field(),
         }
     }
 
     /// Slice all the underlying arrays
     pub fn slice(&self, offset: usize, length: usize) -> Self {
-        match self {
-            ShreddingState::Unshredded { value } => ShreddingState::Unshredded {
-                value: value.slice(offset, length),
-            },
-            ShreddingState::Typed { typed_value } => ShreddingState::Typed {
-                typed_value: typed_value.slice(offset, length),
-            },
-            ShreddingState::PartiallyShredded { value, typed_value } => {
-                ShreddingState::PartiallyShredded {
-                    value: value.slice(offset, length),
-                    typed_value: typed_value.slice(offset, length),
-                }
-            }
-            ShreddingState::AllNull => ShreddingState::AllNull,
+        Self {
+            value: self.value.as_ref().map(|v| v.slice(offset, length)),
+            typed_value: self.typed_value.as_ref().map(|tv| tv.slice(offset, length)),
         }
     }
 }
 
-impl From<&StructArray> for ShreddingState {
-    fn from(inner_struct: &StructArray) -> Self {
-        let value = inner_struct
-            .column_by_name("value")
-            .and_then(|col| col.as_binary_view_opt().cloned());
-        let typed_value = inner_struct.column_by_name("typed_value").cloned();
+/// Similar to [`ShreddingState`] except it holds borrowed references of the target arrays. Useful
+/// for avoiding clone operations when the caller does not need a self-standing shredding state.
+#[derive(Clone, Debug)]
+pub struct BorrowedShreddingState<'a> {
+    value: Option<&'a BinaryViewArray>,
+    typed_value: Option<&'a ArrayRef>,
+}
 
-        ShreddingState::new(value, typed_value)
+impl<'a> BorrowedShreddingState<'a> {
+    /// Create a new `BorrowedShreddingState` from the given `value` and `typed_value` fields
+    ///
+    /// Note you can create a `BorrowedShreddingState` from a &[`StructArray`] using
+    /// `BorrowedShreddingState::try_from(&struct_array)`, for example:
+    ///
+    /// ```no_run
+    /// # use arrow::array::StructArray;
+    /// # use parquet_variant_compute::BorrowedShreddingState;
+    /// # fn get_struct_array() -> StructArray {
+    /// #   unimplemented!()
+    /// # }
+    /// let struct_array: StructArray = get_struct_array();
+    /// let shredding_state = BorrowedShreddingState::try_from(&struct_array).unwrap();
+    /// ```
+    pub fn new(value: Option<&'a BinaryViewArray>, typed_value: Option<&'a ArrayRef>) -> Self {
+        Self { value, typed_value }
+    }
+
+    /// Return a reference to the value field, if present
+    pub fn value_field(&self) -> Option<&'a BinaryViewArray> {
+        self.value
+    }
+
+    /// Return a reference to the typed_value field, if present
+    pub fn typed_value_field(&self) -> Option<&'a ArrayRef> {
+        self.typed_value
+    }
+}
+
+impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
+    type Error = ArrowError;
+
+    fn try_from(inner_struct: &'a StructArray) -> Result<Self, ArrowError> {
+        // The `value` column need not exist, but if it does it must be a binary view.
+        let value = if let Some(value_col) = inner_struct.column_by_name("value") {
+            let Some(binary_view) = value_col.as_binary_view_opt() else {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "VariantArray 'value' field must be BinaryView, got {}",
+                    value_col.data_type()
+                )));
+            };
+            Some(binary_view)
+        } else {
+            None
+        };
+        let typed_value = inner_struct.column_by_name("typed_value");
+        Ok(BorrowedShreddingState::new(value, typed_value))
+    }
+}
+
+impl TryFrom<&StructArray> for ShreddingState {
+    type Error = ArrowError;
+
+    fn try_from(inner_struct: &StructArray) -> Result<Self, ArrowError> {
+        Ok(BorrowedShreddingState::try_from(inner_struct)?.into())
+    }
+}
+
+impl From<BorrowedShreddingState<'_>> for ShreddingState {
+    fn from(state: BorrowedShreddingState<'_>) -> Self {
+        ShreddingState {
+            value: state.value_field().cloned(),
+            typed_value: state.typed_value_field().cloned(),
+        }
     }
 }
 
@@ -816,6 +947,16 @@ fn typed_value_to_variant<'a>(
             let value = array.value(index);
             Variant::from(value)
         }
+        DataType::LargeUtf8 => {
+            let array = typed_value.as_string::<i64>();
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::Utf8View => {
+            let array = typed_value.as_string_view();
+            let value = array.value(index);
+            Variant::from(value)
+        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }
@@ -836,6 +977,42 @@ fn typed_value_to_variant<'a>(
         }
         DataType::Float64 => {
             primitive_conversion_single_value!(Float64Type, typed_value, index)
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
+            generic_conversion_single_value!(
+                TimestampMicrosecondType,
+                as_primitive,
+                |v| DateTime::from_timestamp_micros(v).unwrap(),
+                typed_value,
+                index
+            )
+        }
+        DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            generic_conversion_single_value!(
+                TimestampMicrosecondType,
+                as_primitive,
+                |v| DateTime::from_timestamp_micros(v).unwrap().naive_utc(),
+                typed_value,
+                index
+            )
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(_)) => {
+            generic_conversion_single_value!(
+                TimestampNanosecondType,
+                as_primitive,
+                DateTime::from_timestamp_nanos,
+                typed_value,
+                index
+            )
+        }
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            generic_conversion_single_value!(
+                TimestampNanosecondType,
+                as_primitive,
+                |v| DateTime::from_timestamp_nanos(v).naive_utc(),
+                typed_value,
+                index
+            )
         }
         // todo other types here (note this is very similar to cast_to_variant.rs)
         // so it would be great to figure out how to share this code
@@ -865,19 +1042,12 @@ fn typed_value_to_variant<'a>(
 /// So cast them to get the right type.
 fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     let new_type = canonicalize_and_verify_data_type(array.data_type())?;
+    if let Cow::Borrowed(_) = new_type {
+        if let Some(array) = array.as_struct_opt() {
+            return Ok(Arc::new(array.clone())); // bypass the unnecessary cast
+        }
+    }
     cast(array, new_type.as_ref())
-}
-
-/// Validates whether a given arrow decimal is a valid variant decimal
-///
-/// NOTE: By a strict reading of the "decimal table" in the [shredding spec], each decimal type
-/// should have a width-dependent lower bound on precision as well as an upper bound (i.e. Decimal16
-/// with precision 5 is invalid because Decimal4 "covers" it). But the variant shredding integration
-/// tests specifically expect such cases to succeed, so we only enforce the upper bound here.
-///
-/// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
-fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
-    (1..=max_precision).contains(p) && (0..=*p as i8).contains(s)
 }
 
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
@@ -911,9 +1081,20 @@ fn canonicalize_and_verify_data_type(
         UInt8 | UInt16 | UInt32 | UInt64 | Float16 => fail!(),
 
         // Most decimal types are allowed, with restrictions on precision and scale
-        Decimal32(p, s) if is_valid_variant_decimal(p, s, 9) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal(p, s, 18) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, 38) => borrow!(),
+        //
+        // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
+        // requires using the narrowest decimal type for a given precision. Fix those up first.
+        Decimal64(p, s) | Decimal128(p, s)
+            if VariantDecimal4::is_valid_precision_and_scale(p, s) =>
+        {
+            Cow::Owned(Decimal32(*p, *s))
+        }
+        Decimal128(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
+            Cow::Owned(Decimal64(*p, *s))
+        }
+        Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed
@@ -927,14 +1108,14 @@ fn canonicalize_and_verify_data_type(
         // Binary and string are allowed. Force Binary to BinaryView because that's what the parquet
         // reader returns and what the rest of the variant code expects.
         Binary => Cow::Owned(DataType::BinaryView),
-        BinaryView | Utf8 => borrow!(),
+        BinaryView | Utf8 | LargeUtf8 | Utf8View => borrow!(),
 
         // UUID maps to 16-byte fixed-size binary; no other width is allowed
         FixedSizeBinary(16) => borrow!(),
         FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
 
         // We can _possibly_ allow (some of) these some day?
-        LargeBinary | LargeUtf8 | Utf8View | ListView(_) | LargeList(_) | LargeListView(_) => {
+        LargeBinary | ListView(_) | LargeList(_) | LargeListView(_) => {
             fail!()
         }
 
@@ -982,9 +1163,12 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
 
 #[cfg(test)]
 mod test {
+    use crate::VariantArrayBuilder;
+
     use super::*;
     use arrow::array::{BinaryViewArray, Int32Array};
     use arrow_schema::{Field, Fields};
+    use parquet_variant::ShortString;
 
     #[test]
     fn invalid_not_a_struct_array() {
@@ -1022,7 +1206,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::AllNull
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
 
         // Verify that value() returns Variant::Null (compensating for spec violation)
@@ -1082,7 +1269,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             ShreddingState::new(None, None),
-            ShreddingState::AllNull
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
     }
 
@@ -1099,7 +1289,10 @@ mod test {
         // Verify the shredding state is AllNull
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::AllNull
+            ShreddingState {
+                value: None,
+                typed_value: None
+            }
         ));
 
         // Verify all values are null
@@ -1149,7 +1342,162 @@ mod test {
         // This should be Unshredded, not AllNull, because value field exists in schema
         assert!(matches!(
             variant_array.shredding_state(),
-            ShreddingState::Unshredded { .. }
+            ShreddingState {
+                value: Some(_),
+                typed_value: None
+            }
         ));
+    }
+
+    #[test]
+    fn test_variant_array_iterable() {
+        let mut b = VariantArrayBuilder::new(6);
+
+        b.append_null();
+        b.append_variant(Variant::from(1_i8));
+        b.append_variant(Variant::Null);
+        b.append_variant(Variant::from(2_i32));
+        b.append_variant(Variant::from(3_i64));
+        b.append_null();
+
+        let v = b.build();
+
+        let variants = v.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            variants,
+            vec![
+                None,
+                Some(Variant::Int8(1)),
+                Some(Variant::Null),
+                Some(Variant::Int32(2)),
+                Some(Variant::Int64(3)),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_double_ended() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from(0_i32));
+        b.append_null();
+        b.append_variant(Variant::from(2_i32));
+        b.append_null();
+        b.append_variant(Variant::from(4_i32));
+
+        let array = b.build();
+        let mut iter = array.iter();
+
+        assert_eq!(iter.next(), Some(Some(Variant::from(0_i32))));
+        assert_eq!(iter.next(), Some(None));
+
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(4_i32))));
+        assert_eq!(iter.next_back(), Some(None));
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(2_i32))));
+
+        assert_eq!(iter.next_back(), None);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_variant_array_iter_reverse() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from("a"));
+        b.append_null();
+        b.append_variant(Variant::from("aaa"));
+        b.append_null();
+        b.append_variant(Variant::from("aaaaa"));
+
+        let array = b.build();
+
+        let result: Vec<_> = array.iter().rev().collect();
+        assert_eq!(
+            result,
+            vec![
+                Some(Variant::from("aaaaa")),
+                None,
+                Some(Variant::from("aaa")),
+                None,
+                Some(Variant::from("a")),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_empty() {
+        let v = VariantArrayBuilder::new(0).build();
+        let mut i = v.iter();
+        assert!(i.next().is_none());
+        assert!(i.next_back().is_none());
+    }
+
+    #[test]
+    fn test_from_variant_opts_into_variant_array() {
+        let v = vec![None, Some(Variant::Null), Some(Variant::BooleanFalse), None];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 4);
+
+        assert!(variant_array.is_null(0));
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::Null);
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(variant_array.value(2), Variant::BooleanFalse);
+
+        assert!(variant_array.is_null(3));
+    }
+
+    #[test]
+    fn test_from_variants_into_variant_array() {
+        let v = vec![
+            Variant::Null,
+            Variant::BooleanFalse,
+            Variant::ShortString(ShortString::try_new("norm").unwrap()),
+        ];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(variant_array.value(0), Variant::Null);
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::BooleanFalse);
+
+        assert!(!variant_array.is_null(3));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::ShortString(ShortString::try_new("norm").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_variant_equality() {
+        let v_iter = [None, Some(Variant::BooleanFalse), Some(Variant::Null), None];
+        let v = VariantArray::from_iter(v_iter.clone());
+
+        {
+            let v_copy = v.clone();
+            assert_eq!(v, v_copy);
+        }
+
+        {
+            let v_iter_reversed = v_iter.iter().cloned().rev();
+            let v_reversed = VariantArray::from_iter(v_iter_reversed);
+
+            assert_ne!(v, v_reversed);
+        }
+
+        {
+            let v_sliced = v.slice(0, 1);
+            assert_ne!(v, v_sliced);
+        }
     }
 }

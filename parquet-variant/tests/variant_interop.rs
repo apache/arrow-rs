@@ -23,7 +23,7 @@ use std::{env, fs};
 
 use chrono::{DateTime, NaiveDate, NaiveTime};
 use parquet_variant::{
-    ShortString, Variant, VariantBuilder, VariantDecimal16, VariantDecimal4, VariantDecimal8,
+    ShortString, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8, VariantDecimal16,
 };
 
 use rand::rngs::StdRng;
@@ -109,14 +109,29 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
     // Cases are commented out
     // Enabling is tracked in  https://github.com/apache/arrow-rs/issues/7630
     vec![
-        ("primitive_binary", Variant::Binary(&[0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe])),
+        (
+            "primitive_binary",
+            Variant::Binary(&[0x03, 0x13, 0x37, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe]),
+        ),
         ("primitive_boolean_false", Variant::BooleanFalse),
         ("primitive_boolean_true", Variant::BooleanTrue),
-        ("primitive_date", Variant::Date(NaiveDate::from_ymd_opt(2025, 4 , 16).unwrap())),
-        ("primitive_decimal4", Variant::from(VariantDecimal4::try_new(1234i32, 2u8).unwrap())),
+        (
+            "primitive_date",
+            Variant::Date(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap()),
+        ),
+        (
+            "primitive_decimal4",
+            Variant::from(VariantDecimal4::try_new(1234i32, 2u8).unwrap()),
+        ),
         // ("primitive_decimal8", Variant::Decimal8{integer: 1234567890, scale: 2}),
-        ("primitive_decimal8", Variant::Decimal8(VariantDecimal8::try_new(1234567890,2).unwrap())),
-        ("primitive_decimal16", Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap())),
+        (
+            "primitive_decimal8",
+            Variant::Decimal8(VariantDecimal8::try_new(1234567890, 2).unwrap()),
+        ),
+        (
+            "primitive_decimal16",
+            Variant::Decimal16(VariantDecimal16::try_new(1234567891234567890, 2).unwrap()),
+        ),
         ("primitive_float", Variant::Float(1234567890.1234)),
         ("primitive_double", Variant::Double(1234567890.1234)),
         ("primitive_int8", Variant::Int8(42)),
@@ -124,14 +139,64 @@ fn get_primitive_cases() -> Vec<(&'static str, Variant<'static, 'static>)> {
         ("primitive_int32", Variant::Int32(123456)),
         ("primitive_int64", Variant::Int64(1234567890123456789)),
         ("primitive_null", Variant::Null),
-        ("primitive_string", Variant::String("This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!")),
-        ("primitive_timestamp", Variant::TimestampMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(16, 34, 56, 780).unwrap().and_utc())),
-        ("primitive_timestampntz", Variant::TimestampNtzMicros(NaiveDate::from_ymd_opt(2025, 4, 16).unwrap().and_hms_milli_opt(12, 34, 56, 780).unwrap())),
-        ("primitive_timestamp_nanos", Variant::TimestampNanos(NaiveDate::from_ymd_opt(2024, 11, 7).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap().and_utc())),
-        ("primitive_timestampntz_nanos", Variant::TimestampNtzNanos(NaiveDate::from_ymd_opt(2024, 11, 7).unwrap().and_hms_nano_opt(12, 33, 54, 123456789).unwrap())),
-        ("primitive_uuid", Variant::Uuid(Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap())),
-        ("short_string", Variant::ShortString(ShortString::try_new("Less than 64 bytes (❤\u{fe0f} with utf8)").unwrap())),
-        ("primitive_time", Variant::Time(NaiveTime::from_hms_micro_opt(12, 33, 54, 123456).unwrap())),
+        (
+            "primitive_string",
+            Variant::String(
+                "This string is longer than 64 bytes and therefore does not fit in a short_string and it also includes several non ascii characters such as 🐢, 💖, ♥\u{fe0f}, 🎣 and 🤦!!",
+            ),
+        ),
+        (
+            "primitive_timestamp",
+            Variant::TimestampMicros(
+                NaiveDate::from_ymd_opt(2025, 4, 16)
+                    .unwrap()
+                    .and_hms_milli_opt(16, 34, 56, 780)
+                    .unwrap()
+                    .and_utc(),
+            ),
+        ),
+        (
+            "primitive_timestampntz",
+            Variant::TimestampNtzMicros(
+                NaiveDate::from_ymd_opt(2025, 4, 16)
+                    .unwrap()
+                    .and_hms_milli_opt(12, 34, 56, 780)
+                    .unwrap(),
+            ),
+        ),
+        (
+            "primitive_timestamp_nanos",
+            Variant::TimestampNanos(
+                NaiveDate::from_ymd_opt(2024, 11, 7)
+                    .unwrap()
+                    .and_hms_nano_opt(12, 33, 54, 123456789)
+                    .unwrap()
+                    .and_utc(),
+            ),
+        ),
+        (
+            "primitive_timestampntz_nanos",
+            Variant::TimestampNtzNanos(
+                NaiveDate::from_ymd_opt(2024, 11, 7)
+                    .unwrap()
+                    .and_hms_nano_opt(12, 33, 54, 123456789)
+                    .unwrap(),
+            ),
+        ),
+        (
+            "primitive_uuid",
+            Variant::Uuid(Uuid::parse_str("f24f9b64-81fa-49d1-b74e-8c09a6e31c56").unwrap()),
+        ),
+        (
+            "short_string",
+            Variant::ShortString(
+                ShortString::try_new("Less than 64 bytes (❤\u{fe0f} with utf8)").unwrap(),
+            ),
+        ),
+        (
+            "primitive_time",
+            Variant::Time(NaiveTime::from_hms_micro_opt(12, 33, 54, 123456).unwrap()),
+        ),
     ]
 }
 #[test]
@@ -369,10 +434,7 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             // Generate a list
             let mut list_builder = builder.new_list();
             let list_len = rng.random_range(0..10);
-
-            for _ in 0..list_len {
-                list_builder.append_value(rng.random::<i32>());
-            }
+            list_builder.extend(std::iter::repeat_with(|| rng.random::<i32>()).take(list_len));
             list_builder.finish();
         }
         14 => {
@@ -380,10 +442,9 @@ fn generate_random_value(rng: &mut StdRng, builder: &mut VariantBuilder, max_dep
             let mut object_builder = builder.new_object();
             let obj_size = rng.random_range(0..10);
 
-            for i in 0..obj_size {
-                let key = format!("field_{i}");
-                object_builder.insert(&key, rng.random::<i32>());
-            }
+            object_builder
+                .extend((0..obj_size).map(|i| (format!("field_{i}"), rng.random::<i32>())));
+
             object_builder.finish();
         }
         15 => {

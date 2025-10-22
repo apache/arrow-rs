@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::*;
 use crate::StructArray;
+use crate::builder::*;
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{Fields, SchemaBuilder};
 use std::sync::Arc;
@@ -199,6 +199,11 @@ impl StructBuilder {
     /// Returns the number of fields for the struct this builder is building.
     pub fn num_fields(&self) -> usize {
         self.field_builders.len()
+    }
+
+    /// Returns the fields for the struct this builder is building.
+    pub fn fields(&self) -> &Fields {
+        &self.fields
     }
 
     /// Appends an element (either null or non-null) to the struct. The actual elements
@@ -440,11 +445,13 @@ mod tests {
         match builder {
             Some(builder) => {
                 assert_eq!(builder.value_length(), LIST_LENGTH);
-                assert!(builder
-                    .values()
-                    .as_any_mut()
-                    .downcast_mut::<Int32Builder>()
-                    .is_some());
+                assert!(
+                    builder
+                        .values()
+                        .as_any_mut()
+                        .downcast_mut::<Int32Builder>()
+                        .is_some()
+                );
             }
             None => panic!("expected FixedSizeListBuilder, got a different builder type"),
         }

@@ -21,7 +21,7 @@ use crate::arity::{binary, unary};
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
-use num::traits::{WrappingShl, WrappingShr};
+use num_traits::{WrappingShl, WrappingShr};
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// The helper function for bitwise operation with two array

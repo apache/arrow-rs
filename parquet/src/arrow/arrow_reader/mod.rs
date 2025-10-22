@@ -17,8 +17,8 @@
 
 //! Contains reader which reads parquet data into arrow [`RecordBatch`]
 
-use arrow_array::cast::AsArray;
 use arrow_array::Array;
+use arrow_array::cast::AsArray;
 use arrow_array::{RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
@@ -28,10 +28,11 @@ use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
-use crate::arrow::schema::{parquet_to_arrow_schema_and_fields, ParquetField};
-use crate::arrow::{parquet_to_arrow_field_levels, FieldLevels, ProjectionMask};
+use crate::arrow::schema::{ParquetField, parquet_to_arrow_schema_and_fields};
+use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels};
+use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
-    chunk_read_bloom_filter_header_and_offset, Sbbf, SBBF_HEADER_SIZE_ESTIMATE,
+    SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
 use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
@@ -39,7 +40,6 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
-use crate::format::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
@@ -261,7 +261,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// Skip 1100      (skip the remaining 900 rows in row group 2 and the first 200 rows in row group 3)
     /// ```
     ///
-    /// [`Index`]: crate::file::page_index::index::Index
+    /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
@@ -387,7 +387,7 @@ pub struct ArrowReaderOptions {
     pub(crate) page_index_policy: PageIndexPolicy,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
-    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
+    pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 impl ArrowReaderOptions {
@@ -508,7 +508,7 @@ impl ArrowReaderOptions {
     #[cfg(feature = "encryption")]
     pub fn with_file_decryption_properties(
         self,
-        file_decryption_properties: FileDecryptionProperties,
+        file_decryption_properties: Arc<FileDecryptionProperties>,
     ) -> Self {
         Self {
             file_decryption_properties: Some(file_decryption_properties),
@@ -528,7 +528,7 @@ impl ArrowReaderOptions {
     /// This can be set via
     /// [`file_decryption_properties`][Self::with_file_decryption_properties].
     #[cfg(feature = "encryption")]
-    pub fn file_decryption_properties(&self) -> Option<&FileDecryptionProperties> {
+    pub fn file_decryption_properties(&self) -> Option<&Arc<FileDecryptionProperties>> {
         self.file_decryption_properties.as_ref()
     }
 }
@@ -572,8 +572,9 @@ impl ArrowReaderMetadata {
         let metadata =
             ParquetMetaDataReader::new().with_page_index_policy(options.page_index_policy);
         #[cfg(feature = "encryption")]
-        let metadata =
-            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.with_decryption_properties(
+            options.file_decryption_properties.as_ref().map(Arc::clone),
+        );
         let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
@@ -693,7 +694,7 @@ impl ArrowReaderMetadata {
 }
 
 #[doc(hidden)]
-/// A newtype used within [`ReaderOptionsBuilder`] to distinguish sync readers from async
+// A newtype used within `ReaderOptionsBuilder` to distinguish sync readers from async
 pub struct SyncReader<T: ChunkReader>(T);
 
 impl<T: Debug + ChunkReader> Debug for SyncReader<T> {
@@ -795,7 +796,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     ///
     /// We should call this function after other forms pruning, such as projection and predicate pushdown.
     pub fn get_row_group_column_bloom_filter(
-        &mut self,
+        &self,
         row_group_idx: usize,
         column_idx: usize,
     ) -> Result<Option<Sbbf>> {
@@ -819,17 +820,17 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
-            BloomFilterAlgorithm::BLOCK(_) => {
+            BloomFilterAlgorithm::BLOCK => {
                 // this match exists to future proof the singleton algorithm enum
             }
         }
         match header.compression {
-            BloomFilterCompression::UNCOMPRESSED(_) => {
+            BloomFilterCompression::UNCOMPRESSED => {
                 // this match exists to future proof the singleton compression enum
             }
         }
         match header.hash {
-            BloomFilterHash::XXHASH(_) => {
+            BloomFilterHash::XXHASH => {
                 // this match exists to future proof the singleton hash enum
             }
         }
@@ -1125,7 +1126,7 @@ impl ParquetRecordBatchReader {
     /// all rows will be returned
     pub(crate) fn new(array_reader: Box<dyn ArrayReader>, read_plan: ReadPlan) -> Self {
         let schema = match array_reader.get_data_type() {
-            ArrowType::Struct(ref fields) => Schema::new(fields.clone()),
+            ArrowType::Struct(fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
         };
 
@@ -1155,12 +1156,12 @@ mod tests {
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
-        Date32Type, Date64Type, Decimal128Type, Decimal256Type, Decimal32Type, Decimal64Type,
+        Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type,
         DecimalType, Float16Type, Float32Type, Float64Type, Time32MillisecondType,
         Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{i256, ArrowNativeType, Buffer, IntervalDayTime};
+    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, i256};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
@@ -1168,8 +1169,8 @@ mod tests {
     use arrow_select::concat::concat_batches;
     use bytes::Bytes;
     use half::f16;
-    use num::PrimInt;
-    use rand::{rng, Rng, RngCore};
+    use num_traits::PrimInt;
+    use rand::{Rng, RngCore, rng};
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
@@ -1185,6 +1186,7 @@ mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
+    use crate::file::metadata::ParquetMetaData;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -1630,7 +1632,7 @@ mod tests {
     struct RandFixedLenGen {}
 
     impl RandGen<FixedLenByteArrayType> for RandFixedLenGen {
-        fn gen(len: i32) -> FixedLenByteArray {
+        fn r#gen(len: i32) -> FixedLenByteArray {
             let mut v = vec![0u8; len as usize];
             rng().fill_bytes(&mut v);
             ByteArray::from(v).into()
@@ -1859,8 +1861,8 @@ mod tests {
     struct RandUtf8Gen {}
 
     impl RandGen<ByteArrayType> for RandUtf8Gen {
-        fn gen(len: i32) -> ByteArray {
-            Int32Type::gen(len).to_string().as_str().into()
+        fn r#gen(len: i32) -> ByteArray {
+            Int32Type::r#gen(len).to_string().as_str().into()
         }
     }
 
@@ -2359,6 +2361,63 @@ mod tests {
         assert_eq!(&batch, &read[0])
     }
 
+    #[test]
+    fn test_read_nullable_structs_with_binary_dict_as_first_child_column() {
+        // the `StructArrayReader` will check the definition and repetition levels of the first
+        // child column in the struct to determine nullability for the struct. If the first
+        // column's is being read by `ByteArrayDictionaryReader` we need to ensure that the
+        // nullability is interpreted  correctly from the rep/def level buffers managed by the
+        // buffers managed by this array reader.
+
+        let struct_fields = Fields::from(vec![
+            Field::new(
+                "city",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::UInt8),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("name", ArrowDataType::Utf8, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            ArrowDataType::Struct(struct_fields.clone()),
+            true,
+        )]));
+
+        let items_arr = StructArray::new(
+            struct_fields,
+            vec![
+                Arc::new(DictionaryArray::new(
+                    UInt8Array::from_iter_values(vec![0, 1, 1, 0, 2]),
+                    Arc::new(StringArray::from_iter_values(vec![
+                        "quebec",
+                        "fredericton",
+                        "halifax",
+                    ])),
+                )),
+                Arc::new(StringArray::from_iter_values(vec![
+                    "albert", "terry", "lance", "", "tim",
+                ])),
+            ],
+            Some(NullBuffer::from_iter(vec![true, true, true, false, true])),
+        );
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(items_arr)]).unwrap();
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 8)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(read.len(), 1);
+        assert_eq!(&batch, &read[0])
+    }
+
     /// Parameters for single_column_reader_test
     #[derive(Clone)]
     struct TestOptions {
@@ -2709,7 +2768,10 @@ mod tests {
         // Print out options to facilitate debugging failures on CI
         println!(
             "Running type {:?} single_column_reader_test ConvertedType::{}/ArrowType::{:?} with Options: {:?}",
-            T::get_physical_type(), converted_type, arrow_type, opts
+            T::get_physical_type(),
+            converted_type,
+            arrow_type,
+            opts
         );
 
         //according to null_percent generate def_levels
@@ -2913,7 +2975,7 @@ mod tests {
         schema: TypePtr,
         field: Option<Field>,
         opts: &TestOptions,
-    ) -> Result<crate::format::FileMetaData> {
+    ) -> Result<ParquetMetaData> {
         let mut writer_props = opts.writer_props();
         if let Some(field) = field {
             let arrow_schema = Schema::new(vec![field]);
@@ -3712,7 +3774,10 @@ mod tests {
         let err =
             ParquetRecordBatchReaderBuilder::try_new_with_options(parquet_data, reader_options)
                 .unwrap_err();
-        assert_eq!(err.to_string(), "Arrow: Incompatible supplied Arrow schema: data type mismatch for field column1: requested Int32 but found Utf8")
+        assert_eq!(
+            err.to_string(),
+            "Arrow: Incompatible supplied Arrow schema: data type mismatch for field column1: requested Int32 but found Utf8"
+        )
     }
 
     #[test]
@@ -3732,7 +3797,10 @@ mod tests {
         let err =
             ParquetRecordBatchReaderBuilder::try_new_with_options(parquet_data, reader_options)
                 .unwrap_err();
-        assert_eq!(err.to_string(), "Arrow: Incompatible supplied Arrow schema: nullability mismatch for field column1: expected true but found false")
+        assert_eq!(
+            err.to_string(),
+            "Arrow: Incompatible supplied Arrow schema: nullability mismatch for field column1: expected true but found false"
+        )
     }
 
     #[test]
@@ -4920,7 +4988,7 @@ mod tests {
     }
 
     fn test_get_row_group_column_bloom_filter(data: Bytes, with_length: bool) {
-        let mut builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
+        let builder = ParquetRecordBatchReaderBuilder::try_new(data.clone()).unwrap();
 
         let metadata = builder.metadata();
         assert_eq!(metadata.num_row_groups(), 1);

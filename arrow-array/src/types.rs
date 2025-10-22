@@ -23,18 +23,18 @@ use crate::delta::{
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
-use arrow_buffer::{i256, Buffer, OffsetBuffer};
+use arrow_buffer::{Buffer, OffsetBuffer, i256};
 use arrow_data::decimal::{
-    format_decimal_str, is_validate_decimal256_precision, is_validate_decimal32_precision,
-    is_validate_decimal64_precision, is_validate_decimal_precision, validate_decimal256_precision,
-    validate_decimal32_precision, validate_decimal64_precision, validate_decimal_precision,
+    format_decimal_str, is_validate_decimal_precision, is_validate_decimal32_precision,
+    is_validate_decimal64_precision, is_validate_decimal256_precision, validate_decimal_precision,
+    validate_decimal32_precision, validate_decimal64_precision, validate_decimal256_precision,
 };
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
-    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL32_DEFAULT_SCALE,
-    DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION,
-    DECIMAL64_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    ArrowError, DECIMAL_DEFAULT_SCALE, DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION,
+    DECIMAL32_MAX_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DataType, IntervalUnit, TimeUnit,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
@@ -1323,6 +1323,8 @@ pub trait DecimalType:
     const MAX_PRECISION: u8;
     /// Maximum no of digits after the decimal point (note the scale can be negative)
     const MAX_SCALE: i8;
+    /// The maximum value for each precision in `0..=MAX_PRECISION`: [0, 9, 99, ...]
+    const MAX_FOR_EACH_PRECISION: &[Self::Native];
     /// fn to create its [`DataType`]
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType;
     /// Default values for [`DataType`]
@@ -1393,6 +1395,7 @@ impl DecimalType for Decimal32Type {
     const BYTE_LENGTH: usize = 4;
     const MAX_PRECISION: u8 = DECIMAL32_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL32_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &[i32] = &arrow_data::decimal::MAX_DECIMAL32_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal32;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal32(DECIMAL32_MAX_PRECISION, DECIMAL32_DEFAULT_SCALE);
@@ -1427,6 +1430,7 @@ impl DecimalType for Decimal64Type {
     const BYTE_LENGTH: usize = 8;
     const MAX_PRECISION: u8 = DECIMAL64_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL64_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &[i64] = &arrow_data::decimal::MAX_DECIMAL64_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal64;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal64(DECIMAL64_MAX_PRECISION, DECIMAL64_DEFAULT_SCALE);
@@ -1461,6 +1465,7 @@ impl DecimalType for Decimal128Type {
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL128_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &[i128] = &arrow_data::decimal::MAX_DECIMAL128_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
@@ -1495,6 +1500,7 @@ impl DecimalType for Decimal256Type {
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL256_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &[i256] = &arrow_data::decimal::MAX_DECIMAL256_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
@@ -1560,7 +1566,7 @@ pub(crate) mod bytes {
 
         #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
-            std::str::from_utf8_unchecked(b)
+            unsafe { std::str::from_utf8_unchecked(b) }
         }
     }
 }
@@ -1735,7 +1741,7 @@ impl ByteViewType for BinaryViewType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_data::{layout, BufferSpec};
+    use arrow_data::{BufferSpec, layout};
 
     #[test]
     fn month_day_nano_should_roundtrip() {

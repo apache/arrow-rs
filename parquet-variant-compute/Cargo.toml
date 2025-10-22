@@ -31,13 +31,14 @@ rust-version = { workspace = true }
 
 
 [dependencies]
-arrow = { workspace = true }
+arrow = { workspace = true , features = ["canonical_extension_types"]}
 arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
 indexmap = "2.10.0"
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
 chrono = { workspace = true }
+uuid = { version = "1.18.0", features = ["v4"]}
 
 [lib]
 name = "parquet_variant_compute"

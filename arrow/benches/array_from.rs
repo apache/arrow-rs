@@ -15,16 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
+extern crate arrow;
 #[macro_use]
 extern crate criterion;
 
 use criterion::Criterion;
 
-extern crate arrow;
-
 use arrow::array::*;
 use arrow_buffer::i256;
 use rand::Rng;
+use std::iter::repeat_n;
 use std::{hint, sync::Arc};
 
 fn array_from_vec(n: usize) {
@@ -117,7 +117,7 @@ fn decimal256_array_from_vec(array: &[Option<i256>]) {
     );
 }
 
-fn decimal_benchmark(c: &mut Criterion) {
+fn array_from_vec_decimal_benchmark(c: &mut Criterion) {
     // bench decimal32 array
     // create option<i32> array
     let size: usize = 1 << 15;
@@ -170,7 +170,7 @@ fn decimal_benchmark(c: &mut Criterion) {
     });
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn array_from_vec_benchmark(c: &mut Criterion) {
     c.bench_function("array_from_vec 128", |b| b.iter(|| array_from_vec(128)));
     c.bench_function("array_from_vec 256", |b| b.iter(|| array_from_vec(256)));
     c.bench_function("array_from_vec 512", |b| b.iter(|| array_from_vec(512)));
@@ -206,5 +206,48 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, criterion_benchmark, decimal_benchmark);
+fn gen_option_vector<TItem: Copy>(item: TItem, len: usize) -> Vec<Option<TItem>> {
+    hint::black_box(
+        repeat_n(item, len)
+            .enumerate()
+            .map(|(idx, item)| if idx % 3 == 0 { None } else { Some(item) })
+            .collect(),
+    )
+}
+
+fn from_iter_benchmark(c: &mut Criterion) {
+    const ITER_LEN: usize = 16_384;
+
+    // All ArrowPrimitiveType use the same implementation
+    c.bench_function("Int64Array::from_iter", |b| {
+        let values = gen_option_vector(1, ITER_LEN);
+        b.iter(|| hint::black_box(Int64Array::from_iter(values.iter())));
+    });
+    c.bench_function("Int64Array::from_trusted_len_iter", |b| {
+        let values = gen_option_vector(1, ITER_LEN);
+        b.iter(|| unsafe {
+            // SAFETY: values.iter() is a TrustedLenIterator
+            hint::black_box(Int64Array::from_trusted_len_iter(values.iter()))
+        });
+    });
+
+    c.bench_function("BooleanArray::from_iter", |b| {
+        let values = gen_option_vector(true, ITER_LEN);
+        b.iter(|| hint::black_box(BooleanArray::from_iter(values.iter())));
+    });
+    c.bench_function("BooleanArray::from_trusted_len_iter", |b| {
+        let values = gen_option_vector(true, ITER_LEN);
+        b.iter(|| unsafe {
+            // SAFETY: values.iter() is a TrustedLenIterator
+            hint::black_box(BooleanArray::from_trusted_len_iter(values.iter()))
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    array_from_vec_benchmark,
+    array_from_vec_decimal_benchmark,
+    from_iter_benchmark
+);
 criterion_main!(benches);

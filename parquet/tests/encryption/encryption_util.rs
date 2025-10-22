@@ -16,11 +16,11 @@
 // under the License.
 
 use arrow_array::cast::AsArray;
-use arrow_array::{types, RecordBatch};
+use arrow_array::{RecordBatch, types};
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
-use parquet::arrow::ArrowWriter;
 use parquet::encryption::decrypt::{FileDecryptionProperties, KeyRetriever};
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::{ParquetError, Result};
@@ -28,7 +28,7 @@ use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::WriterProperties;
 use std::collections::HashMap;
 use std::fs::File;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 pub(crate) fn verify_encryption_double_test_data(
     record_batches: Vec<RecordBatch>,
@@ -202,12 +202,14 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
     let column_index = &column_index[0][float_col_idx];
 
     match column_index {
-        parquet::file::page_index::index::Index::FLOAT(float_index) => {
-            assert_eq!(float_index.indexes.len(), 1);
-            assert_eq!(float_index.indexes[0].min, Some(0.0f32));
-            assert!(float_index.indexes[0]
-                .max
-                .is_some_and(|max| (max - 53.9).abs() < 1e-6));
+        parquet::file::page_index::column_index::ColumnIndexMetaData::FLOAT(float_index) => {
+            assert_eq!(float_index.num_pages(), 1);
+            assert_eq!(float_index.min_value(0), Some(&0.0f32));
+            assert!(
+                float_index
+                    .max_value(0)
+                    .is_some_and(|max| (max - 53.9).abs() < 1e-6)
+            );
         }
         _ => {
             panic!("Expected a float column index for column {float_col_idx}");
@@ -217,10 +219,10 @@ pub(crate) fn verify_column_indexes(metadata: &ParquetMetaData) {
 
 pub(crate) fn read_encrypted_file(
     file: &File,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) -> std::result::Result<(Vec<RecordBatch>, ArrowReaderMetadata), ParquetError> {
-    let options = ArrowReaderOptions::default()
-        .with_file_decryption_properties(decryption_properties.clone());
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let metadata = ArrowReaderMetadata::load(file, options.clone())?;
 
     let builder =
@@ -232,11 +234,12 @@ pub(crate) fn read_encrypted_file(
 
 pub(crate) fn read_and_roundtrip_to_encrypted_file(
     file: &File,
-    decryption_properties: FileDecryptionProperties,
-    encryption_properties: FileEncryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
+    encryption_properties: Arc<FileEncryptionProperties>,
 ) {
     // read example data
-    let (batches, metadata) = read_encrypted_file(file, decryption_properties.clone()).unwrap();
+    let (batches, metadata) =
+        read_encrypted_file(file, Arc::clone(&decryption_properties)).unwrap();
 
     // write example data to a temporary file
     let temp_file = tempfile::tempfile().unwrap();
@@ -262,7 +265,7 @@ pub(crate) fn read_and_roundtrip_to_encrypted_file(
 
 pub(crate) fn verify_encryption_test_file_read(
     file: File,
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
 ) {
     let options =
         ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);

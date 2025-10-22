@@ -22,7 +22,7 @@
 //! [`take`]: crate::take::take
 use crate::filter::filter_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
-use arrow_array::{downcast_primitive, Array, ArrayRef, BooleanArray, RecordBatch};
+use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -1400,13 +1400,11 @@ mod tests {
 
     /// Return a RecordBatch of 100 rows
     fn multi_column_batch(range: Range<i32>) -> RecordBatch {
-        let int64_array = Int64Array::from_iter(range.clone().map(|v| {
-            if v % 5 == 0 {
-                None
-            } else {
-                Some(v as i64)
-            }
-        }));
+        let int64_array = Int64Array::from_iter(
+            range
+                .clone()
+                .map(|v| if v % 5 == 0 { None } else { Some(v as i64) }),
+        );
         let string_view_array = StringViewArray::from_iter(range.clone().map(|v| {
             if v % 5 == 0 {
                 None

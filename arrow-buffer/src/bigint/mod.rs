@@ -17,8 +17,8 @@
 
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
-use num::cast::AsPrimitive;
-use num::{BigInt, FromPrimitive, ToPrimitive};
+use num_bigint::BigInt;
+use num_traits::{FromPrimitive, ToPrimitive, cast::AsPrimitive};
 use std::cmp::Ordering;
 use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
@@ -232,11 +232,7 @@ impl i256 {
     pub fn from_f64(v: f64) -> Option<Self> {
         BigInt::from_f64(v).and_then(|i| {
             let (integer, overflow) = i256::from_bigint_with_overflow(i);
-            if overflow {
-                None
-            } else {
-                Some(integer)
-            }
+            if overflow { None } else { Some(integer) }
         })
     }
 
@@ -304,7 +300,7 @@ impl i256 {
         let v_bytes = v.to_signed_bytes_le();
         match v_bytes.len().cmp(&32) {
             Ordering::Less => {
-                let mut bytes = if num::Signed::is_negative(&v) {
+                let mut bytes = if num_traits::Signed::is_negative(&v) {
                     [255_u8; 32]
                 } else {
                     [0; 32]
@@ -867,8 +863,8 @@ impl ToPrimitive for i256 {
 #[cfg(all(test, not(miri)))] // llvm.x86.subborrow.64 not supported by MIRI
 mod tests {
     use super::*;
-    use num::Signed;
-    use rand::{rng, Rng};
+    use num_traits::Signed;
+    use rand::{Rng, rng};
 
     #[test]
     fn test_signed_cmp() {

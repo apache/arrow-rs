@@ -17,11 +17,11 @@
 
 use crate::ArrayData;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
-use num::traits::AsPrimitive;
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::{AsPrimitive, CheckedAdd};
 
 use super::{
-    Extend, _MutableArrayData,
+    _MutableArrayData, Extend,
     utils::{extend_offsets, get_last_offset},
 };
 

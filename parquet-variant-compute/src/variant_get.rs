@@ -26,15 +26,17 @@ use parquet_variant::{VariantPath, VariantPathElement, EMPTY_VARIANT_METADATA_BY
 use crate::variant_array::{ShreddingState, StructArrayBuilder};
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 use crate::VariantArray;
+use crate::variant_array::BorrowedShreddingState;
+use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
 use arrow::array::AsArray;
 use std::sync::Arc;
 
-pub(crate) enum ShreddedPathStep {
+pub(crate) enum ShreddedPathStep<'a> {
     /// Path step succeeded, return the new shredding state
-    Success(ShreddingState),
+    Success(BorrowedShreddingState<'a>),
     /// The path element is not present in the `typed_value` column and there is no `value` column,
-    /// so we we know it does not exist. It, and all paths under it, are all-NULL.
+    /// so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
     /// The path element is not present in the `typed_value` column and must be retrieved from the `value`
     /// column instead. The caller should be prepared to handle any value, including the requested
@@ -47,18 +49,16 @@ pub(crate) enum ShreddedPathStep {
 /// level, or if `typed_value` is not a struct, or if the requested field name does not exist.
 ///
 /// TODO: Support `VariantPathElement::Index`? It wouldn't be easy, and maybe not even possible.
-pub(crate) fn follow_shredded_path_element(
-    shredding_state: &ShreddingState,
+pub(crate) fn follow_shredded_path_element<'a>(
+    shredding_state: &BorrowedShreddingState<'a>,
     path_element: &VariantPathElement<'_>,
     cast_options: &CastOptions,
-) -> Result<ShreddedPathStep> {
+) -> Result<ShreddedPathStep<'a>> {
     // If the requested path element is not present in `typed_value`, and `value` is missing, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
-    let missing_path_step = || {
-        let Some(_value_field) = shredding_state.value_field() else {
-            return ShreddedPathStep::Missing;
-        };
-        ShreddedPathStep::NotShredded
+    let missing_path_step = || match shredding_state.value_field() {
+        Some(_) => ShreddedPathStep::NotShredded,
+        None => ShreddedPathStep::Missing,
     };
 
     let Some(typed_value) = shredding_state.typed_value_field() else {
@@ -98,7 +98,8 @@ pub(crate) fn follow_shredded_path_element(
                 ))
             })?;
 
-            Ok(ShreddedPathStep::Success(struct_array.into()))
+            let state = BorrowedShreddingState::try_from(struct_array)?;
+            Ok(ShreddedPathStep::Success(state))
         }
         VariantPathElement::Index { index } => {
             // TODO: Support array indexing. Among other things, it will require slicing not
@@ -204,7 +205,7 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state().clone();
+    let mut shredding_state = input.shredding_state().borrow();
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
@@ -346,23 +347,27 @@ impl<'a> GetOptions<'a> {
 
 #[cfg(test)]
 mod test {
-    use std::sync::Arc;
-
-    use crate::{json_to_variant, VariantValueArrayBuilder};
+    use super::{GetOptions, variant_get};
+    use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
+    use crate::{VariantArray, VariantArrayBuilder, VariantValueArrayBuilder, json_to_variant};
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Float32Array,
-        Float64Array, GenericListArray, Int16Array, Int32Array, Int64Array, Int8Array, StringArray, StructArray,
+        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
+        Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
+        GenericListArray, Int16Array, Int32Array, Int64Array, LargeStringArray, StringArray, StringViewArray,
+        StructArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
-    use arrow_schema::{DataType, Field, FieldRef, Fields};
-    use parquet_variant::{Variant, VariantPath, EMPTY_VARIANT_METADATA_BYTES};
-
-    use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::VariantArray;
-
-    use super::{variant_get, GetOptions};
+    use arrow::datatypes::i256;
+    use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
+    use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
+    use chrono::DateTime;
+    use parquet_variant::{
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
+        VariantDecimalType, VariantPath,
+    };
+    use std::sync::Arc;
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
         // Create input array from JSON string
@@ -469,6 +474,49 @@ mod test {
         };
     }
 
+    macro_rules! partially_shredded_variant_array_gen {
+        ($func_name:ident,  $typed_value_array_gen: expr) => {
+            fn $func_name() -> ArrayRef {
+                let (metadata, string_value) = {
+                    let mut builder = parquet_variant::VariantBuilder::new();
+                    builder.append_value("n/a");
+                    builder.finish()
+                };
+
+                let nulls = NullBuffer::from(vec![
+                    true,  // row 0 non null
+                    false, // row 1 is null
+                    true,  // row 2 non null
+                    true,  // row 3 non null
+                ]);
+
+                // metadata is the same for all rows
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
+
+                // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
+                // about why row1 is an empty but non null, value.
+                let values = BinaryViewArray::from(vec![
+                    None,                // row 0 is shredded, so no value
+                    Some(b"" as &[u8]),  // row 1 is null, so empty value (why?)
+                    Some(&string_value), // copy the string value "N/A"
+                    None,                // row 3 is shredded, so no value
+                ]);
+
+                let typed_value = $typed_value_array_gen();
+
+                let struct_array = StructArrayBuilder::new()
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
+                    .with_field("value", Arc::new(values), true)
+                    .with_nulls(nulls)
+                    .build();
+                ArrayRef::from(
+                    VariantArray::try_new(&struct_array).expect("should create variant array"),
+                )
+            }
+        };
+    }
+
     #[test]
     fn get_variant_partially_shredded_int8_as_variant() {
         numeric_partially_shredded_test!(i8, partially_shredded_int8_variant_array);
@@ -532,6 +580,15 @@ mod test {
         assert_eq!(result.value(2), Variant::from("n/a"));
         assert_eq!(result.value(3), Variant::from("world"));
     }
+
+    partially_shredded_variant_array_gen!(partially_shredded_binary_view_variant_array, || {
+        BinaryViewArray::from(vec![
+            Some(&[1u8, 2u8, 3u8][..]), // row 0 is shredded
+            None,                       // row 1 is null
+            None,                       // row 2 is a string
+            Some(&[4u8, 5u8, 6u8][..]), // row 3 is shredded
+        ])
+    });
 
     #[test]
     fn get_variant_partially_shredded_date32_as_variant() {
@@ -604,7 +661,10 @@ mod test {
 
         let err = variant_get(&array, options).unwrap_err();
         // TODO make this error message nicer (not Debug format)
-        assert_eq!(err.to_string(), "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])");
+        assert_eq!(
+            err.to_string(),
+            "Cast error: Failed to extract primitive of type Int32 from variant ShortString(ShortString(\"n/a\")) at path VariantPath([])"
+        );
     }
 
     /// Perfect Shredding: extract the typed value as a VariantArray
@@ -699,7 +759,7 @@ mod test {
     }
 
     macro_rules! perfectly_shredded_to_arrow_primitive_test {
-        ($name:ident, $primitive_type:ident, $perfectly_shredded_array_gen_fun:ident, $expected_array:expr) => {
+        ($name:ident, $primitive_type:expr, $perfectly_shredded_array_gen_fun:ident, $expected_array:expr) => {
             #[test]
             fn $name() {
                 let array = $perfectly_shredded_array_gen_fun();
@@ -711,6 +771,13 @@ mod test {
             }
         };
     }
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_int18_as_int8,
+        Int8,
+        perfectly_shredded_int8_variant_array,
+        Int8Array::from(vec![Some(1), Some(2), Some(3)])
+    );
 
     perfectly_shredded_to_arrow_primitive_test!(
         get_variant_perfectly_shredded_int16_as_int16,
@@ -733,6 +800,87 @@ mod test {
         Int64Array::from(vec![Some(1), Some(2), Some(3)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_float32_as_float32,
+        Float32,
+        perfectly_shredded_float32_variant_array,
+        Float32Array::from(vec![Some(1.0), Some(2.0), Some(3.0)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_float64_as_float64,
+        Float64,
+        perfectly_shredded_float64_variant_array,
+        Float64Array::from(vec![Some(1.0), Some(2.0), Some(3.0)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_boolean_as_boolean,
+        Boolean,
+        perfectly_shredded_bool_variant_array,
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_large_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_large_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_view_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_view_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    macro_rules! perfectly_shredded_variant_array_fn {
+        ($func:ident, $typed_value_gen:expr) => {
+            fn $func() -> ArrayRef {
+                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
+                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                    EMPTY_VARIANT_METADATA_BYTES,
+                    3,
+                ));
+                let typed_value = $typed_value_gen();
+
+                let struct_array = StructArrayBuilder::new()
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(typed_value), true)
+                    .build();
+
+                VariantArray::try_new(&struct_array)
+                    .expect("should create variant array")
+                    .into()
+            }
+        };
+    }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_variant_array, || {
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_large_utf8_variant_array, || {
+        LargeStringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_view_variant_array, || {
+        StringViewArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
+        BooleanArray::from(vec![Some(true), Some(false), Some(true)])
+    });
+
     /// Return a VariantArray that represents a perfectly "shredded" variant
     /// for the given typed value.
     ///
@@ -746,28 +894,13 @@ mod test {
     /// ```
     macro_rules! numeric_perfectly_shredded_variant_array_fn {
         ($func:ident, $array_type:ident, $primitive_type:ty) => {
-            fn $func() -> ArrayRef {
-                // At the time of writing, the `VariantArrayBuilder` does not support shredding.
-                // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
-                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
-                    EMPTY_VARIANT_METADATA_BYTES,
-                    3,
-                ));
-                let typed_value = $array_type::from(vec![
+            perfectly_shredded_variant_array_fn!($func, || {
+                $array_type::from(vec![
                     Some(<$primitive_type>::try_from(1u8).unwrap()),
                     Some(<$primitive_type>::try_from(2u8).unwrap()),
                     Some(<$primitive_type>::try_from(3u8).unwrap()),
-                ]);
-
-                let struct_array = StructArrayBuilder::new()
-                    .with_field("metadata", Arc::new(metadata), false)
-                    .with_field("typed_value", Arc::new(typed_value), true)
-                    .build();
-
-                VariantArray::try_new(&struct_array)
-                    .expect("should create variant array")
-                    .into()
-            }
+                ])
+            });
         };
     }
 
@@ -802,6 +935,278 @@ mod test {
         f64
     );
 
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(-456000),
+                Some(1758602096000001),
+                Some(1758602096000002),
+            ])
+        }
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_timestamp_micro_ntz,
+        DataType::Timestamp(TimeUnit::Microsecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+    );
+
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_nano_ntz,
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_timestamp_micro_variant_array, || {
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_timestamp_micro,
+        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array,
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            Some(1758602096000001),
+            Some(1758602096000002),
+        ])
+        .with_timezone("+00:00")
+    );
+
+    // test converting micro to nano
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_nano,
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-456000000),
+            Some(1758602096000001000),
+            Some(1758602096000002000)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_nano_ntz_variant_array,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(-4999999561),
+                Some(1758602096000000001),
+                Some(1758602096000000002),
+            ])
+        }
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_nano_ntz,
+        DataType::Timestamp(TimeUnit::Nanosecond, None),
+        perfectly_shredded_timestamp_nano_ntz_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_timestamp_nano_variant_array, || {
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_as_timestamp_nano,
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_nano_variant_array,
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            Some(1758602096000000001),
+            Some(1758602096000000002),
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_date_variant_array, || {
+        Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_date_as_date,
+        DataType::Date32,
+        perfectly_shredded_date_variant_array,
+        Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
+    );
+
+    macro_rules! assert_variant_get_as_variant_array_with_default_option {
+        ($variant_array: expr, $array_expected: expr) => {{
+            let options = GetOptions::new();
+            let array = $variant_array;
+            let result = variant_get(&array, options).unwrap();
+
+            // expect the result is a VariantArray
+            let result = VariantArray::try_new(&result).unwrap();
+
+            assert_eq!(result.len(), $array_expected.len());
+
+            for (idx, item) in $array_expected.into_iter().enumerate() {
+                match item {
+                    Some(item) => assert_eq!(result.value(idx), item),
+                    None => assert!(result.is_null(idx)),
+                }
+            }
+        }};
+    }
+
+    partially_shredded_variant_array_gen!(
+        partially_shredded_timestamp_micro_ntz_variant_array,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(-456000),
+                None,
+                None,
+                Some(1758602096000000),
+            ])
+        }
+    );
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_micro_ntz_as_variant() {
+        let array = partially_shredded_timestamp_micro_ntz_variant_array();
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp_micros(-456000i64)
+                        .unwrap()
+                        .naive_utc(),
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .naive_utc(),
+                )),
+            ]
+        )
+    }
+
+    partially_shredded_variant_array_gen!(partially_shredded_timestamp_micro_variant_array, || {
+        arrow::array::TimestampMicrosecondArray::from(vec![
+            Some(-456000),
+            None,
+            None,
+            Some(1758602096000000),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_micro_as_variant() {
+        let array = partially_shredded_timestamp_micro_variant_array();
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp_micros(-456000i64)
+                        .unwrap()
+                        .to_utc(),
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .to_utc(),
+                )),
+            ]
+        )
+    }
+
+    partially_shredded_variant_array_gen!(
+        partially_shredded_timestamp_nano_ntz_variant_array,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(-4999999561),
+                None,
+                None,
+                Some(1758602096000000000),
+            ])
+        }
+    );
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_nano_ntz_as_variant() {
+        let array = partially_shredded_timestamp_nano_ntz_variant_array();
+
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp(-5, 439).unwrap().naive_utc()
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .naive_utc()
+                )),
+            ]
+        )
+    }
+
+    partially_shredded_variant_array_gen!(partially_shredded_timestamp_nano_variant_array, || {
+        arrow::array::TimestampNanosecondArray::from(vec![
+            Some(-4999999561),
+            None,
+            None,
+            Some(1758602096000000000),
+        ])
+        .with_timezone("+00:00")
+    });
+
+    #[test]
+    fn get_variant_partial_shredded_timestamp_nano_as_variant() {
+        let array = partially_shredded_timestamp_nano_variant_array();
+
+        assert_variant_get_as_variant_array_with_default_option!(
+            array,
+            vec![
+                Some(Variant::from(
+                    DateTime::from_timestamp(-5, 439).unwrap().to_utc()
+                )),
+                None,
+                Some(Variant::from("n/a")),
+                Some(Variant::from(
+                    DateTime::parse_from_rfc3339("2025-09-23T12:34:56+08:00")
+                        .unwrap()
+                        .to_utc()
+                )),
+            ]
+        )
+    }
+
     /// Return a VariantArray that represents a normal "shredded" variant
     /// for the following example
     ///
@@ -827,6 +1232,17 @@ mod test {
     /// ```
     macro_rules! numeric_partially_shredded_variant_array_fn {
         ($func:ident, $array_type:ident, $primitive_type:ty) => {
+            partially_shredded_variant_array_gen!($func, || $array_type::from(vec![
+                Some(<$primitive_type>::try_from(34u8).unwrap()), // row 0 is shredded, so it has a value
+                None,                                             // row 1 is null, so no value
+                None, // row 2 is a string, so no typed value
+                Some(<$primitive_type>::try_from(100u8).unwrap()), // row 3 is shredded, so it has a value
+            ]));
+        };
+    }
+
+    macro_rules! partially_shredded_variant_array_gen {
+        ($func:ident, $typed_array_gen: expr) => {
             fn $func() -> ArrayRef {
                 // At the time of writing, the `VariantArrayBuilder` does not support shredding.
                 // so we must construct the array manually.  see https://github.com/apache/arrow-rs/issues/7895
@@ -855,12 +1271,7 @@ mod test {
                     None,                // row 3 is shredded, so no value
                 ]);
 
-                let typed_value = $array_type::from(vec![
-                    Some(<$primitive_type>::try_from(34u8).unwrap()), // row 0 is shredded, so it has a value
-                    None,                                             // row 1 is null, so no value
-                    None, // row 2 is a string, so no typed value
-                    Some(<$primitive_type>::try_from(100u8).unwrap()), // row 3 is shredded, so it has a value
-                ]);
+                let typed_value = $typed_array_gen();
 
                 let struct_array = StructArrayBuilder::new()
                     .with_field("metadata", Arc::new(metadata), false)
@@ -869,7 +1280,9 @@ mod test {
                     .with_nulls(nulls)
                     .build();
 
-                Arc::new(struct_array)
+                ArrayRef::from(
+                    VariantArray::try_new(&struct_array).expect("should create variant array"),
+                )
             }
         };
     }
@@ -905,184 +1318,32 @@ mod test {
         f64
     );
 
-    /// Return a VariantArray that represents a partially "shredded" variant for bool
-    fn partially_shredded_bool_variant_array() -> ArrayRef {
-        let (metadata, string_value) = {
-            let mut builder = parquet_variant::VariantBuilder::new();
-            builder.append_value("n/a");
-            builder.finish()
-        };
-
-        let nulls = NullBuffer::from(vec![
-            true,  // row 0 non null
-            false, // row 1 is null
-            true,  // row 2 non null
-            true,  // row 3 non null
-        ]);
-
-        // metadata is the same for all rows
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-        // about why row1 is an empty but non null, value.
-        let values = BinaryViewArray::from(vec![
-            None,                // row 0 is shredded, so no value
-            Some(b"" as &[u8]),  // row 1 is null, so empty value (why?)
-            Some(&string_value), // copy the string value "N/A"
-            None,                // row 3 is shredded, so no value
-        ]);
-
-        let typed_value = BooleanArray::from(vec![
+    partially_shredded_variant_array_gen!(partially_shredded_bool_variant_array, || {
+        arrow::array::BooleanArray::from(vec![
             Some(true),  // row 0 is shredded, so it has a value
             None,        // row 1 is null, so no value
             None,        // row 2 is a string, so no typed value
             Some(false), // row 3 is shredded, so it has a value
-        ]);
+        ])
+    });
 
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), false)
-            .with_field("typed_value", Arc::new(typed_value), true)
-            .with_field("value", Arc::new(values), true)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
-    }
-
-    /// Return a VariantArray that represents a partially "shredded" variant for UTF8
-    fn partially_shredded_utf8_variant_array() -> ArrayRef {
-        let (metadata, string_value) = {
-            let mut builder = parquet_variant::VariantBuilder::new();
-            builder.append_value("n/a");
-            builder.finish()
-        };
-
-        // Create the null buffer for the overall array
-        let nulls = NullBuffer::from(vec![
-            true,  // row 0 non null
-            false, // row 1 is null
-            true,  // row 2 non null
-            true,  // row 3 non null
-        ]);
-
-        // metadata is the same for all rows
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-        // about why row1 is an empty but non null, value.
-        let values = BinaryViewArray::from(vec![
-            None,                // row 0 is shredded, so no value
-            Some(b"" as &[u8]),  // row 1 is null, so empty value
-            Some(&string_value), // copy the string value "N/A"
-            None,                // row 3 is shredded, so no value
-        ]);
-
-        let typed_value = StringArray::from(vec![
+    partially_shredded_variant_array_gen!(partially_shredded_utf8_variant_array, || {
+        StringArray::from(vec![
             Some("hello"), // row 0 is shredded
             None,          // row 1 is null
             None,          // row 2 is a string
             Some("world"), // row 3 is shredded
-        ]);
+        ])
+    });
 
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), false)
-            .with_field("typed_value", Arc::new(typed_value), true)
-            .with_field("value", Arc::new(values), true)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
-    }
-
-    /// Return a VariantArray that represents a partially "shredded" variant for Date32
-    fn partially_shredded_date32_variant_array() -> ArrayRef {
-        let (metadata, string_value) = {
-            let mut builder = parquet_variant::VariantBuilder::new();
-            builder.append_value("n/a");
-            builder.finish()
-        };
-
-        // Create the null buffer for the overall array
-        let nulls = NullBuffer::from(vec![
-            true,  // row 0 non null
-            false, // row 1 is null
-            true,  // row 2 non null
-            true,  // row 3 non null
-        ]);
-
-        // metadata is the same for all rows
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-        // about why row1 is an empty but non null, value.
-        let values = BinaryViewArray::from(vec![
-            None,                // row 0 is shredded, so no value
-            Some(b"" as &[u8]),  // row 1 is null, so empty value
-            Some(&string_value), // copy the string value "N/A"
-            None,                // row 3 is shredded, so no value
-        ]);
-
-        let typed_value = Date32Array::from(vec![
+    partially_shredded_variant_array_gen!(partially_shredded_date32_variant_array, || {
+        Date32Array::from(vec![
             Some(20348), // row 0 is shredded, 2025-09-17
             None,        // row 1 is null
             None,        // row 2 is a string, not a date
             Some(20340), // row 3 is shredded, 2025-09-09
-        ]);
-
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), false)
-            .with_field("typed_value", Arc::new(typed_value), true)
-            .with_field("value", Arc::new(values), true)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
-    }
-
-    /// Return a VariantArray that represents a partially "shredded" variant for BinaryView
-    fn partially_shredded_binary_view_variant_array() -> ArrayRef {
-        let (metadata, string_value) = {
-            let mut builder = parquet_variant::VariantBuilder::new();
-            builder.append_value("n/a");
-            builder.finish()
-        };
-
-        // Create the null buffer for the overall array
-        let nulls = NullBuffer::from(vec![
-            true,  // row 0 non null
-            false, // row 1 is null
-            true,  // row 2 non null
-            true,  // row 3 non null
-        ]);
-
-        // metadata is the same for all rows
-        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(&metadata, 4));
-
-        // See https://docs.google.com/document/d/1pw0AWoMQY3SjD7R4LgbPvMjG_xSCtXp3rZHkVp9jpZ4/edit?disco=AAABml8WQrY
-        // about why row1 is an empty but non null, value.
-        let values = BinaryViewArray::from(vec![
-            None,                // row 0 is shredded, so no value
-            Some(b"" as &[u8]),  // row 1 is null, so empty value
-            Some(&string_value), // copy the string value "N/A"
-            None,                // row 3 is shredded, so no value
-        ]);
-
-        let typed_value = BinaryViewArray::from(vec![
-            Some(&[1u8, 2u8, 3u8][..]), // row 0 is shredded
-            None,                       // row 1 is null
-            None,                       // row 2 is a string
-            Some(&[4u8, 5u8, 6u8][..]), // row 3 is shredded
-        ]);
-
-        let struct_array = StructArrayBuilder::new()
-            .with_field("metadata", Arc::new(metadata), false)
-            .with_field("typed_value", Arc::new(typed_value), true)
-            .with_field("value", Arc::new(values), true)
-            .with_nulls(nulls)
-            .build();
-
-        Arc::new(struct_array)
-    }
+        ])
+    });
 
     /// Return a VariantArray that represents an "all null" variant
     /// for the following example (3 null values):
@@ -2011,9 +2272,78 @@ mod test {
         assert!(result.is_err());
         let error = result.unwrap_err();
         assert!(matches!(error, ArrowError::CastError(_)));
-        assert!(error
-            .to_string()
-            .contains("Cannot access field 'nonexistent_field' on non-struct type"));
+        assert!(
+            error
+                .to_string()
+                .contains("Cannot access field 'nonexistent_field' on non-struct type")
+        );
+    }
+
+    #[test]
+    fn test_error_message_boolean_type_display() {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::Int32(123));
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        // Request Boolean with strict casting to force an error
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", DataType::Boolean, true))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array, options).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to extract primitive of type Boolean"));
+    }
+
+    #[test]
+    fn test_error_message_numeric_type_display() {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::BooleanTrue);
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        // Request Boolean with strict casting to force an error
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new("result", DataType::Float32, true))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array, options).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to extract primitive of type Float32"));
+    }
+
+    #[test]
+    fn test_error_message_temporal_type_display() {
+        let mut builder = VariantArrayBuilder::new(1);
+        builder.append_variant(Variant::BooleanFalse);
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        // Request Boolean with strict casting to force an error
+        let options = GetOptions {
+            path: VariantPath::default(),
+            as_type: Some(Arc::new(Field::new(
+                "result",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            ))),
+            cast_options: CastOptions {
+                safe: false,
+                ..Default::default()
+            },
+        };
+
+        let err = variant_get(&variant_array, options).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to extract primitive of type Timestamp(ns)"));
     }
 
     #[test]
@@ -2758,5 +3088,522 @@ mod test {
             .build();
 
         Arc::new(struct_array)
+    }
+
+    #[test]
+    fn get_decimal32_rescaled_to_scale2() {
+        // Build unshredded variant values with different scales
+        let mut builder = crate::VariantArrayBuilder::new(5);
+        builder.append_variant(VariantDecimal4::try_new(1234, 2).unwrap().into()); // 12.34
+        builder.append_variant(VariantDecimal4::try_new(1234, 3).unwrap().into()); // 1.234
+        builder.append_variant(VariantDecimal4::try_new(1234, 0).unwrap().into()); // 1234
+        builder.append_null();
+        builder.append_variant(
+            VariantDecimal8::try_new((VariantDecimal4::MAX_UNSCALED_VALUE as i64) + 1, 3)
+                .unwrap()
+                .into(),
+        ); // should fit into Decimal32
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), 2);
+        assert_eq!(result.value(0), 1234);
+        assert_eq!(result.value(1), 123);
+        assert_eq!(result.value(2), 123400);
+        assert!(result.is_null(3));
+        assert_eq!(
+            result.value(4),
+            VariantDecimal4::MAX_UNSCALED_VALUE / 10 + 1
+        ); // should not be null as the final result fits into Decimal32
+    }
+
+    #[test]
+    fn get_decimal32_scale_down_rounding() {
+        let mut builder = crate::VariantArrayBuilder::new(7);
+        builder.append_variant(VariantDecimal4::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal4::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal4::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal4::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, -1), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), -1);
+        assert_eq!(result.value(0), 124);
+        assert_eq!(result.value(1), 125);
+        assert_eq!(result.value(2), -124);
+        assert_eq!(result.value(3), -125);
+        assert_eq!(result.value(4), 1);
+        assert!(result.is_valid(5));
+        assert_eq!(result.value(5), 0);
+        assert_eq!(result.value(6), 1);
+    }
+
+    #[test]
+    fn get_decimal32_large_scale_reduction() {
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(
+            VariantDecimal4::try_new(-VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, -9), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), -9);
+        assert_eq!(result.value(0), -1);
+        assert_eq!(result.value(1), 1);
+
+        let field = Field::new("result", DataType::Decimal32(9, -10), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert_eq!(result.precision(), 9);
+        assert_eq!(result.scale(), -10);
+        assert!(result.is_valid(0));
+        assert_eq!(result.value(0), 0);
+        assert!(result.is_valid(1));
+        assert_eq!(result.value(1), 0);
+    }
+
+    #[test]
+    fn get_decimal32_precision_overflow_safe() {
+        // Exceed Decimal32 after scaling and rounding
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 9)
+                .unwrap()
+                .into(),
+        ); // integer value round up overflows
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(2, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal32Array>().unwrap();
+
+        assert!(result.is_null(0));
+        assert!(result.is_null(1)); // should overflow because 1.00 does not fit into precision (2)
+    }
+
+    #[test]
+    fn get_decimal32_precision_overflow_unsafe_errors() {
+        let mut builder = crate::VariantArrayBuilder::new(1);
+        builder.append_variant(
+            VariantDecimal4::try_new(VariantDecimal4::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal32(9, 2), true);
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(cast_options);
+        let err = variant_get(&variant_array, options).unwrap_err();
+
+        assert!(
+            err.to_string().contains(
+                "Failed to cast to Decimal32(precision=9, scale=2) from variant Decimal4"
+            )
+        );
+    }
+
+    #[test]
+    fn get_decimal64_rescaled_to_scale2() {
+        let mut builder = crate::VariantArrayBuilder::new(5);
+        builder.append_variant(VariantDecimal8::try_new(1234, 2).unwrap().into()); // 12.34
+        builder.append_variant(VariantDecimal8::try_new(1234, 3).unwrap().into()); // 1.234
+        builder.append_variant(VariantDecimal8::try_new(1234, 0).unwrap().into()); // 1234
+        builder.append_null();
+        builder.append_variant(
+            VariantDecimal16::try_new((VariantDecimal8::MAX_UNSCALED_VALUE as i128) + 1, 3)
+                .unwrap()
+                .into(),
+        ); // should fit into Decimal64
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal64(18, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
+
+        assert_eq!(result.precision(), 18);
+        assert_eq!(result.scale(), 2);
+        assert_eq!(result.value(0), 1234);
+        assert_eq!(result.value(1), 123);
+        assert_eq!(result.value(2), 123400);
+        assert!(result.is_null(3));
+        assert_eq!(
+            result.value(4),
+            VariantDecimal8::MAX_UNSCALED_VALUE / 10 + 1
+        ); // should not be null as the final result fits into Decimal64
+    }
+
+    #[test]
+    fn get_decimal64_scale_down_rounding() {
+        let mut builder = crate::VariantArrayBuilder::new(7);
+        builder.append_variant(VariantDecimal8::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal8::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal8::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal8::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal64(18, -1), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
+
+        assert_eq!(result.precision(), 18);
+        assert_eq!(result.scale(), -1);
+        assert_eq!(result.value(0), 124);
+        assert_eq!(result.value(1), 125);
+        assert_eq!(result.value(2), -124);
+        assert_eq!(result.value(3), -125);
+        assert_eq!(result.value(4), 1);
+        assert!(result.is_valid(5));
+        assert_eq!(result.value(5), 0);
+        assert_eq!(result.value(6), 1);
+    }
+
+    #[test]
+    fn get_decimal64_large_scale_reduction() {
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(
+            VariantDecimal8::try_new(-VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal64(18, -18), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
+
+        assert_eq!(result.precision(), 18);
+        assert_eq!(result.scale(), -18);
+        assert_eq!(result.value(0), -1);
+        assert_eq!(result.value(1), 1);
+
+        let field = Field::new("result", DataType::Decimal64(18, -19), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
+
+        assert_eq!(result.precision(), 18);
+        assert_eq!(result.scale(), -19);
+        assert!(result.is_valid(0));
+        assert_eq!(result.value(0), 0);
+        assert!(result.is_valid(1));
+        assert_eq!(result.value(1), 0);
+    }
+
+    #[test]
+    fn get_decimal64_precision_overflow_safe() {
+        // Exceed Decimal64 after scaling and rounding
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 18)
+                .unwrap()
+                .into(),
+        ); // integer value round up overflows
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal64(2, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal64Array>().unwrap();
+
+        assert!(result.is_null(0));
+        assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn get_decimal64_precision_overflow_unsafe_errors() {
+        let mut builder = crate::VariantArrayBuilder::new(1);
+        builder.append_variant(
+            VariantDecimal8::try_new(VariantDecimal8::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal64(18, 2), true);
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(cast_options);
+        let err = variant_get(&variant_array, options).unwrap_err();
+
+        assert!(
+            err.to_string().contains(
+                "Failed to cast to Decimal64(precision=18, scale=2) from variant Decimal8"
+            )
+        );
+    }
+
+    #[test]
+    fn get_decimal128_rescaled_to_scale2() {
+        let mut builder = crate::VariantArrayBuilder::new(4);
+        builder.append_variant(VariantDecimal16::try_new(1234, 2).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1234, 3).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1234, 0).unwrap().into());
+        builder.append_null();
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal128(38, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+
+        assert_eq!(result.precision(), 38);
+        assert_eq!(result.scale(), 2);
+        assert_eq!(result.value(0), 1234);
+        assert_eq!(result.value(1), 123);
+        assert_eq!(result.value(2), 123400);
+        assert!(result.is_null(3));
+    }
+
+    #[test]
+    fn get_decimal128_scale_down_rounding() {
+        let mut builder = crate::VariantArrayBuilder::new(7);
+        builder.append_variant(VariantDecimal16::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal128(38, -1), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+
+        assert_eq!(result.precision(), 38);
+        assert_eq!(result.scale(), -1);
+        assert_eq!(result.value(0), 124);
+        assert_eq!(result.value(1), 125);
+        assert_eq!(result.value(2), -124);
+        assert_eq!(result.value(3), -125);
+        assert_eq!(result.value(4), 1);
+        assert!(result.is_valid(5));
+        assert_eq!(result.value(5), 0);
+        assert_eq!(result.value(6), 1);
+    }
+
+    #[test]
+    fn get_decimal128_precision_overflow_safe() {
+        // Exceed Decimal128 after scaling and rounding
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 38)
+                .unwrap()
+                .into(),
+        ); // integer value round up overflows
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal128(2, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal128Array>().unwrap();
+
+        assert!(result.is_null(0));
+        assert!(result.is_null(1)); // should overflow because 1.00 does not fit into precision (2)
+    }
+
+    #[test]
+    fn get_decimal128_precision_overflow_unsafe_errors() {
+        let mut builder = crate::VariantArrayBuilder::new(1);
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal128(38, 2), true);
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(cast_options);
+        let err = variant_get(&variant_array, options).unwrap_err();
+
+        assert!(err.to_string().contains(
+            "Failed to cast to Decimal128(precision=38, scale=2) from variant Decimal16"
+        ));
+    }
+
+    #[test]
+    fn get_decimal256_rescaled_to_scale2() {
+        // Build unshredded variant values with different scales using Decimal16 source
+        let mut builder = crate::VariantArrayBuilder::new(4);
+        builder.append_variant(VariantDecimal16::try_new(1234, 2).unwrap().into()); // 12.34
+        builder.append_variant(VariantDecimal16::try_new(1234, 3).unwrap().into()); // 1.234
+        builder.append_variant(VariantDecimal16::try_new(1234, 0).unwrap().into()); // 1234
+        builder.append_null();
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal256(76, 2), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal256Array>().unwrap();
+
+        assert_eq!(result.precision(), 76);
+        assert_eq!(result.scale(), 2);
+        assert_eq!(result.value(0), i256::from_i128(1234));
+        assert_eq!(result.value(1), i256::from_i128(123));
+        assert_eq!(result.value(2), i256::from_i128(123400));
+        assert!(result.is_null(3));
+    }
+
+    #[test]
+    fn get_decimal256_scale_down_rounding() {
+        let mut builder = crate::VariantArrayBuilder::new(7);
+        builder.append_variant(VariantDecimal16::try_new(1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1235, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(-1245, 0).unwrap().into());
+        builder.append_variant(VariantDecimal16::try_new(1235, 2).unwrap().into()); // 12.35 rounded down to 10 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(1235, 3).unwrap().into()); // 1.235 rounded down to 0 for scale -1
+        builder.append_variant(VariantDecimal16::try_new(5235, 3).unwrap().into()); // 5.235 rounded up to 10 for scale -1
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal256(76, -1), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal256Array>().unwrap();
+
+        assert_eq!(result.precision(), 76);
+        assert_eq!(result.scale(), -1);
+        assert_eq!(result.value(0), i256::from_i128(124));
+        assert_eq!(result.value(1), i256::from_i128(125));
+        assert_eq!(result.value(2), i256::from_i128(-124));
+        assert_eq!(result.value(3), i256::from_i128(-125));
+        assert_eq!(result.value(4), i256::from_i128(1));
+        assert!(result.is_valid(5));
+        assert_eq!(result.value(5), i256::from_i128(0));
+        assert_eq!(result.value(6), i256::from_i128(1));
+    }
+
+    #[test]
+    fn get_decimal256_precision_overflow_safe() {
+        // Exceed Decimal128 max precision (38) after scaling
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal256(76, 39), true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        let result = result.as_any().downcast_ref::<Decimal256Array>().unwrap();
+
+        // Input is Decimal16 with integer = 10^38-1 and scale = 1, target scale = 39
+        // So expected integer is (10^38-1) * 10^(39-1) = (10^38-1) * 10^38
+        let base = i256::from_i128(10);
+        let factor = base.checked_pow(38).unwrap();
+        let expected = i256::from_i128(VariantDecimal16::MAX_UNSCALED_VALUE)
+            .checked_mul(factor)
+            .unwrap();
+        assert_eq!(result.value(0), expected);
+        assert!(result.is_null(1));
+    }
+
+    #[test]
+    fn get_decimal256_precision_overflow_unsafe_errors() {
+        // Exceed Decimal128 max precision (38) after scaling
+        let mut builder = crate::VariantArrayBuilder::new(2);
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 1)
+                .unwrap()
+                .into(),
+        );
+        builder.append_variant(
+            VariantDecimal16::try_new(VariantDecimal16::MAX_UNSCALED_VALUE, 0)
+                .unwrap()
+                .into(),
+        );
+        let variant_array: ArrayRef = ArrayRef::from(builder.build());
+
+        let field = Field::new("result", DataType::Decimal256(76, 39), true);
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(cast_options);
+        let err = variant_get(&variant_array, options).unwrap_err();
+
+        assert!(err.to_string().contains(
+            "Failed to cast to Decimal256(precision=76, scale=39) from variant Decimal16"
+        ));
     }
 }

@@ -112,7 +112,7 @@ use crate::StructMode;
 use arrow_array::*;
 use arrow_schema::*;
 
-pub use encoder::{make_encoder, Encoder, EncoderFactory, EncoderOptions, NullableEncoder};
+pub use encoder::{Encoder, EncoderFactory, EncoderOptions, NullableEncoder, make_encoder};
 
 /// This trait defines how to format a sequence of JSON objects to a
 /// byte stream.
@@ -276,6 +276,36 @@ impl WriterBuilder {
     /// a fallback for types that are not supported by the default encoder.
     pub fn with_encoder_factory(mut self, factory: Arc<dyn EncoderFactory>) -> Self {
         self.0 = self.0.with_encoder_factory(factory);
+        self
+    }
+
+    /// Set the JSON file's date format
+    pub fn with_date_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_date_format(format);
+        self
+    }
+
+    /// Set the JSON file's datetime format
+    pub fn with_datetime_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_datetime_format(format);
+        self
+    }
+
+    /// Set the JSON file's time format
+    pub fn with_time_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_time_format(format);
+        self
+    }
+
+    /// Set the JSON file's timestamp format
+    pub fn with_timestamp_format(mut self, format: String) -> Self {
+        self.0 = self.0.with_timestamp_format(format);
+        self
+    }
+
+    /// Set the JSON file's timestamp tz format
+    pub fn with_timestamp_tz_format(mut self, tz_format: String) -> Self {
+        self.0 = self.0.with_timestamp_tz_format(tz_format);
         self
     }
 
@@ -450,18 +480,18 @@ where
 mod tests {
     use core::str;
     use std::collections::HashMap;
-    use std::fs::{read_to_string, File};
+    use std::fs::{File, read_to_string};
     use std::io::{BufReader, Seek};
     use std::sync::Arc;
 
     use arrow_array::cast::AsArray;
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     use super::LineDelimited;
     use super::{Encoder, WriterBuilder};
     use arrow_array::builder::*;
     use arrow_array::types::*;
-    use arrow_buffer::{i256, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, ToByteSlice};
+    use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, ToByteSlice, i256};
     use arrow_data::ArrayData;
 
     use crate::reader::*;
@@ -726,6 +756,21 @@ mod tests {
 {"name":"b"}
 "#,
         );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_timestamp_format("%m-%d-%Y".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"nanos":"11-13-2018","micros":"11-13-2018","millis":"11-13-2018","secs":"11-13-2018","name":"a"}
+{"name":"b"}
+"#,
+        );
     }
 
     #[test]
@@ -787,6 +832,21 @@ mod tests {
 {"name":"b"}
 "#,
         );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_timestamp_tz_format("%m-%d-%Y %Z".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"nanos":"11-13-2018 +00:00","micros":"11-13-2018 +00:00","millis":"11-13-2018 +00:00","secs":"11-13-2018 +00:00","name":"a"}
+{"name":"b"}
+"#,
+        );
     }
 
     #[test]
@@ -834,6 +894,22 @@ mod tests {
 {"name":"b"}
 "#,
         );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_date_format("%m-%d-%Y".to_string())
+                .with_datetime_format("%m-%d-%Y %Mmin %Ssec %Hhour".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"date32":"11-13-2018","date64":"11-13-2018 11min 10sec 17hour","name":"a"}
+{"name":"b"}
+"#,
+        );
     }
 
     #[test]
@@ -874,6 +950,21 @@ mod tests {
         assert_json_eq(
             &buf,
             r#"{"time32sec":"00:02:00","time32msec":"00:00:00.120","time64usec":"00:00:00.000120","time64nsec":"00:00:00.000000120","name":"a"}
+{"name":"b"}
+"#,
+        );
+
+        let mut buf = Vec::new();
+        {
+            let mut writer = WriterBuilder::new()
+                .with_time_format("%H-%M-%S %f".to_string())
+                .build::<_, LineDelimited>(&mut buf);
+            writer.write_batches(&[&batch]).unwrap();
+        }
+
+        assert_json_eq(
+            &buf,
+            r#"{"time32sec":"00-02-00 000000000","time32msec":"00-00-00 120000000","time64usec":"00-00-00 000120000","time64nsec":"00-00-00 000000120","name":"a"}
 {"name":"b"}
 "#,
         );

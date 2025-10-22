@@ -15,10 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{i256, ArrowNativeType, IntervalDayTime, IntervalMonthDayNano};
+use arrow_buffer::{ArrowNativeType, IntervalDayTime, IntervalMonthDayNano, i256};
 use arrow_schema::ArrowError;
 use half::f16;
-use num::complex::ComplexFloat;
+use num_complex::ComplexFloat;
 use std::cmp::Ordering;
 
 /// Trait for [`ArrowNativeType`] that adds checked and unchecked arithmetic operations,
@@ -288,7 +288,7 @@ native_type_op!(u8);
 native_type_op!(u16);
 native_type_op!(u32);
 native_type_op!(u64);
-native_type_op!(i256, i256::ZERO, i256::ONE, i256::MIN, i256::MAX);
+native_type_op!(i256, i256::ZERO, i256::ONE);
 
 native_type_op!(IntervalDayTime, IntervalDayTime::ZERO, IntervalDayTime::ONE);
 native_type_op!(
@@ -454,9 +454,7 @@ mod tests {
     use super::*;
 
     macro_rules! assert_approx_eq {
-        ( $x: expr, $y: expr ) => {{
-            assert_approx_eq!($x, $y, 1.0e-4)
-        }};
+        ( $x: expr, $y: expr ) => {{ assert_approx_eq!($x, $y, 1.0e-4) }};
         ( $x: expr, $y: expr, $tol: expr ) => {{
             let x_val = $x;
             let y_val = $y;
