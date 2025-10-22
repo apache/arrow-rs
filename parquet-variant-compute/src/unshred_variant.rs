@@ -164,7 +164,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
     fn try_new_opt(shredding_state: BorrowedShreddingState<'a>) -> Result<Option<Self>> {
         let value = shredding_state.value_field();
         let typed_value = shredding_state.typed_value_field();
-        let Some(typed_value) = typed_value else {
+        let Some((_, typed_value)) = typed_value else {
             // Copy the value across directly, if present. Else caller decides what to do.
             return Ok(value.map(|v| Self::ValueOnly(ValueOnlyUnshredVariantBuilder::new(v))));
         };

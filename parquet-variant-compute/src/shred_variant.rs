@@ -309,7 +309,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array =
                 ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
-            builder = builder.with_field(field_name, ArrayRef::from(array), false);
+            builder = builder.with_column(field_name, ArrayRef::from(array), false);
         }
         if let Some(nulls) = self.typed_value_nulls.finish() {
             builder = builder.with_nulls(nulls);
@@ -400,6 +400,7 @@ mod tests {
         let typed_value_field = result
             .typed_value_field()
             .unwrap()
+            .1
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
@@ -459,6 +460,7 @@ mod tests {
         let typed_value_int32 = result_int32
             .typed_value_field()
             .unwrap()
+            .1
             .as_any()
             .downcast_ref::<arrow::array::Int32Array>()
             .unwrap();
@@ -471,6 +473,7 @@ mod tests {
         let typed_value_float64 = result_float64
             .typed_value_field()
             .unwrap()
+            .1
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
@@ -550,6 +553,7 @@ mod tests {
         let typed_value = result
             .typed_value_field()
             .unwrap()
+            .1
             .as_any()
             .downcast_ref::<arrow::array::StructArray>()
             .unwrap();
@@ -570,6 +574,7 @@ mod tests {
         let score_typed_value = score_field
             .typed_value_field()
             .unwrap()
+            .1
             .as_any()
             .downcast_ref::<Float64Array>()
             .unwrap();
@@ -582,6 +587,7 @@ mod tests {
         let age_typed_value = age_field
             .typed_value_field()
             .unwrap()
+            .1
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
@@ -912,6 +918,7 @@ mod tests {
         let typed_value_field = result
             .typed_value_field()
             .unwrap()
+            .1
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
