@@ -204,9 +204,9 @@ fn interleave_bytes<T: ByteArrayType>(
 }
 
 // backed_values and offsets is the inner arrays of a list array
-fn interleave_backend_dict_by_offset<O: OffsetSizeTrait>(
+fn interleave_backend_arrays_by_offset<O: OffsetSizeTrait>(
     backed_values: &[&dyn Array],
-    offsets: &[&[usize]],
+    offsets: &[&[O]],
     length: usize,
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
@@ -215,35 +215,31 @@ fn interleave_backend_dict_by_offset<O: OffsetSizeTrait>(
     let mut array_data = MutableArrayData::new(arrays, false, length);
 
     let mut cur_array = indices[0].0;
-    let mut start_row_idx = offsets[0][0];
-    let mut end_row_idx = offsets[0][1];
+    let mut row = indices[0].1;
+    let mut start = offsets[cur_array][row].as_usize();
+    let mut end = offsets[cur_array][row + 1].as_usize();
 
     for (array, row) in indices.iter().skip(1).copied() {
+        let new_start = offsets[array][row].as_usize();
+        let new_end = offsets[array][row + 1].as_usize();
         // i.e (0,1) and (0,2)
         // where 1 represents offset 0,3
         // and 2 represents offset
-        if array == cur_array && row == end_row_idx {
+        if array == cur_array && new_start == end {
             // subsequent row in same batch
-            end_row_idx += 1;
+            end = new_end;
             continue;
         }
 
-        let offsets = offsets[array];
-
-        let start = offsets[start_row_idx];
-        let end = offsets[end_row_idx + 1];
         // emit current batch of rows for current buffer
         array_data.extend(cur_array, start, end);
 
         // start new batch of rows
         cur_array = array;
-        start_row_idx = row;
-        end_row_idx = start_row_idx + 1;
+        start = new_start;
+        end = new_end;
     }
 
-    let offsets = offsets[cur_array];
-    let start = offsets[start_row_idx];
-    let end = offsets[end_row_idx + 1];
     // emit final batch of rows
     array_data.extend(cur_array, start, end);
     Ok(make_array(array_data.freeze()))
@@ -256,49 +252,57 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
     arrays: &[&dyn Array],
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
-    let mut dictionaries_by_field_numb = HashMap::new();
-    let (list_arrs, offsets) = arrays
-        .iter()
-        .map(|x| {
-            let list = x.as_list::<G>();
+    let mut dicts_to_merge = HashMap::new();
+    dict_fields.iter().for_each(|(field_num, _)| {
+        let mut dicts = Vec::with_capacity(arrays.len());
+        for arr in arrays {
+            let list = arr.as_list::<G>();
             let struct_arr = list.values().as_struct();
-            dict_fields.iter().for_each(|(field_numb, _)| {
-                let dict_col = struct_arr.column(*field_numb).as_dictionary();
-                let dictionaries = dictionaries_by_field_numb
-                    .entry(*field_numb)
-                    .or_insert(Vec::with_capacity(arrays.len()));
-                dictionaries.push(dict_col);
-            });
-            (list, list.value_offsets())
-        })
-        .collect::<(Vec<_>, Vec<_>)>();
-    // split into 2 groups of dicts
-    // a group which required merging the backend dict
-    // another is to do interleaving right away (duplicate dict values)
-    let (dicts_to_merge, dicts_to_concat): (Vec<(_, _)>, Vec<(_, _)>) = dictionaries_by_field_numb
-        .iter()
-        .partition(|(field_numb, dicts)| -> bool {
-            // TODO: typecast each dict array
-
-            should_merge_dictionary_values::<UInt8Type>(
-                *dicts,
-                <UInt8Type as ArrowPrimitiveType>::Native::MAX_TOTAL_ORDER.as_usize(),
-            )
-        });
+            let dict_col = struct_arr.column(*field_num).as_dictionary::<UInt8Type>();
+            dicts.push(dict_col);
+        }
+        if should_merge_dictionary_values::<UInt8Type>(
+            &dicts,
+            <UInt8Type as ArrowPrimitiveType>::Native::MAX_TOTAL_ORDER.as_usize(),
+        ) {
+            dicts_to_merge.insert(*field_num, dicts);
+        }
+    });
+    // if no dictionary field needs merging, interleave using MutableArray
     if dicts_to_merge.is_empty() {
         return interleave_fallback(arrays, indices);
     }
+    // arrays which are not merged are interleaved using MutableArray
+    let mut sub_arrays_by_field = HashMap::new();
+    let (nulls, offsets) = arrays
+        .iter()
+        .map(|x| {
+            let list = x.as_list::<G>();
+            let backed_struct = list.values().as_struct();
+            for (field_num, col) in backed_struct.columns().iter().enumerate() {
+                if dicts_to_merge.get(&field_num).is_some() {
+                    continue;
+                }
+                let sub_arrays = sub_arrays_by_field
+                    .entry(field_num)
+                    .or_insert(Vec::with_capacity(arrays.len()));
+                sub_arrays.push(col as &dyn Array);
+            }
+            (list, list.value_offsets())
+        })
+        .collect::<(Vec<_>, Vec<_>)>();
     let mut key_length = 0;
     let merged_dicts = dicts_to_merge
-        .iter()
-        .map(|(_, dicts)| {
+        .values()
+        .map(|dicts| {
             let (dict, merged_dict_key_length) =
-                merge_dictionaries_by_offset(*dicts, &offsets, indices)?;
+                merge_dictionaries_by_offset(dicts, &offsets, indices)?;
             if key_length != 0 {
                 // since the merging use the same offsets list
                 // the key length should all be equal
                 assert_eq!(key_length, merged_dict_key_length);
             }
+            key_length = merged_dict_key_length;
             Ok(dict)
         })
         .collect::<Result<Vec<MergedDictionaries<UInt8Type>>, ArrowError>>()?;
@@ -307,59 +311,86 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
         .map(|_| PrimitiveBuilder::<UInt8Type>::with_capacity(key_length))
         .collect::<Vec<_>>();
     let mut arr_lengths: Vec<usize> = vec![];
+    let mut total_child_items = 0;
     let mut null_buffer = NullBufferBuilder::new(indices.len());
 
     // construct new dict sub array
     for (array_num, offset) in indices {
-        let list_arr = list_arrs[*array_num];
-        if list_arr.is_null(*offset) {
-            null_buffer.append_null();
-            arr_lengths.push(0);
-            continue;
-        } else {
-            let end = list_arr.value_offsets()[*offset + 1].as_usize();
-            // key_idx -> a range of index in the back end
-            let start = list_arr.value_offsets()[*offset].as_usize();
-            let arr_size = end - start;
-            null_buffer.append_n_non_nulls(arr_size);
-            arr_lengths.push(arr_size);
+        let list = nulls[*array_num];
+        let list_offsets = offsets[*array_num];
 
-            for ((merged_dict, (_, old_dicts)), new_dict_keys) in merged_dicts
-                .iter()
-                .zip(dicts_to_merge.iter())
-                .zip(dict_keys.iter_mut())
-            {
-                let old_keys = old_dicts[*array_num].keys();
-                for key in start..end {
-                    match old_keys.is_valid(key) {
-                        true => {
-                            let old_key = old_keys.values()[key];
-                            new_dict_keys.append_value(
-                                merged_dict.key_mappings[*array_num][old_key.as_usize()],
-                            )
-                        }
-                        false => new_dict_keys.append_null(),
+        if !list.is_valid(*offset) {
+            null_buffer.append_null();
+        } else {
+            null_buffer.append_non_null();
+        }
+        let end = list_offsets[*offset + 1].as_usize();
+        // key_idx -> a range of index in the back end
+        let start = list_offsets[*offset].as_usize();
+
+        let arr_size = end - start;
+        total_child_items += arr_size;
+        arr_lengths.push(arr_size);
+
+        for ((merged_dict, (_, old_dicts)), new_dict_keys) in merged_dicts
+            .iter()
+            .zip(dicts_to_merge.iter())
+            .zip(dict_keys.iter_mut())
+        {
+            let old_keys = old_dicts[*array_num].keys();
+            for key in start..end {
+                match old_keys.is_valid(key) {
+                    true => {
+                        let old_key = old_keys.values()[key];
+                        new_dict_keys
+                            .append_value(merged_dict.key_mappings[*array_num][old_key.as_usize()])
                     }
+                    false => new_dict_keys.append_null(),
                 }
             }
         }
     }
-    // TODO: include concat_only dict interleaving
-    // and other non-dict arrays
-    let struct_sub_arrays = dicts_to_merge
+
+    let mut interleaved_merged = dicts_to_merge
         .iter()
         .zip(dict_keys.iter_mut())
         .zip(merged_dicts)
         .map(|(((field_num, _), new_keys), merged_dict)| {
             let new_backed_dict_arr =
                 unsafe { DictionaryArray::new_unchecked(new_keys.finish(), merged_dict.values) };
-            Arc::new(new_backed_dict_arr) as ArrayRef
+            (*field_num, Arc::new(new_backed_dict_arr) as ArrayRef)
+        })
+        .collect::<HashMap<_, _>>();
+    let mut interleaved_unmerged = sub_arrays_by_field
+        .iter()
+        .map(|(num_field, sub_arrays)| {
+            Ok((
+                *num_field,
+                interleave_backend_arrays_by_offset(
+                    &sub_arrays,
+                    &offsets,
+                    total_child_items,
+                    indices,
+                )?,
+            ))
+        })
+        .collect::<Result<HashMap<_, _>, ArrowError>>()?;
+    let struct_sub_arrays = fields
+        .iter()
+        .enumerate()
+        .map(|(field_num, _)| {
+            if let Some(arr) = interleaved_merged.remove(&field_num) {
+                return arr;
+            }
+            if let Some(arr) = interleaved_unmerged.remove(&field_num) {
+                return arr;
+            }
+            unreachable!("field {field_num} was not interleaved");
         })
         .collect::<Vec<_>>();
 
     let backed_struct_arr = StructArray::try_new(fields.clone(), struct_sub_arrays, None)?;
     let offset_buffer = OffsetBuffer::<G>::from_lengths(arr_lengths);
-    let data_type = arrays[0].data_type();
     let struct_list_arr = GenericListArray::new(
         Arc::new(Field::new("elem", DataType::Struct(fields.clone()), true)),
         offset_buffer,
@@ -1527,73 +1558,119 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v.data_type(), &DataType::Struct(fields));
     }
+    fn create_dict_arr(keys: Vec<u8>, null_keys: Option<Vec<bool>>, values: Vec<u16>) -> ArrayRef {
+        let input_keys = UInt8Array::from_iter_values_with_nulls(
+            keys,
+            null_keys.map(|nulls| NullBuffer::from(nulls)),
+        );
+        let input_values = UInt16Array::from_iter_values(values);
+        let input = DictionaryArray::new(input_keys, Arc::new(input_values));
+        Arc::new(input) as ArrayRef
+    }
+
+    fn create_dict_list_arr(
+        keys: Vec<u8>,
+        null_keys: Option<Vec<bool>>,
+        values: Vec<u16>,
+        lengths: Vec<usize>,
+        list_nulls: Option<Vec<bool>>,
+    ) -> ArrayRef {
+        let dict_arr = {
+            let input_1_keys = UInt8Array::from_iter_values_with_nulls(
+                keys,
+                null_keys.map(|nulls| NullBuffer::from(nulls)),
+            );
+            let input_1_values = UInt16Array::from_iter_values(values);
+            let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
+            input_1
+        };
+
+        let offset_buffer = OffsetBuffer::<i32>::from_lengths(lengths);
+        let list_arr = GenericListArray::new(
+            Arc::new(Field::new_dictionary(
+                "elem",
+                DataType::UInt8,
+                DataType::UInt16,
+                true,
+            )),
+            offset_buffer,
+            Arc::new(dict_arr) as ArrayRef,
+            list_nulls.map(|nulls| NullBuffer::from(nulls)),
+        );
+        let arr = Arc::new(list_arr) as ArrayRef;
+        arr
+    }
 
     #[test]
     fn test_nested_dictionary_lists() {
-        let fields = Fields::from(vec![Field::new(
-            "dict_col",
-            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt8)),
-            false,
-        )]);
-        let create_arr = || {
-            let input_1_keys = UInt8Array::from_iter_values(0..=255);
-            let input_1_values = UInt8Array::from_iter_values(0..=255);
-            let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
-
-            let struct_arr =
-                StructArray::try_new(fields.clone(), vec![Arc::new(input_1)], None).unwrap();
-            let offset_buffer = OffsetBuffer::<i32>::from_lengths(repeat(1).take(256));
-            let struct_fields = struct_arr.fields();
-            let struct_list_arr = GenericListArray::new(
-                Arc::new(Field::new_struct("element", struct_fields.clone(), false)),
-                offset_buffer,
+        let make_struct_list = |f1: ArrayRef,
+                                f2: ArrayRef,
+                                nulls: Option<Vec<bool>>,
+                                lengths: Vec<usize>,
+                                list_nulls: Option<Vec<bool>>| {
+            let fields = Fields::from(vec![
+                Field::new("f1", f1.data_type().clone(), true),
+                Field::new("f2", f2.data_type().clone(), true),
+            ]);
+            let struct_arr = StructArray::try_new(
+                fields.clone(),
+                vec![f1, f2],
+                nulls.map(|v| NullBuffer::from_iter(v)),
+            )
+            .unwrap();
+            let list_arr = GenericListArray::<i32>::new(
+                Arc::new(Field::new_struct("elem", fields, true)),
+                OffsetBuffer::from_lengths(lengths),
                 Arc::new(struct_arr) as ArrayRef,
-                None,
+                list_nulls.map(|nulls: Vec<bool>| NullBuffer::from(nulls)),
             );
-            let arr1 = Arc::new(struct_list_arr) as ArrayRef;
-            arr1
+            Arc::new(list_arr) as ArrayRef
         };
-        let arr1 = create_arr();
-        let arr2 = create_arr();
+
+        let dict_arr1 = create_dict_arr((0..=255).collect(), None, (0..=255).collect());
+        let arr1 = make_struct_list(
+            dict_arr1,
+            Arc::new(StringArray::from_iter_values(
+                (0..=255).map(|i| i.to_string()),
+            )) as ArrayRef,
+            None,
+            repeat(1).take(256).collect::<Vec<_>>(),
+            None,
+        );
+
+        let mut null_keys = vec![true, false];
+        null_keys.extend(vec![true; 254]);
+
+        let mut null_list = vec![true, true, false];
+        null_list.extend(vec![true; 125]);
+        // [255, null] [253, 252] null [249,248] ...
+        let dict_arr2 = create_dict_arr(
+            (0..=255).rev().collect(),
+            Some(null_keys),
+            (0..=255).collect(),
+        );
+        let arr2 = make_struct_list(
+            dict_arr2,
+            Arc::new(StringArray::from_iter_values(
+                (0i32..=255).rev().map(|i| i.to_string()),
+            )) as ArrayRef,
+            None,
+            repeat(2).take(128).collect::<Vec<_>>(),
+            Some(null_list),
+        );
 
         let result =
             interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
-        println!("{:?}", result.as_struct());
+        println!("{:?}", result.data_type());
+        let list = result.as_list::<i32>();
+        println!("{:?}", list.values());
+        let backed_array = list.values().as_struct();
+        println!("{:?}", backed_array);
     }
 
     #[test]
     fn test_dictionary_lists() {
-        let create_dict_arr = |keys: Vec<u8>,
-                               null_keys: Option<Vec<bool>>,
-                               values: Vec<u16>,
-                               lengths: Vec<usize>,
-                               list_nulls: Option<Vec<bool>>| {
-            let dict_arr = {
-                let input_1_keys = UInt8Array::from_iter_values_with_nulls(
-                    keys,
-                    null_keys.map(|nulls| NullBuffer::from(nulls)),
-                );
-                let input_1_values = UInt16Array::from_iter_values(values);
-                let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
-                input_1
-            };
-
-            let offset_buffer = OffsetBuffer::<i32>::from_lengths(lengths);
-            let list_arr = GenericListArray::new(
-                Arc::new(Field::new_dictionary(
-                    "elem",
-                    DataType::UInt8,
-                    DataType::UInt16,
-                    true,
-                )),
-                offset_buffer,
-                Arc::new(dict_arr) as ArrayRef,
-                list_nulls.map(|nulls| NullBuffer::from(nulls)),
-            );
-            let arr = Arc::new(list_arr) as ArrayRef;
-            arr
-        };
-        let arr1 = create_dict_arr(
+        let arr1 = create_dict_list_arr(
             (0..=255).collect(),
             None,
             (0..=255).collect(),
@@ -1606,7 +1683,7 @@ mod tests {
         let mut null_list = vec![true, true, false];
         null_list.extend(vec![true; 125]);
         // [255, null] [253, 252] null [249,248] ...
-        let arr2 = create_dict_arr(
+        let arr2 = create_dict_list_arr(
             (0..=255).rev().collect(),
             Some(null_keys),
             (0..=255).collect(),
@@ -1661,12 +1738,12 @@ mod tests {
 
         assert_eq!(
             &keys_arr,
-            &[Some(1), Some(0), Some(6), None, Some(5), Some(4),]
+            &[Some(1), Some(0), Some(6), None, Some(5), Some(4)]
         );
     }
 
     #[test]
-    fn test_dictionary_overflow() {
+    fn test_uint8_dictionary_overflow_with_256_items() {
         let dict_arr = {
             let input_1_keys = UInt8Array::from_iter_values(0..=255);
             let input_1_values = UInt8Array::from_iter_values(0..=255);
