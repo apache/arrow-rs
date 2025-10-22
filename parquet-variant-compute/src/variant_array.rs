@@ -1000,6 +1000,19 @@ fn typed_value_to_variant<'a>(
                 index
             )
         }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            generic_conversion_single_value!(
+                Time64MicrosecondType,
+                as_primitive,
+                |v| NaiveTime::from_num_seconds_from_midnight_opt(
+                    (v / 1_000_000) as u32,
+                    (v % 1_000_000) as u32 * 1000
+                )
+                .map_or(Variant::Null, Variant::from),
+                typed_value,
+                index
+            )
+        }
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
             generic_conversion_single_value!(
                 TimestampMicrosecondType,
@@ -1032,19 +1045,6 @@ fn typed_value_to_variant<'a>(
                 TimestampNanosecondType,
                 as_primitive,
                 |v| DateTime::from_timestamp_nanos(v).naive_utc(),
-                typed_value,
-                index
-            )
-        }
-        DataType::Time64(TimeUnit::Microsecond) => {
-            generic_conversion_single_value!(
-                Time64MicrosecondType,
-                as_primitive,
-                |v| NaiveTime::from_num_seconds_from_midnight_opt(
-                    (v / 1_000_000) as u32,
-                    (v % 1_000_000) as u32 * 1000
-                )
-                .map_or(Variant::Null, Variant::from),
                 typed_value,
                 index
             )
