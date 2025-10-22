@@ -465,7 +465,7 @@ fn interleave_dictionaries_list<K: ArrowDictionaryKeyType, G: OffsetSizeTrait>(
             // key_idx -> a range of index in the back end
             let start = list_arr.value_offsets()[*b].as_usize();
             let arr_size = end - start;
-            null_buffer.append_n_non_nulls(arr_size);
+            null_buffer.append_non_null();
 
             let old_keys: &PrimitiveArray<K> = dictionaries[*a].keys();
             arr_lengths.push(arr_size);
@@ -601,7 +601,12 @@ fn interleave_list<K: OffsetSizeTrait>(
             if dict_fields.is_empty() {
                 return interleave_fallback(values, indices);
             }
-            interleave_struct_list_containing_dictionaries::<K>(fields,&dict_fields, values, indices)
+            interleave_struct_list_containing_dictionaries::<K>(
+                fields,
+                &dict_fields,
+                values,
+                indices,
+            )
         }
         DataType::Dictionary(k, _) => downcast_integer! {
             k.as_ref() => (dict_list_helper, K, values, indices),
@@ -1551,52 +1556,76 @@ mod tests {
         let arr1 = create_arr();
         let arr2 = create_arr();
 
-        let result = interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
-        println!("{:?}",result.as_struct());
+        let result =
+            interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+        println!("{:?}", result.as_struct());
     }
 
     #[test]
     fn test_dictionary_lists() {
-        let create_dict_arr = |keys: Vec<u8>, values: Vec<u16>, lengths: Vec<usize>| {
+        let create_dict_arr = |keys: Vec<u8>,
+                               null_keys: Option<Vec<bool>>,
+                               values: Vec<u16>,
+                               lengths: Vec<usize>,
+                               list_nulls: Option<Vec<bool>>| {
             let dict_arr = {
-                let input_1_keys = UInt8Array::from_iter_values(keys);
+                let input_1_keys = UInt8Array::from_iter_values_with_nulls(
+                    keys,
+                    null_keys.map(|nulls| NullBuffer::from(nulls)),
+                );
                 let input_1_values = UInt16Array::from_iter_values(values);
                 let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
                 input_1
             };
 
             let offset_buffer = OffsetBuffer::<i32>::from_lengths(lengths);
-            let struct_list_arr = GenericListArray::new(
+            let list_arr = GenericListArray::new(
                 Arc::new(Field::new_dictionary(
                     "elem",
                     DataType::UInt8,
                     DataType::UInt16,
-                    false,
+                    true,
                 )),
                 offset_buffer,
                 Arc::new(dict_arr) as ArrayRef,
-                None,
+                list_nulls.map(|nulls| NullBuffer::from(nulls)),
             );
-            let arr = Arc::new(struct_list_arr) as ArrayRef;
+            let arr = Arc::new(list_arr) as ArrayRef;
             arr
         };
         let arr1 = create_dict_arr(
             (0..=255).collect(),
+            None,
             (0..=255).collect(),
             repeat(1).take(256).collect(),
+            None,
         );
+        let mut null_keys = vec![true, false];
+        null_keys.extend(vec![true; 254]);
+
+        let mut null_list = vec![true, true, false];
+        null_list.extend(vec![true; 125]);
+        // [255, null] [253, 252] null [249,248] ...
         let arr2 = create_dict_arr(
             (0..=255).rev().collect(),
+            Some(null_keys),
             (0..=255).collect(),
             repeat(2).take(128).collect(),
+            Some(null_list),
         );
 
-        // [2], [1], [255,254], [251,250], [253, 252]
+        // [0] [1] [2] [3] ...
+        // [255, null] [253, 252] null [249,248] ...
+
+        // result => [2], [1], [255, null], null, [253, 252]
         let new_arr =
             interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
         let list = new_arr.as_list::<i32>();
         let offsets: Vec<i32> = list.offsets().iter().cloned().collect();
-        assert_eq!(&offsets, &[0, 1, 2, 4, 6, 8]);
+        assert_eq!(&offsets, &[0, 1, 2, 4, 4, 6]);
+
+        let nulls = list.nulls().unwrap().iter().collect::<Vec<bool>>();
+        assert_eq!(&nulls, &[true, true, true, false, true]);
 
         let backed_dict_arr = list.values().as_dictionary::<UInt8Type>();
 
@@ -1615,26 +1644,24 @@ mod tests {
                 Some(251),
                 Some(252),
                 Some(253),
-                Some(254),
-                Some(255)
+                Some(255),
             ]
         );
 
         let keys_arr = backed_dict_arr.keys().iter().collect::<Vec<_>>();
-        // values: 2,1,255,254,251,250,253,252
-        // keys: 1,0,7,6,3,2,5,4
+        // keys: 1,0,6,null,5,4
+        // values: 1,2,250,251,252,253,255
+        // logically represents -> 2, 1, 255, null, 253, 252
+        //
+        // with offsets [0,1,2,4,4,6]
+        // and nulls [true, true, true, false, true, true]
+        // represents [2], [1], [255, null], null, [253, 252]
+
+        assert_eq!(&offsets, &[0, 1, 2, 4, 4, 6]);
+
         assert_eq!(
             &keys_arr,
-            &[
-                Some(1),
-                Some(0),
-                Some(7),
-                Some(6),
-                Some(3),
-                Some(2),
-                Some(5),
-                Some(4)
-            ]
+            &[Some(1), Some(0), Some(6), None, Some(5), Some(4),]
         );
     }
 
