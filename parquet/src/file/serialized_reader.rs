@@ -461,7 +461,10 @@ pub(crate) fn decode_page(
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            return Err(general_err!("Page type {:?} is not supported", page_header.r#type));
+            return Err(general_err!(
+                "Page type {:?} is not supported",
+                page_header.r#type
+            ));
         }
     };
 
@@ -1146,13 +1149,25 @@ mod tests {
     fn test_decode_page_invalid_offset() {
         use crate::file::metadata::thrift_gen::DataPageHeaderV2;
 
-        let mut page_header = PageHeader::default();
-        page_header.r#type = PageType::DATA_PAGE_V2;
-        page_header.uncompressed_page_size = 10;
-        page_header.compressed_page_size = 10;
-        let mut data_page_header_v2 = DataPageHeaderV2::default();
-        data_page_header_v2.definition_levels_byte_length = 11; // offset > uncompressed_page_size
-        page_header.data_page_header_v2 = Some(data_page_header_v2);
+        let page_header = PageHeader {
+            r#type: PageType::DATA_PAGE_V2,
+            uncompressed_page_size: 10,
+            compressed_page_size: 10,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            crc: None,
+            data_page_header_v2: Some(DataPageHeaderV2 {
+                num_nulls: 0,
+                num_rows: 0,
+                num_values: 0,
+                encoding: Encoding::PLAIN,
+                definition_levels_byte_length: 11,
+                repetition_levels_byte_length: 0,
+                is_compressed: None,
+                statistics: None,
+            }),
+        };
 
         let buffer = Bytes::new();
         let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();

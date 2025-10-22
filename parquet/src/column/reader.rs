@@ -571,8 +571,9 @@ fn parse_v1_level(
             let i32_size = std::mem::size_of::<i32>();
             if i32_size <= buf.len() {
                 let data_size = read_num_bytes::<i32>(i32_size, buf.as_ref()) as usize;
-                let end =
-                    i32_size.checked_add(data_size).ok_or(general_err!("invalid level length"))?;
+                let end = i32_size
+                    .checked_add(data_size)
+                    .ok_or(general_err!("invalid level length"))?;
                 if end <= buf.len() {
                     return Ok((end, buf.slice(i32_size..end)));
                 }

@@ -1358,11 +1358,13 @@ fn schema_from_array_helper<'a>(
             //   All other types must have one.
             if !is_root_node {
                 let Some(rep) = repetition else {
-                    return Err(general_err!("Repetition level must be defined for non-root types"));
+                    return Err(general_err!(
+                        "Repetition level must be defined for non-root types"
+                    ));
                 };
                 builder = builder.with_repetition(rep);
             }
-            Ok((next_index, Arc::new(builder.build().unwrap())))
+            Ok((next_index, Arc::new(builder.build()?)))
         }
     }
 }
