@@ -908,14 +908,18 @@ impl RowConverter {
     /// [RowConverter]. It will panic if any rows are null. Operations on the returned [Rows] may
     /// panic if the data is malformed.
     pub fn from_binary(&self, array: BinaryArray) -> Rows {
+        let (offsets, values, nulls) = array.into_parts();
         assert_eq!(
-            array.null_count(),
+            nulls.map(|n| n.null_count()).unwrap_or(0),
             0,
             "can't construct Rows instance from array with nulls"
         );
+        let offsets = offsets.iter().map(|&i| i.as_usize()).collect();
+        // Try zero-copy, if it does not succeed, fall back to copying the values.
+        let buffer = values.into_vec().unwrap_or_else(|values| values.to_vec());
         Rows {
-            buffer: array.values().to_vec(),
-            offsets: array.offsets().iter().map(|&i| i.as_usize()).collect(),
+            buffer,
+            offsets,
             config: RowConfig {
                 fields: Arc::clone(&self.fields),
                 validate_utf8: true,
