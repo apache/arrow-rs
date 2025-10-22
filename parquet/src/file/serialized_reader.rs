@@ -25,7 +25,7 @@ use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift::{DataPageHeaderV2, PageHeader};
+use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics;
 use crate::file::{
@@ -1136,6 +1136,7 @@ mod tests {
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
+    use crate::file::metadata::thrift::DataPageHeaderV2;
     #[allow(deprecated)]
     use crate::file::page_index::index_reader::{read_columns_indexes, read_offset_indexes};
     use crate::file::writer::SerializedFileWriter;
@@ -1145,6 +1146,7 @@ mod tests {
 
     use super::*;
 
+    #[test]
     fn test_decode_page_invalid_offset() {
         let page_header = PageHeader {
             r#type: PageType::DATA_PAGE_V2,
@@ -1174,6 +1176,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn test_decode_unsupported_page() {
         let mut page_header = PageHeader {
             r#type: PageType::INDEX_PAGE,
