@@ -406,6 +406,32 @@ optional fields it is. A typical `write_thrift` implementation will look like:
     }
 ```
 
+In most instances, the `WriteThriftField` implementation can be handled by the `write_thrift_field`
+macro. The first argument is the unqualified name of an object that implements `WriteThrift`, and
+the second is the field type (which will be `FieldType::Struct` for Thrift structs and unions,
+and `FieldType::I32` for Thrift enums).
+
+```rust
+write_thrift_field!(MyNewStruct, FieldType::Struct);
+```
+
+which expands to:
+
+```rust
+impl WriteThriftField for MyNewStruct {
+    fn write_thrift_field<W: Write>(
+        &self,
+        writer: &mut ThriftCompactOutputProtocol<W>,
+        field_id: i16,
+        last_field_id: i16,
+    ) -> Result<i16> {
+        writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+        self.write_thrift(writer)?;
+        Ok(field_id)
+    }
+}
+```
+
 ### Handling for lists
 
 Lists of serialized objects can usually be read using `parquet_thrift::read_thrift_vec` and written

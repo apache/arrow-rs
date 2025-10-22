@@ -23,6 +23,7 @@ use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType,
 };
+use chrono::Timelike;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
@@ -89,6 +90,9 @@ impl_primitive_from_variant!(
     as_naive_date,
     datatypes::Date32Type::from_naive_date
 );
+impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
+    (v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64
+});
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_ntz_micros,
