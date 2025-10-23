@@ -992,6 +992,62 @@ mod tests {
     }
 
     #[test]
+    fn test_concat_sliced_list_view_arrays() {
+        let list1 = vec![
+            Some(vec![Some(-1), None]),
+            None,
+            Some(vec![Some(10), Some(20)]),
+        ];
+        let mut list1_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list1.iter() {
+            list1_array.append_option(v.clone());
+        }
+        let list1_array = list1_array.finish();
+
+        let list2 = vec![
+            None,
+            Some(vec![Some(100), None]),
+            Some(vec![Some(102), Some(103)]),
+        ];
+        let mut list2_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list2.iter() {
+            list2_array.append_option(v.clone());
+        }
+        let list2_array = list2_array.finish();
+
+        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let mut list3_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list3.iter() {
+            list3_array.append_option(v.clone());
+        }
+        let list3_array = list3_array.finish();
+
+        // Concat sliced arrays.
+        // ListView slicing will slice the offset/sizes but preserve the original values child.
+        let array_result = concat(&[
+            &list1_array.slice(1, 2),
+            &list2_array.slice(1, 2),
+            &list3_array.slice(0, 1),
+        ])
+        .unwrap();
+
+        let expected: Vec<_> = vec![
+            None,
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(100), None]),
+            Some(vec![Some(102), Some(103)]),
+            Some(vec![Some(1000), Some(1001)]),
+        ];
+        let mut array_expected = ListViewBuilder::new(Int64Builder::new());
+        for v in expected.iter() {
+            array_expected.append_option(v.clone());
+        }
+        let array_expected = array_expected.finish();
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
     fn test_concat_struct_arrays() {
         let field = Arc::new(Field::new("field", DataType::Int64, true));
         let input_primitive_1: ArrayRef = Arc::new(PrimitiveArray::<Int64Type>::from(vec![

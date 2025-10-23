@@ -17,7 +17,6 @@
 
 use crate::ArrayData;
 use crate::transform::_MutableArrayData;
-use crate::transform::utils::get_last_value_or_default;
 use arrow_buffer::ArrowNativeType;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
@@ -51,9 +50,7 @@ pub(super) fn extend_nulls<T: ArrowNativeType>(mutable: &mut _MutableArrayData, 
     let offset_buffer = &mut mutable.buffer1;
     let sizes_buffer = &mut mutable.buffer2;
 
-    let last_offset: T = get_last_value_or_default(offset_buffer);
-    let last_size: T = get_last_value_or_default(sizes_buffer);
-
-    (0..len).for_each(|_| offset_buffer.push(last_offset));
-    (0..len).for_each(|_| sizes_buffer.push(last_size));
+    // We push 0 as a placeholder for NULL values in both the offsets and sizes
+    (0..len).for_each(|_| offset_buffer.push(T::default()));
+    (0..len).for_each(|_| sizes_buffer.push(T::default()));
 }

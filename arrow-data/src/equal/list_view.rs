@@ -53,6 +53,10 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
             return false;
         }
 
+        if lhs_range_sizes != rhs_range_sizes {
+            return false;
+        }
+
         // Check values for equality
         let lhs_range_offsets = &lhs_offsets[lhs_start..lhs_start + len];
         let rhs_range_offsets = &rhs_offsets[rhs_start..rhs_start + len];
