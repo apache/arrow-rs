@@ -963,6 +963,14 @@ pub fn parse_decimal<T: DecimalType>(
     }
 
     if !is_e_notation {
+        if scale == 0 && fractionals > 0 {
+            // The input string contained some fractional digits after the decimal point despite
+            // the scale being zero. Eject all the fractional digits from the number.
+            result = result.div_wrapping(base.pow_wrapping(fractionals as _));
+            digits -= fractionals as u8;
+            fractionals = 0;
+        }
+
         if fractionals < scale {
             let exp = scale - fractionals;
             if exp as u8 + digits > precision {
@@ -2636,6 +2644,7 @@ mod tests {
             ("12345678908765.123456", 3),
             ("123456789087651234.56e-4", 3),
             ("1234560000000", 0),
+            ("12345678900.0", 0),
             ("1.23456e12", 0),
         ];
         for (s, scale) in overflow_parse_tests {
@@ -2751,6 +2760,23 @@ mod tests {
         for (s, i, scale) in edge_tests_256 {
             let result = parse_decimal::<Decimal256Type>(s, 76, scale);
             assert_eq!(i, result.unwrap());
+        }
+
+        let zero_scale_tests = [
+            ("1.0", 1),
+            ("1.2", 1),
+            ("1.00", 1),
+            ("1.23", 1),
+            ("1.000", 1),
+            ("1.123", 1),
+            ("123.0", 123),
+            ("123.4", 123),
+            ("123.00", 123),
+            ("123.45", 123),
+        ];
+        for (s, i) in zero_scale_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 3, 0).unwrap();
+            assert_eq!(i, result_128);
         }
     }
 
