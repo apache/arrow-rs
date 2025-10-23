@@ -44,14 +44,14 @@ This crate provides:
 
 ```toml
 [dependencies]
-arrow-avro = "56"
+arrow-avro = "57"
 ````
 
 Disable defaults and pick only what you need (see **Feature Flags**):
 
 ```toml
 [dependencies]
-arrow-avro = { version = "56", default-features = false, features = ["deflate", "snappy"] }
+arrow-avro = { version = "57", default-features = false, features = ["deflate", "snappy"] }
 ```
 
 ---
