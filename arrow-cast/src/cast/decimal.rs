@@ -145,27 +145,6 @@ impl DecimalCast for i256 {
     }
 }
 
-fn cast_decimal_to_decimal_error<I, O>(
-    output_precision: u8,
-    output_scale: i8,
-) -> impl Fn(<I as ArrowPrimitiveType>::Native) -> ArrowError
-where
-    I: DecimalType,
-    O: DecimalType,
-    I::Native: DecimalCast + ArrowNativeTypeOp,
-    O::Native: DecimalCast + ArrowNativeTypeOp,
-{
-    move |x: I::Native| {
-        ArrowError::CastError(format!(
-            "Cannot cast to {}({}, {}). Overflowing on {:?}",
-            O::PREFIX,
-            output_precision,
-            output_scale,
-            x
-        ))
-    }
-}
-
 /// Construct closures to upscale decimals from `(input_precision, input_scale)` to
 /// `(output_precision, output_scale)`.
 ///
@@ -174,7 +153,7 @@ where
 /// In that case, the caller should treat this as an overflow for the output scale
 /// and handle it accordingly (e.g., return a cast error).
 #[allow(clippy::type_complexity)]
-pub fn make_upscaler<I: DecimalType, O: DecimalType>(
+fn make_upscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
     output_precision: u8,
@@ -218,7 +197,7 @@ where
 /// available precision). Callers should therefore produce zero values (preserving nulls) rather
 /// than returning an error.
 #[allow(clippy::type_complexity)]
-pub fn make_downscaler<I: DecimalType, O: DecimalType>(
+fn make_downscaler<I: DecimalType, O: DecimalType>(
     input_precision: u8,
     input_scale: i8,
     output_precision: u8,
@@ -272,6 +251,92 @@ where
     let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
     let f_infallible = is_infallible_cast.then_some(move |x| f(x).unwrap());
     Some((f, f_infallible))
+}
+
+/// Apply the rescaler function to the value.
+/// If the rescaler is infallible, use the infallible function.
+/// Otherwise, use the fallible function and validate the precision.
+fn apply_rescaler<I: DecimalType, O: DecimalType>(
+    value: I::Native,
+    output_precision: u8,
+    f: impl Fn(I::Native) -> Option<O::Native>,
+    f_infallible: Option<impl Fn(I::Native) -> O::Native>,
+) -> Option<O::Native>
+where
+    I::Native: DecimalCast,
+    O::Native: DecimalCast,
+{
+    if let Some(f_infallible) = f_infallible {
+        Some(f_infallible(value))
+    } else {
+        f(value).filter(|v| O::is_valid_decimal_precision(*v, output_precision))
+    }
+}
+
+/// Rescales a decimal value from `(input_precision, input_scale)` to
+/// `(output_precision, output_scale)` and returns the converted number when it fits
+/// within the output precision.
+///
+/// The function first validates that the requested precision and scale are supported for
+/// both the source and destination decimal types. It then either upscales (multiplying
+/// by an appropriate power of ten) or downscales (dividing with rounding) the input value.
+/// When the scaling factor exceeds the precision table of the destination type, the value
+/// is treated as an overflow for upscaling, or rounded to zero for downscaling (as any
+/// possible result would be zero at the requested scale).
+///
+/// This mirrors the column-oriented helpers
+/// [`convert_to_smaller_scale_decimal`] and [`convert_to_bigger_or_equal_scale_decimal`]
+/// but operates on a single value (row-level) instead of an entire array.
+///
+/// Returns `None` if the value cannot be represented with the requested precision.
+pub fn rescale_decimal<I: DecimalType, O: DecimalType>(
+    value: I::Native,
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+) -> Option<O::Native>
+where
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    validate_decimal_precision_and_scale::<I>(input_precision, input_scale).ok()?;
+    validate_decimal_precision_and_scale::<O>(output_precision, output_scale).ok()?;
+
+    if input_scale <= output_scale {
+        let (f, f_infallible) =
+            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)?;
+        apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+    } else {
+        let Some((f, f_infallible)) =
+            make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
+        else {
+            // Scale reduction exceeds supported precision; result mathematically rounds to zero
+            return Some(O::Native::ZERO);
+        };
+        apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
+    }
+}
+
+fn cast_decimal_to_decimal_error<I, O>(
+    output_precision: u8,
+    output_scale: i8,
+) -> impl Fn(<I as ArrowPrimitiveType>::Native) -> ArrowError
+where
+    I: DecimalType,
+    O: DecimalType,
+    I::Native: DecimalCast + ArrowNativeTypeOp,
+    O::Native: DecimalCast + ArrowNativeTypeOp,
+{
+    move |x: I::Native| {
+        ArrowError::CastError(format!(
+            "Cannot cast to {}({}, {}). Overflowing on {:?}",
+            O::PREFIX,
+            output_precision,
+            output_scale,
+            x
+        ))
+    }
 }
 
 fn apply_decimal_cast<I: DecimalType, O: DecimalType>(

@@ -17,8 +17,7 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::array::ArrowNativeTypeOp;
-use arrow::compute::{DecimalCast, make_downscaler, make_upscaler};
+use arrow::compute::{DecimalCast, rescale_decimal};
 use arrow::datatypes::{
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType,
@@ -187,55 +186,6 @@ where
             scale,
         ),
         _ => None,
-    }
-}
-
-/// Rescale a decimal from (input_precision, input_scale) to (output_precision, output_scale)
-/// and return the scaled value if it fits the output precision. Similar to the implementation in
-/// decimal.rs in arrow-cast.
-pub(crate) fn rescale_decimal<I: DecimalType, O: DecimalType>(
-    value: I::Native,
-    input_precision: u8,
-    input_scale: i8,
-    output_precision: u8,
-    output_scale: i8,
-) -> Option<O::Native>
-where
-    I::Native: DecimalCast,
-    O::Native: DecimalCast,
-{
-    if input_scale <= output_scale {
-        let (f, f_infallible) =
-            make_upscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)?;
-        apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
-    } else {
-        let Some((f, f_infallible)) =
-            make_downscaler::<I, O>(input_precision, input_scale, output_precision, output_scale)
-        else {
-            // Scale reduction exceeds supported precision; result mathematically rounds to zero
-            return Some(O::Native::ZERO);
-        };
-        apply_rescaler::<I, O>(value, output_precision, f, f_infallible)
-    }
-}
-
-/// Apply the rescaler function to the value.
-/// If the rescaler is infallible, use the infallible function.
-/// Otherwise, use the fallible function and validate the precision.
-fn apply_rescaler<I: DecimalType, O: DecimalType>(
-    value: I::Native,
-    output_precision: u8,
-    f: impl Fn(I::Native) -> Option<O::Native>,
-    f_infallible: Option<impl Fn(I::Native) -> O::Native>,
-) -> Option<O::Native>
-where
-    I::Native: DecimalCast,
-    O::Native: DecimalCast,
-{
-    if let Some(f_infallible) = f_infallible {
-        Some(f_infallible(value))
-    } else {
-        f(value).filter(|v| O::is_valid_decimal_precision(*v, output_precision))
     }
 }
 
