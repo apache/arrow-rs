@@ -42,7 +42,6 @@
 //! * [`ParquetMetaDataPushDecoder`] for decoding from bytes without I/O
 //! * [`ParquetMetaDataWriter`] for writing.
 //!
-//!
 //! # Examples
 //!
 //! Please see [`external_metadata.rs`]
