@@ -831,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_list_arrays() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), Some(-1), Some(2), None, None]),
             Some(vec![]),
             None,
@@ -839,14 +839,14 @@ mod tests {
         ];
         let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None, Some(101)]),
             Some(vec![Some(102)]),
         ];
         let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
 
-        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
         let list3_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone());
 
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
@@ -859,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_list_arrays_slices() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), Some(-1), Some(2), None, None]),
             Some(vec![]), // In slice
             None,         // In slice
@@ -869,7 +869,7 @@ mod tests {
         let list1_array = list1_array.slice(1, 2);
         let list1_values = list1.into_iter().skip(1).take(2);
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None, Some(101)]),
             Some(vec![Some(102)]),
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_list_arrays_sliced_lengths() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), Some(-1), Some(2), None, None]), // In slice
             Some(vec![]),                                        // In slice
             None,                                                // In slice
@@ -898,7 +898,7 @@ mod tests {
         let list1_array = list1_array.slice(0, 3); // no offset, but not all values
         let list1_values = list1.into_iter().take(3);
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None, Some(101)]),
             Some(vec![Some(102)]),
@@ -919,7 +919,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_fixed_size_list_arrays() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), None]),
             None,
             Some(vec![Some(10), Some(20)]),
@@ -927,7 +927,7 @@ mod tests {
         let list1_array =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone(), 2);
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None]),
             Some(vec![Some(102), Some(103)]),
@@ -935,7 +935,7 @@ mod tests {
         let list2_array =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone(), 2);
 
-        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
         let list3_array =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone(), 2);
 
@@ -950,8 +950,8 @@ mod tests {
 
     #[test]
     fn test_concat_list_view_arrays() {
-        let list1 = vec![
-            (Some(vec![Some(-1), None])),
+        let list1 = [
+            Some(vec![Some(-1), None]),
             None,
             Some(vec![Some(10), Some(20)]),
         ];
@@ -961,7 +961,7 @@ mod tests {
         }
         let list1_array = list1_array.finish();
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None]),
             Some(vec![Some(102), Some(103)]),
@@ -972,7 +972,7 @@ mod tests {
         }
         let list2_array = list2_array.finish();
 
-        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
         let mut list3_array = ListViewBuilder::new(Int64Builder::new());
         for v in list3.iter() {
             list3_array.append_option(v.clone());
@@ -993,7 +993,7 @@ mod tests {
 
     #[test]
     fn test_concat_sliced_list_view_arrays() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), None]),
             None,
             Some(vec![Some(10), Some(20)]),
@@ -1004,7 +1004,7 @@ mod tests {
         }
         let list1_array = list1_array.finish();
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None]),
             Some(vec![Some(102), Some(103)]),
@@ -1015,7 +1015,7 @@ mod tests {
         }
         let list2_array = list2_array.finish();
 
-        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
         let mut list3_array = ListViewBuilder::new(Int64Builder::new());
         for v in list3.iter() {
             list3_array.append_option(v.clone());

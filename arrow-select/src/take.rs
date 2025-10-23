@@ -1880,11 +1880,14 @@ mod tests {
         }};
     }
 
-    fn test_take_list_view_generic<OffsetType: OffsetSizeTrait, ValuesType: ArrowPrimitiveType>(
+    fn test_take_list_view_generic<OffsetType: OffsetSizeTrait, ValuesType: ArrowPrimitiveType, F>(
         values: Vec<Option<Vec<Option<ValuesType::Native>>>>,
         take_indices: Vec<Option<usize>>,
         expected: Vec<Option<Vec<Option<ValuesType::Native>>>>,
-    ) {
+        mapper: F,
+    ) where
+        F: Fn(GenericListViewArray<OffsetType>) -> GenericListViewArray<OffsetType>,
+    {
         let mut list_view_array =
             GenericListViewBuilder::<OffsetType, _>::new(PrimitiveBuilder::<ValuesType>::new());
 
@@ -1892,6 +1895,7 @@ mod tests {
             list_view_array.append_option(value);
         }
         let list_view_array = list_view_array.finish();
+        let list_view_array = mapper(list_view_array);
 
         let mut indices = UInt64Builder::new();
         for idx in take_indices {
@@ -1916,8 +1920,12 @@ mod tests {
 
     macro_rules! list_view_test_case {
         (values: $values:expr, indices: $indices:expr, expected: $expected: expr) => {{
-            test_take_list_view_generic::<i32, Int8Type>($values, $indices, $expected);
-            test_take_list_view_generic::<i64, Int8Type>($values, $indices, $expected);
+            test_take_list_view_generic::<i32, Int8Type, _>($values, $indices, $expected, |x| x);
+            test_take_list_view_generic::<i64, Int8Type, _>($values, $indices, $expected, |x| x);
+        }};
+        (values: $values:expr, transform: $fn:expr, indices: $indices:expr, expected: $expected: expr) => {{
+            test_take_list_view_generic::<i32, Int8Type, _>($values, $indices, $expected, $fn);
+            test_take_list_view_generic::<i64, Int8Type, _>($values, $indices, $expected, $fn);
         }};
     }
 
@@ -1986,7 +1994,7 @@ mod tests {
                 None,
                 Some(vec![Some(1), None, Some(3)]),
             ]
-        };
+        }
     }
 
     #[test]
@@ -2000,7 +2008,7 @@ mod tests {
             ],
             indices: vec![None, Some(0), None],
             expected: vec![None, Some(vec![Some(1), None, Some(3)]), None]
-        };
+        }
     }
 
     #[test]
@@ -2014,7 +2022,27 @@ mod tests {
             ],
             indices: vec![Some(1), Some(1), Some(1), None, None],
             expected: vec![None; 5]
-        };
+        }
+    }
+
+    #[test]
+    fn test_take_list_view_sliced() {
+        // Take null indices/values, with slicing.
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1)]),
+                None,
+                None,
+                Some(vec![Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5)]),
+                None,
+            ],
+            transform: |l| l.slice(2, 4),
+            indices: vec![Some(0), Some(3), None, Some(1), Some(2)],
+            expected: vec![
+                None, None, None, Some(vec![Some(2), Some(3)]), Some(vec![Some(4), Some(5)])
+            ]
+        }
     }
 
     #[test]
