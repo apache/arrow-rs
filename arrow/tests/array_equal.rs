@@ -22,11 +22,17 @@ use arrow::array::{
     StringDictionaryBuilder, StructArray, UnionBuilder, make_array,
 };
 use arrow::datatypes::{Int16Type, Int32Type};
-use arrow_array::builder::{StringBuilder, StringViewBuilder, StructBuilder};
-use arrow_array::{DictionaryArray, FixedSizeListArray, StringViewArray};
+use arrow_array::builder::{
+    GenericListViewBuilder, StringBuilder, StringViewBuilder, StructBuilder,
+};
+use arrow_array::cast::AsArray;
+use arrow_array::{
+    DictionaryArray, FixedSizeListArray, GenericListViewArray, PrimitiveArray, StringViewArray,
+};
 use arrow_buffer::{Buffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, Field, Fields};
+use arrow_select::take::take;
 use std::sync::Arc;
 
 #[test]
@@ -754,6 +760,76 @@ fn test_fixed_list_offsets() {
     let a_slice = a.slice(4, 1);
     let b_slice = b.slice(4, 1);
     test_equal(&a_slice, &b_slice, true);
+}
+
+fn create_list_view_array<
+    O: OffsetSizeTrait,
+    U: IntoIterator<Item = Option<i32>>,
+    T: IntoIterator<Item = Option<U>>,
+>(
+    data: T,
+) -> GenericListViewArray<O> {
+    let mut builder = GenericListViewBuilder::<O, _>::new(Int32Builder::new());
+    for d in data {
+        if let Some(v) = d {
+            builder.append_value(v);
+        } else {
+            builder.append_null();
+        }
+    }
+
+    builder.finish()
+}
+
+fn test_test_list_view_array<T: OffsetSizeTrait>() {
+    let a = create_list_view_array::<T, _, _>([
+        None,
+        Some(vec![Some(1), None, Some(2)]),
+        Some(vec![Some(3), Some(4), Some(5), None]),
+    ]);
+    let b = create_list_view_array::<T, _, _>([
+        None,
+        Some(vec![Some(1), None, Some(2)]),
+        Some(vec![Some(3), Some(4), Some(5), None]),
+    ]);
+
+    test_equal(&a, &b, true);
+
+    // Simple non-matching arrays by reordering
+    let b = create_list_view_array::<T, _, _>([
+        Some(vec![Some(3), Some(4), Some(5), None]),
+        Some(vec![Some(1), None, Some(2)]),
+    ]);
+    test_equal(&a, &b, false);
+
+    // reorder using take yields equal values
+    let indices: PrimitiveArray<Int32Type> = vec![None, Some(1), Some(0)].into();
+    let b = take(&b, &indices, None)
+        .unwrap()
+        .as_list_view::<T>()
+        .clone();
+
+    test_equal(&a, &b, true);
+
+    // Slicing one side yields unequal again
+    let a = a.slice(1, 2);
+
+    test_equal(&a, &b, false);
+
+    // Slicing the other to match makes them equal again
+    let b = b.slice(1, 2);
+
+    test_equal(&a, &b, true);
+}
+
+#[test]
+fn test_list_view_array() {
+    test_test_list_view_array::<i32>();
+}
+
+#[test]
+fn test_large_list_view_array() {
+    test_test_list_view_array::<i64>();
 }
 
 #[test]
