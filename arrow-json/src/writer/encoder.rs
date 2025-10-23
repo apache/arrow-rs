@@ -784,7 +784,10 @@ impl<'a> MapEncoder<'a> {
         let values = array.values();
         let keys = array.keys();
 
-        if !matches!(keys.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
+        if !matches!(
+            keys.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
             return Err(ArrowError::JsonError(format!(
                 "Only UTF8 keys supported by JSON MapArray Writer: got {:?}",
                 keys.data_type()

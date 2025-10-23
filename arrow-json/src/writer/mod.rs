@@ -1389,16 +1389,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn json_writer_map() {
-        let keys_array = super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+    fn run_json_writer_map_with_keys(keys_array: ArrayRef) {
         let values_array = super::Int64Array::from(vec![10, 20, 30, 40, 50]);
 
-        let keys = Arc::new(Field::new("keys", DataType::Utf8, false));
-        let values = Arc::new(Field::new("values", DataType::Int64, false));
+        let keys_field = Arc::new(Field::new("keys", keys_array.data_type().clone(), false));
+        let values_field = Arc::new(Field::new("values", DataType::Int64, false));
         let entry_struct = StructArray::from(vec![
-            (keys, Arc::new(keys_array) as ArrayRef),
-            (values, Arc::new(values_array) as ArrayRef),
+            (keys_field, keys_array.clone()),
+            (values_field, Arc::new(values_array) as ArrayRef),
         ]);
 
         let map_data_type = DataType::Map(
@@ -1445,6 +1443,21 @@ mod tests {
 {"map":{}}
 "#,
         );
+    }
+
+    #[test]
+    fn json_writer_map() {
+        // Utf8 (StringArray)
+        let keys_utf8 = super::StringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        run_json_writer_map_with_keys(Arc::new(keys_utf8) as ArrayRef);
+
+        // LargeUtf8 (LargeStringArray)
+        let keys_large = super::LargeStringArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        run_json_writer_map_with_keys(Arc::new(keys_large) as ArrayRef);
+
+        // Utf8View (StringViewArray)
+        let keys_view = super::StringViewArray::from(vec!["foo", "bar", "baz", "qux", "quux"]);
+        run_json_writer_map_with_keys(Arc::new(keys_view) as ArrayRef);
     }
 
     #[test]
