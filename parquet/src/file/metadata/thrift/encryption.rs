@@ -113,6 +113,7 @@ pub(crate) struct FileCryptoMetaData<'a> {
 fn row_group_from_encrypted_thrift(
     mut rg: RowGroupMetaData,
     decryptor: Option<&FileDecryptor>,
+    first_row_index: i64,
 ) -> Result<RowGroupMetaData> {
     let schema_descr = rg.schema_descr;
 
@@ -192,6 +193,7 @@ fn row_group_from_encrypted_thrift(
     Ok(RowGroupMetaData {
         columns,
         num_rows,
+        first_row_index,
         sorting_columns,
         total_byte_size,
         schema_descr,
@@ -294,10 +296,14 @@ pub(crate) fn parquet_metadata_with_encryption(
     }
 
     // decrypt column chunk info
-    let row_groups = row_groups
-        .into_iter()
-        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref()))
-        .collect::<Result<Vec<_>>>()?;
+    let mut first_row_index = 0i64;
+    let mut decrypted_row_groups = Vec::with_capacity(row_groups.len());
+    for rg in row_groups {
+        let decrypted_rg = row_group_from_encrypted_thrift(rg, file_decryptor.as_ref(), first_row_index)?;
+        first_row_index += decrypted_rg.num_rows();
+        decrypted_row_groups.push(decrypted_rg);
+    }
+    let row_groups = decrypted_row_groups;
 
     let metadata = ParquetMetaDataBuilder::new(file_metadata)
         .set_row_groups(row_groups)

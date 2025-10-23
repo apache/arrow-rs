@@ -2464,6 +2464,7 @@ mod tests {
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
             max_predicate_cache_size: 0,
+            row_number_column: None,
         };
 
         // Provide an output projection that also selects the same nested leaf
