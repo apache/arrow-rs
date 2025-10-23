@@ -2479,6 +2479,19 @@ mod tests {
     }
 
     #[test]
+    fn test_from_binary_shared_buffer() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
+        let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
+        let rows = converter.convert_columns(&[array]).unwrap();
+        let binary_rows = rows.try_into_binary().expect("known-small rows");
+        let _binary_rows_shared_buffer = binary_rows.clone();
+
+        let parsed = converter.from_binary(binary_rows);
+
+        converter.convert_rows(parsed.iter()).unwrap();
+    }
+
+    #[test]
     #[should_panic(expected = "Encountered non UTF-8 data")]
     fn test_invalid_utf8() {
         let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
