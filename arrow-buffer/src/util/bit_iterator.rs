@@ -816,82 +816,111 @@ mod tests {
 
     #[test]
     fn assert_bit_iterator_nth_0() {
-        struct NthOp;
+        struct NthOp<const BACK: bool>;
 
-        impl Op for NthOp {
+        impl<const BACK: bool> Op for NthOp<BACK> {
             type Output = Option<bool>;
-            const NAME: &'static str = "nth(0)";
+            const NAME: &'static str = if BACK { "nth_back(0)" } else { "nth(0)" };
 
             fn get_value<T: SharedBetweenBitIteratorAndSliceIter>(mut iter: T) -> Self::Output {
-                iter.nth(0)
+                if BACK { iter.nth_back(0) } else { iter.nth(0) }
             }
         }
 
-        assert_cases::<NthOp>()
+        assert_cases::<NthOp<false>>();
+        assert_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_1() {
-        struct NthOp;
+        struct NthOp<const BACK: bool>;
 
-        impl Op for NthOp {
+        impl<const BACK: bool> Op for NthOp<BACK> {
             type Output = Option<bool>;
-            const NAME: &'static str = "nth(1)";
+            const NAME: &'static str = if BACK { "nth_back(1)" } else { "nth(1)" };
 
             fn get_value<T: SharedBetweenBitIteratorAndSliceIter>(mut iter: T) -> Self::Output {
-                iter.nth(1)
+                if BACK { iter.nth_back(1) } else { iter.nth(1) }
             }
         }
 
-        assert_cases::<NthOp>()
+        assert_cases::<NthOp<false>>();
+        assert_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_after_end() {
-        struct NthOp;
+        struct NthOp<const BACK: bool>;
 
-        impl Op for NthOp {
+        impl<const BACK: bool> Op for NthOp<BACK> {
             type Output = Option<bool>;
-            const NAME: &'static str = "nth(iter.len() + 1)";
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len() + 1)"
+            } else {
+                "nth(iter.len() + 1)"
+            };
 
             fn get_value<T: SharedBetweenBitIteratorAndSliceIter>(mut iter: T) -> Self::Output {
-                iter.nth(iter.len() + 1)
+                if BACK {
+                    iter.nth_back(iter.len() + 1)
+                } else {
+                    iter.nth(iter.len() + 1)
+                }
             }
         }
 
-        assert_cases::<NthOp>()
+        assert_cases::<NthOp<false>>();
+        assert_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_len() {
-        struct NthOp;
+        struct NthOp<const BACK: bool>;
 
-        impl Op for NthOp {
+        impl<const BACK: bool> Op for NthOp<BACK> {
             type Output = Option<bool>;
-            const NAME: &'static str = "nth(iter.len())";
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len())"
+            } else {
+                "nth(iter.len())"
+            };
 
             fn get_value<T: SharedBetweenBitIteratorAndSliceIter>(mut iter: T) -> Self::Output {
-                iter.nth(iter.len())
+                if BACK {
+                    iter.nth_back(iter.len())
+                } else {
+                    iter.nth(iter.len())
+                }
             }
         }
 
-        assert_cases::<NthOp>()
+        assert_cases::<NthOp<false>>();
+        assert_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_last() {
-        struct NthOp;
+        struct NthOp<const BACK: bool>;
 
-        impl Op for NthOp {
+        impl<const BACK: bool> Op for NthOp<BACK> {
             type Output = Option<bool>;
-            const NAME: &'static str = "nth(iter.len().saturating_sub(1))";
+            const NAME: &'static str = if BACK {
+                "nth_back(iter.len().saturating_sub(1))"
+            } else {
+                "nth(iter.len().saturating_sub(1))"
+            };
 
             fn get_value<T: SharedBetweenBitIteratorAndSliceIter>(mut iter: T) -> Self::Output {
-                iter.nth(iter.len().saturating_sub(1))
+                if BACK {
+                    iter.nth_back(iter.len().saturating_sub(1))
+                } else {
+                    iter.nth(iter.len().saturating_sub(1))
+                }
             }
         }
 
-        assert_cases::<NthOp>()
+        assert_cases::<NthOp<false>>();
+        assert_cases::<NthOp<true>>();
     }
 
     #[test]
