@@ -1602,7 +1602,7 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_dictionary_lists() {
+    fn test_struct_list_with_one_mergable_dictionary_field() {
         let make_struct_list = |f1: ArrayRef,
                                 f2: ArrayRef,
                                 nulls: Option<Vec<bool>>,
@@ -1661,11 +1661,69 @@ mod tests {
 
         let result =
             interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
-        println!("{:?}", result.data_type());
+
+        let compare_struct_arr =
+            |struct_arr: &StructArray, values: &[(Option<u16>, Option<&str>)]| {
+                let dict_col = struct_arr.column(0).as_dictionary::<UInt8Type>();
+                let dict_values = dict_col.values().as_primitive::<UInt16Type>();
+
+                let str_col = struct_arr.column(1).as_string::<i32>();
+                for row in 0..struct_arr.len() {
+                    // compare f1
+                    let key = dict_col.key(row);
+                    let (ref expected_f1, ref expected_f2) = values[row];
+                    match (key, expected_f1) {
+                        (Some(got_key), Some(expected)) => {
+                            assert_eq!(dict_values.value(got_key), *expected);
+                        }
+                        (None, None) => {}
+                        _ => {
+                            panic!(
+                                "values at row {row} mismatch, expected: {:?}, got {:?}",
+                                expected_f1, key
+                            );
+                        }
+                    };
+
+                    let got_str = str_col.is_valid(row).then(|| str_col.value(row));
+                    match (got_str, expected_f2) {
+                        (Some(got_str), Some(expected)) => {
+                            assert_eq!(got_str, *expected);
+                        }
+                        (None, None) => {}
+                        _ => {
+                            panic!(
+                                "values at row {row} mismatch, expected: {:?}, got {:?}",
+                                expected_f2, got_str
+                            );
+                        }
+                    };
+                }
+            };
+        let slicer = |list: &GenericListArray<i32>, row: usize| {
+            let temp = list.value(row);
+            temp.as_struct().clone()
+        };
         let list = result.as_list::<i32>();
-        println!("{:?}", list.values());
-        let backed_array = list.values().as_struct();
-        println!("{:?}", backed_array);
+        assert_eq!(list.len(),5);
+        compare_struct_arr(&slicer(list, 0), &[(Some(2), Some("2"))]);
+        compare_struct_arr(&slicer(list, 1), &[(Some(1), Some("1"))]);
+        compare_struct_arr(
+            &slicer(list, 2),
+            &[(Some(255), Some("255")), (None, Some("254"))],
+        );
+        assert!(list.is_null(3));
+        compare_struct_arr(
+            &slicer(list, 4),
+            &[(Some(253), Some("253")), (Some(252), Some("252"))],
+        );
+        // keys: 1,0,6,null,5,4
+        // values: 1,2,250,251,252,253,255
+        // logically represents -> 2, 1, 255, null, 253, 252
+        //
+        // with offsets [0,1,2,4,4,6]
+        // and nulls [true, true, true, false, true, true]
+        // represents [{2,"2"}], [{1,"1"}], [{255, "255"}, {null, "254"}], null, [{253,"253"}, {252,"252"}]
     }
 
     #[test]
