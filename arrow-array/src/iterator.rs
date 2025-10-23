@@ -351,10 +351,10 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
             return None;
         }
 
-        // Go to the one before the last bit
+        // Go to the one before the last value
         self.current = self.current_end - 1;
 
-        // Return the last bit
+        // Return the last value
         self.next()
     }
 
