@@ -138,11 +138,11 @@ use std::io::BufRead;
 use std::sync::Arc;
 
 use chrono::Utc;
-use serde::Serialize;
+use serde_core::Serialize;
 
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::{downcast_integer, make_array, RecordBatch, RecordBatchReader, StructArray};
+use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer, make_array};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
@@ -613,6 +613,8 @@ impl Decoder {
     /// ```
     ///
     /// Note: this ignores any batch size setting, and always decodes all rows
+    ///
+    /// [serde]: https://docs.rs/serde/latest/serde/
     pub fn serialize<S: Serialize>(&mut self, rows: &[S]) -> Result<(), ArrowError> {
         self.tape_decoder.serialize(rows)
     }
@@ -730,6 +732,8 @@ fn make_decoder(
         DataType::Duration(TimeUnit::Microsecond) => primitive_decoder!(DurationMicrosecondType, data_type),
         DataType::Duration(TimeUnit::Millisecond) => primitive_decoder!(DurationMillisecondType, data_type),
         DataType::Duration(TimeUnit::Second) => primitive_decoder!(DurationSecondType, data_type),
+        DataType::Decimal32(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal32Type>::new(p, s))),
+        DataType::Decimal64(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal64Type>::new(p, s))),
         DataType::Decimal128(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal128Type>::new(p, s))),
         DataType::Decimal256(p, s) => Ok(Box::new(DecimalArrayDecoder::<Decimal256Type>::new(p, s))),
         DataType::Boolean => Ok(Box::<BooleanArrayDecoder>::default()),
@@ -948,9 +952,7 @@ mod tests {
         // (The actual buffer may be larger than expected due to rounding or internal allocation strategies.)
         assert!(
             data_buffer >= expected_capacity,
-            "Data buffer length ({}) should be at least {}",
-            data_buffer,
-            expected_capacity
+            "Data buffer length ({data_buffer}) should be at least {expected_capacity}",
         );
 
         // Additionally, verify that the decoded values are correct.
@@ -994,9 +996,7 @@ mod tests {
         let data_buffer = string_view_array.to_data().buffers()[0].len();
         assert!(
             data_buffer >= expected_capacity,
-            "Data buffer length ({}) should be at least {}",
-            data_buffer,
-            expected_capacity
+            "Data buffer length ({data_buffer}) should be at least {expected_capacity}",
         );
 
         // Verify that the converted string values are correct.
@@ -1349,6 +1349,8 @@ mod tests {
 
     #[test]
     fn test_decimals() {
+        test_decimal::<Decimal32Type>(DataType::Decimal32(8, 2));
+        test_decimal::<Decimal64Type>(DataType::Decimal64(10, 2));
         test_decimal::<Decimal128Type>(DataType::Decimal128(10, 2));
         test_decimal::<Decimal256Type>(DataType::Decimal256(10, 2));
     }

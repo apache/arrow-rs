@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, UInt8BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::{ArrayRef, FixedSizeBinaryArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
@@ -42,7 +42,7 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug)]
 pub struct FixedSizeBinaryBuilder {
-    values_builder: UInt8BufferBuilder,
+    values_builder: Vec<u8>,
     null_buffer_builder: NullBufferBuilder,
     value_length: i32,
 }
@@ -61,7 +61,7 @@ impl FixedSizeBinaryBuilder {
             "value length ({byte_width}) of the array must >= 0"
         );
         Self {
-            values_builder: UInt8BufferBuilder::new(capacity * byte_width as usize),
+            values_builder: Vec::with_capacity(capacity * byte_width as usize),
             null_buffer_builder: NullBufferBuilder::new(capacity),
             value_length: byte_width,
         }
@@ -79,7 +79,7 @@ impl FixedSizeBinaryBuilder {
                     .to_string(),
             ))
         } else {
-            self.values_builder.append_slice(value.as_ref());
+            self.values_builder.extend_from_slice(value.as_ref());
             self.null_buffer_builder.append_non_null();
             Ok(())
         }
@@ -89,8 +89,16 @@ impl FixedSizeBinaryBuilder {
     #[inline]
     pub fn append_null(&mut self) {
         self.values_builder
-            .append_slice(&vec![0u8; self.value_length as usize][..]);
+            .extend(std::iter::repeat_n(0u8, self.value_length as usize));
         self.null_buffer_builder.append_null();
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.values_builder
+            .extend(std::iter::repeat_n(0u8, self.value_length as usize * n));
+        self.null_buffer_builder.append_n_nulls(n);
     }
 
     /// Returns the current values buffer as a slice
@@ -102,7 +110,7 @@ impl FixedSizeBinaryBuilder {
     pub fn finish(&mut self) -> FixedSizeBinaryArray {
         let array_length = self.len();
         let array_data_builder = ArrayData::builder(DataType::FixedSizeBinary(self.value_length))
-            .add_buffer(self.values_builder.finish())
+            .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(self.null_buffer_builder.finish())
             .len(array_length);
         let array_data = unsafe { array_data_builder.build_unchecked() };
@@ -169,17 +177,22 @@ mod tests {
     fn test_fixed_size_binary_builder() {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
 
-        //  [b"hello", null, "arrow"]
+        //  [b"hello", null, "arrow", null, null, "world"]
         builder.append_value(b"hello").unwrap();
         builder.append_null();
         builder.append_value(b"arrow").unwrap();
+        builder.append_nulls(2);
+        builder.append_value(b"world").unwrap();
         let array: FixedSizeBinaryArray = builder.finish();
 
         assert_eq!(&DataType::FixedSizeBinary(5), array.data_type());
-        assert_eq!(3, array.len());
-        assert_eq!(1, array.null_count());
+        assert_eq!(6, array.len());
+        assert_eq!(3, array.null_count());
         assert_eq!(10, array.value_offset(2));
+        assert_eq!(15, array.value_offset(3));
         assert_eq!(5, array.value_length());
+        assert!(array.is_null(3));
+        assert!(array.is_null(4));
     }
 
     #[test]

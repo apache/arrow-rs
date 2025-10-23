@@ -103,9 +103,9 @@ To export an array, create an `ArrowArray` using [ArrowArray::try_new].
 
 use std::{mem::size_of, ptr::NonNull, sync::Arc};
 
-use arrow_buffer::{bit_util, Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer, bit_util};
 pub use arrow_data::ffi::FFI_ArrowArray;
-use arrow_data::{layout, ArrayData};
+use arrow_data::{ArrayData, layout};
 pub use arrow_schema::ffi::FFI_ArrowSchema;
 use arrow_schema::{ArrowError, DataType, UnionMode};
 
@@ -134,8 +134,8 @@ pub unsafe fn export_array_into_raw(
     let array = FFI_ArrowArray::new(&data);
     let schema = FFI_ArrowSchema::try_from(data.data_type())?;
 
-    std::ptr::write_unaligned(out_array, array);
-    std::ptr::write_unaligned(out_schema, schema);
+    unsafe { std::ptr::write_unaligned(out_array, array) };
+    unsafe { std::ptr::write_unaligned(out_schema, schema) };
 
     Ok(())
 }
@@ -146,11 +146,11 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
     if let Some(primitive) = data_type.primitive_width() {
         return match i {
             0 => Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
             ))),
             1 => Ok(primitive * 8),
             i => Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
             ))),
         };
     }
@@ -159,75 +159,80 @@ fn bit_width(data_type: &DataType, i: usize) -> Result<usize> {
         (DataType::Boolean, 1) => 1,
         (DataType::Boolean, _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
-            )))
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+            )));
         }
         (DataType::FixedSizeBinary(num_bytes), 1) => *num_bytes as usize * u8::BITS as usize,
         (DataType::FixedSizeList(f, num_elems), 1) => {
             let child_bit_width = bit_width(f.data_type(), 1)?;
             child_bit_width * (*num_elems as usize)
-        },
+        }
         (DataType::FixedSizeBinary(_), _) | (DataType::FixedSizeList(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
-            )))
-        },
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+            )));
+        }
         // Variable-size list and map have one i32 buffer.
         // Variable-sized binaries: have two buffers.
         // "small": first buffer is i32, second is in bytes
-        (DataType::Utf8, 1) | (DataType::Binary, 1) | (DataType::List(_), 1) | (DataType::Map(_, _), 1) => i32::BITS as _,
+        (DataType::Utf8, 1)
+        | (DataType::Binary, 1)
+        | (DataType::List(_), 1)
+        | (DataType::Map(_, _), 1) => i32::BITS as _,
         (DataType::Utf8, 2) | (DataType::Binary, 2) => u8::BITS as _,
         (DataType::List(_), _) | (DataType::Map(_, _), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
-            )))
+                "The datatype \"{data_type}\" expects 2 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+            )));
         }
         (DataType::Utf8, _) | (DataType::Binary, _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
-            )))
+                "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+            )));
         }
         // Variable-sized binaries: have two buffers.
         // LargeUtf8: first buffer is i64, second is in bytes
-        (DataType::LargeUtf8, 1) | (DataType::LargeBinary, 1) | (DataType::LargeList(_), 1) => i64::BITS as _,
-        (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2)=> u8::BITS as _,
-        (DataType::LargeUtf8, _) | (DataType::LargeBinary, _) | (DataType::LargeList(_), _)=> {
+        (DataType::LargeUtf8, 1) | (DataType::LargeBinary, 1) | (DataType::LargeList(_), 1) => {
+            i64::BITS as _
+        }
+        (DataType::LargeUtf8, 2) | (DataType::LargeBinary, 2) | (DataType::LargeList(_), 2) => {
+            u8::BITS as _
+        }
+        (DataType::LargeUtf8, _) | (DataType::LargeBinary, _) | (DataType::LargeList(_), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
-            )))
+                "The datatype \"{data_type}\" expects 3 buffers, but requested {i}. Please verify that the C data interface is correctly implemented."
+            )));
         }
         // Variable-sized views: have 3 or more buffers.
         // Buffer 1 are the u128 views
         // Buffers 2...N-1 are u8 byte buffers
-        (DataType::Utf8View, 1) | (DataType::BinaryView,1) => u128::BITS as _,
-        (DataType::Utf8View, _) | (DataType::BinaryView, _) => {
-            u8::BITS as _
-        }
+        (DataType::Utf8View, 1) | (DataType::BinaryView, 1) => u128::BITS as _,
+        (DataType::Utf8View, _) | (DataType::BinaryView, _) => u8::BITS as _,
         // type ids. UnionArray doesn't have null bitmap so buffer index begins with 0.
         (DataType::Union(_, _), 0) => i8::BITS as _,
         // Only DenseUnion has 2nd buffer
         (DataType::Union(_, UnionMode::Dense), 1) => i32::BITS as _,
         (DataType::Union(_, UnionMode::Sparse), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
-            )))
+                "The datatype \"{data_type}\" expects 1 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
+            )));
         }
         (DataType::Union(_, UnionMode::Dense), _) => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
-            )))
+                "The datatype \"{data_type}\" expects 2 buffer, but requested {i}. Please verify that the C data interface is correctly implemented."
+            )));
         }
         (_, 0) => {
             // We don't call this `bit_width` to compute buffer length for null buffer. If any types that don't have null buffer like
             // UnionArray, they should be handled above.
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
-            )))
+                "The datatype \"{data_type}\" doesn't expect buffer at index 0. Please verify that the C data interface is correctly implemented."
+            )));
         }
         _ => {
             return Err(ArrowError::CDataInterface(format!(
-                "The datatype \"{data_type:?}\" is still not supported in Rust implementation"
-            )))
+                "The datatype \"{data_type}\" is still not supported in Rust implementation"
+            )));
         }
     })
 }
@@ -249,7 +254,7 @@ unsafe fn create_buffer(
         return None;
     }
     NonNull::new(array.buffer(index) as _)
-        .map(|ptr| Buffer::from_custom_allocation(ptr, len, owner))
+        .map(|ptr| unsafe { Buffer::from_custom_allocation(ptr, len, owner) })
 }
 
 /// Export to the C Data Interface
@@ -408,7 +413,17 @@ impl ImportedArrowArray<'_> {
             .map(|index| {
                 let len = self.buffer_len(index, variadic_buffer_lens, &self.data_type)?;
                 match unsafe { create_buffer(self.owner.clone(), self.array, index, len) } {
-                    Some(buf) => Ok(buf),
+                    Some(buf) => {
+                        // External libraries may use a dangling pointer for a buffer with length 0.
+                        // We respect the array length specified in the C Data Interface. Actually,
+                        // if the length is incorrect, we cannot create a correct buffer even if
+                        // the pointer is valid.
+                        if buf.is_empty() {
+                            Ok(MutableBuffer::new(0).into())
+                        } else {
+                            Ok(buf)
+                        }
+                    }
                     None if len == 0 => {
                         // Null data buffer, which Rust doesn't allow. So create
                         // an empty buffer.
@@ -515,7 +530,7 @@ impl ImportedArrowArray<'_> {
         unsafe { create_buffer(self.owner.clone(), self.array, 0, buffer_len) }
     }
 
-    fn dictionary(&self) -> Result<Option<ImportedArrowArray>> {
+    fn dictionary(&self) -> Result<Option<ImportedArrowArray<'_>>> {
         match (self.array.dictionary(), &self.data_type) {
             (Some(array), DataType::Dictionary(_, value_type)) => Ok(Some(ImportedArrowArray {
                 array,
@@ -543,7 +558,7 @@ mod tests_to_then_from_ffi {
 
     use crate::builder::UnionBuilder;
     use crate::cast::AsArray;
-    use crate::types::{Float64Type, Int32Type, Int8Type};
+    use crate::types::{Float64Type, Int8Type, Int32Type};
     use crate::*;
 
     use super::*;
@@ -1296,23 +1311,30 @@ mod tests_to_then_from_ffi {
 
 #[cfg(test)]
 mod tests_from_ffi {
+    #[cfg(not(feature = "force_validate"))]
+    use std::ptr::NonNull;
     use std::sync::Arc;
 
+    #[cfg(not(feature = "force_validate"))]
+    use arrow_buffer::{ScalarBuffer, bit_util, buffer::Buffer};
+    #[cfg(feature = "force_validate")]
     use arrow_buffer::{bit_util, buffer::Buffer};
-    use arrow_data::transform::MutableArrayData;
+
     use arrow_data::ArrayData;
+    use arrow_data::transform::MutableArrayData;
     use arrow_schema::{DataType, Field};
 
     use super::Result;
     use crate::builder::GenericByteViewBuilder;
     use crate::types::{BinaryViewType, ByteViewType, Int32Type, StringViewType};
     use crate::{
+        ArrayRef, GenericByteViewArray, ListArray,
         array::{
             Array, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray,
             Int32Array, Int64Array, StringArray, StructArray, UInt32Array, UInt64Array,
         },
-        ffi::{from_ffi, FFI_ArrowArray, FFI_ArrowSchema},
-        make_array, ArrayRef, GenericByteViewArray, ListArray,
+        ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi},
+        make_array,
     };
 
     fn test_round_trip(expected: &ArrayData) -> Result<()> {
@@ -1576,7 +1598,7 @@ mod tests_from_ffi {
         let mut strings = vec![];
 
         for i in 0..1000 {
-            strings.push(format!("string: {}", i));
+            strings.push(format!("string: {i}"));
         }
 
         let string_array = StringArray::from(strings);
@@ -1658,6 +1680,25 @@ mod tests_from_ffi {
         fn from_str(value: &str) -> &Self {
             value.as_bytes()
         }
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_validate"))]
+    fn test_utf8_view_ffi_from_dangling_pointer() {
+        let empty = GenericByteViewBuilder::<StringViewType>::new().finish();
+        let buffers = empty.data_buffers().to_vec();
+        let nulls = empty.nulls().cloned();
+
+        // Create a dangling pointer to a view buffer with zero length.
+        let alloc = Arc::new(1);
+        let buffer = unsafe { Buffer::from_custom_allocation(NonNull::<u8>::dangling(), 0, alloc) };
+        let views = unsafe { ScalarBuffer::new_unchecked(buffer) };
+
+        let str_view: GenericByteViewArray<StringViewType> =
+            unsafe { GenericByteViewArray::new_unchecked(views, buffers, nulls) };
+        let imported = roundtrip_byte_view_array(str_view);
+        assert_eq!(imported.len(), 0);
+        assert_eq!(&imported, &empty);
     }
 
     #[test]

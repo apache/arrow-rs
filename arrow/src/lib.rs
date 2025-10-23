@@ -243,6 +243,10 @@
 //! let batch = RecordBatch::try_from_iter([("col1", col_1), ("col_2", col_2)]).unwrap();
 //! ```
 //!
+//! # Pretty Printing
+//!
+//! See the [`util::pretty`] module (requires the `prettyprint` crate feature)
+//!
 //! # IO
 //!
 //! This crate provides readers and writers for various formats to/from [`RecordBatch`]
@@ -366,7 +370,7 @@
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
 #![warn(missing_docs)]
@@ -393,7 +397,7 @@ pub use arrow_ipc as ipc;
 #[cfg(feature = "json")]
 pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
-pub mod pyarrow;
+pub use arrow_pyarrow as pyarrow;
 
 /// Contains the `RecordBatch` type and associated traits
 pub mod record_batch {

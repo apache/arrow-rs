@@ -20,10 +20,13 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
+use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::BufferBuilder;
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
+
+#[cfg(feature = "pool")]
+use crate::pool::MemoryPool;
 
 use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
@@ -82,6 +85,13 @@ pub struct Buffer {
     length: usize,
 }
 
+impl Default for Buffer {
+    #[inline]
+    fn default() -> Self {
+        MutableBuffer::default().into()
+    }
+}
+
 impl PartialEq for Buffer {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
@@ -116,6 +126,15 @@ impl Buffer {
     /// Returns the pointer to the start of the buffer without the offset.
     pub fn data_ptr(&self) -> NonNull<u8> {
         self.data.ptr()
+    }
+
+    /// Returns the number of strong references to the buffer.
+    ///
+    /// This method is safe but if the buffer is shared across multiple threads
+    /// the underlying value could change between calling this method and using
+    /// the result.
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.data)
     }
 
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
@@ -153,7 +172,7 @@ impl Buffer {
         len: usize,
         owner: Arc<dyn Allocation>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len))
+        unsafe { Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len)) }
     }
 
     /// Auxiliary method to create a new Buffer
@@ -162,7 +181,7 @@ impl Buffer {
         len: usize,
         deallocation: Deallocation,
     ) -> Self {
-        let bytes = Bytes::new(ptr, len, deallocation);
+        let bytes = unsafe { Bytes::new(ptr, len, deallocation) };
         let ptr = bytes.as_ptr();
         Buffer {
             ptr,
@@ -331,7 +350,7 @@ impl Buffer {
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
     /// in larger chunks and starting at arbitrary bit offsets.
     /// Note that both `offset` and `length` are measured in bits.
-    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks {
+    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks<'_> {
         BitChunks::new(self.as_slice(), offset, len)
     }
 
@@ -413,6 +432,17 @@ impl Buffer {
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.ptr == other.ptr && self.length == other.length
+    }
+
+    /// Register this [`Buffer`] with the provided [`MemoryPool`]
+    ///
+    /// This claims the memory used by this buffer in the pool, allowing for
+    /// accurate accounting of memory usage. Any prior reservation will be
+    /// released so this works well when the buffer is being shared among
+    /// multiple arrays.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn MemoryPool) {
+        self.data.claim(pool)
     }
 }
 
@@ -531,7 +561,7 @@ impl Buffer {
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
-        MutableBuffer::from_trusted_len_iter(iterator).into()
+        unsafe { MutableBuffer::from_trusted_len_iter(iterator).into() }
     }
 
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length or errors
@@ -548,7 +578,7 @@ impl Buffer {
     >(
         iterator: I,
     ) -> Result<Self, E> {
-        Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into())
+        unsafe { Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into()) }
     }
 }
 
@@ -967,13 +997,13 @@ mod tests {
     #[should_panic(expected = "capacity overflow")]
     fn test_from_iter_overflow() {
         let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
-        let _ = Buffer::from_iter(std::iter::repeat(0_u64).take(iter_len));
+        let _ = Buffer::from_iter(std::iter::repeat_n(0_u64, iter_len));
     }
 
     #[test]
     fn bit_slice_length_preserved() {
         // Create a boring buffer
-        let buf = Buffer::from_iter(std::iter::repeat(true).take(64));
+        let buf = Buffer::from_iter(std::iter::repeat_n(true, 64));
 
         let assert_preserved = |offset: usize, len: usize| {
             let new_buf = buf.bit_slice(offset, len);
@@ -1001,5 +1031,32 @@ mod tests {
                 assert_preserved(o, l);
             }
         }
+    }
+
+    #[test]
+    fn test_strong_count() {
+        let buffer = Buffer::from_iter(std::iter::repeat_n(0_u8, 100));
+        assert_eq!(buffer.strong_count(), 1);
+
+        let buffer2 = buffer.clone();
+        assert_eq!(buffer.strong_count(), 2);
+
+        let buffer3 = buffer2.clone();
+        assert_eq!(buffer.strong_count(), 3);
+
+        drop(buffer);
+        assert_eq!(buffer2.strong_count(), 2);
+        assert_eq!(buffer3.strong_count(), 2);
+
+        // Strong count does not increase on move
+        let capture = move || {
+            assert_eq!(buffer3.strong_count(), 2);
+        };
+
+        capture();
+        assert_eq!(buffer2.strong_count(), 2);
+
+        drop(capture);
+        assert_eq!(buffer2.strong_count(), 1);
     }
 }

@@ -18,15 +18,14 @@
 //! Interleave elements from multiple arrays
 
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder, PrimitiveBuilder};
+use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer};
-use arrow_data::transform::MutableArrayData;
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ByteView;
-use arrow_schema::{ArrowError, DataType};
-use std::collections::HashMap;
+use arrow_data::transform::MutableArrayData;
+use arrow_schema::{ArrowError, DataType, Fields};
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -105,6 +104,7 @@ pub fn interleave(
             k.as_ref() => (dict_helper, values, indices),
             _ => unreachable!("illegal dictionary key type {k}")
         },
+        DataType::Struct(fields) => interleave_struct(fields, values, indices),
         _ => interleave_fallback(values, indices)
     }
 }
@@ -132,12 +132,11 @@ impl<'a, T: Array + 'static> Interleave<'a, T> {
 
         let nulls = match has_nulls {
             true => {
-                let mut builder = NullBufferBuilder::new(indices.len());
-                for (a, b) in indices {
-                    let v = arrays[*a].is_valid(*b);
-                    builder.append(v)
-                }
-                builder.finish()
+                let nulls = BooleanBuffer::collect_bool(indices.len(), |i| {
+                    let (a, b) = indices[i];
+                    arrays[a].is_valid(b)
+                });
+                Some(nulls.into())
             }
             false => None,
         };
@@ -153,13 +152,12 @@ fn interleave_primitive<T: ArrowPrimitiveType>(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, PrimitiveArray<T>>::new(values, indices);
 
-    let mut values = Vec::with_capacity(indices.len());
-    for (a, b) in indices {
-        let v = interleaved.arrays[*a].value(*b);
-        values.push(v)
-    }
+    let values = indices
+        .iter()
+        .map(|(a, b)| interleaved.arrays[*a].value(*b))
+        .collect::<Vec<_>>();
 
-    let array = PrimitiveArray::<T>::new(values.into(), interleaved.nulls);
+    let array = PrimitiveArray::<T>::try_new(values.into(), interleaved.nulls)?;
     Ok(Arc::new(array.with_data_type(data_type.clone())))
 }
 
@@ -170,23 +168,23 @@ fn interleave_bytes<T: ByteArrayType>(
     let interleaved = Interleave::<'_, GenericByteArray<T>>::new(values, indices);
 
     let mut capacity = 0;
-    let mut offsets = BufferBuilder::<T::Offset>::new(indices.len() + 1);
-    offsets.append(T::Offset::from_usize(0).unwrap());
-    for (a, b) in indices {
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
+    offsets.push(T::Offset::from_usize(0).unwrap());
+    offsets.extend(indices.iter().map(|(a, b)| {
         let o = interleaved.arrays[*a].value_offsets();
         let element_len = o[*b + 1].as_usize() - o[*b].as_usize();
         capacity += element_len;
-        offsets.append(T::Offset::from_usize(capacity).expect("overflow"));
-    }
+        T::Offset::from_usize(capacity).expect("overflow")
+    }));
 
-    let mut values = MutableBuffer::new(capacity);
+    let mut values = Vec::with_capacity(capacity);
     for (a, b) in indices {
         values.extend_from_slice(interleaved.arrays[*a].value(*b).as_ref());
     }
 
     // Safety: safe by construction
     let array = unsafe {
-        let offsets = OffsetBuffer::new_unchecked(offsets.finish().into());
+        let offsets = OffsetBuffer::new_unchecked(offsets.into());
         GenericByteArray::<T>::new_unchecked(offsets, values.into(), interleaved.nulls)
     };
     Ok(Arc::new(array))
@@ -240,34 +238,78 @@ fn interleave_views<T: ByteViewType>(
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, GenericByteViewArray<T>>::new(values, indices);
-    let mut views_builder = BufferBuilder::new(indices.len());
     let mut buffers = Vec::new();
 
-    // (input array_index, input buffer_index) -> output buffer_index
-    let mut buffer_lookup: HashMap<(usize, u32), u32> = HashMap::new();
-    for (array_idx, value_idx) in indices {
-        let array = interleaved.arrays[*array_idx];
-        let raw_view = array.views().get(*value_idx).unwrap();
-        let view_len = *raw_view as u32;
-        if view_len <= 12 {
-            views_builder.append(*raw_view);
-            continue;
-        }
-        // value is big enough to be in a variadic buffer
-        let view = ByteView::from(*raw_view);
-        let new_buffer_idx: &mut u32 = buffer_lookup
-            .entry((*array_idx, view.buffer_index))
-            .or_insert_with(|| {
-                buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
-                (buffers.len() - 1) as u32
-            });
-        views_builder.append(view.with_buffer_index(*new_buffer_idx).into());
+    // Contains the offsets of start buffer in `buffer_to_new_index`
+    let mut offsets = Vec::with_capacity(interleaved.arrays.len() + 1);
+    offsets.push(0);
+    let mut total_buffers = 0;
+    for a in interleaved.arrays.iter() {
+        total_buffers += a.data_buffers().len();
+        offsets.push(total_buffers);
     }
 
+    // contains the mapping from old buffer index to new buffer index
+    let mut buffer_to_new_index = vec![None; total_buffers];
+
+    let views: Vec<u128> = indices
+        .iter()
+        .map(|(array_idx, value_idx)| {
+            let array = interleaved.arrays[*array_idx];
+            let view = array.views().get(*value_idx).unwrap();
+            let view_len = *view as u32;
+            if view_len <= 12 {
+                return *view;
+            }
+            // value is big enough to be in a variadic buffer
+            let view = ByteView::from(*view);
+            let buffer_to_new_idx = offsets[*array_idx] + view.buffer_index as usize;
+            let new_buffer_idx: u32 =
+                *buffer_to_new_index[buffer_to_new_idx].get_or_insert_with(|| {
+                    buffers.push(array.data_buffers()[view.buffer_index as usize].clone());
+                    (buffers.len() - 1) as u32
+                });
+            view.with_buffer_index(new_buffer_idx).as_u128()
+        })
+        .collect();
+
     let array = unsafe {
-        GenericByteViewArray::<T>::new_unchecked(views_builder.into(), buffers, interleaved.nulls)
+        GenericByteViewArray::<T>::new_unchecked(views.into(), buffers, interleaved.nulls)
     };
     Ok(Arc::new(array))
+}
+
+fn interleave_struct(
+    fields: &Fields,
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, StructArray>::new(values, indices);
+
+    if fields.is_empty() {
+        let array = StructArray::try_new_with_length(
+            fields.clone(),
+            vec![],
+            interleaved.nulls,
+            indices.len(),
+        )?;
+        return Ok(Arc::new(array));
+    }
+
+    let struct_fields_array: Result<Vec<_>, _> = (0..fields.len())
+        .map(|i| {
+            let field_values: Vec<&dyn Array> = interleaved
+                .arrays
+                .iter()
+                .map(|x| x.column(i).as_ref())
+                .collect();
+            interleave(&field_values, indices)
+        })
+        .collect();
+
+    let struct_array =
+        StructArray::try_new(fields.clone(), struct_fields_array?, interleaved.nulls)?;
+    Ok(Arc::new(struct_array))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]
@@ -368,7 +410,9 @@ pub fn interleave_record_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{Int32Builder, ListBuilder};
+    use arrow_array::Int32RunArray;
+    use arrow_array::builder::{Int32Builder, ListBuilder, PrimitiveRunBuilder};
+    use arrow_schema::Field;
 
     #[test]
     fn test_primitive() {
@@ -506,6 +550,199 @@ mod tests {
         let expected = expected.finish();
 
         assert_eq!(v, &expected);
+    }
+
+    #[test]
+    fn test_struct_without_nulls() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, false),
+            Field::new("string_col", DataType::Utf8, false),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let b = {
+            let number_col = Int32Array::from_iter_values([5, 6, 7]);
+            let string_col = StringArray::from_iter_values(["hello", "world", "foo"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let c = {
+            let number_col = Int32Array::from_iter_values([8, 9, 10]);
+            let string_col = StringArray::from_iter_values(["x", "y", "z"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let values = interleave(&[&a, &b, &c], &[(0, 3), (0, 3), (2, 2), (2, 0), (1, 1)]).unwrap();
+        let values_struct = values.as_struct();
+        assert_eq!(values_struct.data_type(), &DataType::Struct(fields));
+        assert_eq!(values_struct.null_count(), 0);
+
+        let values_number = values_struct.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values_number.values(), &[4, 4, 10, 8, 6]);
+        let values_string = values_struct.column(1).as_string::<i32>();
+        let values_string: Vec<_> = values_string.into_iter().collect();
+        assert_eq!(
+            &values_string,
+            &[Some("d"), Some("d"), Some("z"), Some("x"), Some("world")]
+        );
+    }
+
+    #[test]
+    fn test_struct_with_nulls_in_values() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, true),
+            Field::new("string_col", DataType::Utf8, true),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let b = {
+            let number_col = Int32Array::from_iter([Some(1), Some(4), None]);
+            let string_col = StringArray::from(vec![Some("hello"), None, Some("foo")]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let values = interleave(&[&a, &b], &[(0, 1), (1, 2), (1, 2), (0, 3), (1, 1)]).unwrap();
+        let values_struct = values.as_struct();
+        assert_eq!(values_struct.data_type(), &DataType::Struct(fields));
+
+        // The struct itself has no nulls, but the values do
+        assert_eq!(values_struct.null_count(), 0);
+
+        let values_number: Vec<_> = values_struct
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .into_iter()
+            .collect();
+        assert_eq!(values_number, &[Some(2), None, None, Some(4), Some(4)]);
+
+        let values_string = values_struct.column(1).as_string::<i32>();
+        let values_string: Vec<_> = values_string.into_iter().collect();
+        assert_eq!(
+            &values_string,
+            &[Some("b"), Some("foo"), Some("foo"), Some("d"), None]
+        );
+    }
+
+    #[test]
+    fn test_struct_with_nulls() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, false),
+            Field::new("string_col", DataType::Utf8, false),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let b = {
+            let number_col = Int32Array::from_iter_values([5, 6, 7]);
+            let string_col = StringArray::from_iter_values(["hello", "world", "foo"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                Some(NullBuffer::from(&[true, false, true])),
+            )
+            .unwrap()
+        };
+
+        let c = {
+            let number_col = Int32Array::from_iter_values([8, 9, 10]);
+            let string_col = StringArray::from_iter_values(["x", "y", "z"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+
+        let values = interleave(&[&a, &b, &c], &[(0, 3), (0, 3), (2, 2), (1, 1), (2, 0)]).unwrap();
+        let values_struct = values.as_struct();
+        assert_eq!(values_struct.data_type(), &DataType::Struct(fields));
+
+        let validity: Vec<bool> = {
+            let null_buffer = values_struct.nulls().expect("should_have_nulls");
+
+            null_buffer.iter().collect()
+        };
+        assert_eq!(validity, &[true, true, true, false, true]);
+        let values_number = values_struct.column(0).as_primitive::<Int32Type>();
+        assert_eq!(values_number.values(), &[4, 4, 10, 6, 8]);
+        let values_string = values_struct.column(1).as_string::<i32>();
+        let values_string: Vec<_> = values_string.into_iter().collect();
+        assert_eq!(
+            &values_string,
+            &[Some("d"), Some("d"), Some("z"), Some("world"), Some("x"),]
+        );
+    }
+
+    #[test]
+    fn test_struct_empty() {
+        let fields = Fields::from(vec![
+            Field::new("number_col", DataType::Int32, false),
+            Field::new("string_col", DataType::Utf8, false),
+        ]);
+        let a = {
+            let number_col = Int32Array::from_iter_values([1, 2, 3, 4]);
+            let string_col = StringArray::from_iter_values(["a", "b", "c", "d"]);
+
+            StructArray::try_new(
+                fields.clone(),
+                vec![Arc::new(number_col), Arc::new(string_col)],
+                None,
+            )
+            .unwrap()
+        };
+        let v = interleave(&[&a], &[]).unwrap();
+        assert!(v.is_empty());
+        assert_eq!(v.data_type(), &DataType::Struct(fields));
     }
 
     #[test]
@@ -728,5 +965,221 @@ mod tests {
                 3, // Second buffer from array B (reused)
             ]
         );
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_primitive() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 2, 2, 2, 3].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([4, 5, 5, 6, 6, 6].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[(0, 1), (1, 0), (0, 4), (1, 2), (0, 5)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 4, 2, 5, 3];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_string() {
+        let a: Int32RunArray = vec!["hello", "hello", "world", "world", "foo"]
+            .into_iter()
+            .collect();
+        let b: Int32RunArray = vec!["bar", "baz", "baz", "qux"].into_iter().collect();
+
+        let indices = &[(0, 0), (1, 1), (0, 3), (1, 3), (0, 4)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec!["hello", "baz", "world", "qux", "foo"];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_string::<i32>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_with_nulls() {
+        let a: Int32RunArray = vec![Some("a"), Some("a"), None, None, Some("b")]
+            .into_iter()
+            .collect();
+        let b: Int32RunArray = vec![None, Some("c"), Some("c"), Some("d")]
+            .into_iter()
+            .collect();
+
+        let indices = &[(0, 1), (1, 0), (0, 2), (1, 3), (0, 4)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![Some("a"), None, None, Some("d"), Some("b")];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            if result_run_array.values().is_null(physical_idx) {
+                actual.push(None);
+            } else {
+                let value = result_run_array
+                    .values()
+                    .as_string::<i32>()
+                    .value(physical_idx);
+                actual.push(Some(value));
+            }
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_different_run_types() {
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        builder.extend([1, 1, 2, 3, 3].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int16Type, Int32Type>::new();
+        builder.extend([4, 5, 5, 6].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[(0, 0), (1, 1), (0, 3), (1, 3)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &RunArray<Int16Type> = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 5, 3, 6];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_mixed_run_lengths() {
+        let mut builder = PrimitiveRunBuilder::<Int64Type, Int32Type>::new();
+        builder.extend([1, 2, 2, 2, 2, 3, 3, 4].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int64Type, Int32Type>::new();
+        builder.extend([5, 5, 5, 6, 7, 7, 8, 8].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[
+            (0, 0), // 1
+            (1, 2), // 5
+            (0, 3), // 2
+            (1, 3), // 6
+            (0, 6), // 3
+            (1, 6), // 8
+            (0, 7), // 4
+            (1, 4), // 7
+        ];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &RunArray<Int64Type> = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 5, 2, 6, 3, 8, 4, 7];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_interleave_run_end_encoded_empty_runs() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1].into_iter().map(Some));
+        let a = builder.finish();
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([2, 2, 2].into_iter().map(Some));
+        let b = builder.finish();
+
+        let indices = &[(0, 0), (1, 1), (1, 2)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        // The result should be a RunEndEncoded array
+        assert!(matches!(result.data_type(), DataType::RunEndEncoded(_, _)));
+
+        // Cast to RunArray to access values
+        let result_run_array: &Int32RunArray = result.as_any().downcast_ref().unwrap();
+
+        // Verify the logical values by accessing the logical array directly
+        let expected = vec![1, 2, 2];
+        let mut actual = Vec::new();
+        for i in 0..result_run_array.len() {
+            let physical_idx = result_run_array.get_physical_index(i);
+            let value = result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .value(physical_idx);
+            actual.push(value);
+        }
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_struct_no_fields() {
+        let fields = Fields::empty();
+        let a = StructArray::try_new_with_length(fields.clone(), vec![], None, 10).unwrap();
+        let v = interleave(&[&a], &[(0, 0)]).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.data_type(), &DataType::Struct(fields));
     }
 }

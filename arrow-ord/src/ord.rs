@@ -233,6 +233,37 @@ fn compare_fixed_list(
     Ok(f)
 }
 
+fn compare_map(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_map();
+    let right = right.as_map();
+
+    let c_opts = child_opts(opts);
+    let cmp = make_comparator(left.entries(), right.entries(), c_opts)?;
+
+    let l_o = left.offsets().clone();
+    let r_o = right.offsets().clone();
+    let f = compare(left, right, opts, move |i, j| {
+        let l_end = l_o[i + 1].as_usize();
+        let l_start = l_o[i].as_usize();
+
+        let r_end = r_o[j + 1].as_usize();
+        let r_start = r_o[j].as_usize();
+
+        for (i, j) in (l_start..l_end).zip(r_start..r_end) {
+            match cmp(i, j) {
+                Ordering::Equal => continue,
+                r => return r,
+            }
+        }
+        (l_end - l_start).cmp(&(r_end - r_start))
+    });
+    Ok(f)
+}
+
 fn compare_struct(
     left: &dyn Array,
     right: &dyn Array,
@@ -263,12 +294,6 @@ fn compare_struct(
         Ordering::Equal
     });
     Ok(f)
-}
-
-#[deprecated(since = "52.0.0", note = "Use make_comparator")]
-#[doc(hidden)]
-pub fn build_compare(left: &dyn Array, right: &dyn Array) -> Result<DynComparator, ArrowError> {
-    make_comparator(left, right, SortOptions::default())
 }
 
 /// Returns a comparison function that compares two values at two different positions
@@ -386,6 +411,7 @@ pub fn make_comparator(
                  _ => unreachable!()
              }
         },
+        (Map(_, _), Map(_, _)) => compare_map(left, right, opts),
         (lhs, rhs) => Err(ArrowError::InvalidArgumentError(match lhs == rhs {
             true => format!("The data type type {lhs:?} has no natural order"),
             false => "Can't compare arrays of different types".to_string(),
@@ -396,8 +422,8 @@ pub fn make_comparator(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{Int32Builder, ListBuilder};
-    use arrow_buffer::{i256, IntervalDayTime, OffsetBuffer};
+    use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
+    use arrow_buffer::{IntervalDayTime, OffsetBuffer, i256};
     use arrow_schema::{DataType, Field, Fields};
     use half::f16;
     use std::sync::Arc;
@@ -549,7 +575,33 @@ mod tests {
     }
 
     #[test]
-    fn test_decimal() {
+    fn test_decimali32() {
+        let array = vec![Some(5_i32), Some(2_i32), Some(3_i32)]
+            .into_iter()
+            .collect::<Decimal32Array>()
+            .with_precision_and_scale(8, 6)
+            .unwrap();
+
+        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Greater, cmp(0, 2));
+    }
+
+    #[test]
+    fn test_decimali64() {
+        let array = vec![Some(5_i64), Some(2_i64), Some(3_i64)]
+            .into_iter()
+            .collect::<Decimal64Array>()
+            .with_precision_and_scale(16, 6)
+            .unwrap();
+
+        let cmp = make_comparator(&array, &array, SortOptions::default()).unwrap();
+        assert_eq!(Ordering::Less, cmp(1, 0));
+        assert_eq!(Ordering::Greater, cmp(0, 2));
+    }
+
+    #[test]
+    fn test_decimali128() {
         let array = vec![Some(5_i128), Some(2_i128), Some(3_i128)]
             .into_iter()
             .collect::<Decimal128Array>()
@@ -920,5 +972,221 @@ mod tests {
         assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, [])
         assert_eq!(cmp(2, 0), Ordering::Equal); // (None, None) cmp (None, None)
         assert_eq!(cmp(3, 0), Ordering::Greater); // None cmp (None, None)
+    }
+
+    #[test]
+    fn test_map() {
+        // Create first map array demonstrating key priority over values:
+        // [{"a": 100, "b": 1}, {"b": 999, "c": 1}, {}, {"x": 1}]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map1_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 100, "b": 1} - high value for "a", low value for "b"
+        map1_builder.keys().append_value("a");
+        map1_builder.values().append_value(100);
+        map1_builder.keys().append_value("b");
+        map1_builder.values().append_value(1);
+        map1_builder.append(true).unwrap();
+
+        // {"b": 999, "c": 1} - very high value for "b", low value for "c"
+        map1_builder.keys().append_value("b");
+        map1_builder.values().append_value(999);
+        map1_builder.keys().append_value("c");
+        map1_builder.values().append_value(1);
+        map1_builder.append(true).unwrap();
+
+        // {}
+        map1_builder.append(true).unwrap();
+
+        // {"x": 1}
+        map1_builder.keys().append_value("x");
+        map1_builder.values().append_value(1);
+        map1_builder.append(true).unwrap();
+
+        let map1 = map1_builder.finish();
+
+        // Create second map array:
+        // [{"a": 1, "c": 999}, {"b": 1, "d": 999}, {"a": 1}, None]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map2_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 1, "c": 999} - low value for "a", high value for "c"
+        map2_builder.keys().append_value("a");
+        map2_builder.values().append_value(1);
+        map2_builder.keys().append_value("c");
+        map2_builder.values().append_value(999);
+        map2_builder.append(true).unwrap();
+
+        // {"b": 1, "d": 999} - low value for "b", high value for "d"
+        map2_builder.keys().append_value("b");
+        map2_builder.values().append_value(1);
+        map2_builder.keys().append_value("d");
+        map2_builder.values().append_value(999);
+        map2_builder.append(true).unwrap();
+
+        // {"a": 1}
+        map2_builder.keys().append_value("a");
+        map2_builder.values().append_value(1);
+        map2_builder.append(true).unwrap();
+
+        // None
+        map2_builder.append(false).unwrap();
+
+        let map2 = map2_builder.finish();
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&map1, &map2, opts).unwrap();
+
+        // Test that keys have priority over values:
+        // {"a": 100, "b": 1} vs {"a": 1, "c": 999}
+        // First entries match (a:100 vs a:1), but 100 > 1, so Greater
+        assert_eq!(cmp(0, 0), Ordering::Greater);
+
+        // {"b": 999, "c": 1} vs {"b": 1, "d": 999}
+        // First entries match (b:999 vs b:1), but 999 > 1, so Greater
+        assert_eq!(cmp(1, 1), Ordering::Greater);
+
+        // Key comparison: "a" < "b", so {"a": 100, "b": 1} < {"b": 999, "c": 1}
+        assert_eq!(cmp(0, 1), Ordering::Less);
+
+        // Empty map vs non-empty
+        assert_eq!(cmp(2, 2), Ordering::Less); // {} < {"a": 1}
+
+        // Non-null vs null
+        assert_eq!(cmp(3, 3), Ordering::Greater); // {"x": 1} > None
+
+        // Key priority test: "x" > "a", regardless of values
+        assert_eq!(cmp(3, 0), Ordering::Greater); // {"x": 1} > {"a": 1, "c": 999}
+
+        // Empty vs non-empty
+        assert_eq!(cmp(2, 0), Ordering::Less); // {} < {"a": 1, "c": 999}
+
+        let opts = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&map1, &map2, opts).unwrap();
+
+        // With descending=true, value comparison is reversed
+        assert_eq!(cmp(0, 0), Ordering::Less); // {"a": 100, "b": 1} vs {"a": 1, "c": 999} (reversed)
+        assert_eq!(cmp(1, 1), Ordering::Less); // {"b": 999, "c": 1} vs {"b": 1, "d": 999} (reversed)
+        assert_eq!(cmp(0, 1), Ordering::Greater); // {"a": 100, "b": 1} vs {"b": 999, "c": 1} (key order reversed)
+        assert_eq!(cmp(3, 3), Ordering::Greater); // {"x": 1} > None
+        assert_eq!(cmp(2, 2), Ordering::Greater); // {} > {"a": 1} (reversed)
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: false,
+        };
+        let cmp = make_comparator(&map1, &map2, opts).unwrap();
+
+        // Same key priority behavior with nulls_first=false
+        assert_eq!(cmp(0, 0), Ordering::Greater); // {"a": 100, "b": 1} vs {"a": 1, "c": 999}
+        assert_eq!(cmp(1, 1), Ordering::Greater); // {"b": 999, "c": 1} vs {"b": 1, "d": 999}
+        assert_eq!(cmp(3, 3), Ordering::Less); // {"x": 1} < None (nulls last)
+        assert_eq!(cmp(2, 2), Ordering::Less); // {} < {"a": 1}
+    }
+
+    #[test]
+    fn test_map_vs_list_consistency() {
+        // Create map arrays and convert them to list arrays to verify comparison consistency
+        // Map arrays: [{"a": 1, "b": 2}, {"x": 10}, {}, {"c": 3}]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map1_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 1, "b": 2}
+        map1_builder.keys().append_value("a");
+        map1_builder.values().append_value(1);
+        map1_builder.keys().append_value("b");
+        map1_builder.values().append_value(2);
+        map1_builder.append(true).unwrap();
+
+        // {"x": 10}
+        map1_builder.keys().append_value("x");
+        map1_builder.values().append_value(10);
+        map1_builder.append(true).unwrap();
+
+        // {}
+        map1_builder.append(true).unwrap();
+
+        // {"c": 3}
+        map1_builder.keys().append_value("c");
+        map1_builder.values().append_value(3);
+        map1_builder.append(true).unwrap();
+
+        let map1 = map1_builder.finish();
+
+        // Second map array: [{"a": 1, "b": 2}, {"y": 20}, {"d": 4}, None]
+        let string_builder = StringBuilder::new();
+        let int_builder = Int32Builder::new();
+        let mut map2_builder = MapBuilder::new(None, string_builder, int_builder);
+
+        // {"a": 1, "b": 2}
+        map2_builder.keys().append_value("a");
+        map2_builder.values().append_value(1);
+        map2_builder.keys().append_value("b");
+        map2_builder.values().append_value(2);
+        map2_builder.append(true).unwrap();
+
+        // {"y": 20}
+        map2_builder.keys().append_value("y");
+        map2_builder.values().append_value(20);
+        map2_builder.append(true).unwrap();
+
+        // {"d": 4}
+        map2_builder.keys().append_value("d");
+        map2_builder.values().append_value(4);
+        map2_builder.append(true).unwrap();
+
+        // None
+        map2_builder.append(false).unwrap();
+
+        let map2 = map2_builder.finish();
+
+        // Convert map arrays to list arrays (Map entries are struct arrays with key-value pairs)
+        let list1: ListArray = map1.clone().into();
+        let list2: ListArray = map2.clone().into();
+
+        let test_cases = [
+            SortOptions {
+                descending: false,
+                nulls_first: true,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+            SortOptions {
+                descending: false,
+                nulls_first: false,
+            },
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+        ];
+
+        for opts in test_cases {
+            let map_cmp = make_comparator(&map1, &map2, opts).unwrap();
+            let list_cmp = make_comparator(&list1, &list2, opts).unwrap();
+
+            // Test all possible index combinations
+            for i in 0..map1.len() {
+                for j in 0..map2.len() {
+                    let map_result = map_cmp(i, j);
+                    let list_result = list_cmp(i, j);
+                    assert_eq!(
+                        map_result, list_result,
+                        "Map comparison and List comparison should be equal for indices ({i}, {j}) with opts {opts:?}. Map: {map_result:?}, List: {list_result:?}"
+                    );
+                }
+            }
+        }
     }
 }

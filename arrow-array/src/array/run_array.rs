@@ -23,11 +23,11 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field};
 
 use crate::{
+    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
     builder::StringRunBuilder,
     make_array,
     run_iterator::RunArrayIter,
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
-    Array, ArrayAccessor, ArrayRef, PrimitiveArray,
 };
 
 /// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
@@ -259,7 +259,9 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
         match data.data_type() {
             DataType::RunEndEncoded(_, _) => {}
             _ => {
-                panic!("Invalid data type for RunArray. The data type should be DataType::RunEndEncoded");
+                panic!(
+                    "Invalid data type for RunArray. The data type should be DataType::RunEndEncoded"
+                );
             }
         }
 
@@ -641,7 +643,7 @@ where
 
     unsafe fn value_unchecked(&self, logical_index: usize) -> Self::Item {
         let physical_index = self.run_array.get_physical_index(logical_index);
-        self.values().value_unchecked(physical_index)
+        unsafe { self.values().value_unchecked(physical_index) }
     }
 }
 
@@ -662,15 +664,15 @@ where
 
 #[cfg(test)]
 mod tests {
-    use rand::seq::SliceRandom;
-    use rand::thread_rng;
     use rand::Rng;
+    use rand::rng;
+    use rand::seq::SliceRandom;
 
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
     use crate::types::{Int8Type, UInt32Type};
-    use crate::{Int32Array, StringArray};
+    use crate::{Int16Array, Int32Array, StringArray};
 
     fn build_input_array(size: usize) -> Vec<Option<i32>> {
         // The input array is created by shuffling and repeating
@@ -691,7 +693,7 @@ mod tests {
         ];
         let mut result: Vec<Option<i32>> = Vec::with_capacity(size);
         let mut ix = 0;
-        let mut rng = thread_rng();
+        let mut rng = rng();
         // run length can go up to 8. Cap the max run length for smaller arrays to size / 2.
         let max_run_length = 8_usize.min(1_usize.max(size / 2));
         while result.len() < size {
@@ -700,7 +702,7 @@ mod tests {
                 seed.shuffle(&mut rng);
             }
             // repeat the items between 1 and 8 times. Cap the length for smaller sized arrays
-            let num = max_run_length.min(rand::thread_rng().gen_range(1..=max_run_length));
+            let num = max_run_length.min(rng.random_range(1..=max_run_length));
             for _ in 0..num {
                 result.push(seed[ix]);
             }
@@ -1000,7 +1002,7 @@ mod tests {
             let mut logical_indices: Vec<u32> = (0_u32..(logical_len as u32)).collect();
             // add same indices once more
             logical_indices.append(&mut logical_indices.clone());
-            let mut rng = thread_rng();
+            let mut rng = rng();
             logical_indices.shuffle(&mut rng);
 
             let physical_indices = run_array.get_physical_indices(&logical_indices).unwrap();
@@ -1036,7 +1038,7 @@ mod tests {
             let mut logical_indices: Vec<u32> = (0_u32..(slice_len as u32)).collect();
             // add same indices once more
             logical_indices.append(&mut logical_indices.clone());
-            let mut rng = thread_rng();
+            let mut rng = rng();
             logical_indices.shuffle(&mut rng);
 
             // test for offset = 0 and slice length = slice_len
@@ -1103,5 +1105,70 @@ mod tests {
             let n = n.into_iter().collect::<Vec<_>>();
             assert_eq!(&n, &expected[offset..offset + length], "{offset} {length}");
         }
+    }
+
+    #[test]
+    fn test_run_array_eq_identical() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![2, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_ne_different_run_ends() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![1, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "c"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_ne!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_ne_different_values() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec!["a", "b", "c"]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![2, 4, 6]);
+        let values2 = StringArray::from(vec!["a", "b", "d"]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_ne!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_eq_with_nulls() {
+        let run_ends1 = Int32Array::from(vec![2, 4, 6]);
+        let values1 = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let array1 = RunArray::<Int32Type>::try_new(&run_ends1, &values1).unwrap();
+
+        let run_ends2 = Int32Array::from(vec![2, 4, 6]);
+        let values2 = StringArray::from(vec![Some("a"), None, Some("c")]);
+        let array2 = RunArray::<Int32Type>::try_new(&run_ends2, &values2).unwrap();
+
+        assert_eq!(array1, array2);
+    }
+
+    #[test]
+    fn test_run_array_eq_different_run_end_types() {
+        let run_ends_i16_1 = Int16Array::from(vec![2_i16, 4, 6]);
+        let values_i16_1 = StringArray::from(vec!["a", "b", "c"]);
+        let array_i16_1 = RunArray::<Int16Type>::try_new(&run_ends_i16_1, &values_i16_1).unwrap();
+
+        let run_ends_i16_2 = Int16Array::from(vec![2_i16, 4, 6]);
+        let values_i16_2 = StringArray::from(vec!["a", "b", "c"]);
+        let array_i16_2 = RunArray::<Int16Type>::try_new(&run_ends_i16_2, &values_i16_2).unwrap();
+
+        assert_eq!(array_i16_1, array_i16_2);
     }
 }

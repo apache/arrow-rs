@@ -17,7 +17,7 @@
 
 use crate::array::{get_offsets, print_long_array};
 use crate::iterator::MapArrayIter;
-use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
+use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
@@ -185,11 +185,14 @@ impl MapArray {
 
     /// Returns ith value of this map array.
     ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> StructArray {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
+        let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
+        let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
             .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
     }
@@ -197,6 +200,12 @@ impl MapArray {
     /// Returns ith value of this map array.
     ///
     /// This is a [`StructArray`] containing two fields
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> StructArray {
         let end = self.value_offsets()[i + 1] as usize;
         let start = self.value_offsets()[i] as usize;

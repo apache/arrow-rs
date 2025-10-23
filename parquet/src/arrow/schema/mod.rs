@@ -17,14 +17,12 @@
 
 //! Converting Parquet schema <--> Arrow schema: [`ArrowSchemaConverter`] and [parquet_to_arrow_schema]
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
-#[cfg(feature = "arrow_canonical_extension_types")]
-use arrow_schema::extension::{Json, Uuid};
 use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
 
 use crate::basic::{
@@ -35,12 +33,16 @@ use crate::file::{metadata::KeyValue, properties::WriterProperties};
 use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
+mod extension;
 mod primitive;
 
-use crate::arrow::ProjectionMask;
-pub(crate) use complex::{ParquetField, ParquetFieldType};
-
 use super::PARQUET_FIELD_ID_META_KEY;
+use crate::arrow::ProjectionMask;
+use crate::arrow::schema::extension::{
+    has_extension_type, logical_type_for_fixed_size_binary, logical_type_for_string,
+    logical_type_for_struct, try_add_extension_type,
+};
+pub(crate) use complex::{ParquetField, ParquetFieldType};
 
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
@@ -63,7 +65,11 @@ pub fn parquet_to_arrow_schema_by_columns(
     Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata)?.0)
 }
 
-/// Extracts the arrow metadata
+/// Determines the Arrow Schema from a Parquet schema
+///
+/// Looks for an Arrow schema metadata "hint" (see
+/// [`parquet_to_arrow_field_levels`]), and uses it if present to ensure
+/// lossless round trips.
 pub(crate) fn parquet_to_arrow_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
@@ -105,6 +111,12 @@ pub struct FieldLevels {
 ///
 /// Columns not included within [`ProjectionMask`] will be ignored.
 ///
+/// The optional `hint` parameter is the desired Arrow schema. See the
+/// [`arrow`] module documentation for more information.
+///
+/// [`arrow`]: crate::arrow
+///
+/// # Notes:
 /// Where a field type in `hint` is compatible with the corresponding parquet type in `schema`, it
 /// will be used, otherwise the default arrow type for the given parquet column type will be used.
 ///
@@ -174,9 +186,7 @@ fn get_arrow_schema_from_metadata(encoded_meta: &str) -> Result<Schema> {
 /// Encodes the Arrow schema into the IPC format, and base64 encodes it
 pub fn encode_arrow_schema(schema: &Schema) -> String {
     let options = writer::IpcWriteOptions::default();
-    #[allow(deprecated)]
-    let mut dictionary_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(true, options.preserve_dict_id());
+    let mut dictionary_tracker = writer::DictionaryTracker::new(true);
     let data_gen = writer::IpcDataGenerator::default();
     let mut serialized_schema =
         data_gen.schema_to_bytes_with_dictionary_tracker(schema, &mut dictionary_tracker, &options);
@@ -192,8 +202,12 @@ pub fn encode_arrow_schema(schema: &Schema) -> String {
     BASE64_STANDARD.encode(&len_prefix_schema)
 }
 
-/// Mutates writer metadata by storing the encoded Arrow schema.
+/// Mutates writer metadata by storing the encoded Arrow schema hint in
+/// [`ARROW_SCHEMA_META_KEY`].
+///
 /// If there is an existing Arrow schema metadata, it is replaced.
+///
+/// [`ARROW_SCHEMA_META_KEY`]: crate::arrow::ARROW_SCHEMA_META_KEY
 pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterProperties) {
     let encoded = encode_arrow_schema(schema);
 
@@ -224,7 +238,12 @@ pub fn add_encoded_arrow_schema_to_metadata(schema: &Schema, props: &mut WriterP
 
 /// Converter for Arrow schema to Parquet schema
 ///
-/// Example:
+/// See the documentation on the [`arrow`] module for background
+/// information on how Arrow schema is represented in Parquet.
+///
+/// [`arrow`]: crate::arrow
+///
+/// # Example:
 /// ```
 /// # use std::sync::Arc;
 /// # use arrow_schema::{Field, Schema, DataType};
@@ -343,15 +362,6 @@ impl<'a> ArrowSchemaConverter<'a> {
     }
 }
 
-/// Convert arrow schema to parquet schema
-///
-/// The name of the root schema element defaults to `"arrow_schema"`, this can be
-/// overridden with [`ArrowSchemaConverter`]
-#[deprecated(since = "54.0.0", note = "Use `ArrowSchemaConverter` instead")]
-pub fn arrow_to_parquet_schema(schema: &Schema) -> Result<SchemaDescriptor> {
-    ArrowSchemaConverter::new().convert(schema)
-}
-
 fn parse_key_value_metadata(
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Option<HashMap<String, String>> {
@@ -366,11 +376,7 @@ fn parse_key_value_metadata(
                 })
                 .collect();
 
-            if map.is_empty() {
-                None
-            } else {
-                Some(map)
-            }
+            if map.is_empty() { None } else { Some(map) }
         }
         None => None,
     }
@@ -381,31 +387,27 @@ pub fn parquet_to_arrow_field(parquet_column: &ColumnDescriptor) -> Result<Field
     let field = complex::convert_type(&parquet_column.self_type_ptr())?;
     let mut ret = Field::new(parquet_column.name(), field.arrow_type, field.nullable);
 
-    let basic_info = parquet_column.self_type().get_basic_info();
-    let mut meta = HashMap::with_capacity(if cfg!(feature = "arrow_canonical_extension_types") {
-        2
-    } else {
-        1
-    });
+    let parquet_type = parquet_column.self_type();
+    let basic_info = parquet_type.get_basic_info();
+
+    let mut hash_map_size = 0;
     if basic_info.has_id() {
-        meta.insert(
+        hash_map_size += 1;
+    }
+    if has_extension_type(parquet_type) {
+        hash_map_size += 1;
+    }
+    if hash_map_size == 0 {
+        return Ok(ret);
+    }
+    ret.set_metadata(HashMap::with_capacity(hash_map_size));
+    if basic_info.has_id() {
+        ret.metadata_mut().insert(
             PARQUET_FIELD_ID_META_KEY.to_string(),
             basic_info.id().to_string(),
         );
     }
-    #[cfg(feature = "arrow_canonical_extension_types")]
-    if let Some(logical_type) = basic_info.logical_type() {
-        match logical_type {
-            LogicalType::Uuid => ret.try_with_extension_type(Uuid)?,
-            LogicalType::Json => ret.try_with_extension_type(Json::default())?,
-            _ => {}
-        }
-    }
-    if !meta.is_empty() {
-        ret.set_metadata(meta);
-    }
-
-    Ok(ret)
+    try_add_extension_type(ret, parquet_column.self_type())
 }
 
 pub fn decimal_length_from_precision(precision: u8) -> usize {
@@ -528,9 +530,9 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                     is_adjusted_to_u_t_c: matches!(tz, Some(z) if !z.as_ref().is_empty()),
                     unit: match time_unit {
                         TimeUnit::Second => unreachable!(),
-                        TimeUnit::Millisecond => ParquetTimeUnit::MILLIS(Default::default()),
-                        TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
-                        TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
+                        TimeUnit::Millisecond => ParquetTimeUnit::MILLIS,
+                        TimeUnit::Microsecond => ParquetTimeUnit::MICROS,
+                        TimeUnit::Nanosecond => ParquetTimeUnit::NANOS,
                     },
                 }))
                 .with_repetition(repetition)
@@ -567,7 +569,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
-                    TimeUnit::Millisecond => ParquetTimeUnit::MILLIS(Default::default()),
+                    TimeUnit::Millisecond => ParquetTimeUnit::MILLIS,
                     u => unreachable!("Invalid unit for Time32: {:?}", u),
                 },
             }))
@@ -578,15 +580,18 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             .with_logical_type(Some(LogicalType::Time {
                 is_adjusted_to_u_t_c: field.metadata().contains_key("adjusted_to_utc"),
                 unit: match unit {
-                    TimeUnit::Microsecond => ParquetTimeUnit::MICROS(Default::default()),
-                    TimeUnit::Nanosecond => ParquetTimeUnit::NANOS(Default::default()),
+                    TimeUnit::Microsecond => ParquetTimeUnit::MICROS,
+                    TimeUnit::Nanosecond => ParquetTimeUnit::NANOS,
                     u => unreachable!("Invalid unit for Time64: {:?}", u),
                 },
             }))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Duration(_) => Err(arrow_err!("Converting Duration to parquet not supported",)),
+        DataType::Duration(_) => Type::primitive_type_builder(name, PhysicalType::INT64)
+            .with_repetition(repetition)
+            .with_id(id)
+            .build(),
         DataType::Interval(_) => {
             Type::primitive_type_builder(name, PhysicalType::FIXED_LEN_BYTE_ARRAY)
                 .with_converted_type(ConvertedType::INTERVAL)
@@ -606,23 +611,17 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .with_repetition(repetition)
                 .with_id(id)
                 .with_length(*length)
-                .with_logical_type(
-                    #[cfg(feature = "arrow_canonical_extension_types")]
-                    // If set, map arrow uuid extension type to parquet uuid logical type.
-                    field
-                        .try_extension_type::<Uuid>()
-                        .ok()
-                        .map(|_| LogicalType::Uuid),
-                    #[cfg(not(feature = "arrow_canonical_extension_types"))]
-                    None,
-                )
+                .with_logical_type(logical_type_for_fixed_size_binary(field))
                 .build()
         }
         DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
             .with_repetition(repetition)
             .with_id(id)
             .build(),
-        DataType::Decimal128(precision, scale) | DataType::Decimal256(precision, scale) => {
+        DataType::Decimal32(precision, scale)
+        | DataType::Decimal64(precision, scale)
+        | DataType::Decimal128(precision, scale)
+        | DataType::Decimal256(precision, scale) => {
             // Decimal precision determines the Parquet physical type to use.
             // Following the: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#decimal
             let (physical_type, length) = if *precision > 1 && *precision <= 9 {
@@ -649,35 +648,13 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         }
         DataType::Utf8 | DataType::LargeUtf8 => {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-                .with_logical_type({
-                    #[cfg(feature = "arrow_canonical_extension_types")]
-                    {
-                        // Use the Json logical type if the canonical Json
-                        // extension type is set on this field.
-                        field
-                            .try_extension_type::<Json>()
-                            .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
-                    }
-                    #[cfg(not(feature = "arrow_canonical_extension_types"))]
-                    Some(LogicalType::String)
-                })
+                .with_logical_type(logical_type_for_string(field))
                 .with_repetition(repetition)
                 .with_id(id)
                 .build()
         }
         DataType::Utf8View => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
-            .with_logical_type({
-                #[cfg(feature = "arrow_canonical_extension_types")]
-                {
-                    // Use the Json logical type if the canonical Json
-                    // extension type is set on this field.
-                    field
-                        .try_extension_type::<Json>()
-                        .map_or(Some(LogicalType::String), |_| Some(LogicalType::Json))
-                }
-                #[cfg(not(feature = "arrow_canonical_extension_types"))]
-                Some(LogicalType::String)
-            })
+            .with_logical_type(logical_type_for_string(field))
             .with_repetition(repetition)
             .with_id(id)
             .build(),
@@ -718,6 +695,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
                 .with_fields(fields)
                 .with_repetition(repetition)
                 .with_id(id)
+                .with_logical_type(logical_type_for_struct(field))
                 .build()
         }
         DataType::Map(field, _) => {
@@ -759,7 +737,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             }
         }
         DataType::Union(_, _) => unimplemented!("See ARROW-8817."),
-        DataType::Dictionary(_, ref value) => {
+        DataType::Dictionary(_, value) => {
             // Dictionary encoding not handled at the schema level
             let dict_field = field.clone().with_data_type(value.as_ref().clone());
             arrow_to_parquet_type(&dict_field, coerce_types)
@@ -781,15 +759,14 @@ mod tests {
 
     use std::{collections::HashMap, sync::Arc};
 
-    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
-
     use crate::arrow::PARQUET_FIELD_ID_META_KEY;
     use crate::file::metadata::KeyValue;
     use crate::file::reader::FileReader;
     use crate::{
-        arrow::{arrow_reader::ParquetRecordBatchReaderBuilder, ArrowWriter},
+        arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
         schema::{parser::parse_message_type, types::SchemaDescriptor},
     };
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
 
     #[test]
     fn test_flat_primitives() {
@@ -828,10 +805,24 @@ mod tests {
             Field::new("float16", DataType::Float16, true),
             Field::new("string", DataType::Utf8, true),
             Field::new("string_2", DataType::Utf8, true),
-            Field::new("json", DataType::Utf8, true),
+            json_field(),
         ]);
 
         assert_eq!(&arrow_fields, converted_arrow_schema.fields());
+    }
+
+    /// Return the expected Field for a Parquet column annotated with
+    /// the JSON logical type.
+    fn json_field() -> Field {
+        #[cfg(feature = "arrow_canonical_extension_types")]
+        {
+            Field::new("json", DataType::Utf8, true)
+                .with_extension_type(arrow_schema::extension::Json::default())
+        }
+        #[cfg(not(feature = "arrow_canonical_extension_types"))]
+        {
+            Field::new("json", DataType::Utf8, true)
+        }
     }
 
     #[test]
@@ -2061,6 +2052,8 @@ mod tests {
                     false, // fails to roundtrip keys_sorted
                     false,
                 ),
+                Field::new("c42", DataType::Decimal32(5, 2), false),
+                Field::new("c43", DataType::Decimal64(18, 12), true),
             ],
             meta(&[("Key", "Value")]),
         );
@@ -2215,12 +2208,10 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_uuid_to_parquet_uuid() -> Result<()> {
-        let arrow_schema = Schema::new(vec![Field::new(
-            "uuid",
-            DataType::FixedSizeBinary(16),
-            false,
-        )
-        .with_extension_type(Uuid)]);
+        use arrow_schema::extension::Uuid;
+        let arrow_schema = Schema::new(vec![
+            Field::new("uuid", DataType::FixedSizeBinary(16), false).with_extension_type(Uuid),
+        ]);
 
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
 
@@ -2229,9 +2220,8 @@ mod tests {
             Some(LogicalType::Uuid)
         );
 
-        // TODO: roundtrip
-        // let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
-        // assert_eq!(arrow_schema.field(0).try_extension_type::<Uuid>()?, Uuid);
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert_eq!(arrow_schema.field(0).try_extension_type::<Uuid>()?, Uuid);
 
         Ok(())
     }
@@ -2239,8 +2229,9 @@ mod tests {
     #[test]
     #[cfg(feature = "arrow_canonical_extension_types")]
     fn arrow_json_to_parquet_json() -> Result<()> {
+        use arrow_schema::extension::Json;
         let arrow_schema = Schema::new(vec![
-            Field::new("json", DataType::Utf8, false).with_extension_type(Json::default())
+            Field::new("json", DataType::Utf8, false).with_extension_type(Json::default()),
         ]);
 
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
@@ -2250,13 +2241,11 @@ mod tests {
             Some(LogicalType::Json)
         );
 
-        // TODO: roundtrip
-        // https://github.com/apache/arrow-rs/issues/7063
-        // let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
-        // assert_eq!(
-        //     arrow_schema.field(0).try_extension_type::<Json>()?,
-        //     Json::default()
-        // );
+        let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
+        assert_eq!(
+            arrow_schema.field(0).try_extension_type::<Json>()?,
+            Json::default()
+        );
 
         Ok(())
     }

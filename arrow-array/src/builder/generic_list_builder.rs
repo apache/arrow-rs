@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
 use arrow_buffer::NullBufferBuilder;
 use arrow_buffer::{Buffer, OffsetBuffer};
@@ -86,7 +86,7 @@ use std::sync::Arc;
 /// [`LargeListArray`]: crate::array::LargeListArray
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
-    offsets_builder: BufferBuilder<OffsetSize>,
+    offsets_builder: Vec<OffsetSize>,
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
     field: Option<FieldRef>,
@@ -108,8 +108,8 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize
     /// Creates a new [`GenericListBuilder`] from a given values array builder
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, capacity: usize) -> Self {
-        let mut offsets_builder = BufferBuilder::<OffsetSize>::new(capacity + 1);
-        offsets_builder.append(OffsetSize::zero());
+        let mut offsets_builder = Vec::with_capacity(capacity + 1);
+        offsets_builder.push(OffsetSize::zero());
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
@@ -192,7 +192,7 @@ where
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.offsets_builder.append(self.next_offset());
+        self.offsets_builder.push(self.next_offset());
         self.null_buffer_builder.append(is_valid);
     }
 
@@ -266,8 +266,17 @@ where
     /// See [`Self::append_value`] for an example use.
     #[inline]
     pub fn append_null(&mut self) {
-        self.offsets_builder.append(self.next_offset());
+        self.offsets_builder.push(self.next_offset());
         self.null_buffer_builder.append_null();
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        let next_offset = self.next_offset();
+        self.offsets_builder
+            .extend(std::iter::repeat_n(next_offset, n));
+        self.null_buffer_builder.append_n_nulls(n);
     }
 
     /// Appends an optional value into this [`GenericListBuilder`]
@@ -290,10 +299,10 @@ where
         let values = self.values_builder.finish();
         let nulls = self.null_buffer_builder.finish();
 
-        let offsets = self.offsets_builder.finish();
+        let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
         // Safety: Safe by construction
         let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
-        self.offsets_builder.append(OffsetSize::zero());
+        self.offsets_builder.push(OffsetSize::zero());
 
         let field = match &self.field {
             Some(f) => f.clone(),
@@ -354,10 +363,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{make_builder, Int32Builder, ListBuilder};
+    use crate::Int32Array;
+    use crate::builder::{Int32Builder, ListBuilder, make_builder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::Int32Array;
     use arrow_schema::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
@@ -406,7 +415,7 @@ mod tests {
         let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7], null, null, [8]]
         builder.values().append_value(0);
         builder.values().append_value(1);
         builder.values().append_value(2);
@@ -419,14 +428,20 @@ mod tests {
         builder.values().append_value(6);
         builder.values().append_value(7);
         builder.append(true);
+        builder.append_nulls(2);
+        builder.values().append_value(8);
+        builder.append(true);
 
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(4, list_array.len());
-        assert_eq!(1, list_array.null_count());
+        assert_eq!(7, list_array.len());
+        assert_eq!(3, list_array.null_count());
         assert_eq!(O::from_usize(3).unwrap(), list_array.value_offsets()[2]);
+        assert_eq!(O::from_usize(9).unwrap(), list_array.value_offsets()[7]);
         assert_eq!(O::from_usize(3).unwrap(), list_array.value_length(2));
+        assert!(list_array.is_null(4));
+        assert!(list_array.is_null(5));
     }
 
     #[test]

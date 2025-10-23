@@ -18,7 +18,7 @@
 use crate::basic::{ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{BasicTypeInfo, Type};
-use arrow_schema::{DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION};
+use arrow_schema::{DECIMAL128_MAX_PRECISION, DataType, IntervalUnit, TimeUnit};
 
 /// Converts [`Type`] to [`DataType`] with an optional `arrow_type_hint`
 /// provided by the arrow schema
@@ -43,6 +43,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Int32 | DataType::Int64, DataType::Timestamp(_, _)) => hint,
         (DataType::Int32, DataType::Time32(_)) => hint,
         (DataType::Int64, DataType::Time64(_)) => hint,
+        (DataType::Int64, DataType::Duration(_)) => hint,
 
         // Date64 doesn't have a corresponding LogicalType / ConvertedType
         (DataType::Int64, DataType::Date64) => hint,
@@ -50,8 +51,23 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Coerce Date32 back to Date64 (#1666)
         (DataType::Date32, DataType::Date64) => hint,
 
-        // Determine timezone
+        // Timestamps of the same resolution can be converted to a a different timezone.
         (DataType::Timestamp(p, _), DataType::Timestamp(h, Some(_))) if p == h => hint,
+
+        // INT96 default to Timestamp(TimeUnit::Nanosecond, None) (see from_parquet below).
+        // Allow different resolutions to support larger date ranges.
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Second, _),
+        ) => hint,
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Millisecond, _),
+        ) => hint,
+        (
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            DataType::Timestamp(TimeUnit::Microsecond, _),
+        ) => hint,
 
         // Determine offset size
         (DataType::Utf8, DataType::LargeUtf8) => hint,
@@ -69,7 +85,9 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Determine interval time unit (#1666)
         (DataType::Interval(_), DataType::Interval(_)) => hint,
 
-        // Promote to Decimal256
+        // Promote to Decimal256 or narrow to Decimal32 or Decimal64
+        (DataType::Decimal128(_, _), DataType::Decimal32(_, _)) => hint,
+        (DataType::Decimal128(_, _), DataType::Decimal64(_, _)) => hint,
         (DataType::Decimal128(_, _), DataType::Decimal256(_, _)) => hint,
 
         // Potentially preserve dictionary encoding
@@ -114,7 +132,7 @@ fn from_parquet(parquet_type: &Type) -> Result<DataType> {
 }
 
 fn decimal_type(scale: i32, precision: i32) -> Result<DataType> {
-    if precision <= DECIMAL128_MAX_PRECISION as _ {
+    if precision <= DECIMAL128_MAX_PRECISION as i32 {
         decimal_128_type(scale, precision)
     } else {
         decimal_256_type(scale, precision)
@@ -168,7 +186,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
         (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
-            ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
+            ParquetTimeUnit::MILLIS => Ok(DataType::Time32(TimeUnit::Millisecond)),
             _ => Err(arrow_err!(
                 "Cannot create INT32 physical type from {:?}",
                 unit
@@ -207,11 +225,11 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             false => Ok(DataType::UInt64),
         },
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
-            ParquetTimeUnit::MILLIS(_) => {
+            ParquetTimeUnit::MILLIS => {
                 Err(arrow_err!("Cannot create INT64 from MILLIS time unit",))
             }
-            ParquetTimeUnit::MICROS(_) => Ok(DataType::Time64(TimeUnit::Microsecond)),
-            ParquetTimeUnit::NANOS(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+            ParquetTimeUnit::MICROS => Ok(DataType::Time64(TimeUnit::Microsecond)),
+            ParquetTimeUnit::NANOS => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         },
         (
             Some(LogicalType::Timestamp {
@@ -221,9 +239,9 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             _,
         ) => Ok(DataType::Timestamp(
             match unit {
-                ParquetTimeUnit::MILLIS(_) => TimeUnit::Millisecond,
-                ParquetTimeUnit::MICROS(_) => TimeUnit::Microsecond,
-                ParquetTimeUnit::NANOS(_) => TimeUnit::Nanosecond,
+                ParquetTimeUnit::MILLIS => TimeUnit::Millisecond,
+                ParquetTimeUnit::MICROS => TimeUnit::Microsecond,
+                ParquetTimeUnit::NANOS => TimeUnit::Nanosecond,
             },
             if is_adjusted_to_u_t_c {
                 Some("UTC".into())
@@ -258,6 +276,8 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
         (Some(LogicalType::Json), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Bson), _) => Ok(DataType::Binary),
         (Some(LogicalType::Enum), _) => Ok(DataType::Binary),
+        (Some(LogicalType::Geometry { .. }), _) => Ok(DataType::Binary),
+        (Some(LogicalType::Geography { .. }), _) => Ok(DataType::Binary),
         (None, ConvertedType::NONE) => Ok(DataType::Binary),
         (None, ConvertedType::JSON) => Ok(DataType::Utf8),
         (None, ConvertedType::BSON) => Ok(DataType::Binary),

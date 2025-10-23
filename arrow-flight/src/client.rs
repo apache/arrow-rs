@@ -16,19 +16,19 @@
 // under the License.
 
 use crate::{
-    decode::FlightRecordBatchStream,
-    flight_service_client::FlightServiceClient,
-    gen::{CancelFlightInfoRequest, CancelFlightInfoResult, RenewFlightEndpointRequest},
-    trailers::extract_lazy_trailers,
     Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
     HandshakeRequest, PollInfo, PutResult, Ticket,
+    decode::FlightRecordBatchStream,
+    flight_service_client::FlightServiceClient,
+    r#gen::{CancelFlightInfoRequest, CancelFlightInfoResult, RenewFlightEndpointRequest},
+    trailers::extract_lazy_trailers,
 };
 use arrow_schema::Schema;
 use bytes::Bytes;
 use futures::{
+    Stream, StreamExt, TryStreamExt,
     future::ready,
     stream::{self, BoxStream},
-    Stream, StreamExt, TryStreamExt,
 };
 use prost::Message;
 use tonic::{metadata::MetadataMap, transport::Channel};
@@ -210,7 +210,7 @@ impl FlightClient {
         let (response_stream, trailers) = extract_lazy_trailers(response_stream);
 
         Ok(FlightRecordBatchStream::new_from_flight_data(
-            response_stream.map_err(FlightError::Tonic),
+            response_stream.map_err(|status| status.into()),
         )
         .with_headers(md)
         .with_trailers(trailers))
@@ -470,7 +470,7 @@ impl FlightClient {
             .list_flights(request)
             .await?
             .into_inner()
-            .map_err(FlightError::Tonic);
+            .map_err(|status| status.into());
 
         Ok(response.boxed())
     }
@@ -537,7 +537,7 @@ impl FlightClient {
             .list_actions(request)
             .await?
             .into_inner()
-            .map_err(FlightError::Tonic);
+            .map_err(|status| status.into());
 
         Ok(action_stream.boxed())
     }
@@ -575,7 +575,7 @@ impl FlightClient {
             .do_action(request)
             .await?
             .into_inner()
-            .map_err(FlightError::Tonic)
+            .map_err(|status| status.into())
             .map(|r| {
                 r.map(|r| {
                     // unwrap inner bytes

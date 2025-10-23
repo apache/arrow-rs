@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
+use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
@@ -416,7 +416,7 @@ mod tests {
 
         let mut buffer = BooleanBufferBuilder::new(12);
         let mut all_bools = vec![];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let src_len = 32;
         let (src, compacted_src) = {

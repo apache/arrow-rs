@@ -17,8 +17,8 @@
 
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
-use num::cast::AsPrimitive;
-use num::{BigInt, FromPrimitive, ToPrimitive};
+use num_bigint::BigInt;
+use num_traits::{FromPrimitive, ToPrimitive, cast::AsPrimitive};
 use std::cmp::Ordering;
 use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
@@ -232,11 +232,7 @@ impl i256 {
     pub fn from_f64(v: f64) -> Option<Self> {
         BigInt::from_f64(v).and_then(|i| {
             let (integer, overflow) = i256::from_bigint_with_overflow(i);
-            if overflow {
-                None
-            } else {
-                Some(integer)
-            }
+            if overflow { None } else { Some(integer) }
         })
     }
 
@@ -304,7 +300,7 @@ impl i256 {
         let v_bytes = v.to_signed_bytes_le();
         match v_bytes.len().cmp(&32) {
             Ordering::Less => {
-                let mut bytes = if num::Signed::is_negative(&v) {
+                let mut bytes = if num_traits::Signed::is_negative(&v) {
                     [255_u8; 32]
                 } else {
                     [0; 32]
@@ -586,6 +582,25 @@ impl i256 {
     pub const fn is_positive(self) -> bool {
         self.high.is_positive() || self.high == 0 && self.low != 0
     }
+
+    fn leading_zeros(&self) -> u32 {
+        match self.high {
+            0 => u128::BITS + self.low.leading_zeros(),
+            _ => self.high.leading_zeros(),
+        }
+    }
+
+    fn redundant_leading_sign_bits_i256(n: i256) -> u8 {
+        let mask = n >> 255; // all ones or all zeros
+        ((n ^ mask).leading_zeros() - 1) as u8 // we only need one sign bit
+    }
+
+    fn i256_to_f64(input: i256) -> f64 {
+        let k = i256::redundant_leading_sign_bits_i256(input);
+        let n = input << k; // left-justify (no redundant sign bits)
+        let n = (n.high >> 64) as i64; // throw away the lower 192 bits
+        (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
+    }
 }
 
 /// Temporary workaround due to lack of stable const array slicing
@@ -821,6 +836,15 @@ impl ToPrimitive for i256 {
         }
     }
 
+    fn to_f64(&self) -> Option<f64> {
+        match *self {
+            Self::MIN => Some(-2_f64.powi(255)),
+            Self::ZERO => Some(0f64),
+            Self::ONE => Some(1f64),
+            n => Some(Self::i256_to_f64(n)),
+        }
+    }
+
     fn to_u64(&self) -> Option<u64> {
         let as_i128 = self.low as i128;
 
@@ -839,8 +863,8 @@ impl ToPrimitive for i256 {
 #[cfg(all(test, not(miri)))] // llvm.x86.subborrow.64 not supported by MIRI
 mod tests {
     use super::*;
-    use num::Signed;
-    use rand::{thread_rng, Rng};
+    use num_traits::Signed;
+    use rand::{Rng, rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1091,16 +1115,16 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn test_i256_fuzz() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for _ in 0..1000 {
             let mut l = [0_u8; 32];
-            let len = rng.gen_range(0..32);
-            l.iter_mut().take(len).for_each(|x| *x = rng.gen());
+            let len = rng.random_range(0..32);
+            l.iter_mut().take(len).for_each(|x| *x = rng.random());
 
             let mut r = [0_u8; 32];
-            let len = rng.gen_range(0..32);
-            r.iter_mut().take(len).for_each(|x| *x = rng.gen());
+            let len = rng.random_range(0..32);
+            r.iter_mut().take(len).for_each(|x| *x = rng.random());
 
             test_ops(i256::from_le_bytes(l), i256::from_le_bytes(r))
         }
@@ -1263,5 +1287,44 @@ mod tests {
                 test_reference_op(il, ir)
             }
         }
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_typical_values() {
+        let v = i256::from_i128(42_i128);
+        assert_eq!(v.to_f64().unwrap(), 42.0);
+
+        let v = i256::from_i128(-123456789012345678i128);
+        assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+
+        let v = i256::from_string("0").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 0.0);
+
+        let v = i256::from_string("1").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 1.0);
+
+        let mut rng = rng();
+        for _ in 0..10 {
+            let f64_value =
+                (rng.random_range(i128::MIN..i128::MAX) as f64) * rng.random_range(0.0..1.0);
+            let big = i256::from_f64(f64_value).unwrap();
+            assert_eq!(big.to_f64().unwrap(), f64_value);
+        }
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_positive_value() {
+        let max_f = f64::MAX;
+        let big = i256::from_f64(max_f * 2.0).unwrap_or(i256::MAX);
+        let out = big.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_positive());
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_negative_value() {
+        let max_f = f64::MAX;
+        let big_neg = i256::from_f64(-(max_f * 2.0)).unwrap_or(i256::MIN);
+        let out = big_neg.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_negative());
     }
 }

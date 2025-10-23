@@ -20,8 +20,8 @@ use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
-    bit_util, i256, ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano,
-    MutableBuffer, NullBuffer,
+    ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+    NullBuffer, bit_util, i256,
 };
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{DataType, SortOptions};
@@ -456,7 +456,7 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
         .null_bit_buffer(Some(nulls));
 
     // SAFETY: Buffers correct length
-    builder.build_unchecked()
+    unsafe { builder.build_unchecked() }
 }
 
 /// Decodes a `PrimitiveArray` from rows

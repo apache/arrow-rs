@@ -21,17 +21,18 @@ use arrow::datatypes::{Int32Type, Int64Type};
 use arrow::util::bench_util::*;
 use arrow::util::test_util::seedable_rng;
 use arrow_array::UInt32Array;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use rand::Rng;
+use std::hint;
 
 fn create_random_index(size: usize, null_density: f32, max_value: usize) -> UInt32Array {
     let mut rng = seedable_rng();
     let mut builder = UInt32Builder::with_capacity(size);
     for _ in 0..size {
-        if rng.gen::<f32>() < null_density {
+        if rng.random::<f32>() < null_density {
             builder.append_null();
         } else {
-            let value = rng.gen_range::<u32, _>(0u32..max_value as u32);
+            let value = rng.random_range::<u32, _>(0u32..max_value as u32);
             builder.append_value(value);
         }
     }
@@ -52,7 +53,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len}, take_len:{take_len})"),
             |b| {
                 b.iter(|| {
-                    criterion::black_box(take(&run_array, &indices, None).unwrap());
+                    hint::black_box(take(&run_array, &indices, None).unwrap());
                 })
             },
         );

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::{NullBuffer, NullBufferBuilder};
@@ -56,7 +56,7 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
-    offsets_builder: BufferBuilder<i32>,
+    offsets_builder: Vec<i32>,
     null_buffer_builder: NullBufferBuilder,
     field_names: MapFieldNames,
     key_builder: K,
@@ -100,8 +100,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         value_builder: V,
         capacity: usize,
     ) -> Self {
-        let mut offsets_builder = BufferBuilder::<i32>::new(capacity + 1);
-        offsets_builder.append(0);
+        let mut offsets_builder = Vec::with_capacity(capacity + 1);
+        offsets_builder.push(0);
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
@@ -166,7 +166,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
                 self.value_builder.len()
             )));
         }
-        self.offsets_builder.append(self.key_builder.len() as i32);
+        self.offsets_builder.push(self.key_builder.len() as i32);
         self.null_buffer_builder.append(is_valid);
         Ok(())
     }
@@ -177,8 +177,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         // Build the keys
         let keys_arr = self.key_builder.finish();
         let values_arr = self.value_builder.finish();
-        let offset_buffer = self.offsets_builder.finish();
-        self.offsets_builder.append(0);
+        let offset_buffer = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
+        self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
         self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
@@ -284,7 +284,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{make_builder, Int32Builder, StringBuilder};
+    use crate::builder::{Int32Builder, StringBuilder, make_builder};
     use crate::{Int32Array, StringArray};
     use std::collections::HashMap;
 

@@ -21,8 +21,8 @@ use arrow::array::{Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use arrow_array::builder::{Int32Builder, ListBuilder};
 use bytes::Bytes;
-use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ArrowWriter;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{Encoding, PageType};
 use parquet::file::metadata::ParquetMetaData;
 use parquet::file::properties::{ReaderProperties, WriterProperties};
@@ -177,6 +177,7 @@ fn test_primitive() {
         .set_dictionary_enabled(false)
         .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     // Test spill plain encoding pages
@@ -207,6 +208,7 @@ fn test_primitive() {
         .set_dictionary_page_size_limit(1000)
         .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -249,6 +251,7 @@ fn test_primitive() {
         .set_dictionary_page_size_limit(10000)
         .set_data_page_size_limit(500)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -318,6 +321,7 @@ fn test_primitive() {
         .set_dictionary_enabled(false)
         .set_data_page_row_count_limit(100)
         .set_write_batch_size(100)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -352,6 +356,7 @@ fn test_string() {
         .set_dictionary_enabled(false)
         .set_data_page_size_limit(1000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     // Test spill plain encoding pages
@@ -389,6 +394,7 @@ fn test_string() {
         .set_dictionary_page_size_limit(1000)
         .set_data_page_size_limit(10000)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -438,6 +444,7 @@ fn test_string() {
         .set_dictionary_page_size_limit(20000)
         .set_data_page_size_limit(500)
         .set_write_batch_size(10)
+        .set_write_page_header_statistics(true)
         .build();
 
     do_test(LayoutTest {
@@ -520,6 +527,7 @@ fn test_list() {
         .set_dictionary_enabled(false)
         .set_data_page_row_count_limit(20)
         .set_write_batch_size(3)
+        .set_write_page_header_statistics(true)
         .build();
 
     // Test rows not split across pages

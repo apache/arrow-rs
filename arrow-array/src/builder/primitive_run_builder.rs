@@ -17,7 +17,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::{types::RunEndIndexType, ArrayRef, ArrowPrimitiveType, RunArray};
+use crate::{ArrayRef, ArrowPrimitiveType, RunArray, types::RunEndIndexType};
 
 use super::{ArrayBuilder, PrimitiveBuilder};
 

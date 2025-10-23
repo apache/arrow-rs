@@ -16,7 +16,7 @@
 // under the License.
 #![allow(clippy::enum_clike_unportable_variant)]
 
-use crate::{make_array, Array, ArrayRef};
+use crate::{Array, ArrayRef, make_array};
 use arrow_buffer::bit_chunk_iterator::{BitChunkIterator, BitChunks};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{BooleanBuffer, MutableBuffer, ScalarBuffer};
@@ -137,11 +137,11 @@ impl UnionArray {
     ///
     /// # Safety
     ///
-    /// The `type_ids` values should be positive and must match one of the type ids of the fields provided in `fields`.
+    /// The `type_ids` values should be non-negative and must match one of the type ids of the fields provided in `fields`.
     /// These values are used to index into the `children` arrays.
     ///
     /// The `offsets` is provided in the case of a dense union, sparse unions should use `None`.
-    /// If provided the `offsets` values should be positive and must be less than the length of the
+    /// If provided the `offsets` values should be non-negative and must be less than the length of the
     /// corresponding array.
     ///
     /// In both cases above we use signed integer types to maintain compatibility with other
@@ -165,8 +165,8 @@ impl UnionArray {
             .len(len);
 
         let data = match offsets {
-            Some(offsets) => builder.add_buffer(offsets.into_inner()).build_unchecked(),
-            None => builder.build_unchecked(),
+            Some(offsets) => unsafe { builder.add_buffer(offsets.into_inner()).build_unchecked() },
+            None => unsafe { builder.build_unchecked() },
         };
         Self::from(data)
     }
@@ -219,7 +219,7 @@ impl UnionArray {
                 _ => {
                     return Err(ArrowError::InvalidArgumentError(
                         "Type Ids values must match one of the field type ids".to_owned(),
-                    ))
+                    ));
                 }
             }
         }
@@ -230,7 +230,7 @@ impl UnionArray {
             if iter.any(|(type_id, &offset)| offset < 0 || offset >= array_lens[*type_id as usize])
             {
                 return Err(ArrowError::InvalidArgumentError(
-                    "Offsets must be positive and within the length of the Array".to_owned(),
+                    "Offsets must be non-negative and within the length of the Array".to_owned(),
                 ));
             }
         }
@@ -287,6 +287,10 @@ impl UnionArray {
     }
 
     /// Returns the array's value at index `i`.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
@@ -308,7 +312,7 @@ impl UnionArray {
     }
 
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
-    fn is_dense(&self) -> bool {
+    pub fn is_dense(&self) -> bool {
         match self.data_type() {
             DataType::Union(_, mode) => mode == &UnionMode::Dense,
             _ => unreachable!("Union array's data type is not a union!"),
@@ -781,13 +785,18 @@ impl Array for UnionArray {
         };
 
         if fields.len() <= 1 {
-            return self
-                .fields
-                .iter()
-                .flatten()
-                .map(Array::logical_nulls)
-                .next()
-                .flatten();
+            return self.fields.iter().find_map(|field_opt| {
+                field_opt
+                    .as_ref()
+                    .and_then(|field| field.logical_nulls())
+                    .map(|logical_nulls| {
+                        if self.is_dense() {
+                            self.gather_nulls(vec![(0, logical_nulls)]).into()
+                        } else {
+                            logical_nulls
+                        }
+                    })
+            });
         }
 
         let logical_nulls = self.fields_logical_nulls();
@@ -940,7 +949,7 @@ impl std::fmt::Debug for UnionArray {
 
         if let Some(offsets) = &self.offsets {
             writeln!(f, "-- offsets buffer:")?;
-            writeln!(f, "{:?}", offsets)?;
+            writeln!(f, "{offsets:?}")?;
         }
 
         let fields = match self.data_type() {
@@ -1072,6 +1081,30 @@ mod tests {
             let value = slot.value(0);
             assert_eq!(expected_value, &value);
         }
+    }
+
+    #[test]
+    fn slice_union_array_single_field() {
+        // Dense Union
+        // [1, null, 3, null, 4]
+        let union_array = {
+            let mut builder = UnionBuilder::new_dense();
+            builder.append::<Int32Type>("a", 1).unwrap();
+            builder.append_null::<Int32Type>("a").unwrap();
+            builder.append::<Int32Type>("a", 3).unwrap();
+            builder.append_null::<Int32Type>("a").unwrap();
+            builder.append::<Int32Type>("a", 4).unwrap();
+            builder.build().unwrap()
+        };
+
+        // [null, 3, null]
+        let union_slice = union_array.slice(1, 3);
+        let logical_nulls = union_slice.logical_nulls().unwrap();
+
+        assert_eq!(logical_nulls.len(), 3);
+        assert!(logical_nulls.is_null(0));
+        assert!(logical_nulls.is_valid(1));
+        assert!(logical_nulls.is_null(2));
     }
 
     #[test]
@@ -1844,7 +1877,7 @@ mod tests {
 
         assert_eq!(
             err.to_string(),
-            "Invalid argument error: Offsets must be positive and within the length of the Array"
+            "Invalid argument error: Offsets must be non-negative and within the length of the Array"
         );
 
         let offsets = Some(vec![0, 1].into());

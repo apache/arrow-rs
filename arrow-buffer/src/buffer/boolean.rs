@@ -16,10 +16,10 @@
 // under the License.
 
 use crate::bit_chunk_iterator::BitChunks;
-use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::{
-    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not,
-    BooleanBufferBuilder, Buffer, MutableBuffer,
+    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
+    buffer_bin_xor, buffer_unary_not,
 };
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
@@ -104,7 +104,7 @@ impl BooleanBuffer {
     /// Returns a `BitChunks` instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
     #[inline]
-    pub fn bit_chunks(&self) -> BitChunks {
+    pub fn bit_chunks(&self) -> BitChunks<'_> {
         BitChunks::new(self.values(), self.offset, self.len)
     }
 
@@ -206,6 +206,11 @@ impl BooleanBuffer {
     /// Returns an iterator over the set bit positions in this [`BooleanBuffer`]
     pub fn set_indices(&self) -> BitIndexIterator<'_> {
         BitIndexIterator::new(self.values(), self.offset, self.len)
+    }
+
+    /// Returns a `u32` iterator over set bit positions without any usize->u32 conversion
+    pub fn set_indices_u32(&self) -> BitIndexU32Iterator<'_> {
+        BitIndexU32Iterator::new(self.values(), self.offset, self.len)
     }
 
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits

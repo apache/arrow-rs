@@ -18,8 +18,7 @@
 //! Contains all supported decoders for Parquet.
 
 use bytes::Bytes;
-use num::traits::WrappingAdd;
-use num::FromPrimitive;
+use num_traits::{FromPrimitive, WrappingAdd};
 use std::{cmp, marker::PhantomData, mem};
 
 use super::rle::RleDecoder;
@@ -454,7 +453,14 @@ impl<T: DataType> Decoder<T> for RleValueDecoder<T> {
 
         // We still need to remove prefix of i32 from the stream.
         const I32_SIZE: usize = mem::size_of::<i32>();
+        if data.len() < I32_SIZE {
+            return Err(eof_err!("Not enough bytes to decode"));
+        }
         let data_size = bit_util::read_num_bytes::<i32>(I32_SIZE, data.as_ref()) as usize;
+        if data.len() - I32_SIZE < data_size {
+            return Err(eof_err!("Not enough bytes to decode"));
+        }
+
         self.decoder = RleDecoder::new(1);
         self.decoder
             .set_data(data.slice(I32_SIZE..I32_SIZE + data_size));
@@ -1452,6 +1458,18 @@ mod tests {
     }
 
     #[test]
+    fn test_rle_value_decode_missing_size() {
+        let mut decoder = RleValueDecoder::<BoolType>::new();
+        assert!(decoder.set_data(Bytes::from(vec![0]), 1).is_err());
+    }
+
+    #[test]
+    fn test_rle_value_decode_missing_data() {
+        let mut decoder = RleValueDecoder::<BoolType>::new();
+        assert!(decoder.set_data(Bytes::from(vec![5, 0, 0, 0]), 1).is_err());
+    }
+
+    #[test]
     fn test_rle_value_decode_bool_decode() {
         // Test multiple 'put' calls on the same encoder
         let data = vec![
@@ -1812,10 +1830,10 @@ mod tests {
     fn test_byte_stream_split_flba(type_width: usize) {
         let data = vec![
             vec![
-                FixedLenByteArrayType::gen(type_width as i32),
-                FixedLenByteArrayType::gen(type_width as i32),
+                FixedLenByteArrayType::r#gen(type_width as i32),
+                FixedLenByteArrayType::r#gen(type_width as i32),
             ],
-            vec![FixedLenByteArrayType::gen(type_width as i32)],
+            vec![FixedLenByteArrayType::r#gen(type_width as i32)],
         ];
         test_byte_stream_split_decode::<FixedLenByteArrayType>(data, type_width as i32);
     }

@@ -15,19 +15,22 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Maximum and minimum values for [`Decimal256`] and [`Decimal128`].
+//! Maximum and minimum values for [`Decimal256`], [`Decimal128`], [`Decimal64`] and [`Decimal32`].
 //!
 //! Also provides functions to validate if a given decimal value is within
 //! the valid range of the decimal type.
 //!
+//! [`Decimal32`]: arrow_schema::DataType::Decimal32
+//! [`Decimal64`]: arrow_schema::DataType::Decimal64
 //! [`Decimal128`]: arrow_schema::DataType::Decimal128
 //! [`Decimal256`]: arrow_schema::DataType::Decimal256
 use arrow_buffer::i256;
 use arrow_schema::ArrowError;
 
 pub use arrow_schema::{
+    DECIMAL_DEFAULT_SCALE, DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE,
+    DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
     DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
-    DECIMAL_DEFAULT_SCALE,
 };
 
 /// `MAX_DECIMAL256_FOR_EACH_PRECISION[p]` holds the maximum [`i256`] value that can
@@ -899,26 +902,264 @@ pub const MIN_DECIMAL128_FOR_EACH_PRECISION: [i128; 39] = [
     -99999999999999999999999999999999999999,
 ];
 
+/// `MAX_DECIMAL64_FOR_EACH_PRECISION[p]` holds the maximum `i64` value that can
+/// be stored in [`Decimal64`] value of precision `p`.
+///
+/// # Notes
+///
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+///
+/// # Example
+/// ```
+/// # use arrow_data::decimal::MAX_DECIMAL64_FOR_EACH_PRECISION;
+/// assert_eq!(MAX_DECIMAL64_FOR_EACH_PRECISION[3], 999);
+/// ```
+///
+/// [`Decimal64`]: arrow_schema::DataType::Decimal64
+pub const MAX_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
+    0, // unused first element
+    9,
+    99,
+    999,
+    9999,
+    99999,
+    999999,
+    9999999,
+    99999999,
+    999999999,
+    9999999999,
+    99999999999,
+    999999999999,
+    9999999999999,
+    99999999999999,
+    999999999999999,
+    9999999999999999,
+    99999999999999999,
+    999999999999999999,
+];
+
+/// `MIN_DECIMAL64_FOR_EACH_PRECISION[p]` holds the minimum `i64` value that can
+/// be stored in a [`Decimal64`] value of precision `p`.
+///
+/// # Notes
+///
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+///
+/// # Example
+/// ```
+/// # use arrow_data::decimal::MIN_DECIMAL64_FOR_EACH_PRECISION;
+/// assert_eq!(MIN_DECIMAL64_FOR_EACH_PRECISION[3], -999);
+/// ```
+///
+/// [`Decimal64`]: arrow_schema::DataType::Decimal64
+pub const MIN_DECIMAL64_FOR_EACH_PRECISION: [i64; 19] = [
+    0, // unused first element
+    -9,
+    -99,
+    -999,
+    -9999,
+    -99999,
+    -999999,
+    -9999999,
+    -99999999,
+    -999999999,
+    -9999999999,
+    -99999999999,
+    -999999999999,
+    -9999999999999,
+    -99999999999999,
+    -999999999999999,
+    -9999999999999999,
+    -99999999999999999,
+    -999999999999999999,
+];
+
+/// `MAX_DECIMAL32_FOR_EACH_PRECISION[p]` holds the maximum `i32` value that can
+/// be stored in [`Decimal32`] value of precision `p`.
+///
+/// # Notes
+///
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+///
+/// # Example
+/// ```
+/// # use arrow_data::decimal::MAX_DECIMAL32_FOR_EACH_PRECISION;
+/// assert_eq!(MAX_DECIMAL32_FOR_EACH_PRECISION[3], 999);
+/// ```
+///
+/// [`Decimal32`]: arrow_schema::DataType::Decimal32
+pub const MAX_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
+    0, // unused first element
+    9, 99, 999, 9999, 99999, 999999, 9999999, 99999999, 999999999,
+];
+
+/// `MIN_DECIMAL32_FOR_EACH_PRECISION[p]` holds the minimum `ialue that can
+/// be stored in a [`Decimal32`] value of precision `p`.
+///
+/// # Notes
+///
+/// The first element is unused and is inserted so that we can look up using
+/// precision as the index without the need to subtract 1 first.
+///
+/// # Example
+/// ```
+/// # use arrow_data::decimal::MIN_DECIMAL32_FOR_EACH_PRECISION;
+/// assert_eq!(MIN_DECIMAL32_FOR_EACH_PRECISION[3], -999);
+/// ```
+///
+/// [`Decimal32`]: arrow_schema::DataType::Decimal32
+pub const MIN_DECIMAL32_FOR_EACH_PRECISION: [i32; 10] = [
+    0, // unused first element
+    -9, -99, -999, -9999, -99999, -999999, -9999999, -99999999, -999999999,
+];
+
+/// Validates that the specified `i32` value can be properly
+/// interpreted as a [`Decimal32`] number with precision `precision`
+///
+/// [`Decimal32`]: arrow_schema::DataType::Decimal32
+#[inline]
+pub fn validate_decimal32_precision(
+    value: i32,
+    precision: u8,
+    scale: i8,
+) -> Result<(), ArrowError> {
+    if precision > DECIMAL32_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decimal32 is {DECIMAL32_MAX_PRECISION}, but got {precision}",
+        )));
+    }
+    if value > MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscale_max_value = format_decimal_str(
+            &MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{unscaled_value} is too large to store in a Decimal32 of precision {precision}. Max is {}",
+            unscale_max_value
+        )))
+    } else if value < MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscale_min_value = format_decimal_str(
+            &MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{unscaled_value} is too small to store in a Decimal32 of precision {precision}. Min is {}",
+            unscale_min_value
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Returns true if the specified `i32` value can be properly
+/// interpreted as a [`Decimal32`] number with precision `precision`
+///
+/// [`Decimal32`]: arrow_schema::DataType::Decimal32
+#[inline]
+pub fn is_validate_decimal32_precision(value: i32, precision: u8) -> bool {
+    precision <= DECIMAL32_MAX_PRECISION
+        && value >= MIN_DECIMAL32_FOR_EACH_PRECISION[precision as usize]
+        && value <= MAX_DECIMAL32_FOR_EACH_PRECISION[precision as usize]
+}
+
+/// Validates that the specified `i64` value can be properly
+/// interpreted as a [`Decimal64`] number with precision `precision`
+///
+/// [`Decimal64`]: arrow_schema::DataType::Decimal64
+#[inline]
+pub fn validate_decimal64_precision(
+    value: i64,
+    precision: u8,
+    scale: i8,
+) -> Result<(), ArrowError> {
+    if precision > DECIMAL64_MAX_PRECISION {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Max precision of a Decimal64 is {DECIMAL64_MAX_PRECISION}, but got {precision}",
+        )));
+    }
+    if value > MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_max_value = format_decimal_str(
+            &MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{unscaled_value} is too large to store in a Decimal64 of precision {precision}. Max is {}",
+            unscaled_max_value
+        )))
+    } else if value < MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_min_value = format_decimal_str(
+            &MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
+        Err(ArrowError::InvalidArgumentError(format!(
+            "{unscaled_value} is too small to store in a Decimal64 of precision {precision}. Min is {}",
+            unscaled_min_value
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Returns true if the specified `i64` value can be properly
+/// interpreted as a [`Decimal64`] number with precision `precision`
+///
+/// [`Decimal64`]: arrow_schema::DataType::Decimal64
+#[inline]
+pub fn is_validate_decimal64_precision(value: i64, precision: u8) -> bool {
+    precision <= DECIMAL64_MAX_PRECISION
+        && value >= MIN_DECIMAL64_FOR_EACH_PRECISION[precision as usize]
+        && value <= MAX_DECIMAL64_FOR_EACH_PRECISION[precision as usize]
+}
+
 /// Validates that the specified `i128` value can be properly
 /// interpreted as a [`Decimal128`] number with precision `precision`
 ///
 /// [`Decimal128`]: arrow_schema::DataType::Decimal128
 #[inline]
-pub fn validate_decimal_precision(value: i128, precision: u8) -> Result<(), ArrowError> {
+pub fn validate_decimal_precision(value: i128, precision: u8, scale: i8) -> Result<(), ArrowError> {
     if precision > DECIMAL128_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Max precision of a Decimal128 is {DECIMAL128_MAX_PRECISION}, but got {precision}",
         )));
     }
     if value > MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_max_value = format_decimal_str(
+            &MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value} is too large to store in a Decimal128 of precision {precision}. Max is {}",
-            MAX_DECIMAL128_FOR_EACH_PRECISION[precision as usize]
+            "{unscaled_value} is too large to store in a Decimal128 of precision {precision}. Max is {}",
+            unscaled_max_value
         )))
     } else if value < MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_min_value = format_decimal_str(
+            &MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value} is too small to store in a Decimal128 of precision {precision}. Min is {}",
-            MIN_DECIMAL128_FOR_EACH_PRECISION[precision as usize]
+            "{unscaled_value} is too small to store in a Decimal128 of precision {precision}. Min is {}",
+            unscaled_min_value
         )))
     } else {
         Ok(())
@@ -941,21 +1182,40 @@ pub fn is_validate_decimal_precision(value: i128, precision: u8) -> bool {
 ///
 /// [`Decimal256`]: arrow_schema::DataType::Decimal256
 #[inline]
-pub fn validate_decimal256_precision(value: i256, precision: u8) -> Result<(), ArrowError> {
+pub fn validate_decimal256_precision(
+    value: i256,
+    precision: u8,
+    scale: i8,
+) -> Result<(), ArrowError> {
     if precision > DECIMAL256_MAX_PRECISION {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Max precision of a Decimal256 is {DECIMAL256_MAX_PRECISION}, but got {precision}",
         )));
     }
+
     if value > MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_max_value = format_decimal_str(
+            &MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value:?} is too large to store in a Decimal256 of precision {precision}. Max is {:?}",
-            MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize]
+            "{unscaled_value} is too large to store in a Decimal256 of precision {precision}. Max is {}",
+            unscaled_max_value
         )))
     } else if value < MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize] {
+        let unscaled_value =
+            format_decimal_str_internal(&value.to_string(), precision.into(), scale, false);
+        let unscaled_min_value = format_decimal_str(
+            &MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize].to_string(),
+            precision.into(),
+            scale,
+        );
         Err(ArrowError::InvalidArgumentError(format!(
-            "{value:?} is too small to store in a Decimal256 of precision {precision}. Min is {:?}",
-            MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize]
+            "{unscaled_value} is too small to store in a Decimal256 of precision {precision}. Min is {}",
+            unscaled_min_value
         )))
     } else {
         Ok(())
@@ -971,4 +1231,45 @@ pub fn is_validate_decimal256_precision(value: i256, precision: u8) -> bool {
     precision <= DECIMAL256_MAX_PRECISION
         && value >= MIN_DECIMAL256_FOR_EACH_PRECISION[precision as usize]
         && value <= MAX_DECIMAL256_FOR_EACH_PRECISION[precision as usize]
+}
+
+#[inline]
+/// Formats a decimal string given the precision and scale.
+pub fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
+    format_decimal_str_internal(value_str, precision, scale, true)
+}
+
+// Format a decimal string given the precision and scale.
+// If `safe_decimal` is true, the function will ensure that the output string
+// does not exceed the specified precision.
+fn format_decimal_str_internal(
+    value_str: &str,
+    precision: usize,
+    scale: i8,
+    safe_decimal: bool,
+) -> String {
+    let (sign, rest) = match value_str.strip_prefix('-') {
+        Some(stripped) => ("-", stripped),
+        None => ("", value_str),
+    };
+    let bound = if safe_decimal {
+        precision.min(rest.len()) + sign.len()
+    } else {
+        value_str.len()
+    };
+    let value_str = &value_str[0..bound];
+
+    if scale == 0 {
+        value_str.to_string()
+    } else if scale < 0 {
+        let padding = value_str.len() + scale.unsigned_abs() as usize;
+        format!("{value_str:0<padding$}")
+    } else if rest.len() > scale as usize {
+        // Decimal separator is in the middle of the string
+        let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
+        format!("{whole}.{decimal}")
+    } else {
+        // String has to be padded
+        format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
+    }
 }

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::view_buffer::ViewBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
@@ -28,7 +28,7 @@ use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::utf8::check_valid_utf8;
-use arrow_array::{builder::make_view, ArrayRef};
+use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
 use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
@@ -248,7 +248,7 @@ impl ByteViewArrayDecoder {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
                     encoding
-                ))
+                ));
             }
         };
 
@@ -329,7 +329,7 @@ impl ByteViewArrayDecoderPlain {
 
         let to_read = len.min(self.max_remaining_values);
 
-        let buf = self.buf.as_ref();
+        let buf: &[u8] = self.buf.as_ref();
         let mut read = 0;
         output.views.reserve(to_read);
 
@@ -405,7 +405,7 @@ impl ByteViewArrayDecoderPlain {
     pub fn skip(&mut self, to_skip: usize) -> Result<usize> {
         let to_skip = to_skip.min(self.max_remaining_values);
         let mut skip = 0;
-        let buf = self.buf.as_ref();
+        let buf: &[u8] = self.buf.as_ref();
 
         while self.offset < self.buf.len() && skip != to_skip {
             if self.offset + 4 > buf.len() {

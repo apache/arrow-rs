@@ -19,17 +19,89 @@ use crate::cast::*;
 
 /// A utility trait that provides checked conversions between
 /// decimal types inspired by [`NumCast`]
-pub(crate) trait DecimalCast: Sized {
+pub trait DecimalCast: Sized {
+    /// Convert the decimal to an i32
+    fn to_i32(self) -> Option<i32>;
+
+    /// Convert the decimal to an i64
+    fn to_i64(self) -> Option<i64>;
+
+    /// Convert the decimal to an i128
     fn to_i128(self) -> Option<i128>;
 
+    /// Convert the decimal to an i256
     fn to_i256(self) -> Option<i256>;
 
+    /// Convert a decimal from a decimal
     fn from_decimal<T: DecimalCast>(n: T) -> Option<Self>;
 
+    /// Convert a decimal from a f64
     fn from_f64(n: f64) -> Option<Self>;
 }
 
+impl DecimalCast for i32 {
+    fn to_i32(self) -> Option<i32> {
+        Some(self)
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self as i64)
+    }
+
+    fn to_i128(self) -> Option<i128> {
+        Some(self as i128)
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(i256::from_i128(self as i128))
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i32()
+    }
+
+    fn from_f64(n: f64) -> Option<Self> {
+        n.to_i32()
+    }
+}
+
+impl DecimalCast for i64 {
+    fn to_i32(self) -> Option<i32> {
+        i32::try_from(self).ok()
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        Some(self)
+    }
+
+    fn to_i128(self) -> Option<i128> {
+        Some(self as i128)
+    }
+
+    fn to_i256(self) -> Option<i256> {
+        Some(i256::from_i128(self as i128))
+    }
+
+    fn from_decimal<T: DecimalCast>(n: T) -> Option<Self> {
+        n.to_i64()
+    }
+
+    fn from_f64(n: f64) -> Option<Self> {
+        // Call implementation explicitly otherwise this resolves to `to_i64`
+        // in arrow-buffer that behaves differently.
+        num_traits::ToPrimitive::to_i64(&n)
+    }
+}
+
 impl DecimalCast for i128 {
+    fn to_i32(self) -> Option<i32> {
+        i32::try_from(self).ok()
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        i64::try_from(self).ok()
+    }
+
     fn to_i128(self) -> Option<i128> {
         Some(self)
     }
@@ -48,6 +120,14 @@ impl DecimalCast for i128 {
 }
 
 impl DecimalCast for i256 {
+    fn to_i32(self) -> Option<i32> {
+        self.to_i128().map(|x| i32::try_from(x).ok())?
+    }
+
+    fn to_i64(self) -> Option<i64> {
+        self.to_i128().map(|x| i64::try_from(x).ok())?
+    }
+
     fn to_i128(self) -> Option<i128> {
         self.to_i128()
     }
@@ -114,11 +194,19 @@ where
     // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
     let is_infallible_cast = (input_precision as i8) - delta_scale < (output_precision as i8);
 
-    let div = I::Native::from_decimal(10_i128)
-        .unwrap()
-        .pow_checked(delta_scale as u32)?;
+    // delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION. If so, the
+    // scale change divides out more digits than the input has precision and the result of the cast
+    // is always zero. For example, if we try to apply delta_scale=10 a decimal32 value, the largest
+    // possible result is 999999999/10000000000 = 0.0999999999, which rounds to zero. Smaller values
+    // (e.g. 1/10000000000) or larger delta_scale (e.g. 999999999/10000000000000) produce even
+    // smaller results, which also round to zero. In that case, just return an array of zeros.
+    let Some(max) = I::MAX_FOR_EACH_PRECISION.get(delta_scale as usize) else {
+        let zeros = vec![O::Native::ZERO; array.len()];
+        return Ok(PrimitiveArray::new(zeros.into(), array.nulls().cloned()));
+    };
 
-    let half = div.div_wrapping(I::Native::from_usize(2).unwrap());
+    let div = max.add_wrapping(I::Native::ONE);
+    let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
     let half_neg = half.neg_wrapping();
 
     let f = |x: I::Native| {
@@ -139,14 +227,15 @@ where
         // make sure we don't perform calculations that don't make sense w/o validation
         validate_decimal_precision_and_scale::<O>(output_precision, output_scale)?;
         let g = |x: I::Native| f(x).unwrap(); // unwrapping is safe since the result is guaranteed
-                                              // to fit into the target type
+        // to fit into the target type
         array.unary(g)
     } else if cast_options.safe {
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
         array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x))
-                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+            f(x).ok_or_else(|| error(x)).and_then(|v| {
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+            })
         })?
     })
 }
@@ -190,8 +279,9 @@ where
         array.unary_opt(|x| f(x).filter(|v| O::is_valid_decimal_precision(*v, output_precision)))
     } else {
         array.try_unary(|x| {
-            f(x).ok_or_else(|| error(x))
-                .and_then(|v| O::validate_decimal_precision(v, output_precision).map(|_| v))
+            f(x).ok_or_else(|| error(x)).and_then(|v| {
+                O::validate_decimal_precision(v, output_precision, output_scale).map(|_| v)
+            })
         })?
     })
 }
@@ -412,12 +502,11 @@ where
                     parse_string_to_decimal_native::<T>(v, scale as usize)
                         .map_err(|_| {
                             ArrowError::CastError(format!(
-                                "Cannot cast string '{}' to value of {:?} type",
-                                v,
+                                "Cannot cast string '{v}' to value of {} type",
                                 T::DATA_TYPE,
                             ))
                         })
-                        .and_then(|v| T::validate_decimal_precision(v, precision).map(|_| v))
+                        .and_then(|v| T::validate_decimal_precision(v, precision, scale).map(|_| v))
                 })
                 .transpose()
             })
@@ -505,9 +594,8 @@ where
         )?,
         other => {
             return Err(ArrowError::ComputeError(format!(
-                "Cannot cast {:?} to decimal",
-                other
-            )))
+                "Cannot cast {other:?} to decimal",
+            )));
         }
     };
 
@@ -548,7 +636,7 @@ where
                             v
                         ))
                     })
-                    .and_then(|v| D::validate_decimal_precision(v, precision).map(|_| v))
+                    .and_then(|v| D::validate_decimal_precision(v, precision, scale).map(|_| v))
             })?
             .with_precision_and_scale(precision, scale)
             .map(|a| Arc::new(a) as ArrayRef)
@@ -615,7 +703,11 @@ where
     Ok(Arc::new(value_builder.finish()))
 }
 
-// Cast the decimal array to floating-point array
+/// Cast a decimal array to a floating point array.
+///
+/// Conversion is lossy and follows standard floating point semantics. Values
+/// that exceed the representable range become `INFINITY` or `-INFINITY` without
+/// returning an error.
 pub(crate) fn cast_decimal_to_float<D: DecimalType, T: ArrowPrimitiveType, F>(
     array: &dyn Array,
     op: F,

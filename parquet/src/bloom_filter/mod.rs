@@ -72,20 +72,18 @@
 //! [sbbf-paper]: https://arxiv.org/pdf/2101.01719
 //! [bf-formulae]: http://tfk.mit.edu/pdf/bloom.pdf
 
+use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::data_type::AsBytes;
-use crate::errors::ParquetError;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::ColumnChunkMetaData;
 use crate::file::reader::ChunkReader;
-use crate::format::{
-    BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, BloomFilterHeader,
-    SplitBlockAlgorithm, Uncompressed, XxHash,
+use crate::parquet_thrift::{
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
 };
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use crate::thrift_struct;
 use bytes::Bytes;
-use std::hash::Hasher;
 use std::io::Write;
-use std::sync::Arc;
-use thrift::protocol::{TCompactOutputProtocol, TOutputProtocol};
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
@@ -100,9 +98,26 @@ const SALT: [u32; 8] = [
     0x5c6bfb31_u32,
 ];
 
+thrift_struct!(
+/// Bloom filter header is stored at beginning of Bloom filter data of each column
+/// and followed by its bitset.
+///
+pub struct BloomFilterHeader {
+  /// The size of bitset in bytes
+  1: required i32 num_bytes;
+  /// The algorithm for setting bits.
+  2: required BloomFilterAlgorithm algorithm;
+  /// The hash function used for Bloom filter
+  3: required BloomFilterHash hash;
+  /// The compression used in the Bloom filter
+  4: required BloomFilterCompression compression;
+}
+);
+
 /// Each block is 256 bits, broken up into eight contiguous "words", each consisting of 32 bits.
 /// Each word is thought of as an array of bits; each bit is either "set" or "not set".
 #[derive(Debug, Copy, Clone)]
+#[repr(transparent)]
 struct Block([u32; 8]);
 impl Block {
     const ZERO: Block = Block([0; 8]);
@@ -121,21 +136,16 @@ impl Block {
     }
 
     #[inline]
-    #[cfg(target_endian = "little")]
-    fn to_le_bytes(self) -> [u8; 32] {
-        self.to_ne_bytes()
+    #[cfg(not(target_endian = "little"))]
+    fn to_ne_bytes(self) -> [u8; 32] {
+        // SAFETY: [u32; 8] and [u8; 32] have the same size and neither has invalid bit patterns.
+        unsafe { std::mem::transmute(self.0) }
     }
 
     #[inline]
     #[cfg(not(target_endian = "little"))]
     fn to_le_bytes(self) -> [u8; 32] {
         self.swap_bytes().to_ne_bytes()
-    }
-
-    #[inline]
-    fn to_ne_bytes(self) -> [u8; 32] {
-        // SAFETY: [u32; 8] and [u8; 32] have the same size and neither has invalid bit patterns.
-        unsafe { std::mem::transmute(self.0) }
     }
 
     #[inline]
@@ -207,8 +217,8 @@ pub(crate) fn read_bloom_filter_header_and_length(
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
-    let mut prot = TCompactSliceInputProtocol::new(buffer.as_ref());
-    let header = BloomFilterHeader::read_from_in_protocol(&mut prot)
+    let mut prot = ThriftSliceInputProtocol::new(buffer.as_ref());
+    let header = BloomFilterHeader::read_thrift(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
 }
@@ -250,8 +260,10 @@ impl Sbbf {
     /// to the next power of two bounded by [BITSET_MIN_LENGTH] and [BITSET_MAX_LENGTH].
     pub(crate) fn new_with_num_of_bytes(num_bytes: usize) -> Self {
         let num_bytes = optimal_num_of_bytes(num_bytes);
-        let bitset = vec![0_u8; num_bytes];
-        Self::new(&bitset)
+        assert_eq!(num_bytes % size_of::<Block>(), 0);
+        let num_blocks = num_bytes / size_of::<Block>();
+        let bitset = vec![Block::ZERO; num_blocks];
+        Self(bitset)
     }
 
     pub(crate) fn new(bitset: &[u8]) -> Self {
@@ -272,17 +284,16 @@ impl Sbbf {
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
     pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
-        let mut protocol = TCompactOutputProtocol::new(&mut writer);
-        let header = self.header();
-        header.write_to_out_protocol(&mut protocol).map_err(|e| {
+        let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
+        self.header().write_thrift(&mut protocol).map_err(|e| {
             ParquetError::General(format!("Could not write bloom filter header: {e}"))
         })?;
-        protocol.flush()?;
         self.write_bitset(&mut writer)?;
         Ok(())
     }
 
     /// Write the bitset in serialized form to the writer.
+    #[cfg(not(target_endian = "little"))]
     fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         for block in &self.0 {
             writer
@@ -294,21 +305,37 @@ impl Sbbf {
         Ok(())
     }
 
+    /// Write the bitset in serialized form to the writer.
+    #[cfg(target_endian = "little")]
+    fn write_bitset<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+        // Safety: Block is repr(transparent) and [u32; 8] can be reinterpreted as [u8; 32].
+        let slice = unsafe {
+            std::slice::from_raw_parts(
+                self.0.as_ptr() as *const u8,
+                self.0.len() * size_of::<Block>(),
+            )
+        };
+        writer.write_all(slice).map_err(|e| {
+            ParquetError::General(format!("Could not write bloom filter bit set: {e}"))
+        })?;
+        Ok(())
+    }
+
     /// Create and populate [`BloomFilterHeader`] from this bitset for writing to serialized form
     fn header(&self) -> BloomFilterHeader {
         BloomFilterHeader {
             // 8 i32 per block, 4 bytes per i32
             num_bytes: self.0.len() as i32 * 4 * 8,
-            algorithm: BloomFilterAlgorithm::BLOCK(SplitBlockAlgorithm {}),
-            hash: BloomFilterHash::XXHASH(XxHash {}),
-            compression: BloomFilterCompression::UNCOMPRESSED(Uncompressed {}),
+            algorithm: BloomFilterAlgorithm::BLOCK,
+            hash: BloomFilterHash::XXHASH,
+            compression: BloomFilterCompression::UNCOMPRESSED,
         }
     }
 
     /// Read a new bloom filter from the given offset in the given reader.
     pub(crate) fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
-        reader: Arc<R>,
+        reader: &R,
     ) -> Result<Option<Self>, ParquetError> {
         let offset: u64 = if let Some(offset) = column_metadata.bloom_filter_offset() {
             offset
@@ -327,17 +354,17 @@ impl Sbbf {
             chunk_read_bloom_filter_header_and_offset(offset, buffer.clone())?;
 
         match header.algorithm {
-            BloomFilterAlgorithm::BLOCK(_) => {
+            BloomFilterAlgorithm::BLOCK => {
                 // this match exists to future proof the singleton algorithm enum
             }
         }
         match header.compression {
-            BloomFilterCompression::UNCOMPRESSED(_) => {
+            BloomFilterCompression::UNCOMPRESSED => {
                 // this match exists to future proof the singleton compression enum
             }
         }
         match header.hash {
-            BloomFilterHash::XXHASH(_) => {
+            BloomFilterHash::XXHASH => {
                 // this match exists to future proof the singleton hash enum
             }
         }
@@ -397,9 +424,7 @@ const SEED: u64 = 0;
 
 #[inline]
 fn hash_as_bytes<A: AsBytes + ?Sized>(value: &A) -> u64 {
-    let mut hasher = XxHash64::with_seed(SEED);
-    hasher.write(value.as_bytes());
-    hasher.finish()
+    XxHash64::oneshot(SEED, value.as_bytes())
 }
 
 #[cfg(test)]
@@ -467,15 +492,9 @@ mod tests {
             read_length,
         ) = read_bloom_filter_header_and_length(Bytes::copy_from_slice(buffer)).unwrap();
         assert_eq!(read_length, 15);
-        assert_eq!(
-            algorithm,
-            BloomFilterAlgorithm::BLOCK(SplitBlockAlgorithm {})
-        );
-        assert_eq!(
-            compression,
-            BloomFilterCompression::UNCOMPRESSED(Uncompressed {})
-        );
-        assert_eq!(hash, BloomFilterHash::XXHASH(XxHash {}));
+        assert_eq!(algorithm, BloomFilterAlgorithm::BLOCK);
+        assert_eq!(compression, BloomFilterCompression::UNCOMPRESSED);
+        assert_eq!(hash, BloomFilterHash::XXHASH);
         assert_eq!(num_bytes, 32_i32);
         assert_eq!(20, SBBF_HEADER_SIZE_ESTIMATE);
     }

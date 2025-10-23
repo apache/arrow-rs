@@ -67,7 +67,7 @@
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(rustdoc::broken_intra_doc_links)]
 #![warn(missing_docs)]
 
@@ -75,7 +75,10 @@ pub mod reader;
 pub mod writer;
 
 pub use self::reader::{Reader, ReaderBuilder};
-pub use self::writer::{ArrayWriter, LineDelimitedWriter, Writer, WriterBuilder};
+pub use self::writer::{
+    ArrayWriter, Encoder, EncoderFactory, EncoderOptions, LineDelimitedWriter, Writer,
+    WriterBuilder,
+};
 use half::f16;
 use serde_json::{Number, Value};
 
@@ -84,7 +87,7 @@ use serde_json::{Number, Value};
 ///
 /// This enum controls which form(s) the Reader will accept and which form the
 /// Writer will produce. For example, if the RecordBatch Schema is
-/// `[("a", Int32), ("r", Struct([("b", Boolean), ("c", Utf8)]))]`
+/// `[("a", Int32), ("r", Struct("b": Boolean, "c" Utf8))]`
 /// then a Reader with [`StructMode::ObjectOnly`] would read rows of the form
 /// `{"a": 1, "r": {"b": true, "c": "cat"}}` while with ['StructMode::ListOnly']
 /// would read rows of the form `[1, [true, "cat"]]`. A Writer would produce

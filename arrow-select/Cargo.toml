@@ -40,8 +40,8 @@ arrow-buffer = { workspace = true }
 arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
-num = { version = "0.4", default-features = false, features = ["std"] }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 ahash = { version = "0.8", default-features = false}
 
 [dev-dependencies]
-rand = { version = "0.8", default-features = false, features = ["std", "std_rng"] }
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }

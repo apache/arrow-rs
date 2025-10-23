@@ -64,9 +64,12 @@ The `parquet` crate provides the following features which may be enabled in your
 - `experimental` - Experimental APIs which may change, even between minor releases
 - `simdutf8` (default) - Use the [`simdutf8`] crate for SIMD-accelerated UTF-8 validation
 - `encryption` - support for reading / writing encrypted Parquet files
+- `variant_experimental` - ⚠️ Experimental [Parquet Variant] support, which may change, even between minor releases.
+- `geospatial` - ⚠️ Experimental geospatial support, which may change, even between minor releases.
 
 [`arrow`]: https://crates.io/crates/arrow
 [`simdutf8`]: https://crates.io/crates/simdutf8
+[parquet variant]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 
 ## Parquet Feature Status
 
@@ -84,7 +87,7 @@ The `parquet` crate provides the following features which may be enabled in your
   - [ ] Row record writer
   - [x] Arrow record writer
   - [x] Async support
-  - [ ] Encrypted files
+  - [x] Encrypted files
 - [x] Predicate pushdown
 - [x] Parquet format 4.0.0 support
 

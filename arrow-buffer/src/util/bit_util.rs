@@ -20,7 +20,8 @@
 /// Returns the nearest number that is `>=` than `num` and is a multiple of 64
 #[inline]
 pub fn round_upto_multiple_of_64(num: usize) -> usize {
-    round_upto_power_of_2(num, 64)
+    num.checked_next_multiple_of(64)
+        .expect("failed to round upto multiple of 64")
 }
 
 /// Returns the nearest multiple of `factor` that is `>=` than `num`. Here `factor` must
@@ -46,7 +47,7 @@ pub fn get_bit(data: &[u8], i: usize) -> bool {
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
 pub unsafe fn get_bit_raw(data: *const u8, i: usize) -> bool {
-    (*data.add(i / 8) & (1 << (i % 8))) != 0
+    unsafe { (*data.add(i / 8) & (1 << (i % 8))) != 0 }
 }
 
 /// Sets bit at position `i` for `data` to 1
@@ -63,7 +64,9 @@ pub fn set_bit(data: &mut [u8], i: usize) {
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
 pub unsafe fn set_bit_raw(data: *mut u8, i: usize) {
-    *data.add(i / 8) |= 1 << (i % 8);
+    unsafe {
+        *data.add(i / 8) |= 1 << (i % 8);
+    }
 }
 
 /// Sets bit at position `i` for `data` to 0
@@ -80,15 +83,15 @@ pub fn unset_bit(data: &mut [u8], i: usize) {
 /// responsible to guarantee that `i` is within bounds.
 #[inline]
 pub unsafe fn unset_bit_raw(data: *mut u8, i: usize) {
-    *data.add(i / 8) &= !(1 << (i % 8));
+    unsafe {
+        *data.add(i / 8) &= !(1 << (i % 8));
+    }
 }
 
 /// Returns the ceil of `value`/`divisor`
 #[inline]
 pub fn ceil(value: usize, divisor: usize) -> usize {
-    // Rewrite as `value.div_ceil(&divisor)` after
-    // https://github.com/rust-lang/rust/issues/88581 is merged.
-    value / divisor + (0 != value % divisor) as usize
+    value.div_ceil(divisor)
 }
 
 #[cfg(test)]
@@ -107,6 +110,12 @@ mod tests {
         assert_eq!(64, round_upto_multiple_of_64(64));
         assert_eq!(128, round_upto_multiple_of_64(65));
         assert_eq!(192, round_upto_multiple_of_64(129));
+    }
+
+    #[test]
+    #[should_panic(expected = "failed to round upto multiple of 64")]
+    fn test_round_upto_multiple_of_64_panic() {
+        let _ = round_upto_multiple_of_64(usize::MAX);
     }
 
     #[test]
@@ -153,7 +162,7 @@ mod tests {
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {
-            let b = rng.gen_bool(0.5);
+            let b = rng.random_bool(0.5);
             expected.push(b);
             if b {
                 set_bit(&mut buf[..], i)
@@ -197,7 +206,7 @@ mod tests {
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {
-            let b = rng.gen_bool(0.5);
+            let b = rng.random_bool(0.5);
             expected.push(b);
             if b {
                 unsafe {
@@ -221,7 +230,7 @@ mod tests {
         let mut expected = vec![];
         let mut rng = seedable_rng();
         for i in 0..8 * NUM_BYTE {
-            let b = rng.gen_bool(0.5);
+            let b = rng.random_bool(0.5);
             expected.push(b);
             if !b {
                 unsafe {
@@ -247,7 +256,7 @@ mod tests {
         let mut v = HashSet::new();
         let mut rng = seedable_rng();
         for _ in 0..NUM_SETS {
-            let offset = rng.gen_range(0..8 * NUM_BYTES);
+            let offset = rng.random_range(0..8 * NUM_BYTES);
             v.insert(offset);
             set_bit(&mut buffer[..], offset);
         }

@@ -252,7 +252,9 @@ where
                     let (values_read, levels_read) = reader.read_def_levels(out, levels_to_read)?;
 
                     if levels_read != levels_to_read {
-                        return Err(general_err!("insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"));
+                        return Err(general_err!(
+                            "insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"
+                        ));
                     }
 
                     values_read
@@ -488,7 +490,11 @@ where
                             statistics: _,
                         } => {
                             if num_nulls > num_values {
-                                return Err(general_err!("more nulls than values in page, contained {} values and {} nulls", num_values, num_nulls));
+                                return Err(general_err!(
+                                    "more nulls than values in page, contained {} values and {} nulls",
+                                    num_values,
+                                    num_nulls
+                                ));
                             }
 
                             self.num_buffered_values = num_values as _;
@@ -583,7 +589,7 @@ fn parse_v1_level(
 mod tests {
     use super::*;
 
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::{collections::VecDeque, sync::Arc};
 
     use crate::basic::Type as PhysicalType;

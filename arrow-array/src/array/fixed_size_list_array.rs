@@ -18,9 +18,9 @@
 use crate::array::print_long_array;
 use crate::builder::{FixedSizeListBuilder, PrimitiveBuilder};
 use crate::iterator::FixedSizeListIter;
-use crate::{make_array, Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType};
-use arrow_buffer::buffer::NullBuffer;
+use crate::{Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, make_array};
 use arrow_buffer::ArrowNativeType;
+use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use std::any::Any;
@@ -149,7 +149,7 @@ impl FixedSizeListArray {
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
         let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {}", size))
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
         let len = match s {
@@ -243,6 +243,12 @@ impl FixedSizeListArray {
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
         self.values
             .slice(self.value_offset_at(i), self.value_length() as usize)
@@ -343,8 +349,10 @@ impl From<ArrayData> for FixedSizeListArray {
     fn from(data: ArrayData) -> Self {
         let value_length = match data.data_type() {
             DataType::FixedSizeList(_, len) => *len,
-            _ => {
-                panic!("FixedSizeListArray data should contain a FixedSizeList data type")
+            data_type => {
+                panic!(
+                    "FixedSizeListArray data should contain a FixedSizeList data type, got {data_type}"
+                )
             }
         };
 
@@ -474,12 +482,12 @@ impl ArrayAccessor for &FixedSizeListArray {
 
 #[cfg(test)]
 mod tests {
-    use arrow_buffer::{bit_util, BooleanBuffer, Buffer};
+    use arrow_buffer::{BooleanBuffer, Buffer, bit_util};
     use arrow_schema::Field;
 
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::{new_empty_array, Int32Array};
+    use crate::{Int32Array, new_empty_array};
 
     use super::*;
 
@@ -679,11 +687,17 @@ mod tests {
 
         let nulls = NullBuffer::new_null(2);
         let err = FixedSizeListArray::try_new(field, 2, values.clone(), Some(nulls)).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeListArray, expected 3 got 2");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for FixedSizeListArray, expected 3 got 2"
+        );
 
         let field = Arc::new(Field::new_list_field(DataType::Int32, false));
         let err = FixedSizeListArray::try_new(field.clone(), 2, values.clone(), None).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Found unmasked nulls for non-nullable FixedSizeListArray field \"item\"");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Found unmasked nulls for non-nullable FixedSizeListArray field \"item\""
+        );
 
         // Valid as nulls in child masked by parent
         let nulls = NullBuffer::new(BooleanBuffer::new(Buffer::from([0b0000101]), 0, 3));
@@ -691,7 +705,10 @@ mod tests {
 
         let field = Arc::new(Field::new_list_field(DataType::Int64, true));
         let err = FixedSizeListArray::try_new(field, 2, values, None).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\"");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: FixedSizeListArray expected data type Int64 got Int32 for \"item\""
+        );
     }
 
     #[test]

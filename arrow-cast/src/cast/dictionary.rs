@@ -78,7 +78,7 @@ pub(crate) fn dictionary_cast<K: ArrowDictionaryKeyType>(
                 UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)),
                 _ => {
                     return Err(ArrowError::CastError(format!(
-                        "Unsupported type {to_index_type:?} for dictionary index"
+                        "Unsupported type {to_index_type} for dictionary index"
                     )));
                 }
             };
@@ -214,6 +214,20 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
         UInt16 => pack_numeric_to_dictionary::<K, UInt16Type>(array, dict_value_type, cast_options),
         UInt32 => pack_numeric_to_dictionary::<K, UInt32Type>(array, dict_value_type, cast_options),
         UInt64 => pack_numeric_to_dictionary::<K, UInt64Type>(array, dict_value_type, cast_options),
+        Decimal32(p, s) => pack_decimal_to_dictionary::<K, Decimal32Type>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
+        Decimal64(p, s) => pack_decimal_to_dictionary::<K, Decimal64Type>(
+            array,
+            dict_value_type,
+            p,
+            s,
+            cast_options,
+        ),
         Decimal128(p, s) => pack_decimal_to_dictionary::<K, Decimal128Type>(
             array,
             dict_value_type,
@@ -299,7 +313,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             pack_byte_to_fixed_size_dictionary::<K>(array, cast_options, byte_size)
         }
         _ => Err(ArrowError::CastError(format!(
-            "Unsupported output type for dictionary packing: {dict_value_type:?}"
+            "Unsupported output type for dictionary packing: {dict_value_type}"
         ))),
     }
 }

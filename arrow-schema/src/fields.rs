@@ -365,7 +365,7 @@ impl UnionFields {
             .inspect(|&idx| {
                 let mask = 1_u128 << idx;
                 if (set & mask) != 0 {
-                    panic!("duplicate type id: {}", idx);
+                    panic!("duplicate type id: {idx}");
                 } else {
                     set |= mask;
                 }
@@ -409,10 +409,12 @@ impl UnionFields {
                     // If the nested fields in two unions are the same, they must have same
                     // type id.
                     if *self_type_id != field_type_id {
-                        return Err(ArrowError::SchemaError(
-                            format!("Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
-                                    self_field.name(), self_type_id, field_type_id)
-                        ));
+                        return Err(ArrowError::SchemaError(format!(
+                            "Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
+                            self_field.name(),
+                            self_type_id,
+                            field_type_id
+                        )));
                     }
 
                     is_new_field = false;
