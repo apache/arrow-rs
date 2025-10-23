@@ -585,9 +585,11 @@ fn read_column_chunk<'a>(
 fn read_row_group(
     prot: &mut ThriftSliceInputProtocol,
     schema_descr: &Arc<SchemaDescriptor>,
+    first_row_number: i64,
 ) -> Result<RowGroupMetaData> {
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
+    row_group.first_row_index = Some(first_row_number);
 
     // mask values for required fields
     const RG_COLUMNS: u8 = 1 << 1;
@@ -726,8 +728,11 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 let schema_descr = schema_descr.as_ref().unwrap();
                 let list_ident = prot.read_list_begin()?;
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
+                let mut first_row_number = 0i64;
                 for _ in 0..list_ident.size {
-                    rg_vec.push(read_row_group(&mut prot, schema_descr)?);
+                    let rg = read_row_group(&mut prot, schema_descr, first_row_number)?;
+                    first_row_number += rg.num_rows();
+                    rg_vec.push(rg);
                 }
                 row_groups = Some(rg_vec);
             }
@@ -1586,7 +1591,7 @@ pub(crate) mod tests {
         schema_descr: Arc<SchemaDescriptor>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr)
+        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr, 0)
     }
 
     pub(crate) fn read_column_chunk(
