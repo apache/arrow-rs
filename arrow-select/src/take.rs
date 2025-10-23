@@ -636,38 +636,13 @@ where
     OffsetType: ArrowPrimitiveType,
     OffsetType::Native: OffsetSizeTrait,
 {
-    // Take executes only over the views.
-    let mut taken_offsets: Vec<OffsetType::Native> = Vec::with_capacity(indices.len());
-    let mut taken_sizes: Vec<OffsetType::Native> = Vec::with_capacity(indices.len());
-
-    // Initialize null buffer
-    let num_bytes = bit_util::ceil(indices.len(), 8);
-    let mut null_buf = MutableBuffer::new(num_bytes).with_bitset(num_bytes, true);
-    let null_slice = null_buf.as_slice_mut();
-
-    for i in 0..indices.len() {
-        if indices.is_valid(i) {
-            let idx = indices
-                .value(i)
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            taken_offsets.push(values.value_offset(idx));
-            taken_sizes.push(values.value_size(idx));
-
-            if !values.is_valid(idx) {
-                bit_util::unset_bit(null_slice, i);
-            }
-        } else {
-            // null pathway
-            bit_util::unset_bit(null_slice, i);
-            taken_offsets.push(taken_offsets.last().copied().unwrap_or_default());
-            taken_sizes.push(taken_offsets.last().copied().unwrap_or_default());
-        }
-    }
+    let taken_offsets = take_native(values.offsets(), indices);
+    let taken_sizes = take_native(values.sizes(), indices);
+    let nulls = take_nulls(values.nulls(), indices);
 
     let list_view_data = ArrayDataBuilder::new(values.data_type().clone())
         .len(indices.len())
-        .null_bit_buffer(Some(null_buf.into()))
+        .nulls(nulls)
         .buffers(vec![taken_offsets.into(), taken_sizes.into()])
         .child_data(vec![values.values().to_data()]);
 
