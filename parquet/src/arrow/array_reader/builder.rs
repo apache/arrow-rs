@@ -119,7 +119,7 @@ impl<'a> ArrayReaderBuilder<'a> {
             .and_then(|field| self.build_reader(field, mask, row_number_column).transpose())
             .or_else(|| {
             row_number_column.map(|column| {
-                let row_number_reader = build_row_number_reader(row_groups)?;
+                let row_number_reader = self.build_row_number_reader()?;
                 let reader: Box<dyn ArrayReader> = Box::new(StructArrayReader::new(
                     DataType::Struct(Fields::from(vec![Field::new(
                         column,
@@ -135,10 +135,10 @@ impl<'a> ArrayReaderBuilder<'a> {
             })
         })
         .transpose()?
-            .unwrap_or_else(|| make_empty_array_reader(self.num_rows()));
+            .unwrap_or_else(|| make_empty_array_reader(self.row_groups.num_rows()));
 
-    Ok(reader)
-}
+        Ok(reader)
+    }
 
     fn build_reader(
         &self,
@@ -178,9 +178,9 @@ impl<'a> ArrayReaderBuilder<'a> {
         }
     }
 
-fn build_row_number_reader(row_groups: &dyn RowGroups) -> Result<Box<dyn ArrayReader>> {
-    Ok(Box::new(RowNumberReader::try_new(row_groups.row_groups())?))
-}
+    fn build_row_number_reader(&self) -> Result<Box<dyn ArrayReader>> {
+        Ok(Box::new(RowNumberReader::try_new(self.row_groups.row_groups())?))
+    }
 
     /// Build array reader for map type.
     fn build_map_reader(
@@ -441,7 +441,7 @@ fn build_row_number_reader(row_groups: &dyn RowGroups) -> Result<Box<dyn ArrayRe
         }
 
     if let Some(row_number_column) = row_number_column {
-        let reader = build_row_number_reader(row_groups)?;
+        let reader = self.build_row_number_reader()?;
         builder.push(Field::new(
             row_number_column,
             reader.get_data_type().clone(),
@@ -516,8 +516,10 @@ mod tests {
         )
         .unwrap();
 
-        let array_reader =
-            build_array_reader(fields.as_ref(), &mask, &file_reader, Some("row_number")).unwrap();
+        let metrics = ArrowReaderMetrics::disabled();
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .build_array_reader(fields.as_ref(), &mask, Some("row_number"))
+            .unwrap();
 
         // Create arrow types
         let arrow_type = DataType::Struct(Fields::from(vec![

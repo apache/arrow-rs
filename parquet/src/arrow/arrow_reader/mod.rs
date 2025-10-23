@@ -883,6 +883,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
+            row_number_column
         } = self;
 
         // Try to avoid allocate large buffer
@@ -912,14 +913,14 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 cache_projection.intersect(&projection);
 
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-                    .build_array_reader(fields.as_deref(), predicate.projection(), self.row_number_column.as_deref(),)?;
+                    .build_array_reader(fields.as_deref(), predicate.projection(), row_number_column.as_deref(),)?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
         }
 
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-            .build_array_reader(fields.as_deref(), &projection, self.row_number_column.as_deref())?;
+            .build_array_reader(fields.as_deref(), &projection, row_number_column.as_deref())?;
 
         let read_plan = plan_builder
             .limited(reader.num_rows())
@@ -1176,7 +1177,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use rand::rngs::StdRng;
-    use rand::{random, thread_rng, Rng, RngCore, SeedableRng};
+    use rand::{random, rng, thread_rng, Rng, RngCore, SeedableRng};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
@@ -1196,8 +1197,6 @@ pub(crate) mod tests {
     use bytes::Bytes;
     use half::f16;
     use num_traits::PrimInt;
-    use rand::{Rng, RngCore, rng};
-    use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
@@ -2956,7 +2955,7 @@ pub(crate) mod tests {
                 assert_eq!(end - total_read, batch.num_rows());
 
                 let a = converter(&expected_data[total_read..end]);
-                let b = Arc::clone(batch.column(0));
+                let b = batch.column(0);
 
                 assert_eq!(a.data_type(), b.data_type());
                 assert_eq!(a.to_data(), b.to_data());
@@ -5171,7 +5170,7 @@ pub(crate) mod tests {
         std::fs::write(&path, bytes).expect("Could not write file");
 
         let mut case = vec![];
-        let mut remaining = metadata.num_rows;
+        let mut remaining = metadata.file_metadata().num_rows();
         while remaining > 0 {
             let row_count = rng.gen_range(1..=remaining);
             remaining -= row_count;
@@ -5182,7 +5181,7 @@ pub(crate) mod tests {
         }
 
         let filter = use_filter.then(|| {
-            let filter = (0..metadata.num_rows)
+            let filter = (0..metadata.file_metadata().num_rows())
                 .map(|_| rng.gen_bool(0.99))
                 .collect::<Vec<_>>();
             let mut filter_offset = 0;
@@ -5205,7 +5204,7 @@ pub(crate) mod tests {
         let selection = RowSelection::from(case);
         let batches = test_case(path, selection.clone(), filter, rng.gen_range(1..4096));
 
-        if selection.skipped_row_count() == metadata.num_rows as usize {
+        if selection.skipped_row_count() == metadata.file_metadata().num_rows() as usize {
             assert!(batches.into_iter().all(|batch| batch.num_rows() == 0));
             return;
         }
@@ -5231,7 +5230,7 @@ pub(crate) mod tests {
         );
     }
 
-    fn generate_file_with_row_numbers(rng: &mut impl Rng) -> (Bytes, FileMetaData) {
+    fn generate_file_with_row_numbers(rng: &mut impl Rng) -> (Bytes, ParquetMetaData) {
         let schema = Arc::new(Schema::new(Fields::from(vec![Field::new(
             "value",
             ArrowDataType::Int64,

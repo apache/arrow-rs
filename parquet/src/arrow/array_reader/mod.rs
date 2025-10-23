@@ -48,7 +48,7 @@ mod struct_array;
 #[cfg(test)]
 mod test_util;
 
-use parquet::file::metadata::RowGroupMetaData;
+use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
