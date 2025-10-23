@@ -34,10 +34,8 @@ impl RowNumberReader {
     ) -> Result<Self> {
         let ranges = row_groups
             .map(|rg| {
-                let first_row_number = rg.first_row_index().ok_or(ParquetError::General(
-                    "Row group missing row number".to_string(),
-                ))?;
-                Ok(first_row_number..first_row_number + rg.num_rows())
+                let first_row_index = rg.first_row_index();
+                Ok(first_row_index..first_row_index + rg.num_rows())
             })
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
