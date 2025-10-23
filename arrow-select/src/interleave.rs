@@ -26,7 +26,6 @@ use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, NullBufferBuilder, OffsetBuffer,
-    buffer,
 };
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
@@ -46,9 +45,9 @@ macro_rules! dict_helper {
     };
 }
 
-macro_rules! todo_struct_helper {
+macro_rules! try_merge_dict_array_of_struct_list_arr_helper {
     ($t1:ty, $t2:ty, $values:expr, $indices:expr, $field_num:expr, $dictionaries:expr, $returns_helper_stats:expr) => {
-        todo_name_me::<$t1, $t2>(
+        try_merge_dict_array_of_struct_list_arr::<$t1, $t2>(
             $values,
             $indices,
             $field_num,
@@ -217,7 +216,9 @@ fn interleave_bytes<T: ByteArrayType>(
 }
 
 // backed_values and offsets is the inner arrays of a list array
-fn interleave_backend_arrays_by_offset<O: OffsetSizeTrait>(
+// similar to interleave, but requires one logic of indirection
+// from indices -> corresponding offsets -> corresponding rows for each offset
+fn interleave_list_value_arrays_by_offset<O: OffsetSizeTrait>(
     backed_values: &[&dyn Array],
     offsets: &[&[O]],
     length: usize,
@@ -228,9 +229,9 @@ fn interleave_backend_arrays_by_offset<O: OffsetSizeTrait>(
     let mut array_data = MutableArrayData::new(arrays, false, length);
 
     let mut cur_array = indices[0].0;
-    let mut row = indices[0].1;
-    let mut start = offsets[cur_array][row].as_usize();
-    let mut end = offsets[cur_array][row + 1].as_usize();
+    let first_row = indices[0].1;
+    let mut start = offsets[cur_array][first_row].as_usize();
+    let mut end = offsets[cur_array][first_row + 1].as_usize();
 
     for (array, row) in indices.iter().skip(1).copied() {
         let new_start = offsets[array][row].as_usize();
@@ -258,7 +259,8 @@ fn interleave_backend_arrays_by_offset<O: OffsetSizeTrait>(
     Ok(make_array(array_data.freeze()))
 }
 
-fn todo_name_me<K: ArrowDictionaryKeyType, G: OffsetSizeTrait>(
+// interleave by merging the dictionary if concat is not an option (dictionary key size overflow)
+fn try_merge_dict_array_of_struct_list_arr<K: ArrowDictionaryKeyType, G: OffsetSizeTrait>(
     arrays: &[&dyn Array],
     indices: &[(usize, usize)],
     field_num: usize,
@@ -325,12 +327,12 @@ fn todo_name_me<K: ArrowDictionaryKeyType, G: OffsetSizeTrait>(
             unsafe { DictionaryArray::<K>::new_unchecked(new_keys.finish(), merged_dict.values) };
         merged_dictionaries.insert(field_num, Arc::new(new_backed_dict_arr) as ArrayRef);
         if return_helper_stats {
-            return Ok(Some((merged_dict_key_length, arr_lengths, null_buffer)));
+            return Ok(Some((total_child_items, arr_lengths, null_buffer)));
         }
     }
     return Ok(None);
 }
-// TODO: remove hardcode uint8
+
 fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
     fields: &Fields,
     dict_fields: &Vec<(usize, &Field)>,
@@ -349,7 +351,8 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
             _ => unreachable!("invalid data_type for dictionary field"),
         };
         let maybe_helper_stats = downcast_integer! {
-            key_type => (todo_struct_helper,G,arrays,indices,field_num,borrower,return_helper_stats),
+            key_type => (try_merge_dict_array_of_struct_list_arr_helper, G,
+                arrays, indices, field_num, borrower, return_helper_stats),
             _ => unreachable!("illegal dictionary key type {}",field.data_type()),
         }?;
         if let Some(_) = maybe_helper_stats {
@@ -363,7 +366,7 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
     let (total_child_values_after_interleave, arr_lengths, mut null_buffer) = helper_stats.unwrap();
     // arrays which are not merged are interleaved using MutableArray
     let mut non_merged_arrays_by_field = HashMap::new();
-    let (nulls, offsets) = arrays
+    let offsets = arrays
         .iter()
         .map(|x| {
             let list = x.as_list::<G>();
@@ -377,16 +380,16 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
                     .or_insert(Vec::with_capacity(arrays.len()));
                 sub_arrays.push(col as &dyn Array);
             }
-            (list, list.value_offsets())
+            list.value_offsets()
         })
-        .collect::<(Vec<_>, Vec<_>)>();
+        .collect::<Vec<_>>();
 
     let mut interleaved_unmerged = non_merged_arrays_by_field
         .iter()
         .map(|(num_field, sub_arrays)| {
             Ok((
                 *num_field,
-                interleave_backend_arrays_by_offset(
+                interleave_list_value_arrays_by_offset(
                     &sub_arrays,
                     &offsets,
                     total_child_values_after_interleave,
@@ -421,12 +424,13 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
     Ok(Arc::new(struct_list_arr))
 }
 
+// take only offsets included inside indices arrays and perform
+// merging the dictionaries key/value that remains 
 fn merge_dictionaries_by_offset<K: ArrowDictionaryKeyType, G: OffsetSizeTrait>(
     dictionaries: &[&DictionaryArray<K>],
     offsets: &[&[G]],
     indices: &[(usize, usize)],
 ) -> Result<(MergedDictionaries<K>, usize), ArrowError> {
-    let data_type = dictionaries[0].data_type();
     let mut new_dict_key_len = 0;
 
     let masks: Vec<_> = dictionaries
@@ -1795,14 +1799,14 @@ mod tests {
                 ]))
             )
         );
-        // f4 is a interleaved as usual 
+        // f4 is a interleaved as usual
         let f4 = struct_arr.column(3).as_string::<i32>();
 
         assert_eq!(
             f4,
-            &StringArray::from_iter_values(
-                vec!["2","1", "255", "254", "251", "250", "253", "252"],
-            )
+            &StringArray::from_iter_values(vec![
+                "2", "1", "255", "254", "251", "250", "253", "252"
+            ],)
         );
     }
 
