@@ -51,7 +51,7 @@ Disable defaults and pick only what you need (see **Feature Flags**):
 
 ```toml
 [dependencies]
-arrow-avro = { version = "57", default-features = false, features = ["deflate", "snappy"] }
+arrow-avro = { version = "57.0.0", default-features = false, features = ["deflate", "snappy"] }
 ```
 
 ---
