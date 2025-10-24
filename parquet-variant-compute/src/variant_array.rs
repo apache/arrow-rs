@@ -870,6 +870,40 @@ impl From<BorrowedShreddingState<'_>> for ShreddingState {
     }
 }
 
+pub enum ShreddingStateCow<'a> {
+    Owned(ShreddingState),
+    Borrowed(BorrowedShreddingState<'a>),
+}
+
+impl<'a> From<ShreddingState> for ShreddingStateCow<'a> {
+    fn from(s: ShreddingState) -> Self {
+        Self::Owned(s)
+    }
+}
+impl<'a> From<BorrowedShreddingState<'a>> for ShreddingStateCow<'a> {
+    fn from(s: BorrowedShreddingState<'a>) -> Self {
+        Self::Borrowed(s)
+    }
+}
+
+impl<'a> ShreddingStateCow<'a> {
+    /// Always gives the caller a borrowed view, even if we own internally.
+    pub fn as_view(&self) -> BorrowedShreddingState<'_> {
+        match self {
+            ShreddingStateCow::Borrowed(b) => b.clone(),
+            ShreddingStateCow::Owned(o) => o.borrow(),
+        }
+    }
+
+    /// Materialize ownership when the caller needs to keep it.
+    pub fn into_owned(self) -> ShreddingState {
+        match self {
+            ShreddingStateCow::Borrowed(b) => b.into(),
+            ShreddingStateCow::Owned(o) => o,
+        }
+    }
+}
+
 /// Builds struct arrays from component fields
 ///
 /// TODO: move to arrow crate
@@ -940,6 +974,16 @@ fn typed_value_to_variant<'a>(
         }
         DataType::Utf8 => {
             let array = typed_value.as_string::<i32>();
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::LargeUtf8 => {
+            let array = typed_value.as_string::<i64>();
+            let value = array.value(index);
+            Variant::from(value)
+        }
+        DataType::Utf8View => {
+            let array = typed_value.as_string_view();
             let value = array.value(index);
             Variant::from(value)
         }
@@ -1143,14 +1187,14 @@ fn canonicalize_and_verify_data_type(
         // Binary and string are allowed. Force Binary to BinaryView because that's what the parquet
         // reader returns and what the rest of the variant code expects.
         Binary => Cow::Owned(DataType::BinaryView),
-        BinaryView | Utf8 => borrow!(),
+        BinaryView | Utf8 | LargeUtf8 | Utf8View => borrow!(),
 
         // UUID maps to 16-byte fixed-size binary; no other width is allowed
         FixedSizeBinary(16) => borrow!(),
         FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
 
         // We can _possibly_ allow (some of) these some day?
-        LargeBinary | LargeUtf8 | Utf8View | ListView(_) | LargeList(_) | LargeListView(_) => {
+        LargeBinary | ListView(_) | LargeList(_) | LargeListView(_) => {
             fail!()
         }
 
