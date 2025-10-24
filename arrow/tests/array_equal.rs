@@ -822,6 +822,45 @@ fn test_test_list_view_array<T: OffsetSizeTrait>() {
     test_equal(&a, &b, true);
 }
 
+// Special test for List<ListView<i32>>.
+// This tests the equal_ranges kernel
+fn test_sliced_list_of_list_view<T: OffsetSizeTrait>() {
+    // First list view is created using the builder, with elements not deduplicated.
+    let mut a = ListBuilder::new(GenericListViewBuilder::<T, _>::new(Int32Builder::new()));
+
+    a.append_value([Some(vec![Some(1), Some(2), Some(3)]), Some(vec![])]);
+    a.append_null();
+    a.append_value([
+        Some(vec![Some(1), Some(2), Some(3)]),
+        None,
+        Some(vec![Some(6)]),
+    ]);
+
+    let a = a.finish();
+    // a = [[[1,2,3], []], null, [[4, null], [5], null, [6]]]
+
+    // First list view is created using the builder, with elements not deduplicated.
+    let mut b = ListBuilder::new(GenericListViewBuilder::<T, _>::new(Int32Builder::new()));
+
+    // Add an extra row that we will slice off, adjust the List offsets
+    b.append_value([Some(vec![Some(0), Some(0), Some(0)])]);
+    b.append_value([Some(vec![Some(1), Some(2), Some(3)]), Some(vec![])]);
+    b.append_null();
+    b.append_value([
+        Some(vec![Some(1), Some(2), Some(3)]),
+        None,
+        Some(vec![Some(6)]),
+    ]);
+
+    let b = b.finish();
+    // b = [[[0, 0, 0]], [[1,2,3], []], null, [[4, null], [5], null, [6]]]
+    let b = b.slice(1, 3);
+    // b = [[[1,2,3], []], null, [[4, null], [5], null, [6]]] but the outer ListArray
+    // has an offset
+
+    test_equal(&a, &b, true);
+}
+
 #[test]
 fn test_list_view_array() {
     test_test_list_view_array::<i32>();
@@ -830,6 +869,16 @@ fn test_list_view_array() {
 #[test]
 fn test_large_list_view_array() {
     test_test_list_view_array::<i64>();
+}
+
+#[test]
+fn test_nested_list_view_array() {
+    test_sliced_list_of_list_view::<i32>();
+}
+
+#[test]
+fn test_nested_large_list_view_array() {
+    test_sliced_list_of_list_view::<i64>();
 }
 
 #[test]
