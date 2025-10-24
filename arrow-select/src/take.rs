@@ -218,6 +218,12 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
         DataType::LargeList(_) => {
             Ok(Arc::new(take_list::<_, Int64Type>(values.as_list(), indices)?))
         }
+        DataType::ListView(_) => {
+            Ok(Arc::new(take_list_view::<_, Int32Type>(values.as_list_view(), indices)?))
+        }
+        DataType::LargeListView(_) => {
+            Ok(Arc::new(take_list_view::<_, Int64Type>(values.as_list_view(), indices)?))
+        }
         DataType::FixedSizeList(_, length) => {
             let values = values
                 .as_any()
@@ -621,6 +627,33 @@ where
     Ok(GenericListArray::<OffsetType::Native>::from(list_data))
 }
 
+fn take_list_view<IndexType, OffsetType>(
+    values: &GenericListViewArray<OffsetType::Native>,
+    indices: &PrimitiveArray<IndexType>,
+) -> Result<GenericListViewArray<OffsetType::Native>, ArrowError>
+where
+    IndexType: ArrowPrimitiveType,
+    OffsetType: ArrowPrimitiveType,
+    OffsetType::Native: OffsetSizeTrait,
+{
+    let taken_offsets = take_native(values.offsets(), indices);
+    let taken_sizes = take_native(values.sizes(), indices);
+    let nulls = take_nulls(values.nulls(), indices);
+
+    let list_view_data = ArrayDataBuilder::new(values.data_type().clone())
+        .len(indices.len())
+        .nulls(nulls)
+        .buffers(vec![taken_offsets.into(), taken_sizes.into()])
+        .child_data(vec![values.values().to_data()]);
+
+    // SAFETY: all buffers and child nodes for ListView added in constructor
+    let list_view_data = unsafe { list_view_data.build_unchecked() };
+
+    Ok(GenericListViewArray::<OffsetType::Native>::from(
+        list_view_data,
+    ))
+}
+
 /// `take` implementation for `FixedSizeListArray`
 ///
 /// Calculates the index and indexed offset for the inner array,
@@ -980,6 +1013,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano};
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields, TimeUnit, UnionFields};
+    use num_traits::ToPrimitive;
 
     fn test_take_decimal_arrays(
         data: Vec<Option<i128>>,
@@ -1821,6 +1855,55 @@ mod tests {
         }};
     }
 
+    fn test_take_list_view_generic<OffsetType: OffsetSizeTrait, ValuesType: ArrowPrimitiveType, F>(
+        values: Vec<Option<Vec<Option<ValuesType::Native>>>>,
+        take_indices: Vec<Option<usize>>,
+        expected: Vec<Option<Vec<Option<ValuesType::Native>>>>,
+        mapper: F,
+    ) where
+        F: Fn(GenericListViewArray<OffsetType>) -> GenericListViewArray<OffsetType>,
+    {
+        let mut list_view_array =
+            GenericListViewBuilder::<OffsetType, _>::new(PrimitiveBuilder::<ValuesType>::new());
+
+        for value in values {
+            list_view_array.append_option(value);
+        }
+        let list_view_array = list_view_array.finish();
+        let list_view_array = mapper(list_view_array);
+
+        let mut indices = UInt64Builder::new();
+        for idx in take_indices {
+            indices.append_option(idx.map(|i| i.to_u64().unwrap()));
+        }
+        let indices = indices.finish();
+
+        let taken = take(&list_view_array, &indices, None)
+            .unwrap()
+            .as_list_view()
+            .clone();
+
+        let mut expected_array =
+            GenericListViewBuilder::<OffsetType, _>::new(PrimitiveBuilder::<ValuesType>::new());
+        for value in expected {
+            expected_array.append_option(value);
+        }
+        let expected_array = expected_array.finish();
+
+        assert_eq!(taken, expected_array);
+    }
+
+    macro_rules! list_view_test_case {
+        (values: $values:expr, indices: $indices:expr, expected: $expected: expr) => {{
+            test_take_list_view_generic::<i32, Int8Type, _>($values, $indices, $expected, |x| x);
+            test_take_list_view_generic::<i64, Int8Type, _>($values, $indices, $expected, |x| x);
+        }};
+        (values: $values:expr, transform: $fn:expr, indices: $indices:expr, expected: $expected: expr) => {{
+            test_take_list_view_generic::<i32, Int8Type, _>($values, $indices, $expected, $fn);
+            test_take_list_view_generic::<i64, Int8Type, _>($values, $indices, $expected, $fn);
+        }};
+    }
+
     fn do_take_fixed_size_list_test<T>(
         length: <Int32Type as ArrowPrimitiveType>::Native,
         input_data: Vec<Option<Vec<Option<T::Native>>>>,
@@ -1869,6 +1952,72 @@ mod tests {
     #[test]
     fn test_test_take_large_list_with_nulls() {
         test_take_list_with_nulls!(i64, LargeList, LargeListArray);
+    }
+
+    #[test]
+    fn test_test_take_list_view_reversed() {
+        // Take reversed indices
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1), None, Some(3)]),
+                None,
+                Some(vec![Some(7), Some(8), None]),
+            ],
+            indices: vec![Some(2), Some(1), Some(0)],
+            expected: vec![
+                Some(vec![Some(7), Some(8), None]),
+                None,
+                Some(vec![Some(1), None, Some(3)]),
+            ]
+        }
+    }
+
+    #[test]
+    fn test_take_list_view_null_indices() {
+        // Take with null indices
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1), None, Some(3)]),
+                None,
+                Some(vec![Some(7), Some(8), None]),
+            ],
+            indices: vec![None, Some(0), None],
+            expected: vec![None, Some(vec![Some(1), None, Some(3)]), None]
+        }
+    }
+
+    #[test]
+    fn test_take_list_view_null_values() {
+        // Take at null values
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1), None, Some(3)]),
+                None,
+                Some(vec![Some(7), Some(8), None]),
+            ],
+            indices: vec![Some(1), Some(1), Some(1), None, None],
+            expected: vec![None; 5]
+        }
+    }
+
+    #[test]
+    fn test_take_list_view_sliced() {
+        // Take null indices/values, with slicing.
+        list_view_test_case! {
+            values: vec![
+                Some(vec![Some(1)]),
+                None,
+                None,
+                Some(vec![Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5)]),
+                None,
+            ],
+            transform: |l| l.slice(2, 4),
+            indices: vec![Some(0), Some(3), None, Some(1), Some(2)],
+            expected: vec![
+                None, None, None, Some(vec![Some(2), Some(3)]), Some(vec![Some(4), Some(5)])
+            ]
+        }
     }
 
     #[test]
