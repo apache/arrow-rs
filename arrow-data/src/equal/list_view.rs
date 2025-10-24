@@ -68,7 +68,7 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
         for ((&lhs_offset, &rhs_offset), &size) in lhs_range_offsets
             .iter()
             .zip(rhs_range_offsets)
-            .zip(lhs_sizes)
+            .zip(lhs_range_sizes)
         {
             let lhs_offset = lhs_offset.to_usize().unwrap();
             let rhs_offset = rhs_offset.to_usize().unwrap();
@@ -104,7 +104,7 @@ pub(super) fn list_view_equal<T: ArrowNativeType + Integer>(
         for (index, ((&lhs_offset, &rhs_offset), &size)) in lhs_range_offsets
             .iter()
             .zip(rhs_range_offsets)
-            .zip(lhs_sizes)
+            .zip(lhs_range_sizes)
             .enumerate()
         {
             let lhs_is_null = lhs_nulls.is_null(index);
