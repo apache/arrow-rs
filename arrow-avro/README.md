@@ -44,7 +44,7 @@ This crate provides:
 
 ```toml
 [dependencies]
-arrow-avro = "57"
+arrow-avro = "57.0.0"
 ````
 
 Disable defaults and pick only what you need (see **Feature Flags**):
