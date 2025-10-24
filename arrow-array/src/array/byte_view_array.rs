@@ -1405,6 +1405,60 @@ mod tests {
     }
 
     #[test]
+    fn test_gc_huge_array() {
+        // Construct multiple 128 MiB BinaryView entries so total > 4 GiB
+        let block_len: usize = 128 * 1024 * 1024; // 128 MiB per view
+        let num_views: usize = 36;
+
+        // Create a single 128 MiB data block with a simple byte pattern
+        let buffer = Buffer::from_vec(vec![0xAB; block_len]);
+        let buffer2 = Buffer::from_vec(vec![0xFF; block_len]);
+
+        // Append this block and then add many views pointing to it
+        let mut builder = BinaryViewBuilder::new();
+        let block_id = builder.append_block(buffer);
+        for _ in 0..num_views / 2 {
+            builder
+                .try_append_view(block_id, 0, block_len as u32)
+                .expect("append view into 128MiB block");
+        }
+        let block_id2 = builder.append_block(buffer2);
+        for _ in 0..num_views / 2 {
+            builder
+                .try_append_view(block_id2, 0, block_len as u32)
+                .expect("append view into 128MiB block");
+        }
+
+        let array = builder.finish();
+        let total = array.total_buffer_bytes_used();
+        assert!(
+            total > u32::MAX as usize,
+            "Expected total non-inline bytes to exceed 4 GiB, got {}",
+            total
+        );
+
+        // Run gc and verify correctness
+        let gced = array.gc();
+        assert_eq!(gced.len(), num_views, "Length mismatch after gc");
+        assert_eq!(gced.null_count(), 0, "Null count mismatch after gc");
+        assert_eq!(
+            gced.data_buffers().len(),
+            1,
+            "gc should consolidate data into a single buffer"
+        );
+        assert_eq!(
+            gced.data_buffers()[0].len(),
+            total,
+            "Consolidated buffer length should equal total non-inline bytes"
+        );
+
+        // Element-wise equality check across the entire array
+        array.iter().zip(gced.iter()).for_each(|(orig, got)| {
+            assert_eq!(orig, got, "Value mismatch after gc on huge array");
+        });
+    }
+
+    #[test]
     fn test_eq() {
         let test_data = [
             Some("longer than 12 bytes"),
