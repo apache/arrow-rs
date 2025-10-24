@@ -1987,7 +1987,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 2738;
+        let expected_size_with_decryptor = 3298;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(

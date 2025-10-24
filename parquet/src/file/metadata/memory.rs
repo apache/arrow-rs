@@ -100,6 +100,14 @@ impl<T: HeapSize> HeapSize for Arc<T> {
     }
 }
 
+impl HeapSize for Arc<dyn HeapSize> {
+    fn heap_size(&self) -> usize {
+        2 * std::mem::size_of::<usize>()
+            + std::mem::size_of_val(self.as_ref())
+            + self.as_ref().heap_size()
+    }
+}
+
 impl<T: HeapSize> HeapSize for Box<T> {
     fn heap_size(&self) -> usize {
         std::mem::size_of::<T>() + self.as_ref().heap_size()
