@@ -58,7 +58,13 @@ pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 impl<'a> SlicesIterator<'a> {
     /// Creates a new iterator from a [BooleanArray]
     pub fn new(filter: &'a BooleanArray) -> Self {
-        Self(filter.values().set_slices())
+        filter.values().into()
+    }
+}
+
+impl<'a> From<&'a BooleanBuffer> for SlicesIterator<'a> {
+    fn from(buffer: &'a BooleanBuffer) -> Self {
+        Self(buffer.set_slices())
     }
 }
 
