@@ -34,6 +34,7 @@ use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
 mod extension;
+mod row_number;
 mod primitive;
 
 use super::PARQUET_FIELD_ID_META_KEY;
