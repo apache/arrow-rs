@@ -34,7 +34,7 @@ use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
 mod extension;
-mod row_number;
+pub mod virtual_type;
 mod primitive;
 
 use super::PARQUET_FIELD_ID_META_KEY;
@@ -43,7 +43,7 @@ use crate::arrow::schema::extension::{
     has_extension_type, logical_type_for_fixed_size_binary, logical_type_for_string,
     logical_type_for_struct, try_add_extension_type,
 };
-pub(crate) use complex::{ParquetField, ParquetFieldType};
+pub(crate) use complex::{ParquetField, ParquetFieldType, VirtualColumnType};
 
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///

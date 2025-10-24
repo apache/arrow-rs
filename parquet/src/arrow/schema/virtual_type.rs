@@ -18,7 +18,7 @@
 //! RowNumber
 //!
 
-use arrow_schema::{ArrowError, DataType, extension::ExtensionType};
+use arrow_schema::{ArrowError, DataType, Field, extension::ExtensionType};
 
 /// The extension type for `8-bit Boolean`.
 ///
@@ -30,7 +30,7 @@ use arrow_schema::{ArrowError, DataType, extension::ExtensionType};
 pub struct RowNumber;
 
 impl ExtensionType for RowNumber {
-    const NAME: &'static str = "arrow.row_number"; // TODO @vustef: What should it be named?
+    const NAME: &'static str = "arrow.virtual.row_number"; // TODO @vustef: What should it be named?
 
     type Metadata = &'static str;
 
@@ -128,4 +128,14 @@ mod tests {
         );
         field.extension_type::<RowNumber>();
     }
+}
+
+/// Returns `true` if the field is a virtual column.
+///
+/// Virtual columns have extension type names starting with `arrow.virtual.`.
+pub fn is_virtual_column(field: &Field) -> bool {
+    // TODO @vustef: Make this more typed through another approach that doesn't rely on a naming convention.
+    field.extension_type_name()
+        .map(|name| name.starts_with("arrow.virtual."))
+        .unwrap_or(false)
 }

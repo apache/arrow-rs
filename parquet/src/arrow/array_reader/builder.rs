@@ -32,7 +32,7 @@ use crate::arrow::array_reader::{
     make_byte_array_reader,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::schema::{ParquetField, ParquetFieldType};
+use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
@@ -165,6 +165,13 @@ impl<'a> ArrayReaderBuilder<'a> {
                     ))))
                 } else {
                     Ok(Some(reader))
+                }
+            }
+            ParquetFieldType::Virtual(virtual_type) => {
+                // Virtual columns don't have data in the parquet file
+                // They need to be built by specialized readers
+                match virtual_type {
+                    VirtualColumnType::RowNumber => Ok(Some(self.build_row_number_reader()?)),
                 }
             }
             ParquetFieldType::Group { .. } => match &field.arrow_type {

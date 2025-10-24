@@ -1203,7 +1203,7 @@ pub(crate) mod tests {
         ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
         RowSelector,
     };
-    use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
+    use crate::arrow::schema::{add_encoded_arrow_schema_to_metadata, virtual_type::RowNumber};
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
@@ -5037,7 +5037,10 @@ pub(crate) mod tests {
             "value",
             Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
         )]);
-        let supplied_fields = Fields::from(vec![Field::new("value", ArrowDataType::Int64, false)]);
+        let supplied_fields = Fields::from(vec![
+            Field::new("value", ArrowDataType::Int64, false),
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        ]);
 
         let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
         let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
@@ -5045,14 +5048,13 @@ pub(crate) mod tests {
             options,
         )
         .expect("reader builder with schema")
-        .with_row_number_column("row_number")
         .build()
         .expect("reader with schema");
 
         let batch = arrow_reader.next().unwrap().unwrap();
         let schema = Arc::new(Schema::new(vec![
             Field::new("value", ArrowDataType::Int64, false),
-            Field::new("row_number", ArrowDataType::Int64, false),
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
         ]));
 
         assert_eq!(batch.schema(), schema);

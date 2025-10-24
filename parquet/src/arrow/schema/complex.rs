@@ -20,12 +20,14 @@ use std::sync::Arc;
 
 use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
+use crate::arrow::schema::virtual_type::{RowNumber, is_virtual_column};
 use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
 use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
+use arrow_schema::extension::ExtensionType;
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -77,8 +79,16 @@ impl ParquetField {
         match &self.field_type {
             ParquetFieldType::Primitive { .. } => None,
             ParquetFieldType::Group { children } => Some(children),
+            ParquetFieldType::Virtual(_) => None,
         }
     }
+}
+
+/// Types of virtual columns that can be computed at read time
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VirtualColumnType {
+    /// Row number within the file
+    RowNumber,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +102,9 @@ pub enum ParquetFieldType {
     Group {
         children: Vec<ParquetField>,
     },
+    /// Virtual column that doesn't exist in the parquet file
+    /// but is computed at read time (e.g., row_number)
+    Virtual(VirtualColumnType),
 }
 
 /// Encodes the context of the parent of the field currently under consideration
@@ -173,17 +186,35 @@ impl Visitor {
 
         let parquet_fields = struct_type.get_fields();
 
-        // Extract any arrow fields from the hints
-        let arrow_fields = match &context.data_type {
+        // Virtual columns are only supported at the root level (def_level == 0 && rep_level == 0)
+        let allow_virtual_columns = def_level == 0 && rep_level == 0;
+
+        // Extract any arrow fields from the hints and compute capacity
+        let (arrow_fields, capacity) = match &context.data_type {
             Some(DataType::Struct(fields)) => {
-                if fields.len() != parquet_fields.len() {
+                // Check length after filtering out virtual columns (only at root level)
+                let non_virtual_count = if allow_virtual_columns {
+                    fields.iter()
+                        .filter(|field| !is_virtual_column(field))
+                        .count()
+                } else {
+                    // Verify no virtual columns exist at non-root levels
+                    if fields.iter().any(|field| is_virtual_column(field)) {
+                        return Err(arrow_err!(
+                            "virtual columns are only supported at the root level of the schema"
+                        ));
+                    }
+                    fields.len()
+                };
+
+                if non_virtual_count != parquet_fields.len() {
                     return Err(arrow_err!(
-                        "incompatible arrow schema, expected {} struct fields got {}",
+                        "incompatible arrow schema, expected {} struct fields got {} (after filtering virtual columns)",
                         parquet_fields.len(),
-                        fields.len()
+                        non_virtual_count
                     ));
                 }
-                Some(fields)
+                (Some(fields), fields.len())
             }
             Some(d) => {
                 return Err(arrow_err!(
@@ -191,41 +222,67 @@ impl Visitor {
                     d
                 ));
             }
-            None => None,
+            None => (None, parquet_fields.len()),
         };
 
-        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len());
-        let mut children = Vec::with_capacity(parquet_fields.len());
+        let mut child_fields = SchemaBuilder::with_capacity(capacity);
+        let mut children = Vec::with_capacity(capacity);
 
         // Perform a DFS of children
-        for (idx, parquet_field) in parquet_fields.iter().enumerate() {
-            let data_type = match arrow_fields {
-                Some(fields) => {
-                    let field = &fields[idx];
-                    if field.name() != parquet_field.name() {
+        if let Some(fields) = arrow_fields {
+            let mut parquet_idx = 0;
+            for arrow_field in fields.iter() {
+                if is_virtual_column(arrow_field) {
+                    // Handle virtual column - create a ParquetField for it
+                    let virtual_parquet_field = convert_virtual_field(arrow_field, rep_level, def_level)?;
+                    child_fields.push(arrow_field.clone());
+                    children.push(virtual_parquet_field);
+                } else {
+                    // Non-virtual column - match with parquet field
+                    if parquet_idx >= parquet_fields.len() {
+                        return Err(arrow_err!(
+                            "incompatible arrow schema, more non-virtual fields than parquet fields"
+                        ));
+                    }
+
+                    let parquet_field = &parquet_fields[parquet_idx];
+                    if arrow_field.name() != parquet_field.name() {
                         return Err(arrow_err!(
                             "incompatible arrow schema, expected field named {} got {}",
                             parquet_field.name(),
-                            field.name()
+                            arrow_field.name()
                         ));
                     }
-                    Some(field.data_type().clone())
+
+                    let child_ctx = VisitorContext {
+                        rep_level,
+                        def_level,
+                        data_type: Some(arrow_field.data_type().clone()),
+                    };
+
+                    if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
+                        // The child type returned may be different from what is encoded in the arrow
+                        // schema in the event of a mismatch or a projection
+                        child_fields.push(convert_field(parquet_field, &mut child, Some(arrow_field))?);
+                        children.push(child);
+                    }
+
+                    parquet_idx += 1;
                 }
-                None => None,
-            };
+            }
+        } else {
+            // No arrow fields provided - process all parquet fields
+            for parquet_field in parquet_fields.iter() {
+                let child_ctx = VisitorContext {
+                    rep_level,
+                    def_level,
+                    data_type: None,
+                };
 
-            let arrow_field = arrow_fields.map(|x| &*x[idx]);
-            let child_ctx = VisitorContext {
-                rep_level,
-                def_level,
-                data_type,
-            };
-
-            if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
-                // The child type returned may be different from what is encoded in the arrow
-                // schema in the event of a mismatch or a projection
-                child_fields.push(convert_field(parquet_field, &mut child, arrow_field)?);
-                children.push(child);
+                if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
+                    child_fields.push(convert_field(parquet_field, &mut child, None)?);
+                    children.push(child);
+                }
             }
         }
 
@@ -539,6 +596,46 @@ impl Visitor {
             }
         }
     }
+}
+
+/// Converts a virtual Arrow [`Field`] to a [`ParquetField`]
+///
+/// Virtual fields don't correspond to any data in the parquet file,
+/// but are computed at read time (e.g., row_number)
+///
+/// The levels are computed based on the parent context:
+/// - If nullable: def_level = parent_def_level + 1
+/// - If required: def_level = parent_def_level
+/// - rep_level = parent_rep_level (virtual fields are not repeated)
+fn convert_virtual_field(
+    arrow_field: &Field,
+    parent_rep_level: i16,
+    parent_def_level: i16,
+) -> Result<ParquetField> {
+    let nullable = arrow_field.is_nullable();
+    let def_level = if nullable {
+        parent_def_level + 1
+    } else {
+        parent_def_level
+    };
+
+    // Determine the virtual column type based on the extension type
+    let virtual_type = if arrow_field.try_extension_type::<RowNumber>().is_ok() {
+        VirtualColumnType::RowNumber
+    } else {
+        return Err(ParquetError::ArrowError(format!(
+            "unsupported virtual column type for field '{}'",
+            arrow_field.name()
+        )));
+    };
+
+    Ok(ParquetField {
+        rep_level: parent_rep_level,
+        def_level,
+        nullable,
+        arrow_type: arrow_field.data_type().clone(),
+        field_type: ParquetFieldType::Virtual(virtual_type),
+    })
 }
 
 /// Computes the Arrow [`Field`] for a child column
