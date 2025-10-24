@@ -1353,10 +1353,20 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         builder: ColumnChunkMetaDataBuilder,
     ) -> ColumnChunkMetaDataBuilder {
         if let Some(encryption_properties) = self.props.file_encryption_properties.as_ref() {
-            builder.set_column_crypto_metadata(get_column_crypto_metadata(
-                encryption_properties,
-                &self.descr,
-            ))
+            if encryption_properties.encrypt_footer() {
+                builder
+                    .set_column_crypto_metadata(get_column_crypto_metadata(
+                        encryption_properties,
+                        &self.descr,
+                    ))
+                    .clear_statistics()    
+            } else {
+                builder
+                    .set_column_crypto_metadata(get_column_crypto_metadata(
+                        encryption_properties,
+                        &self.descr,
+                    ))    
+            }
         } else {
             builder
         }
