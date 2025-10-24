@@ -20,7 +20,7 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_schema::{ArrowError, DataType as ArrowType, Field, Fields, Schema, SchemaRef};
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 use std::fmt::{Debug, Formatter};
@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
-use crate::arrow::schema::{ParquetField, parquet_to_arrow_schema_and_fields};
+use crate::arrow::schema::{ParquetField, ParquetFieldType, parquet_to_arrow_schema_and_fields};
 use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
@@ -381,6 +381,134 @@ impl<T> ArrowReaderBuilder<T> {
             row_number_column: Some(row_number_column.into()),
             ..self
         }
+    }
+
+    /// Include additional fields by appending them at the end of the fields.
+    ///
+    /// This will add columns to the output record batch.
+    pub fn with_fields_appended(self, fields_to_append: Vec<Field>) -> Result<Self, ParquetError> {
+        use crate::arrow::schema::virtual_type::{RowNumber, is_virtual_column};
+        use crate::arrow::schema::VirtualColumnType;
+        use arrow_schema::extension::ExtensionType;
+
+        if fields_to_append.is_empty() {
+            return Ok(self);
+        }
+
+        // Verify all fields to append are virtual columns
+        for field in &fields_to_append {
+            if !is_virtual_column(field) {
+                return Err(ParquetError::ArrowError(
+                    "Only virtual columns can be appended via with_fields_appended".to_string()
+                ));
+            }
+        }
+
+        // Create extended schema
+        let mut all_fields: Vec<Field> = Vec::new();
+        all_fields.extend(self.schema.fields().iter().map(|f| f.as_ref().clone()));
+        all_fields.extend(fields_to_append.iter().cloned());
+        // TODO @vustef: Preserve metadata in the schema...
+        let extended_schema = Arc::new(Schema::new(all_fields));
+
+        // Get or create root ParquetField
+        let mut root_field = if self.schema.fields().is_empty() {
+            // If schema is empty, create an empty root group
+            ParquetField {
+                rep_level: 0,
+                def_level: 0,
+                nullable: false,
+                arrow_type: ArrowType::Struct(Fields::empty()),
+                field_type: ParquetFieldType::Group { children: vec![] },
+            }
+        } else if let Some(fields) = self.fields {
+            // Unwrap Arc and clone if needed
+            Arc::try_unwrap(fields).unwrap_or_else(|arc| (*arc).clone())
+        } else {
+            // If no fields exist yet, create root group from parquet schema
+            let parquet_schema = self.metadata.file_metadata().schema_descr();
+            let field_levels = parquet_to_arrow_field_levels(
+                parquet_schema,
+                ProjectionMask::all(),
+                None,
+            )?;
+            field_levels.levels.ok_or_else(|| {
+                ParquetError::ArrowError("Failed to create ParquetField from schema".to_string())
+            })?
+        };
+
+        // Convert virtual fields to ParquetFields and append them
+        match &mut root_field.field_type {
+            ParquetFieldType::Group { children } => {
+                for field in &fields_to_append {
+                    // Determine virtual column type
+                    let virtual_type = if field.try_extension_type::<RowNumber>().is_ok() {
+                        VirtualColumnType::RowNumber
+                    } else {
+                        return Err(ParquetError::ArrowError(format!(
+                            "Unsupported virtual column type for field '{}'",
+                            field.name()
+                        )));
+                    };
+
+                    let nullable = field.is_nullable();
+                    // TODO @vustef: Assert def_level and rep_level are 0?
+                    let parquet_field = ParquetField {
+                        rep_level: 0,
+                        def_level: if nullable { 1 } else { 0 },
+                        nullable,
+                        arrow_type: field.data_type().clone(),
+                        field_type: ParquetFieldType::Virtual(virtual_type),
+                    };
+
+                    children.push(parquet_field);
+                }
+
+                // Update the root field's arrow_type to match the extended schema
+                root_field.arrow_type = ArrowType::Struct(extended_schema.fields().clone());
+            }
+            ParquetFieldType::Primitive { .. } => {
+                // Root should never be primitive, but handle it by wrapping in a Group
+                let existing_field = root_field.clone();
+                let mut children = vec![existing_field];
+
+                for field in &fields_to_append {
+                    let virtual_type = if field.try_extension_type::<RowNumber>().is_ok() {
+                        VirtualColumnType::RowNumber
+                    } else {
+                        return Err(ParquetError::ArrowError(format!(
+                            "Unsupported virtual column type for field '{}'",
+                            field.name()
+                        )));
+                    };
+
+                    let nullable = field.is_nullable();
+                    let parquet_field = ParquetField {
+                        rep_level: 0,
+                        def_level: if nullable { 1 } else { 0 },
+                        nullable,
+                        arrow_type: field.data_type().clone(),
+                        field_type: ParquetFieldType::Virtual(virtual_type),
+                    };
+
+                    children.push(parquet_field);
+                }
+
+                root_field.field_type = ParquetFieldType::Group { children };
+                root_field.arrow_type = ArrowType::Struct(extended_schema.fields().clone());
+            }
+            ParquetFieldType::Virtual(_) => {
+                return Err(ParquetError::ArrowError(
+                    "Root field cannot be a Virtual column".to_string()
+                ));
+            }
+        }
+
+        Ok(Self {
+            schema: extended_schema,
+            fields: Some(Arc::new(root_field)),
+            ..self
+        })
     }
 }
 
@@ -5039,8 +5167,9 @@ pub(crate) mod tests {
         )]);
         let supplied_fields = Fields::from(vec![
             Field::new("value", ArrowDataType::Int64, false),
-            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
         ]);
+
+        let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber);
 
         let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
         let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
@@ -5048,13 +5177,15 @@ pub(crate) mod tests {
             options,
         )
         .expect("reader builder with schema")
+        .with_fields_appended(vec![row_number_field.clone()])
+        .expect("with_fields_appended should succeed")
         .build()
         .expect("reader with schema");
 
         let batch = arrow_reader.next().unwrap().unwrap();
         let schema = Arc::new(Schema::new(vec![
             Field::new("value", ArrowDataType::Int64, false),
-            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+            row_number_field,
         ]));
 
         assert_eq!(batch.schema(), schema);
@@ -5085,19 +5216,21 @@ pub(crate) mod tests {
             Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
         )]);
         let mut metadata = ArrowReaderMetadata::load(&file, Default::default()).unwrap();
-        metadata.fields = None;
+        metadata.fields = None; // TODO @vustef: Work out how to best trigger empty schema, only virtual columns...what would return empty results? And are both needed?
+        metadata.schema = Arc::new(Schema::empty());
+
+        let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber);
 
         let mut arrow_reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
-            .with_row_number_column("row_number")
+            .with_fields_appended(vec![row_number_field.clone()])
+            .expect("with_fields_appended should succeed")
             .build()
             .expect("reader with schema");
 
         let batch = arrow_reader.next().unwrap().unwrap();
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "row_number",
-            ArrowDataType::Int64,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![
+            row_number_field,
+        ]));
 
         assert_eq!(batch.schema(), schema);
         assert_eq!(batch.num_columns(), 1);

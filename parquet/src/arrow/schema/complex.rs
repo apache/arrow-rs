@@ -186,35 +186,17 @@ impl Visitor {
 
         let parquet_fields = struct_type.get_fields();
 
-        // Virtual columns are only supported at the root level (def_level == 0 && rep_level == 0)
-        let allow_virtual_columns = def_level == 0 && rep_level == 0;
-
-        // Extract any arrow fields from the hints and compute capacity
-        let (arrow_fields, capacity) = match &context.data_type {
+        // Extract any arrow fields from the hints
+        let arrow_fields = match &context.data_type {
             Some(DataType::Struct(fields)) => {
-                // Check length after filtering out virtual columns (only at root level)
-                let non_virtual_count = if allow_virtual_columns {
-                    fields.iter()
-                        .filter(|field| !is_virtual_column(field))
-                        .count()
-                } else {
-                    // Verify no virtual columns exist at non-root levels
-                    if fields.iter().any(|field| is_virtual_column(field)) {
-                        return Err(arrow_err!(
-                            "virtual columns are only supported at the root level of the schema"
-                        ));
-                    }
-                    fields.len()
-                };
-
-                if non_virtual_count != parquet_fields.len() {
+                if fields.len() != parquet_fields.len() {
                     return Err(arrow_err!(
-                        "incompatible arrow schema, expected {} struct fields got {} (after filtering virtual columns)",
+                        "incompatible arrow schema, expected {} struct fields got {}",
                         parquet_fields.len(),
-                        non_virtual_count
+                        fields.len()
                     ));
                 }
-                (Some(fields), fields.len())
+                Some(fields)
             }
             Some(d) => {
                 return Err(arrow_err!(
@@ -222,67 +204,41 @@ impl Visitor {
                     d
                 ));
             }
-            None => (None, parquet_fields.len()),
+            None => None,
         };
 
-        let mut child_fields = SchemaBuilder::with_capacity(capacity);
-        let mut children = Vec::with_capacity(capacity);
+        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len());
+        let mut children = Vec::with_capacity(parquet_fields.len());
 
         // Perform a DFS of children
-        if let Some(fields) = arrow_fields {
-            let mut parquet_idx = 0;
-            for arrow_field in fields.iter() {
-                if is_virtual_column(arrow_field) {
-                    // Handle virtual column - create a ParquetField for it
-                    let virtual_parquet_field = convert_virtual_field(arrow_field, rep_level, def_level)?;
-                    child_fields.push(arrow_field.clone());
-                    children.push(virtual_parquet_field);
-                } else {
-                    // Non-virtual column - match with parquet field
-                    if parquet_idx >= parquet_fields.len() {
-                        return Err(arrow_err!(
-                            "incompatible arrow schema, more non-virtual fields than parquet fields"
-                        ));
-                    }
-
-                    let parquet_field = &parquet_fields[parquet_idx];
-                    if arrow_field.name() != parquet_field.name() {
+        for (idx, parquet_field) in parquet_fields.iter().enumerate() {
+            let data_type = match arrow_fields {
+                Some(fields) => {
+                    let field = &fields[idx];
+                    if field.name() != parquet_field.name() {
                         return Err(arrow_err!(
                             "incompatible arrow schema, expected field named {} got {}",
                             parquet_field.name(),
-                            arrow_field.name()
+                            field.name()
                         ));
                     }
-
-                    let child_ctx = VisitorContext {
-                        rep_level,
-                        def_level,
-                        data_type: Some(arrow_field.data_type().clone()),
-                    };
-
-                    if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
-                        // The child type returned may be different from what is encoded in the arrow
-                        // schema in the event of a mismatch or a projection
-                        child_fields.push(convert_field(parquet_field, &mut child, Some(arrow_field))?);
-                        children.push(child);
-                    }
-
-                    parquet_idx += 1;
+                    Some(field.data_type().clone())
                 }
-            }
-        } else {
-            // No arrow fields provided - process all parquet fields
-            for parquet_field in parquet_fields.iter() {
-                let child_ctx = VisitorContext {
-                    rep_level,
-                    def_level,
-                    data_type: None,
-                };
+                None => None,
+            };
 
-                if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
-                    child_fields.push(convert_field(parquet_field, &mut child, None)?);
-                    children.push(child);
-                }
+            let arrow_field = arrow_fields.map(|x| &*x[idx]);
+            let child_ctx = VisitorContext {
+                rep_level,
+                def_level,
+                data_type,
+            };
+
+            if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
+                // The child type returned may be different from what is encoded in the arrow
+                // schema in the event of a mismatch or a projection
+                child_fields.push(convert_field(parquet_field, &mut child, arrow_field)?);
+                children.push(child);
             }
         }
 
