@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
 use std::sync::{Arc, Mutex};
-
-use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
@@ -26,6 +25,7 @@ use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::row_group_cache::RowGroupCache;
+use crate::arrow::array_reader::row_number::RowNumberReader;
 use crate::arrow::array_reader::{
     ArrayReader, FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
     PrimitiveArrayReader, RowGroups, StructArrayReader, make_byte_array_dictionary_reader,
@@ -113,25 +113,39 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: Option<&ParquetField>,
         mask: &ProjectionMask,
-    ) -> Result<Box<dyn ArrayReader>> {
+        row_number_column: Option<&str>,
+) -> Result<Box<dyn ArrayReader>> {
         let reader = field
-            .and_then(|field| self.build_reader(field, mask).transpose())
-            .transpose()?
-            .unwrap_or_else(|| make_empty_array_reader(self.num_rows()));
+            .and_then(|field| self.build_reader(field, mask, row_number_column).transpose())
+            .or_else(|| {
+            row_number_column.map(|column| {
+                let row_number_reader = self.build_row_number_reader()?;
+                let reader: Box<dyn ArrayReader> = Box::new(StructArrayReader::new(
+                    DataType::Struct(Fields::from(vec![Field::new(
+                        column,
+                        row_number_reader.get_data_type().clone(),
+                        false,
+                    )])),
+                    vec![row_number_reader],
+                    0,
+                    0,
+                    false,
+                ));
+                Ok(reader)
+            })
+        })
+        .transpose()?
+            .unwrap_or_else(|| make_empty_array_reader(self.row_groups.num_rows()));
 
         Ok(reader)
-    }
-
-    /// Return the total number of rows
-    fn num_rows(&self) -> usize {
-        self.row_groups.num_rows()
     }
 
     fn build_reader(
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+        row_number_column: Option<&str>,
+) -> Result<Option<Box<dyn ArrayReader>>> {
         match field.field_type {
             ParquetFieldType::Primitive { col_idx, .. } => {
                 let Some(reader) = self.build_primitive_reader(field, mask)? else {
@@ -155,13 +169,17 @@ impl<'a> ArrayReaderBuilder<'a> {
             }
             ParquetFieldType::Group { .. } => match &field.arrow_type {
                 DataType::Map(_, _) => self.build_map_reader(field, mask),
-                DataType::Struct(_) => self.build_struct_reader(field, mask),
+                DataType::Struct(_) => self.build_struct_reader(field, mask, row_number_column),
                 DataType::List(_) => self.build_list_reader(field, mask, false),
                 DataType::LargeList(_) => self.build_list_reader(field, mask, true),
                 DataType::FixedSizeList(_, _) => self.build_fixed_size_list_reader(field, mask),
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
+    }
+
+    fn build_row_number_reader(&self) -> Result<Box<dyn ArrayReader>> {
+        Ok(Box::new(RowNumberReader::try_new(self.row_groups.row_groups())?))
     }
 
     /// Build array reader for map type.
@@ -173,8 +191,8 @@ impl<'a> ArrayReaderBuilder<'a> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 2);
 
-        let key_reader = self.build_reader(&children[0], mask)?;
-        let value_reader = self.build_reader(&children[1], mask)?;
+        let key_reader = self.build_reader(&children[0], mask, None)?;
+        let value_reader = self.build_reader(&children[1], mask, None)?;
 
         match (key_reader, value_reader) {
             (Some(key_reader), Some(value_reader)) => {
@@ -225,7 +243,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(&children[0], mask, None)? {
             Some(item_reader) => {
                 // Need to retrieve underlying data type to handle projection
                 let item_type = item_reader.get_data_type().clone();
@@ -271,7 +289,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         let children = field.children().unwrap();
         assert_eq!(children.len(), 1);
 
-        let reader = match self.build_reader(&children[0], mask)? {
+        let reader = match self.build_reader(&children[0], mask, None)? {
             Some(item_reader) => {
                 let item_type = item_reader.get_data_type().clone();
                 let reader = match &field.arrow_type {
@@ -401,7 +419,8 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+        row_number_column: Option<&str>,
+) -> Result<Option<Box<dyn ArrayReader>>> {
         let arrow_fields = match &field.arrow_type {
             DataType::Struct(children) => children,
             _ => unreachable!(),
@@ -413,13 +432,23 @@ impl<'a> ArrayReaderBuilder<'a> {
         let mut builder = SchemaBuilder::with_capacity(children.len());
 
         for (arrow, parquet) in arrow_fields.iter().zip(children) {
-            if let Some(reader) = self.build_reader(parquet, mask)? {
+            if let Some(reader) = self.build_reader(parquet, mask, None)? {
                 // Need to retrieve underlying data type to handle projection
                 let child_type = reader.get_data_type().clone();
                 builder.push(arrow.as_ref().clone().with_data_type(child_type));
                 readers.push(reader);
             }
         }
+
+    if let Some(row_number_column) = row_number_column {
+        let reader = self.build_row_number_reader()?;
+        builder.push(Field::new(
+            row_number_column,
+            reader.get_data_type().clone(),
+            false,
+        ));
+        readers.push(reader);
+    }
 
         if readers.is_empty() {
             return Ok(None);
@@ -460,7 +489,7 @@ mod tests {
 
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
-            .build_array_reader(fields.as_ref(), &mask)
+            .build_array_reader(fields.as_ref(), &mask, None)
             .unwrap();
 
         // Create arrow types
@@ -469,6 +498,38 @@ mod tests {
             DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
             true,
         )]));
+
+        assert_eq!(array_reader.get_data_type(), &arrow_type);
+    }
+
+    #[test]
+    fn test_create_array_reader_with_row_numbers() {
+        let file = get_test_file("nulls.snappy.parquet");
+        let file_reader: Arc<dyn FileReader> = Arc::new(SerializedFileReader::new(file).unwrap());
+
+        let file_metadata = file_reader.metadata().file_metadata();
+        let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
+        let (_, fields) = parquet_to_arrow_schema_and_fields(
+            file_metadata.schema_descr(),
+            ProjectionMask::all(),
+            file_metadata.key_value_metadata(),
+        )
+        .unwrap();
+
+        let metrics = ArrowReaderMetrics::disabled();
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .build_array_reader(fields.as_ref(), &mask, Some("row_number"))
+            .unwrap();
+
+        // Create arrow types
+        let arrow_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "b_struct",
+                DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
+                true,
+            ),
+            Field::new("row_number", DataType::Int64, false),
+        ]));
 
         assert_eq!(array_reader.get_data_type(), &arrow_type);
     }

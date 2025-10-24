@@ -129,6 +129,10 @@ impl RowGroups for InMemoryRowGroup {
             }
         }
     }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(std::iter::once(&self.metadata))
+    }
 }
 
 impl InMemoryRowGroup {
