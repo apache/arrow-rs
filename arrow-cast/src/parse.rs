@@ -2763,7 +2763,7 @@ mod tests {
         }
 
         let zero_scale_tests = [
-          ("0.123", 0),
+            ("0.123", 0),
             ("1.0", 1),
             ("1.2", 1),
             ("1.00", 1),
@@ -2774,6 +2774,7 @@ mod tests {
             ("123.4", 123),
             ("123.00", 123),
             ("123.45", 123),
+            ("123.000000000000000000004", 123),
         ];
         for (s, i) in zero_scale_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, 3, 0).unwrap();
