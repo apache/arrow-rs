@@ -122,6 +122,12 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// Returns a filtered `values` [`Array`] where the corresponding elements of
 /// `predicate` are `true`.
 ///
+/// If multiple arrays (or record batches) need to be filtered using the same predicate array,
+/// consider using [FilterBuilder] to create a single [FilterPredicate] and then
+/// calling [FilterPredicate::filter_record_batch].
+/// In contrast to this function, it is then the responsibility of the caller
+/// to use [FilterBuilder::optimize] if appropriate.
+///
 /// # See also
 /// * [`FilterBuilder`] for more control over the filtering process.
 /// * [`filter_record_batch`] to filter a [`RecordBatch`]
@@ -168,6 +174,12 @@ fn multiple_arrays(data_type: &DataType) -> bool {
 /// `predicate` are true.
 ///
 /// This is the equivalent of calling [filter] on each column of the [RecordBatch].
+///
+/// If multiple record batches (or arrays) need to be filtered using the same predicate array,
+/// consider using [FilterBuilder] to create a single [FilterPredicate] and then
+/// calling [FilterPredicate::filter_record_batch].
+/// In contrast to this function, it is then the responsibility of the caller
+/// to use [FilterBuilder::optimize] if appropriate.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
