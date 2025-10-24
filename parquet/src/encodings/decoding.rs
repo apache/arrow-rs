@@ -2137,16 +2137,20 @@ mod tests {
         let mut read_buffer = vec![0; 32];
         let err = decoder.get(&mut read_buffer).unwrap_err();
         assert!(
-            err.to_string().contains("Invalid delta bit width 33 which is larger than expected 32"),
-            "{}", err
+            err.to_string()
+                .contains("Invalid delta bit width 33 which is larger than expected 32"),
+            "{}",
+            err
         );
 
         let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
         decoder.set_data(corrupted_buffer, 32).unwrap();
         let err = decoder.skip(32).unwrap_err();
         assert!(
-            err.to_string().contains("Invalid delta bit width 33 which is larger than expected 32"),
-            "{}", err
+            err.to_string()
+                .contains("Invalid delta bit width 33 which is larger than expected 32"),
+            "{}",
+            err
         );
     }
 }
