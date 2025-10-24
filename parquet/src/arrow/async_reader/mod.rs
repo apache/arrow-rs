@@ -1007,11 +1007,11 @@ impl InMemoryRowGroup<'_> {
                 .filter(|&(idx, (chunk, _chunk_meta))| {
                     chunk.is_none() && projection.leaf_included(idx)
                 })
-                .flat_map(|(idx, (_chunk, chunk_meta))| {
+                .flat_map(|(idx, (_chunk, chunk_meta))| -> Result<Vec<Range<u64>>> {
                     // If the first page does not start at the beginning of the column,
                     // then we need to also fetch a dictionary page.
                     let mut ranges: Vec<Range<u64>> = vec![];
-                    let (start, _len) = chunk_meta.byte_range();
+                    let (start, _len) = chunk_meta.byte_range()?;
                     match offset_index[idx].page_locations.first() {
                         Some(first) if first.offset as u64 != start => {
                             ranges.push(start..first.offset as u64);
@@ -1030,8 +1030,11 @@ impl InMemoryRowGroup<'_> {
                     }
                     page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
 
-                    ranges
+                    Ok(ranges)
                 })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .flat_map(|ranges| ranges)
                 .collect();
 
             let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
@@ -1049,7 +1052,7 @@ impl InMemoryRowGroup<'_> {
                     }
 
                     *chunk = Some(Arc::new(ColumnChunkData::Sparse {
-                        length: metadata.column(idx).byte_range().1 as usize,
+                        length: metadata.column(idx).byte_range()?.1 as usize,
                         data: offsets
                             .into_iter()
                             .map(|x| x as usize)
@@ -1059,19 +1062,19 @@ impl InMemoryRowGroup<'_> {
                 }
             }
         } else {
-            let fetch_ranges = self
+            let fetch_ranges: Result<Vec<Range<u64>>> = self
                 .column_chunks
                 .iter()
                 .enumerate()
                 .filter(|&(idx, chunk)| chunk.is_none() && projection.leaf_included(idx))
                 .map(|(idx, _chunk)| {
                     let column = metadata.column(idx);
-                    let (start, length) = column.byte_range();
-                    start..(start + length)
+                    let (start, length) = column.byte_range()?;
+                    Ok(start..(start + length))
                 })
                 .collect();
 
-            let mut chunk_data = input.get_byte_ranges(fetch_ranges).await?.into_iter();
+            let mut chunk_data = input.get_byte_ranges(fetch_ranges?).await?.into_iter();
 
             for (idx, chunk) in self.column_chunks.iter_mut().enumerate() {
                 if chunk.is_some() || !projection.leaf_included(idx) {
@@ -1080,7 +1083,7 @@ impl InMemoryRowGroup<'_> {
 
                 if let Some(data) = chunk_data.next() {
                     *chunk = Some(Arc::new(ColumnChunkData::Dense {
-                        offset: metadata.column(idx).byte_range().0 as usize,
+                        offset: metadata.column(idx).byte_range()?.0 as usize,
                         data,
                     }));
                 }
@@ -1314,8 +1317,8 @@ mod tests {
         assert_eq!(async_batches, sync_batches);
 
         let requests = requests.lock().unwrap();
-        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range();
-        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range();
+        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range().unwrap();
+        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range().unwrap();
 
         assert_eq!(
             &requests[..],
@@ -1371,8 +1374,8 @@ mod tests {
         assert_eq!(async_batches, sync_batches);
 
         let requests = requests.lock().unwrap();
-        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range();
-        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range();
+        let (offset_1, length_1) = metadata.row_group(0).column(1).byte_range().unwrap();
+        let (offset_2, length_2) = metadata.row_group(0).column(2).byte_range().unwrap();
 
         assert_eq!(
             &requests[..],
