@@ -2108,6 +2108,8 @@ mod tests {
     }
 
     #[test]
+    // Allow initializing a vector and pushing to it for clarity in this test
+    #[allow(clippy::vec_init_then_push)]
     fn test_delta_bit_packed_invalid_bit_width() {
         // Manually craft a buffer with an invalid bit width
         let mut buffer = vec![];
