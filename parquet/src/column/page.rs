@@ -31,7 +31,7 @@ use crate::file::statistics::{Statistics, page_stats_to_thrift};
 /// List of supported pages.
 /// These are 1-to-1 mapped from the equivalent Thrift definitions, except `buf` which
 /// used to store uncompressed bytes of the page.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Page {
     /// Data page Parquet format v1.
     DataPage {
