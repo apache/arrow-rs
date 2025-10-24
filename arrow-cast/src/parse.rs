@@ -741,32 +741,23 @@ fn parse_e_notation<T: DecimalType>(
     let mut exp: i16 = 0;
     let base = T::Native::usize_as(10);
 
-    let mut exp_start: bool = false;
     // e has a plus sign
     let mut pos_shift_direction: bool = true;
 
-    // skip to point or exponent index
-    let mut bs;
-    if fractionals > 0 {
-        // it's a fraction, so the point index needs to be skipped, so +1
-        bs = s.as_bytes().iter().skip(index + fractionals as usize + 1);
-    } else {
-        // it's actually an integer that is already written into the result, so let's skip on to e
-        bs = s.as_bytes().iter().skip(index);
-    }
+    // skip to the exponent index directly or just after any processed fractionals
+    let mut bs = s.as_bytes().iter().skip(index + fractionals as usize);
 
-    while let Some(b) = bs.next() {
+    // complete parsing of any unprocessed fractionals up to the exponent
+    for b in bs.by_ref() {
         match b {
             b'0'..=b'9' => {
                 result = result.mul_wrapping(base);
                 result = result.add_wrapping(T::Native::usize_as((b - b'0') as usize));
-                if fractionals > 0 {
-                    fractionals += 1;
-                }
+                fractionals += 1;
                 digits += 1;
             }
-            &b'e' | &b'E' => {
-                exp_start = true;
+            b'e' | b'E' => {
+                break;
             }
             _ => {
                 return Err(ArrowError::ParseError(format!(
@@ -774,38 +765,28 @@ fn parse_e_notation<T: DecimalType>(
                 )));
             }
         };
+    }
 
-        if exp_start {
-            pos_shift_direction = match bs.next() {
-                Some(&b'-') => false,
-                Some(&b'+') => true,
-                Some(b) => {
-                    if !b.is_ascii_digit() {
-                        return Err(ArrowError::ParseError(format!(
-                            "can't parse the string value {s} to decimal"
-                        )));
-                    }
-
-                    exp *= 10;
-                    exp += (b - b'0') as i16;
-
-                    true
-                }
-                None => {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
-                }
-            };
-
-            for b in bs.by_ref() {
-                if !b.is_ascii_digit() {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
-                }
+    // parse the exponent itself
+    let mut signed = false;
+    for b in bs {
+        match b {
+            b'-' if !signed => {
+                pos_shift_direction = false;
+                signed = true;
+            }
+            b'+' if !signed => {
+                pos_shift_direction = true;
+                signed = true;
+            }
+            b if b.is_ascii_digit() => {
                 exp *= 10;
                 exp += (b - b'0') as i16;
+            }
+            _ => {
+                return Err(ArrowError::ParseError(format!(
+                    "can't parse the string value {s} to decimal"
+                )));
             }
         }
     }
@@ -903,7 +884,7 @@ pub fn parse_decimal<T: DecimalType>(
                                 digits as u16,
                                 fractionals as i16,
                                 result,
-                                point_index,
+                                point_index + 1,
                                 precision as u16,
                                 scale as i16,
                             )?;
@@ -916,7 +897,7 @@ pub fn parse_decimal<T: DecimalType>(
                             "can't parse the string value {s} to decimal"
                         )));
                     }
-                    if fractionals == scale && scale != 0 {
+                    if fractionals == scale {
                         // We have processed all the digits that we need. All that
                         // is left is to validate that the rest of the string contains
                         // valid digits.
@@ -933,7 +914,7 @@ pub fn parse_decimal<T: DecimalType>(
                 }
 
                 // Fail on "."
-                if digits == 0 {
+                if digits == 0 && scale != 0 {
                     return Err(ArrowError::ParseError(format!(
                         "can't parse the string value {s} to decimal"
                     )));
@@ -963,14 +944,6 @@ pub fn parse_decimal<T: DecimalType>(
     }
 
     if !is_e_notation {
-        if scale == 0 && fractionals > 0 {
-            // The input string contained some fractional digits after the decimal point despite
-            // the scale being zero. Eject all the fractional digits from the number.
-            result = result.div_wrapping(base.pow_wrapping(fractionals as _));
-            digits -= fractionals as u8;
-            fractionals = 0;
-        }
-
         if fractionals < scale {
             let exp = scale - fractionals;
             if exp as u8 + digits > precision {
@@ -2763,20 +2736,31 @@ mod tests {
         }
 
         let zero_scale_tests = [
-          ("0.123", 0),
-            ("1.0", 1),
-            ("1.2", 1),
-            ("1.00", 1),
-            ("1.23", 1),
-            ("1.000", 1),
-            ("1.123", 1),
-            ("123.0", 123),
-            ("123.4", 123),
-            ("123.00", 123),
-            ("123.45", 123),
+            ("0.123", 0, 3),
+            ("1.0", 1, 3),
+            ("1.2", 1, 3),
+            ("1.00", 1, 3),
+            ("1.23", 1, 3),
+            ("1.000", 1, 3),
+            ("1.123", 1, 3),
+            ("123.0", 123, 3),
+            ("123.4", 123, 3),
+            ("123.00", 123, 3),
+            ("123.45", 123, 3),
+            ("123.000000000000000000004", 123, 3),
+            ("0.123e2", 12, 3),
+            ("0.123e4", 1230, 10),
+            ("1.23e4", 12300, 10),
+            ("12.3e4", 123000, 10),
+            ("123e4", 1230000, 10),
+            (
+                "20000000000000000000000000000000000002.0",
+                20000000000000000000000000000000000002,
+                38,
+            ),
         ];
-        for (s, i) in zero_scale_tests {
-            let result_128 = parse_decimal::<Decimal128Type>(s, 3, 0).unwrap();
+        for (s, i, precision) in zero_scale_tests {
+            let result_128 = parse_decimal::<Decimal128Type>(s, precision, 0).unwrap();
             assert_eq!(i, result_128);
         }
     }
