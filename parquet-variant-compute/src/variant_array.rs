@@ -870,6 +870,40 @@ impl From<BorrowedShreddingState<'_>> for ShreddingState {
     }
 }
 
+pub enum ShreddingStateCow<'a> {
+    Owned(ShreddingState),
+    Borrowed(BorrowedShreddingState<'a>),
+}
+
+impl<'a> From<ShreddingState> for ShreddingStateCow<'a> {
+    fn from(s: ShreddingState) -> Self {
+        Self::Owned(s)
+    }
+}
+impl<'a> From<BorrowedShreddingState<'a>> for ShreddingStateCow<'a> {
+    fn from(s: BorrowedShreddingState<'a>) -> Self {
+        Self::Borrowed(s)
+    }
+}
+
+impl<'a> ShreddingStateCow<'a> {
+    /// Always gives the caller a borrowed view, even if we own internally.
+    pub fn as_view(&self) -> BorrowedShreddingState<'_> {
+        match self {
+            ShreddingStateCow::Borrowed(b) => b.clone(),
+            ShreddingStateCow::Owned(o) => o.borrow(),
+        }
+    }
+
+    /// Materialize ownership when the caller needs to keep it.
+    pub fn into_owned(self) -> ShreddingState {
+        match self {
+            ShreddingStateCow::Borrowed(b) => b.into(),
+            ShreddingStateCow::Owned(o) => o,
+        }
+    }
+}
+
 /// Builds struct arrays from component fields
 ///
 /// TODO: move to arrow crate

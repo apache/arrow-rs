@@ -16,25 +16,24 @@
 // under the License.
 use arrow::{
     array::{self, Array, ArrayRef, BinaryViewArray, GenericListArray, StructArray, UInt32Array},
-    compute::{take, CastOptions},
+    compute::{CastOptions, take},
     datatypes::Field,
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement, EMPTY_VARIANT_METADATA_BYTES};
+use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantPath, VariantPathElement};
 
-use crate::variant_array::{ShreddingState, StructArrayBuilder};
-use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
-use crate::VariantArray;
 use crate::variant_array::BorrowedShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
+use crate::{ShreddingState, variant_array::StructArrayBuilder};
+use crate::{VariantArray, variant_array::ShreddingStateCow};
 
 use arrow::array::AsArray;
 use std::sync::Arc;
 
 pub(crate) enum ShreddedPathStep<'a> {
     /// Path step succeeded, return the new shredding state
-    Success(BorrowedShreddingState<'a>),
+    Success(ShreddingStateCow<'a>),
     /// The path element is not present in the `typed_value` column and there is no `value` column,
     /// so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
@@ -99,7 +98,7 @@ pub(crate) fn follow_shredded_path_element<'a>(
             })?;
 
             let state = BorrowedShreddingState::try_from(struct_array)?;
-            Ok(ShreddedPathStep::Success(state))
+            Ok(ShreddedPathStep::Success(state.into()))
         }
         VariantPathElement::Index { index } => {
             // TODO: Support array indexing. Among other things, it will require slicing not
@@ -126,7 +125,7 @@ pub(crate) fn follow_shredded_path_element<'a>(
             };
 
             let Some(typed_array) = struct_array.column_by_name("typed_value") else {
-                return Ok(missing_path_step())
+                return Ok(missing_path_step());
             };
 
             // Build the list of indices to take
@@ -158,7 +157,8 @@ pub(crate) fn follow_shredded_path_element<'a>(
                 .with_field("typed_value", taken, true)
                 .build();
 
-            Ok(ShreddedPathStep::Success(struct_array.into()))
+            let state = ShreddingState::try_from(struct_array)?;
+            Ok(ShreddedPathStep::Success(state.into()))
         }
     }
 }
@@ -205,20 +205,21 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state().borrow();
+    let mut shredding_state = ShreddingStateCow::Borrowed(input.shredding_state().borrow());
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
-        match follow_shredded_path_element(&shredding_state, path_element, cast_options)? {
+        match follow_shredded_path_element(&shredding_state.as_view(), path_element, cast_options)?
+        {
             ShreddedPathStep::Success(state) => {
                 // Union nulls from the typed_value we just accessed
-                if let Some(typed_value) = shredding_state.typed_value_field() {
+                if let Some(typed_value) = shredding_state.as_view().typed_value_field() {
                     accumulated_nulls = arrow::buffer::NullBuffer::union(
                         accumulated_nulls.as_ref(),
                         typed_value.nulls(),
                     );
                 }
-                shredding_state = state;
+                shredding_state = ShreddingStateCow::Owned(state.into_owned());
                 path_index += 1;
                 continue;
             }
@@ -232,7 +233,7 @@ fn shredded_get_path(
             }
             ShreddedPathStep::NotShredded => {
                 let target = make_target_variant(
-                    shredding_state.value_field().cloned(),
+                    shredding_state.as_view().value_field().cloned(),
                     None,
                     accumulated_nulls,
                 );
@@ -243,8 +244,8 @@ fn shredded_get_path(
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.
     let target = make_target_variant(
-        shredding_state.value_field().cloned(),
-        shredding_state.typed_value_field().cloned(),
+        shredding_state.as_view().value_field().cloned(),
+        shredding_state.as_view().typed_value_field().cloned(),
         accumulated_nulls,
     );
 
@@ -355,9 +356,9 @@ mod test {
     use crate::{VariantArray, VariantArrayBuilder, VariantValueArrayBuilder, json_to_variant};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
-        Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
-        GenericListArray, Int16Array, Int32Array, Int64Array, NullBuilder, LargeStringArray, StringArray, StringViewArray,
-        StructArray, Time64MicrosecondArray,
+        Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
+        GenericListArray, Int8Array, Int16Array, Int32Array, Int64Array, LargeStringArray,
+        NullBuilder, StringArray, StringViewArray, StructArray, Time64MicrosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::compute::CastOptions;

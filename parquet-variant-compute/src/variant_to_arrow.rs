@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, BinaryViewArray, BooleanBuilder, NullArray, NullBufferBuilder, PrimitiveBuilder,
-    LargeStringBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder, 
+    ArrayRef, BinaryViewArray, BooleanBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
+    PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
 };
 use arrow::compute::{CastOptions, DecimalCast};
 use arrow::datatypes::{self, DataType, DecimalType};
