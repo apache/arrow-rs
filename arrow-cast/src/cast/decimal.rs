@@ -922,4 +922,58 @@ mod tests {
         );
         Ok(())
     }
+
+    #[test]
+    fn test_rescale_decimal_upscale_within_precision() {
+        let result = rescale_decimal::<Decimal128Type, Decimal128Type>(
+            12_345_i128, // 123.45 with scale 2
+            5,
+            2,
+            8,
+            5,
+        );
+        assert_eq!(result, Some(12_345_000_i128));
+    }
+
+    #[test]
+    fn test_rescale_decimal_downscale_rounds_half_away_from_zero() {
+        let positive = rescale_decimal::<Decimal128Type, Decimal128Type>(
+            1_050_i128, // 1.050 with scale 3
+            5, 3, 5, 1,
+        );
+        assert_eq!(positive, Some(11_i128)); // 1.1 with scale 1
+
+        let negative = rescale_decimal::<Decimal128Type, Decimal128Type>(
+            -1_050_i128, // -1.050 with scale 3
+            5,
+            3,
+            5,
+            1,
+        );
+        assert_eq!(negative, Some(-11_i128)); // -1.1 with scale 1
+    }
+
+    #[test]
+    fn test_rescale_decimal_downscale_large_delta_returns_zero() {
+        let result = rescale_decimal::<Decimal32Type, Decimal32Type>(12_345_i32, 9, 9, 9, 4);
+        assert_eq!(result, Some(0_i32));
+    }
+
+    #[test]
+    fn test_rescale_decimal_upscale_overflow_returns_none() {
+        let result = rescale_decimal::<Decimal32Type, Decimal32Type>(9_999_i32, 4, 0, 5, 2);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rescale_decimal_invalid_input_precision_scale_returns_none() {
+        let result = rescale_decimal::<Decimal128Type, Decimal128Type>(123_i128, 39, 39, 38, 38);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_rescale_decimal_invalid_output_precision_scale_returns_none() {
+        let result = rescale_decimal::<Decimal128Type, Decimal128Type>(123_i128, 38, 38, 39, 39);
+        assert_eq!(result, None);
+    }
 }
