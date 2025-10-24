@@ -81,6 +81,35 @@ macro_rules! thrift_enum {
                 Ok(field_id)
             }
         }
+
+        impl $identifier {
+            #[allow(deprecated)]
+            #[doc = "Returns a slice containing every variant of this enum."]
+            #[allow(dead_code)]
+            pub const VARIANTS: &'static [Self] = &[
+                $(Self::$field_name),*
+            ];
+
+            #[allow(deprecated)]
+            const fn max_discriminant_impl() -> i32 {
+                let values: &[i32] = &[$($field_value),*];
+                let mut max = values[0];
+                let mut idx = 1;
+                while idx < values.len() {
+                    let candidate = values[idx];
+                    if candidate > max {
+                        max = candidate;
+                    }
+                    idx += 1;
+                }
+                max
+            }
+
+            #[allow(deprecated)]
+            #[doc = "Returns the largest discriminant value defined for this enum."]
+            #[allow(dead_code)]
+            pub const MAX_DISCRIMINANT: i32 = Self::max_discriminant_impl();
+        }
     }
 }
 
