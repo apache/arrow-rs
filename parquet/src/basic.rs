@@ -741,7 +741,7 @@ pub struct EncodingMask(i32);
 
 impl EncodingMask {
     /// Highest valued discriminant in the [`Encoding`] enum
-    const MAX_ENCODING: i32 = Encoding::BYTE_STREAM_SPLIT as i32;
+    const MAX_ENCODING: i32 = Encoding::MAX_DISCRIMINANT;
     /// A mask consisting of unused bit positions, used for validation. This includes the never
     /// used GROUP_VAR_INT encoding value of `1`.
     const ALLOWED_MASK: u32 =

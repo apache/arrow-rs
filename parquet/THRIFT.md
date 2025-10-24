@@ -57,7 +57,7 @@ The `thrift_enum` macro can be used in this instance.
 
 ```rust
 thrift_enum!(
-    enum Type {
+enum Type {
   BOOLEAN = 0;
   INT32 = 1;
   INT64 = 2;
@@ -84,6 +84,8 @@ pub enum Type {
   FIXED_LEN_BYTE_ARRAY,
 }
 ```
+
+All Rust `enum`s produced with this macro will have `pub` visibility.
 
 ### Unions
 
@@ -174,6 +176,9 @@ pub enum ColumnCryptoMetaData {
     ENCRYPTION_WITH_COLUMN_KEY(EncryptionWithColumnKey),
 }
 ```
+
+All Rust `enum`s produced with either macro will have `pub` visibility. `thrift_union` also allows
+for lifetime annotations, but this capability is not currently utilized.
 
 ### Structs
 
