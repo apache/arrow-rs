@@ -28,6 +28,7 @@ use crate::file::page_index::column_index::{
 };
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics::{Statistics, ValueStatistics};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Trait for calculating the size of various containers
@@ -50,9 +51,60 @@ impl<T: HeapSize> HeapSize for Vec<T> {
     }
 }
 
+impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
+    fn heap_size(&self) -> usize {
+        let capacity = self.capacity();
+        if capacity == 0 {
+            return 0;
+        }
+
+        // HashMap doesn't provide a way to get its heap size, so this is an approximation based on
+        // the behavior of hashbrown::HashMap as at version 0.16.0, and may become inaccurate
+        // if the implementation changes.
+        let key_val_size = std::mem::size_of::<(K, V)>();
+        // Overhead for the control tags group, which may be smaller depending on architecture
+        let group_size = 16;
+        // 1 byte of metadata stored per bucket.
+        let metadata_size = 1;
+
+        // Compute the number of buckets for the capacity. Based on hashbrown's capacity_to_buckets
+        let buckets = if capacity < 15 {
+            let min_cap = match key_val_size {
+                0..=1 => 14,
+                2..=3 => 7,
+                _ => 3,
+            };
+            let cap = min_cap.max(capacity);
+            if cap < 4 {
+                4
+            } else if cap < 8 {
+                8
+            } else {
+                16
+            }
+        } else {
+            (capacity.saturating_mul(8) / 7).next_power_of_two()
+        };
+
+        group_size
+            + (buckets * (key_val_size + metadata_size))
+            + self.keys().map(|k| k.heap_size()).sum::<usize>()
+            + self.values().map(|v| v.heap_size()).sum::<usize>()
+    }
+}
+
 impl<T: HeapSize> HeapSize for Arc<T> {
     fn heap_size(&self) -> usize {
-        self.as_ref().heap_size()
+        // Arc stores weak and strong counts on the heap alongside an instance of T
+        2 * std::mem::size_of::<usize>() + std::mem::size_of::<T>() + self.as_ref().heap_size()
+    }
+}
+
+impl HeapSize for Arc<dyn HeapSize> {
+    fn heap_size(&self) -> usize {
+        2 * std::mem::size_of::<usize>()
+            + std::mem::size_of_val(self.as_ref())
+            + self.as_ref().heap_size()
     }
 }
 

@@ -287,11 +287,17 @@ impl ParquetMetaData {
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_size = self.file_decryptor.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_size = 0usize;
+
         std::mem::size_of::<Self>()
             + self.file_metadata.heap_size()
             + self.row_groups.heap_size()
             + self.column_index.heap_size()
             + self.offset_index.heap_size()
+            + encryption_size
     }
 
     /// Override the column index
@@ -1875,10 +1881,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2248;
+        let base_expected_size = 2766;
         #[cfg(feature = "encryption")]
-        // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
-        let base_expected_size = 2416;
+        let base_expected_size = 2934;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1907,14 +1912,88 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2674;
+        let bigger_expected_size = 3192;
         #[cfg(feature = "encryption")]
-        // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
-        let bigger_expected_size = 2842;
+        let bigger_expected_size = 3360;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_memory_size_with_decryptor() {
+        use crate::encryption::decrypt::FileDecryptionProperties;
+        use crate::file::metadata::thrift::encryption::AesGcmV1;
+
+        let schema_descr = get_test_schema_descr();
+
+        let columns = schema_descr
+            .columns()
+            .iter()
+            .map(|column_descr| ColumnChunkMetaData::builder(column_descr.clone()).build())
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        let row_group_meta = RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(1000)
+            .set_column_metadata(columns)
+            .build()
+            .unwrap();
+        let row_group_meta = vec![row_group_meta];
+
+        let version = 2;
+        let num_rows = 1000;
+        let aad_file_unique = vec![1u8; 8];
+        let aad_prefix = vec![2u8; 8];
+        let encryption_algorithm = EncryptionAlgorithm::AES_GCM_V1(AesGcmV1 {
+            aad_prefix: Some(aad_prefix.clone()),
+            aad_file_unique: Some(aad_file_unique.clone()),
+            supply_aad_prefix: Some(true),
+        });
+        let footer_key_metadata = Some(vec![3u8; 8]);
+        let file_metadata =
+            FileMetaData::new(version, num_rows, None, None, schema_descr.clone(), None)
+                .with_encryption_algorithm(Some(encryption_algorithm))
+                .with_footer_signing_key_metadata(footer_key_metadata.clone());
+
+        let parquet_meta_data = ParquetMetaDataBuilder::new(file_metadata.clone())
+            .set_row_groups(row_group_meta.clone())
+            .build();
+
+        let base_expected_size = 2058;
+        assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
+
+        let footer_key = "0123456789012345".as_bytes();
+        let column_key = "1234567890123450".as_bytes();
+        let mut decryption_properties_builder =
+            FileDecryptionProperties::builder(footer_key.to_vec())
+                .with_aad_prefix(aad_prefix.clone());
+        for column in schema_descr.columns() {
+            decryption_properties_builder = decryption_properties_builder
+                .with_column_key(&column.path().string(), column_key.to_vec());
+        }
+        let decryption_properties = decryption_properties_builder.build().unwrap();
+        let decryptor = FileDecryptor::new(
+            &decryption_properties,
+            footer_key_metadata.as_deref(),
+            aad_file_unique,
+            aad_prefix,
+        )
+        .unwrap();
+
+        let parquet_meta_data = ParquetMetaDataBuilder::new(file_metadata.clone())
+            .set_row_groups(row_group_meta.clone())
+            .set_file_decryptor(Some(decryptor))
+            .build();
+
+        let expected_size_with_decryptor = 3072;
+        assert!(expected_size_with_decryptor > base_expected_size);
+
+        assert_eq!(
+            parquet_meta_data.memory_size(),
+            expected_size_with_decryptor
+        );
     }
 
     /// Returns sample schema descriptor so we can create column metadata.
