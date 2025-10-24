@@ -15,8 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util};
-use std::ops::Range;
+use crate::{
+    BooleanBuffer, Buffer, MutableBuffer, MutableOpsBufferSupportedLhs, bit_mask, bit_util,
+    mutable_buffer_bin_and, mutable_buffer_bin_or, mutable_buffer_bin_xor,
+    mutable_buffer_unary_not,
+};
+use std::ops::{BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Not, Range};
 
 /// Builder for [`BooleanBuffer`]
 ///
@@ -258,6 +262,133 @@ impl BooleanBufferBuilder {
     }
 }
 
+/// This trait is not public API so it does not leak the inner mutable buffer
+impl MutableOpsBufferSupportedLhs for BooleanBufferBuilder {
+    fn inner_mutable_buffer(&mut self) -> &mut MutableBuffer {
+        &mut self.buffer
+    }
+}
+
+impl Not for BooleanBufferBuilder {
+    type Output = BooleanBufferBuilder;
+
+    fn not(mut self) -> Self::Output {
+        mutable_buffer_unary_not(&mut self.buffer, 0, self.len);
+        Self {
+            buffer: self.buffer,
+            len: self.len,
+        }
+    }
+}
+
+impl BitAnd<&BooleanBuffer> for BooleanBufferBuilder {
+    type Output = BooleanBufferBuilder;
+
+    fn bitand(mut self, rhs: &BooleanBuffer) -> Self::Output {
+        self &= rhs;
+
+        self
+    }
+}
+
+impl BitAnd<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    type Output = BooleanBufferBuilder;
+
+    fn bitand(mut self, rhs: &BooleanBufferBuilder) -> Self::Output {
+        self &= rhs;
+
+        self
+    }
+}
+
+impl BitAndAssign<&BooleanBuffer> for BooleanBufferBuilder {
+    fn bitand_assign(&mut self, rhs: &BooleanBuffer) {
+        assert_eq!(self.len, rhs.len());
+
+        mutable_buffer_bin_and(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
+    }
+}
+
+impl BitAndAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    fn bitand_assign(&mut self, rhs: &BooleanBufferBuilder) {
+        assert_eq!(self.len, rhs.len());
+
+        mutable_buffer_bin_and(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+    }
+}
+
+impl BitOr<&BooleanBuffer> for BooleanBufferBuilder {
+    type Output = BooleanBufferBuilder;
+
+    fn bitor(mut self, rhs: &BooleanBuffer) -> Self::Output {
+        self |= rhs;
+
+        self
+    }
+}
+
+impl BitOr<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    type Output = BooleanBufferBuilder;
+
+    fn bitor(mut self, rhs: &BooleanBufferBuilder) -> Self::Output {
+        self |= rhs;
+
+        self
+    }
+}
+
+impl BitOrAssign<&BooleanBuffer> for BooleanBufferBuilder {
+    fn bitor_assign(&mut self, rhs: &BooleanBuffer) {
+        assert_eq!(self.len, rhs.len());
+
+        mutable_buffer_bin_or(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
+    }
+}
+
+impl BitOrAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    fn bitor_assign(&mut self, rhs: &BooleanBufferBuilder) {
+        assert_eq!(self.len, rhs.len());
+
+        mutable_buffer_bin_or(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+    }
+}
+
+impl BitXor<&BooleanBuffer> for BooleanBufferBuilder {
+    type Output = BooleanBufferBuilder;
+
+    fn bitxor(mut self, rhs: &BooleanBuffer) -> Self::Output {
+        self ^= rhs;
+
+        self
+    }
+}
+
+impl BitXor<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    type Output = BooleanBufferBuilder;
+
+    fn bitxor(mut self, rhs: &BooleanBufferBuilder) -> Self::Output {
+        self ^= rhs;
+
+        self
+    }
+}
+
+impl BitXorAssign<&BooleanBuffer> for BooleanBufferBuilder {
+    fn bitxor_assign(&mut self, rhs: &BooleanBuffer) {
+        assert_eq!(self.len, rhs.len());
+
+        mutable_buffer_bin_xor(&mut self.buffer, 0, rhs.inner(), rhs.offset(), self.len);
+    }
+}
+
+impl BitXorAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    fn bitxor_assign(&mut self, rhs: &BooleanBufferBuilder) {
+        assert_eq!(self.len, rhs.len());
+
+        mutable_buffer_bin_xor(&mut self.buffer, 0, &rhs.buffer, 0, self.len);
+    }
+}
+
 impl From<BooleanBufferBuilder> for Buffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
@@ -269,6 +400,16 @@ impl From<BooleanBufferBuilder> for BooleanBuffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
         BooleanBuffer::new(builder.buffer.into(), 0, builder.len)
+    }
+}
+
+impl From<&[bool]> for BooleanBufferBuilder {
+    #[inline]
+    fn from(source: &[bool]) -> Self {
+        let mut builder = BooleanBufferBuilder::new(source.len());
+        builder.append_slice(source);
+
+        builder
     }
 }
 
