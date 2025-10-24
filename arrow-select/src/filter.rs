@@ -177,7 +177,7 @@ pub fn filter_record_batch(
     if num_cols > 1
         || (num_cols > 0 && multiple_arrays(record_batch.schema_ref().field(0).data_type()))
     {
-        // Only optimize if filtering more than one column
+        // Only optimize if filtering more than one column or if the column contains multiple internal arrays
         // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
     }
