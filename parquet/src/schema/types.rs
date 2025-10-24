@@ -845,7 +845,9 @@ pub struct ColumnDescriptor {
 
 impl HeapSize for ColumnDescriptor {
     fn heap_size(&self) -> usize {
-        self.primitive_type.heap_size() + self.path.heap_size()
+        // Don't include the heap size of primitive_type, this is already
+        // accounted for via SchemaDescriptor::schema
+        self.path.heap_size()
     }
 }
 
