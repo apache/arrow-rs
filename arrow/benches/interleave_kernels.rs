@@ -169,7 +169,7 @@ fn add_benchmark(c: &mut Criterion) {
             Arc::new(Field::new_dictionary(
                 "item",
                 DataType::UInt8,
-                DataType::UInt8,
+                DataType::Utf8,
                 true,
             )),
             OffsetBuffer::new(ScalarBuffer::<i32>::from_iter(random_list_offsets(
