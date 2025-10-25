@@ -18,6 +18,7 @@
 #[macro_use]
 extern crate criterion;
 
+use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use criterion::Criterion;
 use std::ops::Range;
 
@@ -161,6 +162,37 @@ fn add_benchmark(c: &mut Criterion) {
     }
 
     let dict_values = create_string_array_with_len::<i32>(255, 0.0, 20);
+
+    let dict_arr = create_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values);
+    let make_dict_list_arr = || {
+        Arc::new(GenericListArray::<i32>::new(
+            Arc::new(Field::new_dictionary(
+                "item",
+                DataType::UInt8,
+                DataType::UInt8,
+                true,
+            )),
+            OffsetBuffer::new(ScalarBuffer::<i32>::from_iter(random_list_offsets(
+                1024, 0, 10,
+            ))),
+            Arc::new(dict_arr.clone()) as ArrayRef,
+            None,
+        )) as ArrayRef
+    };
+
+    let dict_lists = (0..4).map(|_| make_dict_list_arr()).collect::<Vec<_>>();
+    for len in [100, 1024, 2048] {
+        bench_values(
+            c,
+            &format!("interleave list of logically_equivalent_dict {len}"),
+            len,
+            &dict_lists
+                .iter()
+                .map(|arr| arr.as_ref())
+                .collect::<Vec<_>>(),
+        );
+    }
+
     let struct_f1_dict = create_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values);
     let struct_f2_dict =
         create_sparse_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values, 10..20);
@@ -199,8 +231,12 @@ fn add_benchmark(c: &mut Criterion) {
         0.0,
         &dict_values,
     )) as ArrayRef;
-    let shared_struct_f2_dict =
-        Arc::new(create_sparse_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values, 10..20)) as ArrayRef;
+    let shared_struct_f2_dict = Arc::new(create_sparse_dict_from_values::<UInt8Type>(
+        1024,
+        0.0,
+        &dict_values,
+        10..20,
+    )) as ArrayRef;
     //  struct list with dictionary field
     let make_struct_list_with_sharing_same_dict_ptr = || {
         Arc::new(create_struct_list::<i32>(
