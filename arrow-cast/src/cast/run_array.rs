@@ -1,49 +1,8 @@
 use crate::cast::*;
 use arrow_ord::partition::partition;
 
-/// Attempts to cast a Run-End Encoded array to another type, handling both REE-to-REE
-/// and REE-to-other type conversions with proper validation and error handling.
-///
-/// # Arguments
-/// * `array` - The input Run-End Encoded array to be cast
-/// * `to_type` - The target data type for the casting operation
-/// * `cast_options` - Options controlling the casting behavior (e.g., safe vs unsafe)
-///
-/// # Returns
-/// A `Result` containing the new `ArrayRef` or an `ArrowError` if casting fails
-///
-/// # Behavior
-/// This function handles two main casting scenarios:
-///
-/// ## Case 1: REE-to-REE Casting
-/// When casting to another Run-End Encoded type:
-/// - Casts both the `values` and `run_ends` to their target types
-/// - Validates that run-end casting only allows upcasts (Int16→Int32, Int16→Int64, Int32→Int64)
-/// - Preserves the REE structure while updating both fields
-/// - Returns a new `RunArray` with the appropriate run-end type (Int16, Int32, or Int64)
-///
-/// ## Case 2: REE-to-Other Casting
-/// When casting to a non-REE type:
-/// - Expands the REE array to its logical form by unpacking all values
-/// - Applies the target type casting to the expanded array
-/// - Returns a regular array of the target type (e.g., StringArray, Int64Array)
-///
-/// # Error Handling, error occurs if:
-/// - the input array is not a Run-End Encoded array
-/// - run-end downcasting would cause overflow
-/// - the target run-end type is unsupported
-/// - Propagates errors from underlying casting operations
-///
-/// # Safety Considerations
-/// - Run-end casting uses `safe: false` to prevent silent overflow
-/// - Only upcasts are allowed for run-ends to maintain valid REE structure
-/// - Unpacking preserves null values and array length
-/// - Type validation ensures only supported run-end types (Int16, Int32, Int64)
-///
-/// # Performance Notes
-/// - REE-to-REE casting is efficient as it operates on the compressed structure
-/// - REE-to-other casting requires full unpacking, which may be expensive for large arrays
-/// - Run-end validation adds minimal overhead for safety
+/// Attempts to cast a `RunArray` with index type K into
+/// `to_type` for supported types.
 pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
     array: &dyn Array,
     to_type: &DataType,
@@ -59,7 +18,7 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
             let values = run_array.values();
 
             match to_type {
-                // CASE 1: Stay as RunEndEncoded, cast only the values
+                // Stay as RunEndEncoded, cast only the values
                 DataType::RunEndEncoded(target_index_field, target_value_field) => {
                     let cast_values =
                         cast_with_options(values, target_value_field.data_type(), cast_options)?;
@@ -94,15 +53,21 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
                     Ok(Arc::new(new_run_array))
                 }
 
-                // CASE 2: Expand to logical form
+                // Expand to logical form
                 _ => {
-                    let total_len = run_array.len();
-                    let indices = Int32Array::from_iter_values(
-                        (0..total_len).map(|i| run_array.get_physical_index(i) as i32),
-                    );
+                    let run_ends = run_array.run_ends().values().to_vec();
+                    let mut indices = Vec::with_capacity(run_array.run_ends().len());
+                    let mut physical_idx: usize = 0;
+                    for logical_idx in 0..run_array.run_ends().len() {
+                        // If the logical index is equal to the (next) run end, increment the physical index,
+                        // since we are at the end of a run.
+                        if logical_idx == run_ends[physical_idx].as_usize() {
+                            physical_idx += 1;
+                        }
+                        indices.push(physical_idx as i32);
+                    }
 
-                    let taken = take(values.as_ref(), &indices, None)?;
-
+                    let taken = take(&values, &Int32Array::from_iter_values(indices), None)?;
                     if taken.data_type() != to_type {
                         cast_with_options(taken.as_ref(), to_type, cast_options)
                     } else {
@@ -119,23 +84,8 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
     }
 }
 
-/// Attempts to cast an array to a RunEndEncoded array with the specified index type K
-/// and value type. This function performs run-end encoding on the input array.
-///
-/// # Arguments
-/// * `array` - The input array to be run-end encoded
-/// * `value_type` - The target data type for the values in the RunEndEncoded array
-/// * `cast_options` - Options controlling the casting behavior
-///
-/// # Returns
-/// A `Result` containing the new `RunArray` or an `ArrowError` if casting fails
-///
-/// # Process
-/// 1. Cast the input array to the target value type if needed
-/// 2. Partition the array to identify runs of consecutive equal values
-/// 3. Build run_ends array indicating where each run terminates
-/// 4. Build values array containing the unique values for each run
-/// 5. Construct and return the RunArray
+/// Attempts to encode an array into a `RunArray` with index type K
+/// and value type `value_type`
 pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
     array: &ArrayRef,
     value_type: &DataType,
@@ -162,7 +112,9 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
     // REE arrays are handled by run_end_encoded_cast
     if let DataType::RunEndEncoded(_, _) = array.data_type() {
-        unreachable!()
+        return Err(ArrowError::CastError(format!(
+            "Source array is already a RunEndEncoded array, should have been handled by run_end_encoded_cast"
+        )));
     }
 
     // Partition the array to identify runs of consecutive equal values
