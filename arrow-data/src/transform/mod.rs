@@ -829,9 +829,8 @@ impl<'a> MutableArrayData<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
-    use arrow_buffer::BufferBuilder;
     use arrow_schema::Field;
-    use std::{iter::repeat, sync::Arc};
+    use std::sync::Arc;
 
     #[test]
     fn test_list_append_with_capacities() {

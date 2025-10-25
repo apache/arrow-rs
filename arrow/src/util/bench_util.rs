@@ -588,7 +588,7 @@ pub fn random_list_offsets<K: OffsetSizeTrait>(total_items: usize, min: usize, m
     result
 }
 
-/// create a list of struct given
+/// Create a list of struct given child arrays and offsets
 pub fn create_struct_list<K: OffsetSizeTrait>(
     field_arrays: Vec<ArrayRef>,
     nulls: Option<Vec<bool>>,
