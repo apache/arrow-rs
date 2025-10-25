@@ -794,9 +794,9 @@ pub fn cast_with_options(
             | Dictionary(_, _),
         ) => Ok(new_null_array(to_type, array.len())),
         (RunEndEncoded(index_type, _), _) => match index_type.data_type() {
-            Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, &cast_options),
-            Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, &cast_options),
-            Int64 => run_end_encoded_cast::<Int64Type>(array, to_type, &cast_options),
+            Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, cast_options),
+            Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, cast_options),
+            Int64 => run_end_encoded_cast::<Int64Type>(array, to_type, cast_options),
             _ => Err(ArrowError::CastError(format!(
                 "Casting from run end encoded type {from_type:?} to {to_type:?} not supported",
             ))),
@@ -807,17 +807,17 @@ pub fn cast_with_options(
                 Int16 => cast_to_run_end_encoded::<Int16Type>(
                     &array_ref,
                     value_type.data_type(),
-                    &cast_options,
+                    cast_options,
                 ),
                 Int32 => cast_to_run_end_encoded::<Int32Type>(
                     &array_ref,
                     value_type.data_type(),
-                    &cast_options,
+                    cast_options,
                 ),
                 Int64 => cast_to_run_end_encoded::<Int64Type>(
                     &array_ref,
                     value_type.data_type(),
-                    &cast_options,
+                    cast_options,
                 ),
                 _ => Err(ArrowError::CastError(format!(
                     "Casting from type {from_type:?} to run end encoded type {to_type:?} not supported",
@@ -11755,7 +11755,7 @@ mod tests {
         let result: Result<Arc<dyn Array + 'static>, ArrowError> =
             cast_with_options(&array_ref, &target_type, &cast_options);
 
-        let e = result.err().expect("Cast should have failed but succeeded");
+        let e = result.expect_err("Cast should have failed but succeeded");
         assert!(
             e.to_string()
                 .contains("Cast error: Can't cast value 100000 to type Int16")
@@ -11784,7 +11784,7 @@ mod tests {
         // This fails even though safe is true because the run_ends array has null values
         let result: Result<Arc<dyn Array + 'static>, ArrowError> =
             cast_with_options(&array_ref, &target_type, &cast_options);
-        let e = result.err().expect("Cast should have failed but succeeded");
+        let e = result.expect_err("Cast should have failed but succeeded");
         assert!(
             e.to_string()
                 .contains("Invalid argument error: Found null values in run_ends array. The run_ends array should not have null values.")
@@ -11834,7 +11834,7 @@ mod tests {
     fn test_cast_run_end_encoded_dictionary_to_run_end_encoded() {
         // Construct a valid dictionary encoded array
         let values = StringArray::from_iter([Some("a"), Some("b"), Some("c")]);
-        let keys = UInt64Array::from_iter(vec![1, 1, 1, 0, 0, 0, 2, 2, 2].into_iter());
+        let keys = UInt64Array::from_iter(vec![1, 1, 1, 0, 0, 0, 2, 2, 2]);
         let array_ref = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
 
         // Attempt to cast to RunEndEncoded<Int64, Utf8>

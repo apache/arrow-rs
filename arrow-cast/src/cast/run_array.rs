@@ -112,9 +112,9 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
 
     // REE arrays are handled by run_end_encoded_cast
     if let DataType::RunEndEncoded(_, _) = array.data_type() {
-        return Err(ArrowError::CastError(format!(
-            "Source array is already a RunEndEncoded array, should have been handled by run_end_encoded_cast"
-        )));
+        return Err(ArrowError::CastError(
+            "Source array is already a RunEndEncoded array, should have been handled by run_end_encoded_cast".to_string()
+        ));
     }
 
     // Partition the array to identify runs of consecutive equal values
