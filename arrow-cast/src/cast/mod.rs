@@ -140,7 +140,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
         (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
-        (_, RunEndEncoded(_, _value_type)) => can_cast_to_run_end_encoded(from_type, to_type),
+        (_, RunEndEncoded(_, value_type)) => can_cast_types(from_type, value_type.data_type()),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
         (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
