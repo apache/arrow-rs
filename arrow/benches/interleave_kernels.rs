@@ -184,7 +184,7 @@ fn add_benchmark(c: &mut Criterion) {
     for len in [100, 1024, 2048] {
         bench_values(
             c,
-            &format!("interleave list struct with logically_equivalent_dict) {len}"),
+            &format!("interleave list struct with logically_equivalent_dict {len}"),
             len,
             &struct_lists
                 .iter()
@@ -220,7 +220,7 @@ fn add_benchmark(c: &mut Criterion) {
     for len in [100, 1024, 2048] {
         bench_values(
             c,
-            &format!("interleave list struct with logically_equivalent_dict) {len}"),
+            &format!("interleave list struct with same dict ptr {len}"),
             len,
             &struct_lists
                 .iter()
