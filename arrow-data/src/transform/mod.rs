@@ -668,7 +668,7 @@ impl<'a> MutableArrayData<'a> {
                             next_offset += dict_len;
                         }
 
-                        build_extend_dictionary(array, offset, 0.max(offset + dict_len - 1))
+                        build_extend_dictionary(array, offset, offset + dict_len)
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
                     .collect();
@@ -829,8 +829,9 @@ impl<'a> MutableArrayData<'a> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow_buffer::BufferBuilder;
     use arrow_schema::Field;
-    use std::sync::Arc;
+    use std::{iter::repeat, sync::Arc};
 
     #[test]
     fn test_list_append_with_capacities() {

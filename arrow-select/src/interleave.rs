@@ -808,8 +808,6 @@ mod tests {
     use std::iter::repeat;
     use std::sync::Arc;
 
-    use crate::concat::concat;
-
     use super::*;
     use arrow_array::Int32RunArray;
     use arrow_array::builder::{Int32Builder, ListBuilder, PrimitiveRunBuilder};
@@ -2015,24 +2013,5 @@ mod tests {
             &keys_arr,
             &[Some(1), Some(0), Some(6), None, Some(5), Some(4)]
         );
-    }
-
-    #[test]
-    fn test_uint8_dictionary_overflow_with_256_items() {
-        let dict_arr = {
-            let input_1_keys = UInt8Array::from_iter_values(0..=255);
-            let input_1_values = UInt8Array::from_iter_values(0..=255);
-            let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
-            input_1
-        };
-
-        let arr1 = Arc::new(dict_arr) as ArrayRef;
-        let arr2 = arr1.clone();
-
-        let new = concat(&[&arr1, &arr2]).unwrap();
-        let data = new.into_data();
-        println!("{:?}", data);
-
-        // interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
     }
 }
