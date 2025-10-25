@@ -155,12 +155,12 @@ fn add_benchmark(c: &mut Criterion) {
         bench_values(
             c,
             &format!("interleave dict_distinct {len}"),
-            100,
+            len,
             &[&dict, &sparse_dict],
         );
     }
 
-    let dict_values = create_string_array_with_len::<i32>(1024, 0.0, 256);
+    let dict_values = create_string_array_with_len::<i32>(255, 0.0, 20);
     let struct_f1_dict = create_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values);
     let struct_f2_dict =
         create_sparse_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values, 10..20);
@@ -193,7 +193,7 @@ fn add_benchmark(c: &mut Criterion) {
         );
     }
 
-    let dict_values = create_string_array_with_len::<i32>(1024, 0.0, 256);
+    let dict_values = create_string_array_with_len::<i32>(255, 0.0, 20);
     let shared_struct_f1_dict = Arc::new(create_dict_from_values::<UInt8Type>(
         1024,
         0.0,
