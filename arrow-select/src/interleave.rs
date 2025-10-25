@@ -416,7 +416,7 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
     let backed_struct_arr = StructArray::try_new(fields.clone(), struct_sub_arrays, None)?;
     let offset_buffer = OffsetBuffer::<G>::from_lengths(arr_lengths);
     let struct_list_arr = GenericListArray::new(
-        Arc::new(Field::new("elem", DataType::Struct(fields.clone()), true)),
+        Arc::new(Field::new("item", DataType::Struct(fields.clone()), true)),
         offset_buffer,
         Arc::new(backed_struct_arr) as ArrayRef,
         null_buffer.finish(),
@@ -540,7 +540,7 @@ fn interleave_dictionaries_list<K: ArrowDictionaryKeyType, G: OffsetSizeTrait>(
         unsafe { DictionaryArray::new_unchecked(keys.finish(), merged.values) };
     let offset_buffer = OffsetBuffer::<G>::from_lengths(arr_lengths);
     let list_dict_arr = GenericListArray::new(
-        Arc::new(Field::new("elem", data_type.clone(), true)),
+        Arc::new(Field::new("item", data_type.clone(), true)),
         offset_buffer,
         Arc::new(new_backed_dict_arr) as ArrayRef,
         null_buffer.finish(),
@@ -1617,7 +1617,7 @@ mod tests {
         let offset_buffer = OffsetBuffer::<i32>::from_lengths(lengths);
         let list_arr = GenericListArray::new(
             Arc::new(Field::new_dictionary(
-                "elem",
+                "item",
                 DataType::UInt8,
                 DataType::UInt16,
                 true,
@@ -1659,7 +1659,7 @@ mod tests {
             )
             .unwrap();
             let list_arr = GenericListArray::<i32>::new(
-                Arc::new(Field::new_struct("elem", fields, true)),
+                Arc::new(Field::new_struct("item", fields, true)),
                 OffsetBuffer::from_lengths(lengths),
                 Arc::new(struct_arr) as ArrayRef,
                 list_nulls.map(|nulls: Vec<bool>| NullBuffer::from(nulls)),
@@ -1832,7 +1832,7 @@ mod tests {
             )
             .unwrap();
             let list_arr = GenericListArray::<i32>::new(
-                Arc::new(Field::new_struct("elem", fields, true)),
+                Arc::new(Field::new_struct("item", fields, true)),
                 OffsetBuffer::from_lengths(lengths),
                 Arc::new(struct_arr) as ArrayRef,
                 list_nulls.map(|nulls: Vec<bool>| NullBuffer::from(nulls)),

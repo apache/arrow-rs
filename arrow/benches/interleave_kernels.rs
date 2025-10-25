@@ -159,6 +159,75 @@ fn add_benchmark(c: &mut Criterion) {
             &[&dict, &sparse_dict],
         );
     }
+
+    let dict_values = create_string_array_with_len::<i32>(1024, 0.0, 256);
+    let struct_f1_dict = create_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values);
+    let struct_f2_dict =
+        create_sparse_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values, 10..20);
+
+    //  struct list with dictionary field
+    let make_struct_list_with_equivalent_dict = || {
+        Arc::new(create_struct_list::<i32>(
+            vec![
+                Arc::new(struct_f1_dict.clone()) as ArrayRef,
+                Arc::new(struct_f2_dict.clone()) as ArrayRef,
+                Arc::new(string.clone()) as ArrayRef,
+            ],
+            None,
+            random_list_offsets(1024, 0, 10),
+            None,
+        )) as ArrayRef
+    };
+    let struct_lists = (0..4)
+        .map(|_| make_struct_list_with_equivalent_dict())
+        .collect::<Vec<_>>();
+    for len in [100, 1024, 2048] {
+        bench_values(
+            c,
+            &format!("interleave list struct with logically_equivalent_dict) {len}"),
+            len,
+            &struct_lists
+                .iter()
+                .map(|arr| arr.as_ref())
+                .collect::<Vec<_>>(),
+        );
+    }
+
+    let dict_values = create_string_array_with_len::<i32>(1024, 0.0, 256);
+    let shared_struct_f1_dict = Arc::new(create_dict_from_values::<UInt8Type>(
+        1024,
+        0.0,
+        &dict_values,
+    )) as ArrayRef;
+    let shared_struct_f2_dict =
+        Arc::new(create_sparse_dict_from_values::<UInt8Type>(1024, 0.0, &dict_values, 10..20)) as ArrayRef;
+    //  struct list with dictionary field
+    let make_struct_list_with_sharing_same_dict_ptr = || {
+        Arc::new(create_struct_list::<i32>(
+            vec![
+                shared_struct_f1_dict.clone(),
+                shared_struct_f2_dict.clone(),
+                Arc::new(string.clone()) as ArrayRef,
+            ],
+            None,
+            random_list_offsets(1024, 0, 10),
+            None,
+        )) as ArrayRef
+    };
+    let struct_lists = (0..4)
+        .map(|_| make_struct_list_with_sharing_same_dict_ptr())
+        .collect::<Vec<_>>();
+    for len in [100, 1024, 2048] {
+        bench_values(
+            c,
+            &format!("interleave list struct with logically_equivalent_dict) {len}"),
+            len,
+            &struct_lists
+                .iter()
+                .map(|arr| arr.as_ref())
+                .collect::<Vec<_>>(),
+        );
+    }
 }
 
 criterion_group!(benches, add_benchmark);

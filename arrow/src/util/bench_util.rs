@@ -20,6 +20,9 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
+use arrow_buffer::NullBuffer;
+use arrow_buffer::OffsetBuffer;
+use arrow_buffer::ScalarBuffer;
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use half::f16;
 use rand::Rng;
@@ -31,6 +34,7 @@ use rand::{
     prelude::StdRng,
 };
 use std::ops::Range;
+use std::sync::Arc;
 
 /// Creates an random (but fixed-seeded) array of a given size and null density
 pub fn create_primitive_array<T>(size: usize, null_density: f32) -> PrimitiveArray<T>
@@ -563,6 +567,54 @@ pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> Fix
         value_len as i32,
     )
     .unwrap()
+}
+
+/// Create an offset vector used to build a list, given total number
+/// of items in the list's child array, and min max length of each list item
+pub fn random_list_offsets<K: OffsetSizeTrait>(total_items: usize, min: usize, max: usize) -> Vec<K> {
+    let mut result = vec![K::zero()];
+
+    let rng = &mut seedable_rng();
+    let total_casted = K::from_usize(total_items).unwrap();
+    loop {
+        let length = K::from_usize(rng.random_range(min..max)).unwrap();
+        let next = result.last().unwrap().add(length);
+        if next >= total_casted {
+            result.push(total_casted);
+            break;
+        }
+        result.push(next);
+    }
+    result
+}
+
+/// create a list of struct given
+pub fn create_struct_list<K: OffsetSizeTrait>(
+    field_arrays: Vec<ArrayRef>,
+    nulls: Option<Vec<bool>>,
+    offsets: Vec<K>,
+    list_nulls: Option<Vec<bool>>,
+) -> GenericListArray<K> {
+    let fields = Fields::from(
+        field_arrays
+            .iter()
+            .enumerate()
+            .map(|(index, arr)| Field::new(format!("f{index}"), arr.data_type().clone(), true))
+            .collect::<Vec<_>>(),
+    );
+    let struct_arr = StructArray::try_new(
+        fields.clone(),
+        field_arrays,
+        nulls.map(|v| NullBuffer::from_iter(v)),
+    )
+    .unwrap();
+    let list_arr = GenericListArray::<K>::new(
+        Arc::new(Field::new_struct("item", fields, true)),
+        OffsetBuffer::new(ScalarBuffer::<K>::from_iter(offsets)),
+        Arc::new(struct_arr) as ArrayRef,
+        list_nulls.map(|nulls: Vec<bool>| NullBuffer::from(nulls)),
+    );
+    list_arr
 }
 
 /// Creates a random (but fixed-seeded) dictionary array of a given size and null density
