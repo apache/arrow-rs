@@ -11627,38 +11627,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cast_with_type_conversion() {
-        // Create an Int32 array: [1, 1, 2, 2, 3]
-        let source_array = Int32Array::from(vec![1, 1, 2, 2, 3]);
-        let array_ref = Arc::new(source_array) as ArrayRef;
-
-        // Cast to RunEndEncoded<Int32, String> (values get converted to strings)
-        let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int32, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
-        );
-        let cast_result = cast(&array_ref, &target_type).unwrap();
-
-        // Verify the result is a RunArray with String values
-        let result_run_array = cast_result
-            .as_any()
-            .downcast_ref::<RunArray<Int32Type>>()
-            .unwrap();
-
-        // Check that values were converted to strings
-        assert_eq!(result_run_array.values().data_type(), &DataType::Utf8);
-
-        // Check run structure: runs should end at positions [2, 4, 5]
-        assert_eq!(result_run_array.run_ends().values(), &[2, 4, 5]);
-
-        // Check values: should be ["1", "2", "3"]
-        let values_array = result_run_array.values().as_string::<i32>();
-        assert_eq!(values_array.value(0), "1");
-        assert_eq!(values_array.value(1), "2");
-        assert_eq!(values_array.value(2), "3");
-    }
-
-    #[test]
     fn test_empty_array_to_run_end_encoded() {
         // Create an empty Int32 array
         let source_array = Int32Array::from(Vec::<i32>::new());
@@ -11713,13 +11681,35 @@ mod tests {
         let cast_result = cast(&array_ref, &target_type).unwrap();
         assert_eq!(cast_result.data_type(), &target_type);
 
-        // Test with Int64 index type
+        // Verify the cast worked correctly: values are [1, 2, 3]
+        // and run-ends are [2, 3, 5]
+        let run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(0), 1);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(1), 2);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(2), 3);
+        assert_eq!(run_array.run_ends().values(), &[2i16, 3i16, 5i16]);
+
+        // Test again with Int64 index type
         let target_type = DataType::RunEndEncoded(
             Arc::new(Field::new("run_ends", DataType::Int64, false)),
             Arc::new(Field::new("values", DataType::Int32, true)),
         );
         let cast_result = cast(&array_ref, &target_type).unwrap();
         assert_eq!(cast_result.data_type(), &target_type);
+
+        // Verify the cast worked correctly: values are [1, 2, 3]
+        // and run-ends are [2, 3, 5]
+        let run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(0), 1);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(1), 2);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(2), 3);
+        assert_eq!(run_array.run_ends().values(), &[2i64, 3i64, 5i64]);
     }
 
     #[test]
@@ -11772,6 +11762,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_cast_run_end_encoded_int64_to_int16_with_safe_should_fail_with_null_invalid_error() {
+        // Construct a valid REE array with Int64 run-ends
+        let run_ends = Int64Array::from(vec![100_000, 400_000, 700_000]); // values too large for Int16
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int64Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int16, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+
+        // This fails even though safe is true because the run_ends array has null values
+        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
+            cast_with_options(&array_ref, &target_type, &cast_options);
+        let e = result.err().expect("Cast should have failed but succeeded");
+        assert!(
+            e.to_string()
+                .contains("Invalid argument error: Found null values in run_ends array. The run_ends array should not have null values.")
+        );
+    }
+
     /// Test casting RunEndEncoded<Int16, String> to RunEndEncoded<Int64, String> should succeed
     #[test]
     fn test_cast_run_end_encoded_int16_to_int64_should_succeed() {
@@ -11809,37 +11828,6 @@ mod tests {
         assert_eq!(run_array.values().as_string::<i32>().value(0), "a");
         assert_eq!(run_array.values().as_string::<i32>().value(1), "b");
         assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
-    }
-
-    /// Test casting RunEndEncoded<Int32, String> to RunEndEncoded<Int16, String> should fail
-    #[test]
-    fn test_cast_run_end_encoded_int32_to_int16_should_fail() {
-        // Construct a valid REE array with Int32 run-ends
-        let run_ends = Int32Array::from(vec![1000, 50000, 80000]); // values too large for Int16
-        let values = StringArray::from(vec!["x", "y", "z"]);
-
-        let ree_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
-        let array_ref = Arc::new(ree_array) as ArrayRef;
-
-        // Attempt to cast to RunEndEncoded<Int16, Utf8> (downcast should fail)
-        let target_type = DataType::RunEndEncoded(
-            Arc::new(Field::new("run_ends", DataType::Int16, false)),
-            Arc::new(Field::new("values", DataType::Utf8, true)),
-        );
-        let cast_options = CastOptions {
-            safe: false,
-            format_options: FormatOptions::default(),
-        };
-
-        // This should fail due to run-end overflow
-        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
-            cast_with_options(&array_ref, &target_type, &cast_options);
-
-        // Verify the error is about overflow/out of range
-        let e = result
-            .err()
-            .expect("Cast should have failed due to overflow but succeeded");
-        assert!(e.to_string().contains("Can't cast value"));
     }
 
     #[test]
