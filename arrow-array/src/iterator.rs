@@ -73,116 +73,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
             .unwrap_or_default()
     }
 
-    /// Get consuming (won't update `self.current`) iterator when there are nulls
-    ///
-    /// # Panics
-    /// If `self.logical_nulls` is `None`
-    #[inline]
-    fn get_consuming_iterator_for_nullable(
-        &self,
-    ) -> impl Iterator<Item = <Self as Iterator>::Item> {
-        self.logical_nulls
-            .as_ref()
-            .expect("logical_nulls must exists when this function is called")
-            .iter()
-            .skip(self.current)
-            .take(self.current_end - self.current)
-            .enumerate()
-            .map(move |(offset, is_valid)| {
-                if is_valid {
-                    // Safety:
-                    // we are in bounds as i < self.array.len()
-                    let value = unsafe { self.array.value_unchecked(self.current + offset) };
-                    Some(value)
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Get consuming (won't update `self.current`) iterator  when there are no null
-    ///
-    /// # Panics
-    /// If `self.logical_nulls` is `Some(_)`
-    #[inline]
-    fn get_consuming_iterator_for_non_nullable(
-        self,
-    ) -> impl Iterator<Item = <Self as Iterator>::Item> {
-        assert_eq!(
-            self.logical_nulls, None,
-            "logical_nulls must be None when this function is called"
-        );
-
-        // Skip null checks
-        (self.current..self.current_end).map(move |i| {
-            debug_assert!(
-                !self.is_null(i),
-                "Value at index {} is null for non_nullable",
-                i
-            );
-
-            // Safety:
-            // we are in bounds as i < self.array.len()
-            Some(unsafe { self.array.value_unchecked(i) })
-        })
-    }
-
-    /// Get consuming (won't update `self.current_end`) reverse iterator when there are nulls
-    ///
-    /// # Panics
-    /// If `self.logical_nulls` is `None`
-    #[inline]
-    fn get_consuming_reverse_iterator_for_nullable(
-        &self,
-    ) -> impl Iterator<Item = <Self as Iterator>::Item> {
-        self.logical_nulls
-            .as_ref()
-            .expect("logical_nulls must exists when this function is called")
-            .iter()
-            .rev()
-            .skip(self.array.len() - self.current_end)
-            .take(self.current_end - self.current)
-            .enumerate()
-            .map(move |(offset, is_valid)| {
-                if is_valid {
-                    // Safety:
-                    // we are in bounds as i < self.array.len()
-                    let value = unsafe { self.array.value_unchecked(self.current_end - offset) };
-                    Some(value)
-                } else {
-                    None
-                }
-            })
-    }
-
-    /// Get consuming (won't update `self.current_end`) reverse iterator when there are no null
-    ///
-    /// # Panics
-    /// If `self.logical_nulls` is `Some(_)`
-    #[inline]
-    fn get_consuming_reverse_iterator_for_non_nullable(
-        self,
-    ) -> impl Iterator<Item = <Self as Iterator>::Item> {
-        assert_eq!(
-            self.logical_nulls, None,
-            "logical_nulls must be None when this function is called"
-        );
-
-        // Skip null checks
-        (self.current..self.current_end).rev().map(move |i| {
-            debug_assert!(
-                !self.is_null(i),
-                "Value at index {} is null for non_nullable",
-                i
-            );
-
-            // Safety:
-            // we are in bounds as i < self.array.len()
-            Some(unsafe { self.array.value_unchecked(i) })
-        })
-    }
-
-    /// Get non-consuming (will update `self.current`) iterator when there are nulls
+    /// Get iterator when there are nulls
     ///
     /// # Panics
     /// If `self.logical_nulls` is `None`
@@ -208,7 +99,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
             })
     }
 
-    /// Get non-consuming (won't update `self.current`) iterator when there are no null
+    /// Get iterator when there are no null
     ///
     /// # Panics
     /// If `self.logical_nulls` is `Some(_)`
@@ -237,7 +128,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
         })
     }
 
-    /// Get non-consuming (will update `self.current_end`) reverse iterator when there are nulls
+    /// Get reverse iterator when there are nulls
     ///
     /// # Panics
     /// If `self.logical_nulls` is `None`
@@ -266,7 +157,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
             })
     }
 
-    /// Get non-consuming (won't update `self.current_end`) reverse iterator when there are no null
+    /// Get reverse iterator when there are no null
     ///
     /// # Panics
     /// If `self.logical_nulls` is `Some(_)`
@@ -365,27 +256,27 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         self.len()
     }
 
-    fn for_each<F>(self, f: F)
+    fn for_each<F>(mut self, f: F)
     where
         Self: Sized,
         F: FnMut(Self::Item),
     {
         if self.logical_nulls.is_some() {
-            self.get_consuming_iterator_for_nullable().for_each(f)
+            self.get_iterator_for_nullable().for_each(f)
         } else {
-            self.get_consuming_iterator_for_non_nullable().for_each(f)
+            self.get_iterator_for_non_nullable().for_each(f)
         }
     }
 
-    fn fold<B, F>(self, init: B, f: F) -> B
+    fn fold<B, F>(mut self, init: B, f: F) -> B
     where
         Self: Sized,
         F: FnMut(B, Self::Item) -> B,
     {
         if self.logical_nulls.is_some() {
-            self.get_consuming_iterator_for_nullable().fold(init, f)
+            self.get_iterator_for_nullable().fold(init, f)
         } else {
-            self.get_consuming_iterator_for_non_nullable().fold(init, f)
+            self.get_iterator_for_non_nullable().fold(init, f)
         }
     }
 
@@ -437,16 +328,16 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         }
     }
 
-    fn partition<B, F>(self, f: F) -> (B, B)
+    fn partition<B, F>(mut self, f: F) -> (B, B)
     where
         Self: Sized,
         B: Default + Extend<Self::Item>,
         F: FnMut(&Self::Item) -> bool,
     {
         if self.logical_nulls.is_some() {
-            self.get_consuming_iterator_for_nullable().partition(f)
+            self.get_iterator_for_nullable().partition(f)
         } else {
-            self.get_consuming_iterator_for_non_nullable().partition(f)
+            self.get_iterator_for_non_nullable().partition(f)
         }
     }
 
@@ -513,16 +404,16 @@ impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
         self.next_back()
     }
 
-    fn rfold<B, F>(self, init: B, f: F) -> B
+    fn rfold<B, F>(mut self, init: B, f: F) -> B
     where
         Self: Sized,
         F: FnMut(B, Self::Item) -> B,
     {
         if self.logical_nulls.is_some() {
-            self.get_consuming_reverse_iterator_for_nullable()
+            self.get_reverse_iterator_for_nullable()
                 .fold(init, f)
         } else {
-            self.get_consuming_reverse_iterator_for_non_nullable()
+            self.get_reverse_iterator_for_non_nullable()
                 .fold(init, f)
         }
     }
@@ -566,6 +457,8 @@ mod tests {
     use std::sync::Arc;
 
     use crate::array::{ArrayRef, BinaryArray, BooleanArray, Int32Array, StringArray};
+    use crate::ArrayAccessor;
+    use crate::iterator::ArrayIter;
 
     #[test]
     fn test_primitive_array_iter_round_trip() {
@@ -680,4 +573,7 @@ mod tests {
         // check if ExactSizeIterator is implemented
         let _ = array.iter().rposition(|opt_b| opt_b == Some(true));
     }
+
+
+
 }
