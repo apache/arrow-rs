@@ -555,19 +555,25 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         };
         assert!(gc_copy_groups.len() <= i32::MAX as usize);
 
-        let mut gc_copy_group_begin = 0;
-        let mut views_buf: Vec<u128> = vec![];
-        let mut data_blocks = vec![];
-        // 3) Copy the buffers groups by group
-        for (idx, gc_copy_group) in gc_copy_groups.iter().enumerate() {
+        // 3) Copy the buffers group by group
+        let mut views_buf = Vec::with_capacity(len);
+        let mut data_blocks = Vec::with_capacity(gc_copy_groups.len());
+
+        let mut current_view_idx = 0;
+
+        for (group_idx, gc_copy_group) in gc_copy_groups.iter().enumerate() {
             let mut data_buf = Vec::with_capacity(gc_copy_group.total_buffer_bytes);
-            let v: Vec<u128> = (gc_copy_group_begin..gc_copy_group_begin + gc_copy_group.total_len)
-                .map(|i| unsafe { self.copy_view_to_buffer(i, idx as i32, &mut data_buf) })
+
+            let group_views: Vec<u128> = (current_view_idx
+                ..current_view_idx + gc_copy_group.total_len)
+                .map(|view_idx| unsafe {
+                    self.copy_view_to_buffer(view_idx, group_idx as i32, &mut data_buf)
+                })
                 .collect();
-            views_buf.extend(v);
-            let data_block = Buffer::from_vec(data_buf);
-            data_blocks.push(data_block);
-            gc_copy_group_begin += gc_copy_group.total_len;
+
+            views_buf.extend(group_views);
+            data_blocks.push(Buffer::from_vec(data_buf));
+            current_view_idx += gc_copy_group.total_len;
         }
 
         // 4) Wrap up buffers
