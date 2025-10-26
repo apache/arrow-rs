@@ -322,7 +322,7 @@ impl FallbackImpl {
 
 impl ZipImpl for FallbackImpl {
     fn create_output(&self, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
-        zip_impl(predicate, &self.truthy, false, &self.falsy, false)
+        zip_impl(predicate, &self.truthy, true, &self.falsy, true)
     }
 }
 
