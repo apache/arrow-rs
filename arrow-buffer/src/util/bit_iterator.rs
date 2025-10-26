@@ -81,8 +81,8 @@ impl Iterator for BitIterator<'_> {
     }
 
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        // Check if we advance to the one before the desired offset
-        // when n is 0 it means we want the next() value
+        // Check if we can advance to the desired offset.
+        // When n is 0 it means we want the next() value
         // and when n is 1 we want the next().next() value
         // so adding n to the current offset and not n - 1
         match self.current_offset.checked_add(n) {
@@ -154,10 +154,10 @@ impl DoubleEndedIterator for BitIterator<'_> {
     }
 
     fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
-        // Check if we advance to the one before the desired offset
-        // when n is 0 it means we want the next_back() value
+        // Check if we can advance to the desired offset.
+        // When n is 0 it means we want the next_back() value
         // and when n is 1 we want the next_back().next_back() value
-        // so adding n to the current offset and not n - 1
+        // so subtracting n to the current offset and not n - 1
         match self.end_offset.checked_sub(n) {
             // Yes, and still within bounds
             Some(new_offset) if self.current_offset < new_offset => {
@@ -589,17 +589,6 @@ mod tests {
     {
     }
 
-    fn mutate_2_iters<T: SharedBetweenBitIteratorAndSliceIter>(
-        mut bit_iterator: BitIterator,
-        mut source: T,
-        mutate_fn: impl Fn(&mut dyn SharedBetweenBitIteratorAndSliceIter),
-    ) -> (BitIterator, T) {
-        mutate_fn(&mut bit_iterator);
-        mutate_fn(&mut source);
-
-        (bit_iterator, source)
-    }
-
     fn get_bit_iterator_cases() -> impl Iterator<Item = (BooleanBuffer, Vec<bool>)> {
         let mut rng = StdRng::seed_from_u64(42);
 
@@ -617,24 +606,36 @@ mod tests {
         assert_fn: impl Fn(BitIterator, Copied<Iter<bool>>),
     ) {
         for (boolean_buffer, source) in get_bit_iterator_cases() {
-            let (actual, expected) = mutate_2_iters(
-                BitIterator::new(boolean_buffer.values(), 0, boolean_buffer.len()),
-                source.iter().copied(),
-                &setup_iters,
-            );
+            // Not using `boolean_buffer.iter()` in case the implementation change to not call BitIterator internally
+            // in which case the test would not test what it intends to test
+            let mut actual = BitIterator::new(boolean_buffer.values(), 0, boolean_buffer.len());
+            let mut expected = source.iter().copied();
+
+            setup_iters(&mut actual);
+            setup_iters(&mut expected);
 
             assert_fn(actual, expected);
         }
     }
 
-    trait Op {
+    /// Trait representing an operation on a BitIterator
+    /// that can be compared against a slice iterator
+    trait BitIteratorOp {
+        /// What the operation returns (e.g. Option<bool> for last/max, usize for count, etc)
         type Output: PartialEq + Debug;
+
+        /// The name of the operation, used for error messages
         const NAME: &'static str;
 
+        /// Get the value of the operation for the provided iterator
+        /// This will be either a BitIterator or a slice iterator to make sure they produce the same result
         fn get_value<T: SharedBetweenBitIteratorAndSliceIter>(iter: T) -> Self::Output;
     }
 
-    fn assert_cases<O: Op>() {
+    /// Helper function that will assert that the provided operation
+    /// produces the same result for both BitIterator and slice iterator
+    /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
+    fn assert_bit_iterator_cases<O: BitIteratorOp>() {
         setup_and_assert(
             |_iter: &mut dyn SharedBetweenBitIteratorAndSliceIter| {},
             |actual, expected| {
@@ -770,7 +771,7 @@ mod tests {
     fn assert_bit_iterator_count() {
         struct CountOp;
 
-        impl Op for CountOp {
+        impl BitIteratorOp for CountOp {
             type Output = usize;
             const NAME: &'static str = "count";
 
@@ -779,14 +780,14 @@ mod tests {
             }
         }
 
-        assert_cases::<CountOp>()
+        assert_bit_iterator_cases::<CountOp>()
     }
 
     #[test]
     fn assert_bit_iterator_last() {
         struct LastOp;
 
-        impl Op for LastOp {
+        impl BitIteratorOp for LastOp {
             type Output = Option<bool>;
             const NAME: &'static str = "last";
 
@@ -795,14 +796,14 @@ mod tests {
             }
         }
 
-        assert_cases::<LastOp>()
+        assert_bit_iterator_cases::<LastOp>()
     }
 
     #[test]
     fn assert_bit_iterator_max() {
         struct MaxOp;
 
-        impl Op for MaxOp {
+        impl BitIteratorOp for MaxOp {
             type Output = Option<bool>;
             const NAME: &'static str = "max";
 
@@ -811,14 +812,14 @@ mod tests {
             }
         }
 
-        assert_cases::<MaxOp>()
+        assert_bit_iterator_cases::<MaxOp>()
     }
 
     #[test]
     fn assert_bit_iterator_nth_0() {
         struct NthOp<const BACK: bool>;
 
-        impl<const BACK: bool> Op for NthOp<BACK> {
+        impl<const BACK: bool> BitIteratorOp for NthOp<BACK> {
             type Output = Option<bool>;
             const NAME: &'static str = if BACK { "nth_back(0)" } else { "nth(0)" };
 
@@ -827,15 +828,15 @@ mod tests {
             }
         }
 
-        assert_cases::<NthOp<false>>();
-        assert_cases::<NthOp<true>>();
+        assert_bit_iterator_cases::<NthOp<false>>();
+        assert_bit_iterator_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_1() {
         struct NthOp<const BACK: bool>;
 
-        impl<const BACK: bool> Op for NthOp<BACK> {
+        impl<const BACK: bool> BitIteratorOp for NthOp<BACK> {
             type Output = Option<bool>;
             const NAME: &'static str = if BACK { "nth_back(1)" } else { "nth(1)" };
 
@@ -844,15 +845,15 @@ mod tests {
             }
         }
 
-        assert_cases::<NthOp<false>>();
-        assert_cases::<NthOp<true>>();
+        assert_bit_iterator_cases::<NthOp<false>>();
+        assert_bit_iterator_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_after_end() {
         struct NthOp<const BACK: bool>;
 
-        impl<const BACK: bool> Op for NthOp<BACK> {
+        impl<const BACK: bool> BitIteratorOp for NthOp<BACK> {
             type Output = Option<bool>;
             const NAME: &'static str = if BACK {
                 "nth_back(iter.len() + 1)"
@@ -869,15 +870,15 @@ mod tests {
             }
         }
 
-        assert_cases::<NthOp<false>>();
-        assert_cases::<NthOp<true>>();
+        assert_bit_iterator_cases::<NthOp<false>>();
+        assert_bit_iterator_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_len() {
         struct NthOp<const BACK: bool>;
 
-        impl<const BACK: bool> Op for NthOp<BACK> {
+        impl<const BACK: bool> BitIteratorOp for NthOp<BACK> {
             type Output = Option<bool>;
             const NAME: &'static str = if BACK {
                 "nth_back(iter.len())"
@@ -894,15 +895,15 @@ mod tests {
             }
         }
 
-        assert_cases::<NthOp<false>>();
-        assert_cases::<NthOp<true>>();
+        assert_bit_iterator_cases::<NthOp<false>>();
+        assert_bit_iterator_cases::<NthOp<true>>();
     }
 
     #[test]
     fn assert_bit_iterator_nth_last() {
         struct NthOp<const BACK: bool>;
 
-        impl<const BACK: bool> Op for NthOp<BACK> {
+        impl<const BACK: bool> BitIteratorOp for NthOp<BACK> {
             type Output = Option<bool>;
             const NAME: &'static str = if BACK {
                 "nth_back(iter.len().saturating_sub(1))"
@@ -919,8 +920,8 @@ mod tests {
             }
         }
 
-        assert_cases::<NthOp<false>>();
-        assert_cases::<NthOp<true>>();
+        assert_bit_iterator_cases::<NthOp<false>>();
+        assert_bit_iterator_cases::<NthOp<true>>();
     }
 
     #[test]
