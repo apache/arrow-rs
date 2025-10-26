@@ -631,6 +631,19 @@ where
             self.next_block()
         }
     }
+
+    /// Verify the bit width is smaller then the integer type that it is trying to decode.
+    #[inline]
+    fn check_bit_width(&self, bit_width: usize) -> Result<()> {
+        if bit_width > std::mem::size_of::<T::T>() * 8 {
+            return Err(general_err!(
+                "Invalid delta bit width {} which is larger than expected {} ",
+                bit_width,
+                std::mem::size_of::<T::T>() * 8
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T>
@@ -726,6 +739,7 @@ where
             }
 
             let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            self.check_bit_width(bit_width)?;
             let batch_to_read = self.mini_block_remaining.min(to_read - read);
 
             let batch_read = self
@@ -796,6 +810,7 @@ where
             }
 
             let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            self.check_bit_width(bit_width)?;
             let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
             let mini_block_should_skip = mini_block_to_skip;
 
@@ -2090,5 +2105,52 @@ mod tests {
             }
             v
         }
+    }
+
+    #[test]
+    // Allow initializing a vector and pushing to it for clarity in this test
+    #[allow(clippy::vec_init_then_push)]
+    fn test_delta_bit_packed_invalid_bit_width() {
+        // Manually craft a buffer with an invalid bit width
+        let mut buffer = vec![];
+        // block_size = 128
+        buffer.push(128);
+        buffer.push(1);
+        // mini_blocks_per_block = 4
+        buffer.push(4);
+        // num_values = 32
+        buffer.push(32);
+        // first_value = 0
+        buffer.push(0);
+        // min_delta = 0
+        buffer.push(0);
+        // bit_widths, one for each of the 4 mini blocks
+        buffer.push(33); // Invalid bit width
+        buffer.push(0);
+        buffer.push(0);
+        buffer.push(0);
+
+        let corrupted_buffer = Bytes::from(buffer);
+
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(corrupted_buffer.clone(), 32).unwrap();
+        let mut read_buffer = vec![0; 32];
+        let err = decoder.get(&mut read_buffer).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid delta bit width 33 which is larger than expected 32"),
+            "{}",
+            err
+        );
+
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(corrupted_buffer, 32).unwrap();
+        let err = decoder.skip(32).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid delta bit width 33 which is larger than expected 32"),
+            "{}",
+            err
+        );
     }
 }
