@@ -512,18 +512,66 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             };
         }
 
-        // 3) Allocate exactly capacity for all non-inline data
-        let mut data_buf = Vec::with_capacity(total_large);
+        struct GcCopyGroup {
+            total_buffer_bytes: usize,
+            total_len: usize,
+        }
 
-        // 4) Iterate over views and process each inline/non-inline view
-        let views_buf: Vec<u128> = (0..len)
-            .map(|i| unsafe { self.copy_view_to_buffer(i, &mut data_buf) })
-            .collect();
+        let gc_copy_groups = if total_large > i32::MAX as usize {
+            // Slow-path: need to split into multiple copy groups
+            let mut groups = vec![];
+            let mut current_length = 0;
+            let mut current_elements = 0;
 
-        // 5) Wrap up buffers
-        let data_block = Buffer::from_vec(data_buf);
+            for view in self.views() {
+                let len = *view as u32;
+                if len > MAX_INLINE_VIEW_LEN {
+                    if current_length + len > i32::MAX as u32 {
+                        // Start a new group
+                        groups.push(GcCopyGroup {
+                            total_buffer_bytes: current_length as usize,
+                            total_len: current_elements,
+                        });
+                        current_length = 0;
+                        current_elements = 0;
+                    }
+                    current_length += len;
+                    current_elements += 1;
+                }
+            }
+            if current_elements != 0 {
+                groups.push(GcCopyGroup {
+                    total_buffer_bytes: current_length as usize,
+                    total_len: current_elements,
+                });
+            }
+            groups
+        } else {
+            let gc_copy_group = GcCopyGroup {
+                total_buffer_bytes: total_large,
+                total_len: len,
+            };
+            vec![gc_copy_group]
+        };
+        assert!(gc_copy_groups.len() <= i32::MAX as usize);
+
+        let mut gc_copy_group_begin = 0;
+        let mut views_buf: Vec<u128> = vec![];
+        let mut data_blocks = vec![];
+        // 3) Copy the buffers groups by group
+        for (idx, gc_copy_group) in gc_copy_groups.iter().enumerate() {
+            let mut data_buf = Vec::with_capacity(gc_copy_group.total_buffer_bytes);
+            let v: Vec<u128> = (gc_copy_group_begin..gc_copy_group_begin + gc_copy_group.total_len)
+                .map(|i| unsafe { self.copy_view_to_buffer(i, idx as i32, &mut data_buf) })
+                .collect();
+            views_buf.extend(v);
+            let data_block = Buffer::from_vec(data_buf);
+            data_blocks.push(data_block);
+            gc_copy_group_begin += gc_copy_group.total_len;
+        }
+
+        // 4) Wrap up buffers
         let views_scalar = ScalarBuffer::from(views_buf);
-        let data_blocks = vec![data_block];
 
         // SAFETY: views_scalar, data_blocks, and nulls are correctly aligned and sized
         unsafe { GenericByteViewArray::new_unchecked(views_scalar, data_blocks, nulls) }
@@ -541,7 +589,12 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///   `buffer_index` reset to `0` and its `offset` updated so that it points
     ///   into the bytes just appended at the end of `data_buf`.
     #[inline(always)]
-    unsafe fn copy_view_to_buffer(&self, i: usize, data_buf: &mut Vec<u8>) -> u128 {
+    unsafe fn copy_view_to_buffer(
+        &self,
+        i: usize,
+        buffer_idx: i32,
+        data_buf: &mut Vec<u8>,
+    ) -> u128 {
         // SAFETY: `i < self.len()` ensures this is in‑bounds.
         let raw_view = unsafe { *self.views().get_unchecked(i) };
         let mut bv = ByteView::from(raw_view);
@@ -561,7 +614,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             let new_offset = data_buf.len() as u32;
             data_buf.extend_from_slice(slice);
 
-            bv.buffer_index = 0;
+            bv.buffer_index = buffer_idx as u32;
             bv.offset = new_offset;
             bv.into()
         }
@@ -1441,15 +1494,10 @@ mod tests {
         let gced = array.gc();
         assert_eq!(gced.len(), num_views, "Length mismatch after gc");
         assert_eq!(gced.null_count(), 0, "Null count mismatch after gc");
-        assert_eq!(
+        assert_ne!(
             gced.data_buffers().len(),
             1,
-            "gc should consolidate data into a single buffer"
-        );
-        assert_eq!(
-            gced.data_buffers()[0].len(),
-            total,
-            "Consolidated buffer length should equal total non-inline bytes"
+            "gc with huge buffer should not consolidate data into a single buffer"
         );
 
         // Element-wise equality check across the entire array
