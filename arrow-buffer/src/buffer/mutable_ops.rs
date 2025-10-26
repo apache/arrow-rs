@@ -140,7 +140,10 @@ pub fn mutable_bitwise_bin_op_helper<F>(
         );
     } else {
         // If we are not byte aligned, run `op` on the first few bits to reach byte alignment
-        let bits_to_next_byte = 8 - left_bit_offset;
+        let bits_to_next_byte = (8 - left_bit_offset)
+            // Minimum with the amount of bits we need to process
+            // to avoid reading out of bounds
+            .min(len_in_bits);
 
         {
             let right_byte_offset = right_offset_in_bits / 8;
@@ -275,7 +278,7 @@ fn read_up_to_byte_from_offset(
 
     // number of bytes to read
     // might be one more than sizeof(u64) if the offset is in the middle of a byte
-    assert!(slice.len() >= number_of_bytes_to_read);
+    assert!(slice.len() >= number_of_bytes_to_read, "slice is too small");
 
     let mut bits = slice[0] >> bit_offset;
     for (i, &byte) in slice
@@ -763,10 +766,10 @@ pub fn mutable_bitwise_unary_op_helper<F>(
             op,
         );
     } else {
+        align_to_byte(&mut op, mutable_buffer, offset_in_bits);
+
         // If we are not byte aligned we will read the first few bits
         let bits_to_next_byte = 8 - left_bit_offset;
-
-        align_to_byte(&mut op, mutable_buffer, offset_in_bits);
 
         let offset_in_bits = offset_in_bits + bits_to_next_byte;
         let len_in_bits = len_in_bits.saturating_sub(bits_to_next_byte);
@@ -1252,5 +1255,24 @@ mod tests {
     fn test_not_empty_length() {
         let data = vec![true, false, true, false];
         test_mutable_buffer_unary_op_helper(&data, 0, 0, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_less_than_byte_unaligned_and_not_enough_bits() {
+        let left_offset_in_bits = 2;
+        let right_offset_in_bits = 4;
+        let len_in_bits = 1;
+
+        // Single byte
+        let right = (0..8).map(|i| (i / 2) % 2 == 0).collect::<Vec<_>>();
+        // less than a byte
+        let left = (0..3).map(|i| i % 2 == 0).collect::<Vec<_>>();
+        test_all_binary_ops(
+            &left,
+            &right,
+            left_offset_in_bits,
+            right_offset_in_bits,
+            len_in_bits,
+        );
     }
 }
