@@ -616,6 +616,7 @@ pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
+    first_row_index: i64,
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
@@ -654,6 +655,11 @@ impl RowGroupMetaData {
     /// Number of rows in this row group.
     pub fn num_rows(&self) -> i64 {
         self.num_rows
+    }
+
+    /// Returns the global index number for the first row in this row group.
+    pub fn first_row_index(&self) -> i64 {
+        self.first_row_index
     }
 
     /// Returns the sort ordering of the rows in this RowGroup if any
@@ -713,6 +719,7 @@ impl RowGroupMetaDataBuilder {
             schema_descr,
             file_offset: None,
             num_rows: 0,
+            first_row_index: 0,
             sorting_columns: None,
             total_byte_size: 0,
             ordinal: None,
@@ -722,6 +729,12 @@ impl RowGroupMetaDataBuilder {
     /// Sets number of rows in this row group.
     pub fn set_num_rows(mut self, value: i64) -> Self {
         self.0.num_rows = value;
+        self
+    }
+
+    /// Sets the first row number in this row group.
+    pub fn set_first_row_index(mut self, value: i64) -> Self {
+        self.0.first_row_index = value;
         self
     }
 
@@ -1875,10 +1888,10 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2248;
+        let base_expected_size = 2256;
         #[cfg(feature = "encryption")]
         // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
-        let base_expected_size = 2416;
+        let base_expected_size = 2424;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1907,10 +1920,10 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2674;
+        let bigger_expected_size = 2682;
         #[cfg(feature = "encryption")]
         // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
-        let bigger_expected_size = 2842;
+        let bigger_expected_size = 2850;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);

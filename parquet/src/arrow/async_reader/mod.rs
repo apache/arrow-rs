@@ -53,7 +53,7 @@ use crate::bloom_filter::{
 };
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 
@@ -516,6 +516,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset: self.offset,
             metrics: self.metrics,
             max_predicate_cache_size: self.max_predicate_cache_size,
+            row_number_column: self.row_number_column,
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -561,7 +562,7 @@ struct ReaderFactory<T> {
     /// Optional filter
     filter: Option<RowFilter>,
 
-    /// Limit to apply to remaining row groups.  
+    /// Limit to apply to remaining row groups.
     limit: Option<usize>,
 
     /// Offset to apply to the next
@@ -572,6 +573,8 @@ struct ReaderFactory<T> {
 
     /// Maximum size of the predicate cache
     max_predicate_cache_size: usize,
+
+    row_number_column: Option<String>,
 }
 
 impl<T> ReaderFactory<T>
@@ -649,7 +652,7 @@ where
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_cache_options(Some(&cache_options))
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                    .build_array_reader(self.fields.as_deref(), predicate.projection(), self.row_number_column.as_deref())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
@@ -706,7 +709,7 @@ where
         let cache_options = cache_options_builder.consumer();
         let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
             .with_cache_options(Some(&cache_options))
-            .build_array_reader(self.fields.as_deref(), &projection)?;
+            .build_array_reader(self.fields.as_deref(), &projection, self.row_number_column.as_deref())?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
@@ -1130,6 +1133,10 @@ impl RowGroups for InMemoryRowGroup<'_> {
             }
         }
     }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(std::iter::once(self.metadata.row_group(self.row_group_idx)))
+    }
 }
 
 /// An in-memory column chunk
@@ -1210,6 +1217,7 @@ impl PageIterator for ColumnChunkIterator {}
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
     };
@@ -1990,6 +1998,7 @@ mod tests {
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
             max_predicate_cache_size: 0,
+            row_number_column: None,
         };
 
         let mut skip = true;
@@ -2455,6 +2464,7 @@ mod tests {
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
             max_predicate_cache_size: 0,
+            row_number_column: None,
         };
 
         // Provide an output projection that also selects the same nested leaf
@@ -2706,6 +2716,57 @@ mod tests {
                 .map(|r| r.len())
                 .sum::<usize>(),
             92
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            false,
+            |path, selection, _row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let reader = ParquetRecordBatchStreamBuilder::new(file)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_batch_size(batch_size)
+                        .with_row_number_column("row_number")
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups_and_filter() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            true,
+            |path, selection, row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let reader = ParquetRecordBatchStreamBuilder::new(file)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_row_filter(row_filter.expect("No row filter"))
+                        .with_batch_size(batch_size)
+                        .with_row_number_column("row_number")
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
         );
     }
 }

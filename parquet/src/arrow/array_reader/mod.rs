@@ -42,12 +42,13 @@ mod map_array;
 mod null_array;
 mod primitive_array;
 mod row_group_cache;
+mod row_number;
 mod struct_array;
 
 #[cfg(test)]
 mod test_util;
 
-// Note that this crate is public under the `experimental` feature flag.
+use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
@@ -139,6 +140,9 @@ pub trait RowGroups {
     /// Returns a [`PageIterator`] for all pages in the specified column chunk
     /// across all row groups in this collection.
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
+
+    /// Returns an iterator over the row groups in this collection
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_>;
 }
 
 impl RowGroups for Arc<dyn FileReader> {
@@ -149,6 +153,10 @@ impl RowGroups for Arc<dyn FileReader> {
     fn column_chunks(&self, column_index: usize) -> Result<Box<dyn PageIterator>> {
         let iterator = FilePageIterator::new(column_index, Arc::clone(self))?;
         Ok(Box::new(iterator))
+    }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(self.metadata().row_groups().iter())
     }
 }
 
