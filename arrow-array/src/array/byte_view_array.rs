@@ -564,14 +564,13 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         for (group_idx, gc_copy_group) in gc_copy_groups.iter().enumerate() {
             let mut data_buf = Vec::with_capacity(gc_copy_group.total_buffer_bytes);
 
-            let group_views: Vec<u128> = (current_view_idx
-                ..current_view_idx + gc_copy_group.total_len)
-                .map(|view_idx| unsafe {
-                    self.copy_view_to_buffer(view_idx, group_idx as i32, &mut data_buf)
-                })
-                .collect();
+            // Directly push views to avoid intermediate Vec allocation
+            for view_idx in current_view_idx..current_view_idx + gc_copy_group.total_len {
+                let view =
+                    unsafe { self.copy_view_to_buffer(view_idx, group_idx as i32, &mut data_buf) };
+                views_buf.push(view);
+            }
 
-            views_buf.extend(group_views);
             data_blocks.push(Buffer::from_vec(data_buf));
             current_view_idx += gc_copy_group.total_len;
         }
