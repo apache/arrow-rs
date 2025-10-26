@@ -94,6 +94,55 @@ pub fn ceil(value: usize, divisor: usize) -> usize {
     value.div_ceil(divisor)
 }
 
+/// Read up to 8 bits from a byte slice starting at a given bit offset.
+///
+/// # Arguments
+///
+/// * `slice` - The byte slice to read from
+/// * `number_of_bits_to_read` - Number of bits to read (must be < 8)
+/// * `bit_offset` - Starting bit offset within the first byte (must be < 8)
+///
+/// # Returns
+///
+/// A `u8` containing the requested bits in the least significant positions
+///
+/// # Panics
+/// - Panics if `number_of_bits_to_read` is 0 or >= 8
+/// - Panics if `bit_offset` is >= 8
+/// - Panics if `slice` is empty or too small to read the requested bits
+///
+#[inline]
+pub(crate) fn read_up_to_byte_from_offset(
+    slice: &[u8],
+    number_of_bits_to_read: usize,
+    bit_offset: usize,
+) -> u8 {
+    assert!(number_of_bits_to_read < 8, "can read up to 8 bits only");
+    assert!(bit_offset < 8, "bit offset must be less than 8");
+    assert_ne!(
+        number_of_bits_to_read, 0,
+        "number of bits to read must be greater than 0"
+    );
+    assert_ne!(slice.len(), 0, "slice must not be empty");
+
+    let number_of_bytes_to_read = ceil(number_of_bits_to_read + bit_offset, 8);
+
+    // number of bytes to read
+    assert!(slice.len() >= number_of_bytes_to_read, "slice is too small");
+
+    let mut bits = slice[0] >> bit_offset;
+    for (i, &byte) in slice
+        .iter()
+        .take(number_of_bytes_to_read)
+        .enumerate()
+        .skip(1)
+    {
+        bits |= byte << (i * 8 - bit_offset);
+    }
+
+    bits & ((1 << number_of_bits_to_read) - 1)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -278,5 +327,78 @@ mod tests {
         assert_eq!(ceil(10000000000, 10), 1000000000);
         assert_eq!(ceil(10, 10000000000), 1);
         assert_eq!(ceil(10000000000, 1000000000), 10);
+    }
+
+    #[test]
+    fn test_read_up_to() {
+        let all_ones = &[0b10111001, 0b10001100];
+
+        for (bit_offset, expected) in [
+            (0, 0b00000001),
+            (1, 0b00000000),
+            (2, 0b00000000),
+            (3, 0b00000001),
+            (4, 0b00000001),
+            (5, 0b00000001),
+            (6, 0b00000000),
+            (7, 0b00000001),
+        ] {
+            let result = read_up_to_byte_from_offset(all_ones, 1, bit_offset);
+            assert_eq!(
+                result, expected,
+                "failed at bit_offset {bit_offset}. result, expected:\n{result:08b}\n{expected:08b}"
+            );
+        }
+
+        for (bit_offset, expected) in [
+            (0, 0b00000001),
+            (1, 0b00000000),
+            (2, 0b00000010),
+            (3, 0b00000011),
+            (4, 0b00000011),
+            (5, 0b00000001),
+            (6, 0b00000010),
+            (7, 0b00000001),
+        ] {
+            let result = read_up_to_byte_from_offset(all_ones, 2, bit_offset);
+            assert_eq!(
+                result, expected,
+                "failed at bit_offset {bit_offset}. result, expected:\n{result:08b}\n{expected:08b}"
+            );
+        }
+
+        for (bit_offset, expected) in [
+            (0, 0b00111001),
+            (1, 0b00011100),
+            (2, 0b00101110),
+            (3, 0b00010111),
+            (4, 0b00001011),
+            (5, 0b00100101),
+            (6, 0b00110010),
+            (7, 0b00011001),
+        ] {
+            let result = read_up_to_byte_from_offset(all_ones, 6, bit_offset);
+            assert_eq!(
+                result, expected,
+                "failed at bit_offset {bit_offset}. result, expected:\n{result:08b}\n{expected:08b}"
+            );
+        }
+
+        for (bit_offset, expected) in [
+            (0, 0b00111001),
+            (1, 0b01011100),
+            (2, 0b00101110),
+            (3, 0b00010111),
+            (4, 0b01001011),
+            (5, 0b01100101),
+            (6, 0b00110010),
+            (7, 0b00011001),
+        ] {
+            let result = read_up_to_byte_from_offset(all_ones, 7, bit_offset);
+            assert_eq!(
+                result, expected,
+                "failed at bit_offset {bit_offset}. result, expected:\n{result:08b}\n{expected:08b}"
+            );
+        }
     }
 }

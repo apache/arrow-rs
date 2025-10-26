@@ -26,7 +26,6 @@ pub use mutable::*;
 mod ops;
 pub use ops::*;
 mod mutable_ops;
-pub use mutable_ops::*;
 mod scalar;
 pub use scalar::*;
 mod boolean;

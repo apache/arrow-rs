@@ -743,6 +743,12 @@ impl std::ops::DerefMut for MutableBuffer {
     }
 }
 
+impl AsRef<[u8]> for &MutableBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
 impl Drop for MutableBuffer {
     fn drop(&mut self) {
         if self.layout.size() != 0 {
