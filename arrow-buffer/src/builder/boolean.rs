@@ -283,6 +283,10 @@ impl Not for BooleanBufferBuilder {
 impl BitAnd<&BooleanBuffer> for BooleanBufferBuilder {
     type Output = BooleanBufferBuilder;
 
+    /// Performs a bitwise AND operation between this buffer and `rhs`, returning the result as a new buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitand(mut self, rhs: &BooleanBuffer) -> Self::Output {
         self &= rhs;
 
@@ -293,6 +297,10 @@ impl BitAnd<&BooleanBuffer> for BooleanBufferBuilder {
 impl BitAnd<&BooleanBufferBuilder> for BooleanBufferBuilder {
     type Output = BooleanBufferBuilder;
 
+    /// Performs a bitwise AND operation between this buffer and `rhs`, returning the result as a new buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitand(mut self, rhs: &BooleanBufferBuilder) -> Self::Output {
         self &= rhs;
 
@@ -301,6 +309,10 @@ impl BitAnd<&BooleanBufferBuilder> for BooleanBufferBuilder {
 }
 
 impl BitAndAssign<&BooleanBuffer> for BooleanBufferBuilder {
+    /// Performs a bitwise AND operation between this buffer and `rhs`, storing the result in this buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitand_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
 
@@ -310,6 +322,10 @@ impl BitAndAssign<&BooleanBuffer> for BooleanBufferBuilder {
 }
 
 impl BitAndAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    /// Performs a bitwise AND operation between this buffer and `rhs`, storing the result in this buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitand_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
 
@@ -321,6 +337,10 @@ impl BitAndAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
 impl BitOr<&BooleanBuffer> for BooleanBufferBuilder {
     type Output = BooleanBufferBuilder;
 
+    /// Performs a bitwise OR operation between this buffer and `rhs`, returning the result as a new buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitor(mut self, rhs: &BooleanBuffer) -> Self::Output {
         self |= rhs;
 
@@ -331,6 +351,10 @@ impl BitOr<&BooleanBuffer> for BooleanBufferBuilder {
 impl BitOr<&BooleanBufferBuilder> for BooleanBufferBuilder {
     type Output = BooleanBufferBuilder;
 
+    /// Performs a bitwise OR operation between this buffer and `rhs`, returning the result as a new buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitor(mut self, rhs: &BooleanBufferBuilder) -> Self::Output {
         self |= rhs;
 
@@ -339,6 +363,10 @@ impl BitOr<&BooleanBufferBuilder> for BooleanBufferBuilder {
 }
 
 impl BitOrAssign<&BooleanBuffer> for BooleanBufferBuilder {
+    /// Performs a bitwise OR operation between this buffer and `rhs`, storing the result in this buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitor_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
 
@@ -348,6 +376,10 @@ impl BitOrAssign<&BooleanBuffer> for BooleanBufferBuilder {
 }
 
 impl BitOrAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    /// Performs a bitwise OR operation between this buffer and `rhs`, storing the result in this buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitor_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
 
@@ -359,6 +391,10 @@ impl BitOrAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
 impl BitXor<&BooleanBuffer> for BooleanBufferBuilder {
     type Output = BooleanBufferBuilder;
 
+    /// Performs a bitwise XOR operation between this buffer and `rhs`, returning the result as a new buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitxor(mut self, rhs: &BooleanBuffer) -> Self::Output {
         self ^= rhs;
 
@@ -369,6 +405,10 @@ impl BitXor<&BooleanBuffer> for BooleanBufferBuilder {
 impl BitXor<&BooleanBufferBuilder> for BooleanBufferBuilder {
     type Output = BooleanBufferBuilder;
 
+    /// Performs a bitwise XOR operation between this buffer and `rhs`, returning the result as a new buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitxor(mut self, rhs: &BooleanBufferBuilder) -> Self::Output {
         self ^= rhs;
 
@@ -377,6 +417,10 @@ impl BitXor<&BooleanBufferBuilder> for BooleanBufferBuilder {
 }
 
 impl BitXorAssign<&BooleanBuffer> for BooleanBufferBuilder {
+    /// Performs a bitwise XOR operation between this buffer and `rhs`, storing the result in this buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitxor_assign(&mut self, rhs: &BooleanBuffer) {
         assert_eq!(self.len, rhs.len());
 
@@ -386,6 +430,10 @@ impl BitXorAssign<&BooleanBuffer> for BooleanBufferBuilder {
 }
 
 impl BitXorAssign<&BooleanBufferBuilder> for BooleanBufferBuilder {
+    /// Performs a bitwise XOR operation between this buffer and `rhs`, storing the result in this buffer.
+    ///
+    /// # Panics
+    /// Panics if the lengths of the two buffers are not equal
     fn bitxor_assign(&mut self, rhs: &BooleanBufferBuilder) {
         assert_eq!(self.len, rhs.len());
 
