@@ -17,7 +17,7 @@
 
 //! [`zip`]: Combine values from two arrays based on boolean mask
 
-use crate::filter::SlicesIterator;
+use crate::filter::{SlicesIterator, prep_null_mask_filter};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type};
 use arrow_array::*;
@@ -31,7 +31,7 @@ use arrow_schema::{ArrowError, DataType};
 use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::{BitAnd, Not};
+use std::ops::Not;
 use std::sync::Arc;
 
 /// Zip two arrays by some boolean mask.
@@ -149,6 +149,7 @@ fn zip_impl(
     falsy: &ArrayData,
     falsy_is_scalar: bool,
 ) -> Result<ArrayRef, ArrowError> {
+    let mask_buffer = maybe_prep_null_mask_filter(mask);
     let mut mutable = MutableArrayData::new(vec![truthy, falsy], false, truthy.len());
 
     // the SlicesIterator slices only the true values. So the gaps left by this iterator we need to
@@ -157,7 +158,7 @@ fn zip_impl(
     // keep track of how much is filled
     let mut filled = 0;
 
-    SlicesIterator::new(mask).for_each(|(start, end)| {
+    SlicesIterator::from(&mask_buffer).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
             if falsy_is_scalar {
@@ -359,9 +360,10 @@ impl<T: ArrowPrimitiveType> PrimitiveScalarImpl<T> {
             Some(value)
         }
     }
-}
 
-impl<T: ArrowPrimitiveType> PrimitiveScalarImpl<T> {
+    /// return an output array that has
+    /// `value` in all locations where predicate is true
+    /// `null` otherwise
     fn get_scalar_and_null_buffer_for_single_non_nullable(
         predicate: BooleanBuffer,
         value: T::Native,
@@ -378,7 +380,7 @@ impl<T: ArrowPrimitiveType> ZipImpl for PrimitiveScalarImpl<T> {
     fn create_output(&self, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
         let result_len = predicate.len();
         // Nulls are treated as false
-        let predicate = combine_nulls_and_false(predicate);
+        let predicate = maybe_prep_null_mask_filter(predicate);
 
         let (scalars, nulls): (Vec<T::Native>, Option<NullBuffer>) = match (self.truthy, self.falsy)
         {
@@ -459,6 +461,9 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         }
     }
 
+    /// return an output array that has
+    /// `value` in all locations where predicate is true
+    /// `null` otherwise
     fn get_scalar_and_null_buffer_for_single_non_nullable(
         predicate: BooleanBuffer,
         value: &[u8],
@@ -497,73 +502,24 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         (bytes, offsets, Some(nulls))
     }
 
+    /// Create a [`Buffer`] where `value` slice is repeated `number_of_values` times
+    /// and [`OffsetBuffer`] where there are `number_of_values` lengths, and all equals to `value` length
     fn get_bytes_and_offset_for_all_same_value(
-        predicate: &BooleanBuffer,
+        number_of_values: usize,
         value: &[u8],
     ) -> (Buffer, OffsetBuffer<T::Offset>) {
         let value_length = value.len();
 
         let offsets =
-            OffsetBuffer::<T::Offset>::from_repeated_length(value_length, predicate.len());
+            OffsetBuffer::<T::Offset>::from_repeated_length(value_length, number_of_values);
 
         let mut bytes = MutableBuffer::with_capacity(0);
-        bytes.repeat_slice_n_times(value, predicate.len());
+        bytes.repeat_slice_n_times(value, number_of_values);
         let bytes = Buffer::from(bytes);
 
         (bytes, offsets)
     }
-}
 
-impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
-    fn create_output(&self, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
-        let result_len = predicate.len();
-        // Nulls are treated as false
-        let predicate = combine_nulls_and_false(predicate);
-
-        let (bytes, offsets, nulls): (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) =
-            match (self.truthy.as_deref(), self.falsy.as_deref()) {
-                (Some(truthy_val), Some(falsy_val)) => {
-                    let (bytes, offsets) =
-                        Self::create_output_on_non_nulls(&predicate, truthy_val, falsy_val);
-
-                    (bytes, offsets, None)
-                }
-                (Some(truthy_val), None) => {
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)
-                }
-                (None, Some(falsy_val)) => {
-                    // Flipping the boolean buffer as we want the opposite of the TRUE case
-                    //
-                    // if the condition is true we want null so we need to NOT the value so we get 0 (meaning null)
-                    // if the condition is false we want the FALSE value so we need to NOT the value so we get 1 (meaning not null)
-                    let predicate = predicate.not();
-                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)
-                }
-                (None, None) => {
-                    // All values are null
-                    let nulls = NullBuffer::new_null(result_len);
-
-                    (
-                        // Empty bytes
-                        Buffer::from(&[]),
-                        // All nulls so all lengths are 0
-                        OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
-                        Some(nulls),
-                    )
-                }
-            };
-
-        let output = unsafe {
-            // Safety: the values are based on valid inputs
-            // and `try_new` is expensive for strings as it validate that the input is valid utf8
-            GenericByteArray::<T>::new_unchecked(offsets, bytes, nulls)
-        };
-
-        Ok(Arc::new(output))
-    }
-}
-
-impl<T: ByteArrayType> BytesScalarImpl<T> {
     fn create_output_on_non_nulls(
         predicate: &BooleanBuffer,
         truthy_val: &[u8],
@@ -576,14 +532,14 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
                 // All values are falsy
 
                 let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate, falsy_val);
+                  Self::get_bytes_and_offset_for_all_same_value(predicate.len(), falsy_val);
 
                 return (bytes, offsets);
             }
             n if n == predicate.len() => {
                 // All values are truthy
                 let (bytes, offsets) =
-                    Self::get_bytes_and_offset_for_all_same_value(predicate, truthy_val);
+                  Self::get_bytes_and_offset_for_all_same_value(predicate.len(), truthy_val);
 
                 return (bytes, offsets);
             }
@@ -594,7 +550,7 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
         }
 
         let total_number_of_bytes =
-            true_count * truthy_val.len() + (predicate.len() - true_count) * falsy_val.len();
+          true_count * truthy_val.len() + (predicate.len() - true_count) * falsy_val.len();
         let mut mutable = MutableBuffer::with_capacity(total_number_of_bytes);
         let mut offset_buffer_builder = OffsetBufferBuilder::<T::Offset>::new(predicate.len());
 
@@ -640,14 +596,63 @@ impl<T: ByteArrayType> BytesScalarImpl<T> {
     }
 }
 
-fn combine_nulls_and_false(predicate: &BooleanArray) -> BooleanBuffer {
-    if let Some(nulls) = predicate.nulls().filter(|n| n.null_count() > 0) {
-        predicate.values().bitand(
-            // nulls are represented as 0 (false) in the values buffer
-            nulls.inner(),
-        )
-    } else {
+impl<T: ByteArrayType> ZipImpl for BytesScalarImpl<T> {
+    fn create_output(&self, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
+        let result_len = predicate.len();
+        // Nulls are treated as false
+        let predicate = maybe_prep_null_mask_filter(predicate);
+
+        let (bytes, offsets, nulls): (Buffer, OffsetBuffer<T::Offset>, Option<NullBuffer>) =
+            match (self.truthy.as_deref(), self.falsy.as_deref()) {
+                (Some(truthy_val), Some(falsy_val)) => {
+                    let (bytes, offsets) =
+                        Self::create_output_on_non_nulls(&predicate, truthy_val, falsy_val);
+
+                    (bytes, offsets, None)
+                }
+                (Some(truthy_val), None) => {
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, truthy_val)
+                }
+                (None, Some(falsy_val)) => {
+                    // Flipping the boolean buffer as we want the opposite of the TRUE case
+                    //
+                    // if the condition is true we want null so we need to NOT the value so we get 0 (meaning null)
+                    // if the condition is false we want the FALSE value so we need to NOT the value so we get 1 (meaning not null)
+                    let predicate = predicate.not();
+                    Self::get_scalar_and_null_buffer_for_single_non_nullable(predicate, falsy_val)
+                }
+                (None, None) => {
+                    // All values are null
+                    let nulls = NullBuffer::new_null(result_len);
+
+                    (
+                        // Empty bytes
+                        Buffer::from(&[]),
+                        // All nulls so all lengths are 0
+                        OffsetBuffer::<T::Offset>::new_zeroed(predicate.len()),
+                        Some(nulls),
+                    )
+                }
+            };
+
+        let output = unsafe {
+            // Safety: the values are based on valid inputs
+            // and `try_new` is expensive for strings as it validate that the input is valid utf8
+            GenericByteArray::<T>::new_unchecked(offsets, bytes, nulls)
+        };
+
+        Ok(Arc::new(output))
+    }
+}
+
+fn maybe_prep_null_mask_filter(predicate: &BooleanArray) -> BooleanBuffer {
+    // Nulls are treated as false
+    if predicate.null_count() == 0 {
         predicate.values().clone()
+    } else {
+        let cleaned = prep_null_mask_filter(predicate);
+        let (boolean_buffer, _) = cleaned.into_parts();
+        boolean_buffer
     }
 }
 
@@ -731,7 +736,7 @@ mod test {
     }
 
     #[test]
-    fn test_zip_kernel_scalar_both() {
+    fn test_zip_kernel_scalar_both_mask_ends_with_true() {
         let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
         let scalar_falsy = Scalar::new(Int32Array::from_value(123, 1));
 
@@ -743,7 +748,49 @@ mod test {
     }
 
     #[test]
-    fn test_zip_kernel_scalar_none_1() {
+    fn test_zip_kernel_scalar_both_mask_ends_with_false() {
+        let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+        let scalar_falsy = Scalar::new(Int32Array::from_value(123, 1));
+
+        let mask = BooleanArray::from(vec![true, true, false, true, false, false]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![Some(42), Some(42), Some(123), Some(42), Some(123), Some(123)]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_primitive_scalar_with_boolean_array_mask_with_nulls_should_be_treated_as_false() {
+        let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+        let scalar_falsy = Scalar::new(Int32Array::from_value(123, 1));
+
+        let mask = {
+            let booleans = BooleanBuffer::from(vec![true, true, false, true, false, false]);
+            let nulls = NullBuffer::from(vec![
+                true,
+                true,
+                true,
+                false, // null treated as false even though in the original mask it was true
+                true,
+                true
+            ]);
+            BooleanArray::new(booleans, Some(nulls))
+        };
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![
+            Some(42),
+            Some(42),
+            Some(123),
+            Some(123), // true in mask but null
+            Some(123),
+            Some(123)
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_primitive_scalar_none_1() {
         let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
         let scalar_falsy = Scalar::new(Int32Array::new_null(1));
 
@@ -755,7 +802,7 @@ mod test {
     }
 
     #[test]
-    fn test_zip_kernel_scalar_none_2() {
+    fn test_zip_kernel_primitive_scalar_none_2() {
         let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
         let scalar_falsy = Scalar::new(Int32Array::new_null(1));
 
@@ -764,6 +811,168 @@ mod test {
         let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
         let expected = Int32Array::from(vec![None, None, Some(42), Some(42), None]);
         assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_primitive_scalar_both_null() {
+        let scalar_truthy = Scalar::new(Int32Array::new_null(1));
+        let scalar_falsy = Scalar::new(Int32Array::new_null(1));
+
+        let mask = BooleanArray::from(vec![false, false, true, true, false]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![None, None, None, None, None]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_large_string_scalar_with_boolean_array_mask_with_nulls_should_be_treated_as_false() {
+        let scalar_truthy = Scalar::new(LargeStringArray::from_iter_values(&["test"]));
+        let scalar_falsy = Scalar::new(LargeStringArray::from_iter_values(&["something else"]));
+
+        let mask = {
+            let booleans = BooleanBuffer::from(vec![true, true, false, true, false, false]);
+            let nulls = NullBuffer::from(vec![
+                true,
+                true,
+                true,
+                false, // null treated as false even though in the original mask it was true
+                true,
+                true
+            ]);
+            BooleanArray::new(booleans, Some(nulls))
+        };
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        let expected = LargeStringArray::from_iter(vec![
+            Some("test"),
+            Some("test"),
+            Some("something else"),
+            Some("something else"), // true in mask but null
+            Some("something else"),
+            Some("something else")
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_bytes_scalar_none_1() {
+        let scalar_truthy = Scalar::new(StringArray::from_iter_values(&["hello"]));
+        let scalar_falsy = Scalar::new(StringArray::new_null(1));
+
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<StringArray>().unwrap();
+        let expected = StringArray::from_iter(vec![Some("hello"), Some("hello"), None, None, Some("hello")]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_bytes_scalar_none_2() {
+        let scalar_truthy = Scalar::new(StringArray::new_null(1));
+        let scalar_falsy = Scalar::new(StringArray::from_iter_values(&["hello"]));
+
+        let mask = BooleanArray::from(vec![true, true, false, false, true]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<StringArray>().unwrap();
+        let expected = StringArray::from_iter(vec![None, None, Some("hello"), Some("hello"), None]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_bytes_scalar_both() {
+        let scalar_truthy = Scalar::new(StringArray::from_iter_values(&["test"]));
+        let scalar_falsy = Scalar::new(StringArray::from_iter_values(&["something else"]));
+
+        // mask ends with false
+        let mask = BooleanArray::from(vec![true, true, false, true, false, false]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<StringArray>().unwrap();
+        let expected = StringArray::from_iter(vec![
+            Some("test"),
+            Some("test"),
+            Some("something else"),
+            Some("test"),
+            Some("something else"),
+            Some("something else"),
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_scalar_bytes_only_taking_one_side() {
+        let mask_len = 5;
+        let all_true_mask = BooleanArray::from(vec![true; mask_len]);
+        let all_false_mask = BooleanArray::from(vec![false; mask_len]);
+
+        let null_scalar = Scalar::new(StringArray::new_null(1));
+        let non_null_scalar_1 = Scalar::new(StringArray::from_iter_values(&["test"]));
+        let non_null_scalar_2 = Scalar::new(StringArray::from_iter_values(&["something else"]));
+
+        {
+            // 1. Test where left is null and right is non-null
+            //    and mask is all true
+            let out = zip(&all_true_mask, &null_scalar, &non_null_scalar_1).unwrap();
+            let actual = out.as_string::<i32>();
+            let expected = StringArray::from_iter(std::iter::repeat_n(None::<&str>, mask_len));
+            assert_eq!(actual, &expected);
+        }
+
+        {
+            // 2. Test where left is null and right is non-null
+            //    and mask is all false
+            let out = zip(&all_false_mask, &null_scalar, &non_null_scalar_1).unwrap();
+            let actual = out.as_string::<i32>();
+            let expected = StringArray::from_iter(std::iter::repeat_n(Some("test"), mask_len));
+            assert_eq!(actual, &expected);
+        }
+
+        {
+            // 3. Test where left is non-null and right is null
+            //    and mask is all true
+            let out = zip(&all_true_mask, &non_null_scalar_1, &null_scalar).unwrap();
+            let actual = out.as_string::<i32>();
+            let expected = StringArray::from_iter(std::iter::repeat_n(Some("test"), mask_len));
+            assert_eq!(actual, &expected);
+        }
+
+        {
+            // 4. Test where left is non-null and right is null
+            //    and mask is all false
+            let out = zip(&all_false_mask, &non_null_scalar_1, &null_scalar).unwrap();
+            let actual = out.as_string::<i32>();
+            let expected = StringArray::from_iter(std::iter::repeat_n(None::<&str>, mask_len));
+            assert_eq!(actual, &expected);
+        }
+
+        {
+            // 5. Test where both left and right are not null
+            //    and mask is all true
+            let out = zip(&all_true_mask, &non_null_scalar_1, &non_null_scalar_2).unwrap();
+            let actual = out.as_string::<i32>();
+            let expected = StringArray::from_iter(std::iter::repeat_n(Some("test"), mask_len));
+            assert_eq!(actual, &expected);
+        }
+
+        {
+            // 6. Test where both left and right are not null
+            //    and mask is all false
+            let out = zip(&all_false_mask, &non_null_scalar_1, &non_null_scalar_2).unwrap();
+            let actual = out.as_string::<i32>();
+            let expected = StringArray::from_iter(std::iter::repeat_n(Some("something else"), mask_len));
+            assert_eq!(actual, &expected);
+        }
+
+        {
+            // 7. Test where both left and right are null
+            //    and mask is random
+            let mask = BooleanArray::from(vec![true, false, true, false, true]);
+            let out = zip(&mask, &null_scalar, &null_scalar).unwrap();
+            let actual = out.as_string::<i32>();
+            let expected = StringArray::from_iter(std::iter::repeat_n(None::<&str>, mask_len));
+            assert_eq!(actual, &expected);
+        }
+
     }
 
     #[test]
@@ -819,6 +1028,28 @@ mod test {
         let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
         let actual = out.as_binary::<i32>();
         let expected = BinaryArray::from(vec![
+            Some(truthy_bytes),
+            Some(falsy_bytes),
+            Some(truthy_bytes),
+            Some(falsy_bytes),
+            Some(truthy_bytes),
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_large_binary() {
+        let truthy_bytes: &[u8] = b"hey";
+        let falsy_bytes: &[u8] = b"world";
+        let scalar_truthy = Scalar::new(LargeBinaryArray::from_iter_values(
+            vec![truthy_bytes],
+        ));
+        let scalar_falsy = Scalar::new(LargeBinaryArray::from_iter_values(vec![falsy_bytes]));
+
+        let mask = BooleanArray::from(vec![true, false, true, false, true]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_binary::<i64>();
+        let expected = LargeBinaryArray::from(vec![
             Some(truthy_bytes),
             Some(falsy_bytes),
             Some(truthy_bytes),
@@ -904,5 +1135,31 @@ mod test {
             let out = zip(mask, truthy, falsy).unwrap();
             assert_eq!(out.data_type(), &expected_data_type);
         }
+    }
+
+    #[test]
+    fn zip_scalar_fallback_impl() {
+        let truthy_list_item_scalar = Some(vec![Some(1), None, Some(3)]);
+        let truthy_list_array_scalar = Scalar::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            truthy_list_item_scalar.clone()
+        ]));
+        let falsy_list_item_scalar = Some(vec![None, Some(2), Some(4)]);
+        let falsy_list_array_scalar = Scalar::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            falsy_list_item_scalar.clone()
+        ]));
+        let mask = BooleanArray::from(vec![true, false, true, false, false, true, false]);
+        let out = zip(&mask, &truthy_list_array_scalar, &falsy_list_array_scalar).unwrap();
+        let actual = out.as_list::<i32>();
+
+        let expected = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            truthy_list_item_scalar.clone(),
+            falsy_list_item_scalar.clone(),
+            truthy_list_item_scalar.clone(),
+            falsy_list_item_scalar.clone(),
+            falsy_list_item_scalar.clone(),
+            truthy_list_item_scalar.clone(),
+            falsy_list_item_scalar.clone(),
+        ]);
+        assert_eq!(actual, &expected);
     }
 }
