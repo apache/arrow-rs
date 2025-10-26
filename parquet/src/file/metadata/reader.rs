@@ -180,9 +180,9 @@ impl ParquetMetaDataReader {
     #[cfg(feature = "encryption")]
     pub fn with_decryption_properties(
         mut self,
-        properties: Option<&FileDecryptionProperties>,
+        properties: Option<std::sync::Arc<FileDecryptionProperties>>,
     ) -> Self {
-        self.file_decryption_properties = properties.cloned().map(std::sync::Arc::new);
+        self.file_decryption_properties = properties;
         self
     }
 
@@ -1245,7 +1245,7 @@ mod async_tests {
 
         // just make sure the metadata is properly decrypted and read
         let expected = ParquetMetaDataReader::new()
-            .with_decryption_properties(Some(&decryption_properties))
+            .with_decryption_properties(Some(decryption_properties))
             .load_via_suffix_and_finish(input)
             .await
             .unwrap();

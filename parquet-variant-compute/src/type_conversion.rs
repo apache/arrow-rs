@@ -17,8 +17,14 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::datatypes::{self, ArrowPrimitiveType, ArrowTimestampType, Date32Type};
-use parquet_variant::Variant;
+use arrow::array::ArrowNativeTypeOp;
+use arrow::compute::DecimalCast;
+use arrow::datatypes::{
+    self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
+    DecimalType,
+};
+use chrono::Timelike;
+use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,8 +88,11 @@ impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
 impl_primitive_from_variant!(
     datatypes::Date32Type,
     as_naive_date,
-    Date32Type::from_naive_date
+    datatypes::Date32Type::from_naive_date
 );
+impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
+    (v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64
+});
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_ntz_micros,
@@ -108,6 +117,162 @@ impl_timestamp_from_variant!(
     ntz = false,
     |timestamp| Self::make_value(timestamp.naive_utc())
 );
+
+/// Returns the unscaled integer representation for Arrow decimal type `O`
+/// from a `Variant`.
+///
+/// - `precision` and `scale` specify the target Arrow decimal parameters
+/// - Integer variants (`Int8/16/32/64`) are treated as decimals with scale 0
+/// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
+///
+/// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` and
+/// returns `None` if it cannot fit the requested precision.
+pub(crate) fn variant_to_unscaled_decimal<O>(
+    variant: &Variant<'_, '_>,
+    precision: u8,
+    scale: i8,
+) -> Option<O::Native>
+where
+    O: DecimalType,
+    O::Native: DecimalCast,
+{
+    match variant {
+        Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
+            *i as i32,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int16(i) => rescale_decimal::<Decimal32Type, O>(
+            *i as i32,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int32(i) => rescale_decimal::<Decimal32Type, O>(
+            *i,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int64(i) => rescale_decimal::<Decimal64Type, O>(
+            *i,
+            VariantDecimal8::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
+            d.integer(),
+            VariantDecimal4::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        ),
+        Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, O>(
+            d.integer(),
+            VariantDecimal8::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        ),
+        Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, O>(
+            d.integer(),
+            VariantDecimal16::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        ),
+        _ => None,
+    }
+}
+
+/// Rescale a decimal from (input_precision, input_scale) to (output_precision, output_scale)
+/// and return the scaled value if it fits the output precision. Similar to the implementation in
+/// decimal.rs in arrow-cast.
+pub(crate) fn rescale_decimal<I: DecimalType, O: DecimalType>(
+    value: I::Native,
+    input_precision: u8,
+    input_scale: i8,
+    output_precision: u8,
+    output_scale: i8,
+) -> Option<O::Native>
+where
+    I::Native: DecimalCast,
+    O::Native: DecimalCast,
+{
+    let delta_scale = output_scale - input_scale;
+
+    let (scaled, is_infallible_cast) = if delta_scale >= 0 {
+        // O::MAX_FOR_EACH_PRECISION[k] stores 10^k - 1 (e.g., 9, 99, 999, ...).
+        // Adding 1 yields exactly 10^k without computing a power at runtime.
+        // Using the precomputed table avoids pow(10, k) and its checked/overflow
+        // handling, which is faster and simpler for scaling by 10^delta_scale.
+        let max = O::MAX_FOR_EACH_PRECISION.get(delta_scale as usize)?;
+        let mul = max.add_wrapping(O::Native::ONE);
+
+        // if the gain in precision (digits) is greater than the multiplication due to scaling
+        // every number will fit into the output type
+        // Example: If we are starting with any number of precision 5 [xxxxx],
+        // then an increase of scale by 3 will have the following effect on the representation:
+        // [xxxxx] -> [xxxxx000], so for the cast to be infallible, the output type
+        // needs to provide at least 8 digits precision
+        let is_infallible_cast = input_precision as i8 + delta_scale <= output_precision as i8;
+        let value = O::Native::from_decimal(value);
+        let scaled = if is_infallible_cast {
+            Some(value.unwrap().mul_wrapping(mul))
+        } else {
+            value.and_then(|x| x.mul_checked(mul).ok())
+        };
+        (scaled, is_infallible_cast)
+    } else {
+        // the abs of delta_scale is guaranteed to be > 0, but may also be larger than I::MAX_PRECISION.
+        // If so, the scale change divides out more digits than the input has precision and the result
+        // of the cast is always zero. For example, if we try to apply delta_scale=10 a decimal32 value,
+        // the largest possible result is 999999999/10000000000 = 0.0999999999, which rounds to zero.
+        // Smaller values (e.g. 1/10000000000) or larger delta_scale (e.g. 999999999/10000000000000)
+        // produce even smaller results, which also round to zero. In that case, just return zero.
+        let Some(max) = I::MAX_FOR_EACH_PRECISION.get(delta_scale.unsigned_abs() as usize) else {
+            return Some(O::Native::ZERO);
+        };
+        let div = max.add_wrapping(I::Native::ONE);
+        let half = div.div_wrapping(I::Native::ONE.add_wrapping(I::Native::ONE));
+        let half_neg = half.neg_wrapping();
+
+        // div is >= 10 and so this cannot overflow
+        let d = value.div_wrapping(div);
+        let r = value.mod_wrapping(div);
+
+        // Round result
+        let adjusted = match value >= I::Native::ZERO {
+            true if r >= half => d.add_wrapping(I::Native::ONE),
+            false if r <= half_neg => d.sub_wrapping(I::Native::ONE),
+            _ => d,
+        };
+
+        // if the reduction of the input number through scaling (dividing) is greater
+        // than a possible precision loss (plus potential increase via rounding)
+        // every input number will fit into the output type
+        // Example: If we are starting with any number of precision 5 [xxxxx],
+        // then and decrease the scale by 3 will have the following effect on the representation:
+        // [xxxxx] -> [xx] (+ 1 possibly, due to rounding).
+        // The rounding may add a digit, so for the cast to be infallible,
+        // the output type needs to have at least 3 digits of precision.
+        // e.g. Decimal(5, 3) 99.999 to Decimal(3, 0) will result in 100:
+        // [99999] -> [99] + 1 = [100], a cast to Decimal(2, 0) would not be possible
+        let is_infallible_cast = input_precision as i8 + delta_scale < output_precision as i8;
+        (O::Native::from_decimal(adjusted), is_infallible_cast)
+    };
+
+    if is_infallible_cast {
+        scaled
+    } else {
+        scaled.filter(|v| O::is_valid_decimal_precision(*v, output_precision))
+    }
+}
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
@@ -150,22 +315,3 @@ macro_rules! primitive_conversion_single_value {
     }};
 }
 pub(crate) use primitive_conversion_single_value;
-
-/// Convert a decimal value to a `VariantDecimal`
-macro_rules! decimal_to_variant_decimal {
-    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {{
-        let (v, scale) = if *$scale < 0 {
-            // For negative scale, we need to multiply the value by 10^|scale|
-            // For example: 123 with scale -2 becomes 12300 with scale 0
-            let multiplier = <$value_type>::pow(10, (-*$scale) as u32);
-            (<$value_type>::checked_mul($v, multiplier), 0u8)
-        } else {
-            (Some($v), *$scale as u8)
-        };
-
-        // Return an Option to allow callers to decide whether to error (strict)
-        // or append null (non-strict) on conversion failure
-        v.and_then(|v| <$variant_type>::try_new(v, scale).ok())
-    }};
-}
-pub(crate) use decimal_to_variant_decimal;

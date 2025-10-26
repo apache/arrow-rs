@@ -31,11 +31,14 @@
 //! [Thrift compact]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md#list-and-set
 //! [THRIFT.md]: https://github.com/apache/arrow-rs/blob/main/parquet/THRIFT.md
 
+#[doc(hidden)]
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 /// Macro used to generate rust enums from a Thrift `enum` definition.
 ///
-/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+/// Note:
+///  - All enums generated with this macro will have `pub` visibility.
+///  - When utilizing this macro the Thrift serialization traits and structs need to be in scope.
 macro_rules! thrift_enum {
     ($(#[$($def_attrs:tt)*])* enum $identifier:ident { $($(#[$($field_attrs:tt)*])* $field_name:ident = $field_value:literal;)* }) => {
         $(#[$($def_attrs)*])*
@@ -78,6 +81,35 @@ macro_rules! thrift_enum {
                 Ok(field_id)
             }
         }
+
+        impl $identifier {
+            #[allow(deprecated)]
+            #[doc = "Returns a slice containing every variant of this enum."]
+            #[allow(dead_code)]
+            pub const VARIANTS: &'static [Self] = &[
+                $(Self::$field_name),*
+            ];
+
+            #[allow(deprecated)]
+            const fn max_discriminant_impl() -> i32 {
+                let values: &[i32] = &[$($field_value),*];
+                let mut max = values[0];
+                let mut idx = 1;
+                while idx < values.len() {
+                    let candidate = values[idx];
+                    if candidate > max {
+                        max = candidate;
+                    }
+                    idx += 1;
+                }
+                max
+            }
+
+            #[allow(deprecated)]
+            #[doc = "Returns the largest discriminant value defined for this enum."]
+            #[allow(dead_code)]
+            pub const MAX_DISCRIMINANT: i32 = Self::max_discriminant_impl();
+        }
     }
 }
 
@@ -90,7 +122,10 @@ macro_rules! thrift_enum {
 ///
 /// The resulting Rust enum will have all unit variants.
 ///
-/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+/// Note:
+///  - All enums generated with this macro will have `pub` visibility.
+///  - When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[doc(hidden)]
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union_all_empty {
@@ -160,9 +195,11 @@ macro_rules! thrift_union_all_empty {
 /// non-empty type, the typename must be contained within parens (e.g. `1: MyType Var1;` becomes
 /// `1: (MyType) Var1;`).
 ///
-/// This macro allows for specifying lifetime annotations for the resulting `enum` and its fields.
-///
-/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+/// Note:
+///  - All enums generated with this macro will have `pub` visibility.
+///  - This macro allows for specifying lifetime annotations for the resulting `enum` and its fields.
+///  - When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[doc(hidden)]
 #[macro_export]
 #[allow(clippy::crate_in_macro_def)]
 macro_rules! thrift_union {
@@ -225,9 +262,12 @@ macro_rules! thrift_union {
 
 /// Macro used to generate Rust structs from a Thrift `struct` definition.
 ///
-/// This macro allows for specifying lifetime annotations for the resulting `struct` and its fields.
-///
-/// When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+/// Note:
+///  - This macro allows for specifying the visibility of the resulting `struct` and its fields.
+///    + The `struct` and all fields will have the same visibility.
+///  - This macro allows for specifying lifetime annotations for the resulting `struct` and its fields.
+///  - When utilizing this macro the Thrift serialization traits and structs need to be in scope.
+#[doc(hidden)]
 #[macro_export]
 macro_rules! thrift_struct {
     ($(#[$($def_attrs:tt)*])* $vis:vis struct $identifier:ident $(< $lt:lifetime >)? { $($(#[$($field_attrs:tt)*])* $field_id:literal : $required_or_optional:ident $field_type:ident $(< $field_lt:lifetime >)? $(< $element_type:ident >)? $field_name:ident $(= $default_value:literal)? $(;)?)* }) => {
@@ -282,6 +322,21 @@ macro_rules! thrift_struct {
         impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
             fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
                 writer.write_field_begin(FieldType::Struct, field_id, last_field_id)?;
+                self.write_thrift(writer)?;
+                Ok(field_id)
+            }
+        }
+    }
+}
+
+#[doc(hidden)]
+#[macro_export]
+/// Generate `WriteThriftField` implementation for a struct.
+macro_rules! write_thrift_field {
+    ($identifier:ident $(< $lt:lifetime >)?, $fld_type:expr) => {
+        impl $(<$lt>)? WriteThriftField for $identifier $(<$lt>)? {
+            fn write_thrift_field<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>, field_id: i16, last_field_id: i16) -> Result<i16> {
+                writer.write_field_begin($fld_type, field_id, last_field_id)?;
                 self.write_thrift(writer)?;
                 Ok(field_id)
             }

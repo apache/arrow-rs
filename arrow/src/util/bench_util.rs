@@ -156,6 +156,27 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
     max_str_len: usize,
     prefix: &str,
 ) -> GenericStringArray<Offset> {
+    create_string_array_with_len_range_and_prefix_and_seed(
+        size,
+        null_density,
+        min_str_len,
+        max_str_len,
+        prefix,
+        42,
+    )
+}
+
+/// Creates a random [`GenericStringArray`] of a given `size` and `null_density`
+/// filling it with random strings with lengths in the specified range,
+/// all starting with the provided `prefix`, generated using the provided `seed`.
+pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    min_str_len: usize,
+    max_str_len: usize,
+    prefix: &str,
+    seed: u64,
+) -> GenericStringArray<Offset> {
     assert!(
         min_str_len <= max_str_len,
         "min_str_len must be <= max_str_len"
@@ -165,7 +186,7 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
         "Prefix length must be <= max_str_len"
     );
 
-    let rng = &mut seedable_rng();
+    let rng = &mut StdRng::seed_from_u64(seed);
     (0..size)
         .map(|_| {
             if rng.random::<f32>() < null_density {
@@ -449,8 +470,29 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> GenericBinaryArray<Offset> {
-    let rng = &mut seedable_rng();
-    let range_rng = &mut seedable_rng();
+    create_binary_array_with_seed(
+        size,
+        null_density,
+        42, // bytes_seed
+        42, // bytes_length_seed
+    )
+}
+
+/// Creates a random [`GenericBinaryArray`] of a given `size` and `null_density`
+/// filling it with random bytes, generated using the provided `seed`s.
+///
+/// the `bytes_seed` is used to seed the RNG for generating the byte values,
+/// while the `bytes_length_seed` is used to seed the RNG for generating the length of an array item
+///
+/// These values can be the same as they are used to seed different RNGs internally.
+pub fn create_binary_array_with_seed<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    bytes_seed: u64,
+    bytes_length_seed: u64,
+) -> GenericBinaryArray<Offset> {
+    let rng = &mut StdRng::seed_from_u64(bytes_seed);
+    let range_rng = &mut StdRng::seed_from_u64(bytes_length_seed);
 
     (0..size)
         .map(|_| {
@@ -461,6 +503,41 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
                     .sample_iter::<u8, _>(StandardUniform)
                     .take(range_rng.random_range(0..8))
                     .collect::<Vec<u8>>();
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+/// Creates a random [`GenericBinaryArray`] of a given `size` and `null_density`
+/// filling it with random bytes with lengths in the specified range,
+/// all starting with the provided `prefix`, generated using the provided `seed`.
+///
+pub fn create_binary_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    min_len: usize,
+    max_len: usize,
+    prefix: &[u8],
+    seed: u64,
+) -> GenericBinaryArray<Offset> {
+    assert!(min_len <= max_len, "min_len must be <= max_len");
+    assert!(prefix.len() <= max_len, "Prefix length must be <= max_len");
+
+    let rng = &mut StdRng::seed_from_u64(seed);
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let remaining_len = rng
+                    .random_range(min_len.saturating_sub(prefix.len())..=(max_len - prefix.len()));
+
+                let remaining = rng
+                    .sample_iter::<u8, _>(StandardUniform)
+                    .take(remaining_len);
+
+                let value = prefix.iter().copied().chain(remaining).collect::<Vec<u8>>();
                 Some(value)
             }
         })

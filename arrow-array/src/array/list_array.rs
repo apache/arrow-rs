@@ -466,7 +466,7 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListArray<
             _ => unreachable!(),
         };
 
-        let offsets = OffsetBuffer::from_lengths(std::iter::repeat_n(size, value.len()));
+        let offsets = OffsetBuffer::from_repeated_length(size, value.len());
 
         Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field.clone()),

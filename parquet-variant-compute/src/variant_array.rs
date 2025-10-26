@@ -17,22 +17,22 @@
 
 //! [`VariantArray`] implementation
 
+use crate::VariantArrayBuilder;
 use crate::type_conversion::{generic_conversion_single_value, primitive_conversion_single_value};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
 use arrow::datatypes::{
-    Date32Type, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
+    Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float16Type, Float32Type,
+    Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType,
     TimestampMicrosecondType, TimestampNanosecondType,
 };
 use arrow_schema::extension::ExtensionType;
-use arrow_schema::{
-    ArrowError, DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
-    DataType, Field, FieldRef, Fields, TimeUnit,
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use chrono::{DateTime, NaiveTime};
+use parquet_variant::{
+    Uuid, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantDecimalType as _,
 };
-use chrono::DateTime;
-use parquet_variant::Uuid;
-use parquet_variant::Variant;
 
 use std::borrow::Cow;
 use std::sync::Arc;
@@ -209,7 +209,7 @@ impl ExtensionType for VariantType {
 /// assert_eq!(variant_array.value(0), Variant::from("such wow"));
 /// ```
 ///
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VariantArray {
     /// Reference to the underlying StructArray
     inner: StructArray,
@@ -422,6 +422,11 @@ impl VariantArray {
     pub fn is_valid(&self, index: usize) -> bool {
         !self.is_null(index)
     }
+
+    /// Returns an iterator over the values in this array
+    pub fn iter(&self) -> VariantArrayIter<'_> {
+        VariantArrayIter::new(self)
+    }
 }
 
 impl From<VariantArray> for StructArray {
@@ -436,7 +441,106 @@ impl From<VariantArray> for ArrayRef {
     }
 }
 
-/// One shredded field of a partially or prefectly shredded variant. For example, suppose the
+impl<'m, 'v> FromIterator<Option<Variant<'m, 'v>>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Option<Variant<'m, 'v>>>>(iter: T) -> Self {
+        let iter = iter.into_iter();
+
+        let mut b = VariantArrayBuilder::new(iter.size_hint().0);
+        b.extend(iter);
+        b.build()
+    }
+}
+
+impl<'m, 'v> FromIterator<Variant<'m, 'v>> for VariantArray {
+    fn from_iter<T: IntoIterator<Item = Variant<'m, 'v>>>(iter: T) -> Self {
+        Self::from_iter(iter.into_iter().map(Some))
+    }
+}
+
+/// An iterator over [`VariantArray`]
+///
+/// This iterator returns `Option<Option<Variant<'a, 'a>>>` where:
+/// - `None` indicates the end of iteration
+/// - `Some(None)` indicates a null value at this position
+/// - `Some(Some(variant))` indicates a valid variant value
+///
+/// # Example
+///
+/// ```
+/// # use parquet_variant::Variant;
+/// # use parquet_variant_compute::VariantArrayBuilder;
+/// let mut builder = VariantArrayBuilder::new(10);
+/// builder.append_variant(Variant::from(42));
+/// builder.append_null();
+/// builder.append_variant(Variant::from("hello"));
+/// let array = builder.build();
+///
+/// let values = array.iter().collect::<Vec<_>>();
+/// assert_eq!(values.len(), 3);
+/// assert_eq!(values[0], Some(Variant::from(42)));
+/// assert_eq!(values[1], None);
+/// assert_eq!(values[2], Some(Variant::from("hello")));
+/// ```
+#[derive(Debug)]
+pub struct VariantArrayIter<'a> {
+    array: &'a VariantArray,
+    head_i: usize,
+    tail_i: usize,
+}
+
+impl<'a> VariantArrayIter<'a> {
+    /// Creates a new iterator over the given [`VariantArray`]
+    pub fn new(array: &'a VariantArray) -> Self {
+        Self {
+            array,
+            head_i: 0,
+            tail_i: array.len(),
+        }
+    }
+
+    fn value_opt(&self, i: usize) -> Option<Variant<'a, 'a>> {
+        self.array.is_valid(i).then(|| self.array.value(i))
+    }
+}
+
+impl<'a> Iterator for VariantArrayIter<'a> {
+    type Item = Option<Variant<'a, 'a>>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        let out = self.value_opt(self.head_i);
+
+        self.head_i += 1;
+
+        Some(out)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remainder = self.tail_i - self.head_i;
+
+        (remainder, Some(remainder))
+    }
+}
+
+impl<'a> DoubleEndedIterator for VariantArrayIter<'a> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        if self.head_i == self.tail_i {
+            return None;
+        }
+
+        self.tail_i -= 1;
+
+        Some(self.value_opt(self.tail_i))
+    }
+}
+
+impl<'a> ExactSizeIterator for VariantArrayIter<'a> {}
+
+/// One shredded field of a partially or perfectly shredded variant. For example, suppose the
 /// shredding schema for variant `v` treats it as an object with a single field `a`, where `a` is
 /// itself a struct with the single field `b` of type INT. Then the physical layout of the column
 /// is:
@@ -638,7 +742,7 @@ impl From<ShreddedVariantFieldArray> for StructArray {
 /// (partial shredding).
 ///
 /// [Parquet Variant Shredding Spec]: https://github.com/apache/parquet-format/blob/master/VariantShredding.md#value-shredding
-#[derive(Clone, Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ShreddingState {
     value: Option<BinaryViewArray>,
     typed_value: Option<ArrayRef>,
@@ -817,16 +921,11 @@ fn typed_value_to_variant<'a>(
         panic!("Invalid variant, conflicting value and typed_value");
     }
     match data_type {
+        DataType::Null => Variant::Null,
         DataType::Boolean => {
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
             Variant::from(value)
-        }
-        DataType::Date32 => {
-            let array = typed_value.as_primitive::<Date32Type>();
-            let value = array.value(index);
-            let date = Date32Type::to_naive_date(value);
-            Variant::from(date)
         }
         // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
@@ -864,6 +963,55 @@ fn typed_value_to_variant<'a>(
         }
         DataType::Float64 => {
             primitive_conversion_single_value!(Float64Type, typed_value, index)
+        }
+        DataType::Decimal32(_, s) => {
+            generic_conversion_single_value!(
+                Decimal32Type,
+                as_primitive,
+                |v| VariantDecimal4::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
+                typed_value,
+                index
+            )
+        }
+        DataType::Decimal64(_, s) => {
+            generic_conversion_single_value!(
+                Decimal64Type,
+                as_primitive,
+                |v| VariantDecimal8::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
+                typed_value,
+                index
+            )
+        }
+        DataType::Decimal128(_, s) => {
+            generic_conversion_single_value!(
+                Decimal128Type,
+                as_primitive,
+                |v| VariantDecimal16::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
+                typed_value,
+                index
+            )
+        }
+        DataType::Date32 => {
+            generic_conversion_single_value!(
+                Date32Type,
+                as_primitive,
+                Date32Type::to_naive_date,
+                typed_value,
+                index
+            )
+        }
+        DataType::Time64(TimeUnit::Microsecond) => {
+            generic_conversion_single_value!(
+                Time64MicrosecondType,
+                as_primitive,
+                |v| NaiveTime::from_num_seconds_from_midnight_opt(
+                    (v / 1_000_000) as u32,
+                    (v % 1_000_000) as u32 * 1000
+                )
+                .map_or(Variant::Null, Variant::from),
+                typed_value,
+                index
+            )
         }
         DataType::Timestamp(TimeUnit::Microsecond, Some(_)) => {
             generic_conversion_single_value!(
@@ -937,18 +1085,6 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
     cast(array, new_type.as_ref())
 }
 
-/// Validates whether a given arrow decimal is a valid variant decimal
-///
-/// NOTE: By a strict reading of the "decimal table" in the [shredding spec], each decimal type
-/// should have a width-dependent lower bound on precision as well as an upper bound (i.e. Decimal16
-/// with precision 5 is invalid because Decimal4 "covers" it). But the variant shredding integration
-/// tests specifically expect such cases to succeed, so we only enforce the upper bound here.
-///
-/// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
-fn is_valid_variant_decimal(p: &u8, s: &i8, max_precision: u8) -> bool {
-    (1..=max_precision).contains(p) && (0..=*p as i8).contains(s)
-}
-
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
 /// appear in a (possibly shredded) variant array. It also replaces Binary fields with BinaryView,
 /// since that's what comes back from the parquet reader and what the variant code expects to find.
@@ -984,16 +1120,16 @@ fn canonicalize_and_verify_data_type(
         // NOTE: arrow-parquet reads widens 32- and 64-bit decimals to 128-bit, but the variant spec
         // requires using the narrowest decimal type for a given precision. Fix those up first.
         Decimal64(p, s) | Decimal128(p, s)
-            if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) =>
+            if VariantDecimal4::is_valid_precision_and_scale(p, s) =>
         {
             Cow::Owned(Decimal32(*p, *s))
         }
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => {
+        Decimal128(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
             Cow::Owned(Decimal64(*p, *s))
         }
-        Decimal32(p, s) if is_valid_variant_decimal(p, s, DECIMAL32_MAX_PRECISION) => borrow!(),
-        Decimal64(p, s) if is_valid_variant_decimal(p, s, DECIMAL64_MAX_PRECISION) => borrow!(),
-        Decimal128(p, s) if is_valid_variant_decimal(p, s, DECIMAL128_MAX_PRECISION) => borrow!(),
+        Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => borrow!(),
+        Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => borrow!(),
         Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..) => fail!(),
 
         // Only micro and nano timestamps are allowed
@@ -1062,9 +1198,12 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
 
 #[cfg(test)]
 mod test {
+    use crate::VariantArrayBuilder;
+
     use super::*;
     use arrow::array::{BinaryViewArray, Int32Array};
     use arrow_schema::{Field, Fields};
+    use parquet_variant::ShortString;
 
     #[test]
     fn invalid_not_a_struct_array() {
@@ -1243,5 +1382,157 @@ mod test {
                 typed_value: None
             }
         ));
+    }
+
+    #[test]
+    fn test_variant_array_iterable() {
+        let mut b = VariantArrayBuilder::new(6);
+
+        b.append_null();
+        b.append_variant(Variant::from(1_i8));
+        b.append_variant(Variant::Null);
+        b.append_variant(Variant::from(2_i32));
+        b.append_variant(Variant::from(3_i64));
+        b.append_null();
+
+        let v = b.build();
+
+        let variants = v.iter().collect::<Vec<_>>();
+
+        assert_eq!(
+            variants,
+            vec![
+                None,
+                Some(Variant::Int8(1)),
+                Some(Variant::Null),
+                Some(Variant::Int32(2)),
+                Some(Variant::Int64(3)),
+                None,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_double_ended() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from(0_i32));
+        b.append_null();
+        b.append_variant(Variant::from(2_i32));
+        b.append_null();
+        b.append_variant(Variant::from(4_i32));
+
+        let array = b.build();
+        let mut iter = array.iter();
+
+        assert_eq!(iter.next(), Some(Some(Variant::from(0_i32))));
+        assert_eq!(iter.next(), Some(None));
+
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(4_i32))));
+        assert_eq!(iter.next_back(), Some(None));
+        assert_eq!(iter.next_back(), Some(Some(Variant::from(2_i32))));
+
+        assert_eq!(iter.next_back(), None);
+        assert_eq!(iter.next(), None);
+    }
+
+    #[test]
+    fn test_variant_array_iter_reverse() {
+        let mut b = VariantArrayBuilder::new(5);
+
+        b.append_variant(Variant::from("a"));
+        b.append_null();
+        b.append_variant(Variant::from("aaa"));
+        b.append_null();
+        b.append_variant(Variant::from("aaaaa"));
+
+        let array = b.build();
+
+        let result: Vec<_> = array.iter().rev().collect();
+        assert_eq!(
+            result,
+            vec![
+                Some(Variant::from("aaaaa")),
+                None,
+                Some(Variant::from("aaa")),
+                None,
+                Some(Variant::from("a")),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_variant_array_iter_empty() {
+        let v = VariantArrayBuilder::new(0).build();
+        let mut i = v.iter();
+        assert!(i.next().is_none());
+        assert!(i.next_back().is_none());
+    }
+
+    #[test]
+    fn test_from_variant_opts_into_variant_array() {
+        let v = vec![None, Some(Variant::Null), Some(Variant::BooleanFalse), None];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 4);
+
+        assert!(variant_array.is_null(0));
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::Null);
+
+        assert!(!variant_array.is_null(2));
+        assert_eq!(variant_array.value(2), Variant::BooleanFalse);
+
+        assert!(variant_array.is_null(3));
+    }
+
+    #[test]
+    fn test_from_variants_into_variant_array() {
+        let v = vec![
+            Variant::Null,
+            Variant::BooleanFalse,
+            Variant::ShortString(ShortString::try_new("norm").unwrap()),
+        ];
+
+        let variant_array = VariantArray::from_iter(v);
+
+        assert_eq!(variant_array.len(), 3);
+
+        assert!(!variant_array.is_null(0));
+        assert_eq!(variant_array.value(0), Variant::Null);
+
+        assert!(!variant_array.is_null(1));
+        assert_eq!(variant_array.value(1), Variant::BooleanFalse);
+
+        assert!(!variant_array.is_null(3));
+        assert_eq!(
+            variant_array.value(2),
+            Variant::ShortString(ShortString::try_new("norm").unwrap())
+        );
+    }
+
+    #[test]
+    fn test_variant_equality() {
+        let v_iter = [None, Some(Variant::BooleanFalse), Some(Variant::Null), None];
+        let v = VariantArray::from_iter(v_iter.clone());
+
+        {
+            let v_copy = v.clone();
+            assert_eq!(v, v_copy);
+        }
+
+        {
+            let v_iter_reversed = v_iter.iter().cloned().rev();
+            let v_reversed = VariantArray::from_iter(v_iter_reversed);
+
+            assert_ne!(v, v_reversed);
+        }
+
+        {
+            let v_sliced = v.slice(0, 1);
+            assert_ne!(v, v_sliced);
+        }
     }
 }

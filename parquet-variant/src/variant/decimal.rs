@@ -17,52 +17,188 @@
 use arrow_schema::ArrowError;
 use std::fmt;
 
-// All decimal types use the same try_new implementation
-macro_rules! decimal_try_new {
-    ($integer:ident, $scale:ident) => {{
-        // Validate that scale doesn't exceed precision
-        if $scale > Self::MAX_PRECISION {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Scale {} is larger than max precision {}",
-                $scale,
-                Self::MAX_PRECISION,
-            )));
-        }
+/// Trait for variant decimal types, enabling generic code across Decimal4/8/16
+///
+/// This trait provides a common interface for the three variant decimal types,
+/// allowing generic functions and data structures to work with any decimal width.
+/// It is modeled after Arrow's `DecimalType` trait but adapted for variant semantics.
+///
+/// # Example
+///
+/// ```
+/// # use parquet_variant::{VariantDecimal4, VariantDecimal8, VariantDecimalType};
+/// #
+/// fn extract_scale<D: VariantDecimalType>(decimal: D) -> u8 {
+///     decimal.scale()
+/// }
+///
+/// let dec4 = VariantDecimal4::try_new(12345, 2).unwrap();
+/// let dec8 = VariantDecimal8::try_new(67890, 3).unwrap();
+///
+/// assert_eq!(extract_scale(dec4), 2);
+/// assert_eq!(extract_scale(dec8), 3);
+/// ```
+pub trait VariantDecimalType: Into<super::Variant<'static, 'static>> {
+    /// The underlying signed integer type (i32, i64, or i128)
+    type Native;
 
-        // Validate that the integer value fits within the precision
-        if $integer.unsigned_abs() > Self::MAX_UNSCALED_VALUE {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "{} is wider than max precision {}",
-                $integer,
-                Self::MAX_PRECISION
-            )));
-        }
+    /// Maximum number of significant digits this decimal type can represent (9, 18, or 38)
+    const MAX_PRECISION: u8;
+    /// The largest positive unscaled value that fits in [`Self::MAX_PRECISION`] digits.
+    const MAX_UNSCALED_VALUE: Self::Native;
 
-        Ok(Self { $integer, $scale })
-    }};
+    /// True if the given precision and scale are valid for this variant decimal type.
+    ///
+    /// NOTE: By a strict reading of the "decimal table" in the [variant spec], one might conclude that
+    /// each decimal type has both lower and upper bounds on precision (i.e. Decimal16 with precision 5
+    /// is invalid because Decimal4 "covers" it). But the variant shredding integration tests
+    /// specifically expect such cases to succeed, so we only enforce the upper bound here.
+    ///
+    /// [shredding spec]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md#encoding-types
+    ///
+    /// # Example
+    /// ```
+    /// # use parquet_variant::{VariantDecimal4, VariantDecimalType};
+    /// #
+    /// assert!(VariantDecimal4::is_valid_precision_and_scale(&5, &2));
+    /// assert!(!VariantDecimal4::is_valid_precision_and_scale(&10, &2)); // too wide
+    /// assert!(!VariantDecimal4::is_valid_precision_and_scale(&5, &-1)); // negative scale
+    /// assert!(!VariantDecimal4::is_valid_precision_and_scale(&5, &7)); // scale too big
+    /// ```
+    fn is_valid_precision_and_scale(precision: &u8, scale: &i8) -> bool {
+        (1..=Self::MAX_PRECISION).contains(precision) && (0..=*precision as i8).contains(scale)
+    }
+
+    /// Creates a new decimal value from the given unscaled integer and scale, failing if the
+    /// integer's width, or the requested scale, exceeds `MAX_PRECISION`.
+    ///
+    /// NOTE: For compatibility with arrow decimal types, negative scale is allowed as long
+    /// as the rescaled value fits in the available precision.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use parquet_variant::{VariantDecimal4, VariantDecimalType};
+    /// #
+    /// // Valid: 123.45 (5 digits, scale 2)
+    /// let d = VariantDecimal4::try_new(12345, 2).unwrap();
+    /// assert_eq!(d.integer(), 12345);
+    /// assert_eq!(d.scale(), 2);
+    ///
+    /// VariantDecimal4::try_new(123, 10).expect_err("scale exceeds MAX_PRECISION");
+    /// VariantDecimal4::try_new(1234567890, 10).expect_err("value's width exceeds MAX_PRECISION");
+    /// ```
+    fn try_new(integer: Self::Native, scale: u8) -> Result<Self, ArrowError>;
+
+    /// Attempts to convert an unscaled arrow decimal value to the indicated variant decimal type.
+    ///
+    /// Unlike [`Self::try_new`], this function accepts a signed scale, and attempts to rescale
+    /// negative-scale values to their equivalent (larger) scale-0 values. For example, a decimal
+    /// value of 123 with scale -2 becomes 12300 with scale 0.
+    ///
+    /// Fails if rescaling fails, or for any of the reasons [`Self::try_new`] could fail.
+    fn try_new_with_signed_scale(integer: Self::Native, scale: i8) -> Result<Self, ArrowError>;
+
+    /// Returns the unscaled integer value
+    fn integer(&self) -> Self::Native;
+
+    /// Returns the scale (number of digits after the decimal point)
+    fn scale(&self) -> u8;
 }
 
-// All decimal values format the same way, using integer arithmetic to avoid floating point precision loss
-macro_rules! format_decimal {
-    ($f:expr, $integer:expr, $scale:expr, $int_type:ty) => {{
-        let integer = if $scale == 0 {
-            $integer
-        } else {
-            let divisor = <$int_type>::pow(10, $scale as u32);
-            let remainder = $integer % divisor;
-            if remainder != 0 {
-                // Track the sign explicitly, in case the quotient is zero
-                let sign = if $integer < 0 { "-" } else { "" };
-                // Format an unsigned remainder with leading zeros and strip (unnecessary) trailing zeros.
-                let remainder = format!("{:0width$}", remainder.abs(), width = $scale as usize);
-                let remainder = remainder.trim_end_matches('0');
-                let quotient = $integer / divisor;
-                return write!($f, "{}{}.{}", sign, quotient.abs(), remainder);
+/// Implements the complete variant decimal type: methods, Display, and VariantDecimalType trait
+macro_rules! impl_variant_decimal {
+    ($struct_name:ident, $native:ty) => {
+        impl $struct_name {
+            /// Attempts to create a new instance of this decimal type, failing if the value is too
+            /// wide or the scale is too large.
+            pub fn try_new(integer: $native, scale: u8) -> Result<Self, ArrowError> {
+                let max_precision = Self::MAX_PRECISION;
+                if scale > max_precision {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Scale {scale} is larger than max precision {max_precision}",
+                    )));
+                }
+                if !(-Self::MAX_UNSCALED_VALUE..=Self::MAX_UNSCALED_VALUE).contains(&integer) {
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "{integer} is wider than max precision {max_precision}",
+                    )));
+                }
+
+                Ok(Self { integer, scale })
             }
-            $integer / divisor
-        };
-        write!($f, "{}", integer)
-    }};
+
+            /// Returns the unscaled integer value of the decimal.
+            ///
+            /// For example, if the decimal is `123.45`, this will return `12345`.
+            pub fn integer(&self) -> $native {
+                self.integer
+            }
+
+            /// Returns the scale of the decimal (how many digits after the decimal point).
+            ///
+            /// For example, if the decimal is `123.45`, this will return `2`.
+            pub fn scale(&self) -> u8 {
+                self.scale
+            }
+        }
+
+        impl VariantDecimalType for $struct_name {
+            type Native = $native;
+            const MAX_PRECISION: u8 = Self::MAX_PRECISION;
+            const MAX_UNSCALED_VALUE: $native = <$native>::pow(10, Self::MAX_PRECISION as u32) - 1;
+
+            fn try_new(integer: $native, scale: u8) -> Result<Self, ArrowError> {
+                Self::try_new(integer, scale)
+            }
+
+            fn try_new_with_signed_scale(integer: $native, scale: i8) -> Result<Self, ArrowError> {
+                let (integer, scale) = if scale < 0 {
+                    let multiplier = <$native>::checked_pow(10, -scale as u32);
+                    let Some(rescaled) = multiplier.and_then(|m| integer.checked_mul(m)) else {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "Overflow when rescaling {integer} with scale {scale}"
+                        )));
+                    };
+                    (rescaled, 0u8)
+                } else {
+                    (integer, scale as u8)
+                };
+                Self::try_new(integer, scale)
+            }
+
+            fn integer(&self) -> $native {
+                self.integer()
+            }
+
+            fn scale(&self) -> u8 {
+                self.scale()
+            }
+        }
+
+        impl fmt::Display for $struct_name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let integer = if self.scale == 0 {
+                    self.integer
+                } else {
+                    let divisor = <$native>::pow(10, self.scale as u32);
+                    let remainder = self.integer % divisor;
+                    if remainder != 0 {
+                        // Track the sign explicitly, in case the quotient is zero
+                        let sign = if self.integer < 0 { "-" } else { "" };
+                        // Format an unsigned remainder with leading zeros and strip trailing zeros
+                        let remainder =
+                            format!("{:0width$}", remainder.abs(), width = self.scale as usize);
+                        let remainder = remainder.trim_end_matches('0');
+                        let quotient = (self.integer / divisor).abs();
+                        return write!(f, "{sign}{quotient}.{remainder}");
+                    }
+                    self.integer / divisor
+                };
+                write!(f, "{integer}")
+            }
+        }
+    };
 }
 
 /// Represents a 4-byte decimal value in the Variant format.
@@ -86,33 +222,11 @@ pub struct VariantDecimal4 {
 }
 
 impl VariantDecimal4 {
-    pub(crate) const MAX_PRECISION: u8 = 9;
-    pub(crate) const MAX_UNSCALED_VALUE: u32 = u32::pow(10, Self::MAX_PRECISION as u32) - 1;
-
-    pub fn try_new(integer: i32, scale: u8) -> Result<Self, ArrowError> {
-        decimal_try_new!(integer, scale)
-    }
-
-    /// Returns the underlying value of the decimal.
-    ///
-    /// For example, if the decimal is `123.4567`, this will return `1234567`.
-    pub fn integer(&self) -> i32 {
-        self.integer
-    }
-
-    /// Returns the scale of the decimal (how many digits after the decimal point).
-    ///
-    /// For example, if the decimal is `123.4567`, this will return `4`.
-    pub fn scale(&self) -> u8 {
-        self.scale
-    }
+    /// Maximum number of significant digits (9 for 4-byte decimals)
+    pub const MAX_PRECISION: u8 = arrow_schema::DECIMAL32_MAX_PRECISION;
 }
 
-impl fmt::Display for VariantDecimal4 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format_decimal!(f, self.integer, self.scale, i32)
-    }
-}
+impl_variant_decimal!(VariantDecimal4, i32);
 
 /// Represents an 8-byte decimal value in the Variant format.
 ///
@@ -136,33 +250,11 @@ pub struct VariantDecimal8 {
 }
 
 impl VariantDecimal8 {
-    pub(crate) const MAX_PRECISION: u8 = 18;
-    pub(crate) const MAX_UNSCALED_VALUE: u64 = u64::pow(10, Self::MAX_PRECISION as u32) - 1;
-
-    pub fn try_new(integer: i64, scale: u8) -> Result<Self, ArrowError> {
-        decimal_try_new!(integer, scale)
-    }
-
-    /// Returns the underlying value of the decimal.
-    ///
-    /// For example, if the decimal is `123456.78`, this will return `12345678`.
-    pub fn integer(&self) -> i64 {
-        self.integer
-    }
-
-    /// Returns the scale of the decimal (how many digits after the decimal point).
-    ///
-    /// For example, if the decimal is `123456.78`, this will return `2`.
-    pub fn scale(&self) -> u8 {
-        self.scale
-    }
+    /// Maximum number of significant digits (18 for 8-byte decimals)
+    pub const MAX_PRECISION: u8 = arrow_schema::DECIMAL64_MAX_PRECISION;
 }
 
-impl fmt::Display for VariantDecimal8 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format_decimal!(f, self.integer, self.scale, i64)
-    }
-}
+impl_variant_decimal!(VariantDecimal8, i64);
 
 /// Represents an 16-byte decimal value in the Variant format.
 ///
@@ -186,33 +278,11 @@ pub struct VariantDecimal16 {
 }
 
 impl VariantDecimal16 {
-    const MAX_PRECISION: u8 = 38;
-    const MAX_UNSCALED_VALUE: u128 = u128::pow(10, Self::MAX_PRECISION as u32) - 1;
-
-    pub fn try_new(integer: i128, scale: u8) -> Result<Self, ArrowError> {
-        decimal_try_new!(integer, scale)
-    }
-
-    /// Returns the underlying value of the decimal.
-    ///
-    /// For example, if the decimal is `12345678901234567.890`, this will return `12345678901234567890`.
-    pub fn integer(&self) -> i128 {
-        self.integer
-    }
-
-    /// Returns the scale of the decimal (how many digits after the decimal point).
-    ///
-    /// For example, if the decimal is `12345678901234567.890`, this will return `3`.
-    pub fn scale(&self) -> u8 {
-        self.scale
-    }
+    /// Maximum number of significant digits (38 for 16-byte decimals)
+    pub const MAX_PRECISION: u8 = arrow_schema::DECIMAL128_MAX_PRECISION;
 }
 
-impl fmt::Display for VariantDecimal16 {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        format_decimal!(f, self.integer, self.scale, i128)
-    }
-}
+impl_variant_decimal!(VariantDecimal16, i128);
 
 // Infallible conversion from a narrower decimal type to a wider one
 macro_rules! impl_from_decimal_for_decimal {

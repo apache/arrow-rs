@@ -160,6 +160,10 @@ pub mod basic;
 // Don't try clippy and format auto generated code
 #[allow(clippy::all, missing_docs)]
 #[rustfmt::skip]
+#[deprecated(
+    since = "57.0.0",
+    note = "The `format` module is no longer maintained, and will be removed in `59.0.0`"
+)]
 pub mod format;
 
 #[macro_use]

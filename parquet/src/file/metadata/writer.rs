@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::file::metadata::thrift_gen::FileMeta;
+use crate::file::metadata::thrift::FileMeta;
 use crate::file::metadata::{
     ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
 };
@@ -31,7 +31,7 @@ use crate::{
         modules::{ModuleType, create_footer_aad, create_module_aad},
     },
     file::column_crypto_metadata::ColumnCryptoMetaData,
-    file::metadata::thrift_gen::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
+    file::metadata::thrift::encryption::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
 };
 use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 
@@ -762,7 +762,7 @@ impl MetadataObjectWriter {
                 // so the column chunk does not need additional encryption.
             }
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(col_key)) => {
-                use crate::file::metadata::thrift_gen::serialize_column_meta_data;
+                use crate::file::metadata::thrift::serialize_column_meta_data;
 
                 let column_path = col_key.path_in_schema.join(".");
                 let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;
