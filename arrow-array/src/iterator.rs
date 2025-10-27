@@ -23,7 +23,6 @@ use crate::array::{
 };
 use crate::{FixedSizeListArray, GenericListViewArray, MapArray};
 use arrow_buffer::NullBuffer;
-use std::iter::Skip;
 
 /// An iterator that returns Some(T) or None, that can be used on any [`ArrayAccessor`]
 ///
@@ -456,10 +455,8 @@ pub type MapArrayIter<'a> = ArrayIter<&'a MapArray>;
 pub type GenericListViewArrayIter<'a, O> = ArrayIter<&'a GenericListViewArray<O>>;
 #[cfg(test)]
 mod tests {
-    use crate::ArrayAccessor;
     use crate::array::{ArrayRef, BinaryArray, BooleanArray, Int32Array, StringArray};
     use crate::iterator::ArrayIter;
-    use hashbrown::HashSet;
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     use std::fmt::Debug;
@@ -585,16 +582,12 @@ mod tests {
         ExactSizeIterator<Item = Option<i32>> + DoubleEndedIterator<Item = Option<i32>> + Clone
     {
     }
-    impl<
-        T: ?Sized
-            + Clone
-            + ExactSizeIterator<Item = Option<i32>>
-            + DoubleEndedIterator<Item = Option<i32>>,
-    > SharedBetweenArrayIterAndSliceIter for T
+    impl<T: Clone + ExactSizeIterator<Item = Option<i32>> + DoubleEndedIterator<Item = Option<i32>>>
+        SharedBetweenArrayIterAndSliceIter for T
     {
     }
 
-    fn get_base_int32_iterator_cases() -> impl Iterator<Item = (Int32Array, Vec<Option<i32>>)> {
+    fn get_int32_iterator_cases() -> impl Iterator<Item = (Int32Array, Vec<Option<i32>>)> {
         let mut rng = StdRng::seed_from_u64(42);
 
         let no_nulls_and_no_duplicates = (0..10).map(Some).collect::<Vec<Option<i32>>>();
@@ -612,7 +605,7 @@ mod tests {
             .collect::<Vec<Option<i32>>>();
         let only_middle_nulls = (0..10)
             .map(|item| {
-                if item >= 4 && item <= 8 && rng.random_bool(0.9) {
+                if (4..=8).contains(&item) && rng.random_bool(0.9) {
                     None
                 } else {
                     Some(item)
@@ -629,36 +622,21 @@ mod tests {
             })
             .collect::<Vec<Option<i32>>>();
 
-        [
-            no_nulls_and_no_duplicates,
-            no_nulls_random_values,
-            all_nulls,
-            only_start_nulls,
-            only_end_nulls,
-            only_middle_nulls,
-            random_values_with_random_nulls,
-        ]
-        .map(|case| (Int32Array::from(case.clone()), case))
-        .into_iter()
-    }
-
-    fn get_int32_iterator_cases_with_duplicates()
-    -> impl Iterator<Item = (Int32Array, Vec<Option<i32>>)> {
-        let no_nulls_and_some_duplicates = (0..20)
+        let no_nulls_and_some_duplicates = (0..10)
             .map(|item| item % 3)
             .map(Some)
             .collect::<Vec<Option<i32>>>();
         let no_nulls_and_all_same_value =
-            (0..20).map(|_| 17).map(Some).collect::<Vec<Option<i32>>>();
+            (0..10).map(|_| 9).map(Some).collect::<Vec<Option<i32>>>();
         let no_nulls_and_continues_duplicates = [0, 0, 0, 1, 1, 2, 2, 2, 2, 3]
             .map(Some)
             .into_iter()
             .collect::<Vec<Option<i32>>>();
 
-        let single_null_and_no_duplicates = (0..20)
+        let single_null_and_no_duplicates = (0..10)
             .map(|item| if item == 4 { None } else { Some(item) })
             .collect::<Vec<Option<i32>>>();
-        let multiple_nulls_and_no_duplicates = (0..20)
+        let multiple_nulls_and_no_duplicates = (0..10)
             .map(|item| if item % 3 == 2 { None } else { Some(item) })
             .collect::<Vec<Option<i32>>>();
         let continues_nulls_and_no_duplicates = [
@@ -677,26 +655,31 @@ mod tests {
         .collect::<Vec<Option<i32>>>();
 
         [
+            no_nulls_and_no_duplicates,
+            no_nulls_random_values,
             no_nulls_and_some_duplicates,
             no_nulls_and_all_same_value,
             no_nulls_and_continues_duplicates,
+            all_nulls,
+            only_start_nulls,
+            only_end_nulls,
+            only_middle_nulls,
+            random_values_with_random_nulls,
             single_null_and_no_duplicates,
             multiple_nulls_and_no_duplicates,
             continues_nulls_and_no_duplicates,
         ]
         .map(|case| (Int32Array::from(case.clone()), case))
         .into_iter()
-        .chain(get_base_int32_iterator_cases())
     }
 
-    struct SetupIterator;
     trait SetupIter {
         fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I);
     }
 
     struct NoSetup;
     impl SetupIter for NoSetup {
-        fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
+        fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, _iter: &mut I) {
             // none
         }
     }
@@ -705,7 +688,7 @@ mod tests {
         setup_iterator: impl SetupIter,
         assert_fn: impl Fn(ArrayIter<&Int32Array>, Copied<Iter<Option<i32>>>),
     ) {
-        for (array, source) in get_base_int32_iterator_cases() {
+        for (array, source) in get_int32_iterator_cases() {
             let mut actual = ArrayIter::new(&array);
             let mut expected = source.iter().copied();
 
@@ -748,18 +731,15 @@ mod tests {
     /// produces the same result for both BitIterator and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
     fn assert_array_iterator_cases<O: ArrayIteratorOp>(o: O) {
-        setup_and_assert_base_cases(
-            NoSetup,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
+        setup_and_assert_base_cases(NoSetup, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct Next;
         impl SetupIter for Next {
@@ -767,19 +747,16 @@ mod tests {
                 iter.next();
             }
         }
-        setup_and_assert_base_cases(
-            Next,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(Next, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter after consuming 1 element from the start (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter after consuming 1 element from the start (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextBack;
         impl SetupIter for NextBack {
@@ -788,19 +765,16 @@ mod tests {
             }
         }
 
-        setup_and_assert_base_cases(
-            NextBack,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextBack, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter after consuming 1 element from the end (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter after consuming 1 element from the end (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextAndBack;
         impl SetupIter for NextAndBack {
@@ -810,19 +784,16 @@ mod tests {
             }
         }
 
-        setup_and_assert_base_cases(
-            NextAndBack,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextAndBack, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter after consuming 1 element from start and end (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter after consuming 1 element from start and end (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextUntilLast;
         impl SetupIter for NextUntilLast {
@@ -833,19 +804,16 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_base_cases(
-            NextUntilLast,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextUntilLast, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter after consuming all from the start but 1 (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter after consuming all from the start but 1 (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextBackUntilFirst;
         impl SetupIter for NextBackUntilFirst {
@@ -856,19 +824,16 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_base_cases(
-            NextBackUntilFirst,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextBackUntilFirst, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter after consuming all from the end but 1 (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter after consuming all from the end but 1 (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextFinish;
         impl SetupIter for NextFinish {
@@ -876,20 +841,16 @@ mod tests {
                 iter.nth(iter.len());
             }
         }
-        setup_and_assert_base_cases(
-            NextFinish,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextFinish, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter after consuming all from the start (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
-
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter after consuming all from the start (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextBackFinish;
         impl SetupIter for NextBackFinish {
@@ -897,51 +858,43 @@ mod tests {
                 iter.nth_back(iter.len());
             }
         }
-        setup_and_assert_base_cases(
-            NextBackFinish,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextBackFinish, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for new iter after consuming all from the end (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
-
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for new iter after consuming all from the end (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextUntilLastNone;
         impl SetupIter for NextUntilLastNone {
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
-                    let last_null_position = iter.clone().rposition(|item| item == None);
+                let last_null_position = iter.clone().rposition(|item| item.is_none());
 
-                    // move the iterator to the location where there are no nulls anymore
-                    if let Some(last_null_position) = last_null_position {
-                        iter.nth(last_null_position);
-                    }
+                // move the iterator to the location where there are no nulls anymore
+                if let Some(last_null_position) = last_null_position {
+                    iter.nth(last_null_position);
+                }
             }
         }
-        setup_and_assert_base_cases(
-            NextUntilLastNone,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextUntilLastNone, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for iter that have no nulls left (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for iter that have no nulls left (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
 
         struct NextUntilLastSome;
         impl SetupIter for NextUntilLastSome {
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
-
-                let last_some_position = iter.clone().rposition(|item| item != None);
+                let last_some_position = iter.clone().rposition(|item| item.is_some());
 
                 // move the iterator to the location where there are only nulls
                 if let Some(last_some_position) = last_some_position {
@@ -949,27 +902,23 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_base_cases(
-            NextUntilLastSome,
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        setup_and_assert_base_cases(NextUntilLastSome, |actual, expected| {
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for iter that only have nulls left (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
-
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for iter that only have nulls left (left actual, right expected) ({current_iterator_values:?})",
+                o.name()
+            );
+        });
     }
 
     /// Helper function that will assert that the provided operation
     /// produces the same result for both BitIterator and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
     fn assert_array_iterator_cases_mutate<O: ArrayIteratorMutateOp>(o: O) {
-        for (array, source) in get_int32_iterator_cases_with_duplicates() {
+        for (array, source) in get_int32_iterator_cases() {
             for i in 0..source.len() {
                 let mut actual = ArrayIter::new(&array);
                 let mut expected = source.iter().copied();
@@ -1040,23 +989,23 @@ mod tests {
                     iter.rposition(|item| {
                         items.push(item);
 
-                        return if count < self.number_of_false {
+                        if count < self.number_of_false {
                             count += 1;
                             false
                         } else {
                             true
-                        };
+                        }
                     })
                 } else {
                     iter.position(|item| {
                         items.push(item);
 
-                        return if count < self.number_of_false {
+                        if count < self.number_of_false {
                             count += 1;
                             false
                         } else {
                             true
-                        };
+                        }
                     })
                 };
 
@@ -1079,87 +1028,81 @@ mod tests {
 
     #[test]
     fn assert_nth() {
-        setup_and_assert_base_cases(
-            NoSetup,
-            |actual, expected| {
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        #[allow(clippy::iter_nth_zero)]
-                        let actual_val = actual.nth(0);
-                        #[allow(clippy::iter_nth_zero)]
-                        let expected_val = expected.nth(0);
-                        assert_eq!(actual_val, expected_val, "Failed on nth(0)");
-                    }
+        setup_and_assert_base_cases(NoSetup, |actual, expected| {
+            {
+                let mut actual = actual.clone();
+                let mut expected = expected.clone();
+                for _ in 0..expected.len() {
+                    #[allow(clippy::iter_nth_zero)]
+                    let actual_val = actual.nth(0);
+                    #[allow(clippy::iter_nth_zero)]
+                    let expected_val = expected.nth(0);
+                    assert_eq!(actual_val, expected_val, "Failed on nth(0)");
                 }
+            }
 
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth(1);
-                        let expected_val = expected.nth(1);
-                        assert_eq!(actual_val, expected_val, "Failed on nth(1)");
-                    }
+            {
+                let mut actual = actual.clone();
+                let mut expected = expected.clone();
+                for _ in 0..expected.len() {
+                    let actual_val = actual.nth(1);
+                    let expected_val = expected.nth(1);
+                    assert_eq!(actual_val, expected_val, "Failed on nth(1)");
                 }
+            }
 
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth(2);
-                        let expected_val = expected.nth(2);
-                        assert_eq!(actual_val, expected_val, "Failed on nth(2)");
-                    }
+            {
+                let mut actual = actual.clone();
+                let mut expected = expected.clone();
+                for _ in 0..expected.len() {
+                    let actual_val = actual.nth(2);
+                    let expected_val = expected.nth(2);
+                    assert_eq!(actual_val, expected_val, "Failed on nth(2)");
                 }
-            },
-        );
+            }
+        });
     }
 
     #[test]
     fn assert_nth_back() {
-        setup_and_assert_base_cases(
-            NoSetup,
-            |actual, expected| {
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        #[allow(clippy::iter_nth_zero)]
-                        let actual_val = actual.nth_back(0);
-                        #[allow(clippy::iter_nth_zero)]
-                        let expected_val = expected.nth_back(0);
-                        assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");
-                    }
+        setup_and_assert_base_cases(NoSetup, |actual, expected| {
+            {
+                let mut actual = actual.clone();
+                let mut expected = expected.clone();
+                for _ in 0..expected.len() {
+                    #[allow(clippy::iter_nth_zero)]
+                    let actual_val = actual.nth_back(0);
+                    #[allow(clippy::iter_nth_zero)]
+                    let expected_val = expected.nth_back(0);
+                    assert_eq!(actual_val, expected_val, "Failed on nth_back(0)");
                 }
+            }
 
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth_back(1);
-                        let expected_val = expected.nth_back(1);
-                        assert_eq!(actual_val, expected_val, "Failed on nth_back(1)");
-                    }
+            {
+                let mut actual = actual.clone();
+                let mut expected = expected.clone();
+                for _ in 0..expected.len() {
+                    let actual_val = actual.nth_back(1);
+                    let expected_val = expected.nth_back(1);
+                    assert_eq!(actual_val, expected_val, "Failed on nth_back(1)");
                 }
+            }
 
-                {
-                    let mut actual = actual.clone();
-                    let mut expected = expected.clone();
-                    for _ in 0..expected.len() {
-                        let actual_val = actual.nth_back(2);
-                        let expected_val = expected.nth_back(2);
-                        assert_eq!(actual_val, expected_val, "Failed on nth_back(2)");
-                    }
+            {
+                let mut actual = actual.clone();
+                let mut expected = expected.clone();
+                for _ in 0..expected.len() {
+                    let actual_val = actual.nth_back(2);
+                    let expected_val = expected.nth_back(2);
+                    assert_eq!(actual_val, expected_val, "Failed on nth_back(2)");
                 }
-            },
-        );
+            }
+        });
     }
 
     #[test]
     fn assert_last() {
-        for (array, source) in get_base_int32_iterator_cases() {
+        for (array, source) in get_int32_iterator_cases() {
             let mut actual_forward = ArrayIter::new(&array);
             let mut expected_forward = source.iter().copied();
 
@@ -1211,7 +1154,7 @@ mod tests {
 
                 CallTrackingAndResult {
                     calls: items,
-                    result: ()
+                    result: (),
                 }
             }
         }
@@ -1228,7 +1171,7 @@ mod tests {
         #[derive(Debug, PartialEq)]
         struct CallArgs {
             acc: Option<i32>,
-            item: Option<i32>
+            item: Option<i32>,
         }
 
         impl ArrayIteratorOp for FoldOp {
@@ -1247,20 +1190,14 @@ mod tests {
 
                 let result = if self.reverse {
                     iter.rfold(Some(1), |acc, item| {
-                        items.push(CallArgs {
-                            item,
-                            acc
-                        });
+                        items.push(CallArgs { item, acc });
 
                         item.map(|val| val + 100)
                     })
-
                 } else {
+                    #[allow(clippy::manual_try_fold)]
                     iter.fold(Some(1), |acc, item| {
-                        items.push(CallArgs {
-                            item,
-                            acc
-                        });
+                        items.push(CallArgs { item, acc });
 
                         item.map(|val| val + 100)
                     })
@@ -1268,7 +1205,7 @@ mod tests {
 
                 CallTrackingAndResult {
                     calls: items,
-                    result
+                    result,
                 }
             }
         }
@@ -1319,17 +1256,17 @@ mod tests {
                 let res = iter.any(|item| {
                     items.push(item);
 
-                    return if count < self.false_count {
+                    if count < self.false_count {
                         count += 1;
                         false
                     } else {
                         true
-                    };
+                    }
                 });
 
                 CallTrackingWithInputType {
                     calls: items,
-                    result: res
+                    result: res,
                 }
             }
         }
@@ -1362,17 +1299,17 @@ mod tests {
                 let res = iter.all(|item| {
                     items.push(item);
 
-                    return if count < self.true_count {
+                    if count < self.true_count {
                         count += 1;
                         true
                     } else {
                         false
-                    };
+                    }
                 });
 
                 CallTrackingWithInputType {
                     calls: items,
-                    result: res
+                    result: res,
                 }
             }
         }
@@ -1410,31 +1347,31 @@ mod tests {
 
                 let position_result = if self.reverse {
                     iter.rfind(|item| {
-                        items.push(item.clone());
+                        items.push(*item);
 
-                        return if count < self.false_count {
+                        if count < self.false_count {
                             count += 1;
                             false
                         } else {
                             true
-                        };
+                        }
                     })
                 } else {
                     iter.find(|item| {
-                        items.push(item.clone());
+                        items.push(*item);
 
-                        return if count < self.false_count {
+                        if count < self.false_count {
                             count += 1;
                             false
                         } else {
                             true
-                        };
+                        }
                     })
                 };
 
                 CallTrackingWithInputType {
                     calls: items,
-                    result: position_result
+                    result: position_result,
                 }
             }
         }
@@ -1473,12 +1410,12 @@ mod tests {
                 let result = iter.find_map(|item| {
                     items.push(item);
 
-                    return if count < self.number_of_nones {
+                    if count < self.number_of_nones {
                         count += 1;
                         None
                     } else {
                         Some("found it")
-                    };
+                    }
                 });
 
                 CallTrackingAndResult {
@@ -1513,16 +1450,13 @@ mod tests {
                 format!("partition by {}", self.description)
             }
 
-            fn get_value<T: SharedBetweenArrayIterAndSliceIter>(
-                &self,
-                iter: T,
-            ) -> Self::Output {
+            fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: T) -> Self::Output {
                 let mut items = vec![];
 
                 let mut index = 0;
 
                 let (left, right) = iter.partition(|item| {
-                    items.push(item.clone());
+                    items.push(*item);
 
                     let res = (self.predicate)(index, item);
 
@@ -1531,10 +1465,7 @@ mod tests {
                 });
 
                 CallTrackingAndResult {
-                    result: PartitionResult {
-                        left,
-                        right
-                    },
+                    result: PartitionResult { left, right },
                     calls: items,
                 }
             }
@@ -1542,7 +1473,7 @@ mod tests {
 
         assert_array_iterator_cases(PartitionOp {
             description: "None on one side and Some(*) on the other",
-            predicate: |_, item| *item == None
+            predicate: |_, item| item.is_none(),
         });
 
         assert_array_iterator_cases(PartitionOp {
@@ -1555,7 +1486,7 @@ mod tests {
             predicate: |_, _| false,
         });
 
-        let random_values = (0..100).map(|item| rand::random_bool(0.5)).collect::<Vec<_>>();
+        let random_values = (0..100).map(|_| rand::random_bool(0.5)).collect::<Vec<_>>();
         assert_array_iterator_cases(PartitionOp {
             description: "random",
             predicate: |index, _| random_values[index % random_values.len()],
