@@ -686,31 +686,36 @@ mod tests {
         .chain(get_base_int32_iterator_cases())
     }
 
+    struct SetupIterator;
+    trait SetupIter {
+        fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I);
+    }
+
     fn setup_and_assert_base_cases(
-        setup_iters: impl Fn(&mut dyn SharedBetweenArrayIterAndSliceIter),
+        setup_iterator: impl SetupIter,
         assert_fn: impl Fn(ArrayIter<&Int32Array>, Copied<Iter<Option<i32>>>),
     ) {
         for (array, source) in get_base_int32_iterator_cases() {
             let mut actual = ArrayIter::new(&array);
             let mut expected = source.iter().copied();
 
-            setup_iters(&mut actual);
-            setup_iters(&mut expected);
+            setup_iterator.setup(&mut actual);
+            setup_iterator.setup(&mut expected);
 
             assert_fn(actual, expected);
         }
     }
 
     fn setup_and_assert_extended_cases(
-        setup_iters: impl Fn(&mut dyn SharedBetweenArrayIterAndSliceIter),
+        setup_iterator: impl SetupIter,
         assert_fn: impl Fn(ArrayIter<&Int32Array>, Copied<Iter<Option<i32>>>),
     ) {
         for (array, source) in get_int32_iterator_cases_with_duplicates() {
             let mut actual = ArrayIter::new(&array);
             let mut expected = source.iter().copied();
 
-            setup_iters(&mut actual);
-            setup_iters(&mut expected);
+            setup_iterator.setup(&mut actual);
+            setup_iterator.setup(&mut expected);
 
             assert_fn(actual, expected);
         }
@@ -748,8 +753,14 @@ mod tests {
     /// produces the same result for both BitIterator and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
     fn assert_array_iterator_cases<O: ArrayIteratorOp>(o: O) {
+        struct NoSetup;
+        impl SetupIter for NoSetup {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
+                // none
+            }
+        }
         setup_and_assert_base_cases(
-            |_iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {},
+            NoSetup,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
                 assert_eq!(
@@ -761,10 +772,14 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
+        struct Next;
+        impl SetupIter for Next {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.next();
-            },
+            }
+        }
+        setup_and_assert_extended_cases(
+            Next,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -777,10 +792,15 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
+        struct NextBack;
+        impl SetupIter for NextBack {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.next_back();
-            },
+            }
+        }
+
+        setup_and_assert_extended_cases(
+            NextBack,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -793,11 +813,16 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
+        struct NextAndBack;
+        impl SetupIter for NextAndBack {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.next();
                 iter.next_back();
-            },
+            }
+        }
+
+        setup_and_assert_extended_cases(
+            NextAndBack,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -810,12 +835,17 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
+        struct NextUntilLast;
+        impl SetupIter for NextUntilLast {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
+
                 while iter.len() > 1 {
                     iter.next();
                 }
-            },
+            }
+        }
+        setup_and_assert_extended_cases(
+            NextUntilLast,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -828,12 +858,17 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
+        struct NextBackUntilFirst;
+        impl SetupIter for NextBackUntilFirst {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
+
                 while iter.len() > 1 {
                     iter.next_back();
                 }
-            },
+            }
+        }
+        setup_and_assert_extended_cases(
+            NextBackUntilFirst,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -846,10 +881,14 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
+        struct NextFinish;
+        impl SetupIter for NextFinish {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 while iter.next().is_some() {}
-            },
+            }
+        }
+        setup_and_assert_extended_cases(
+            NextFinish,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -862,10 +901,15 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
+
+        struct NextBackFinish;
+        impl SetupIter for NextBackFinish {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 while iter.next_back().is_some() {}
-            },
+            }
+        }
+        setup_and_assert_extended_cases(
+            NextBackFinish,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -878,18 +922,20 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
-                // Until last null
-                {
+
+        struct NextUntilLastNone;
+        impl SetupIter for NextUntilLastNone {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                     let last_null_position = iter.clone().rposition(|item| item == None);
 
                     // move the iterator to the location where there are no nulls anymore
                     if let Some(last_null_position) = last_null_position {
                         iter.nth(last_null_position);
                     }
-                }
-            },
+            }
+        }
+        setup_and_assert_extended_cases(
+            NextUntilLastNone,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -902,18 +948,20 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
-                // Until last non null
-                {
-                    let last_some_position = iter.clone().rposition(|item| item != None);
+        struct NextUntilLastSome;
+        impl SetupIter for NextUntilLastSome {
+            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
 
-                    // move the iterator to the location where there are only nulls
-                    if let Some(last_some_position) = last_some_position {
-                        iter.nth(last_some_position);
-                    }
+                let last_some_position = iter.clone().rposition(|item| item != None);
+
+                // move the iterator to the location where there are only nulls
+                if let Some(last_some_position) = last_some_position {
+                    iter.nth(last_some_position);
                 }
-            },
+            }
+        }
+        setup_and_assert_extended_cases(
+            NextUntilLastSome,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
 
@@ -926,57 +974,6 @@ mod tests {
             },
         );
 
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
-                // Until first null
-                {
-                    let first_null_position = iter.clone().position(|item| item == None);
-
-                    // move the iterator to the location where there are no nulls anymore
-                    if let Some(first_null_position) = first_null_position {
-                        // TODO - should be - 1?
-                        iter.nth_back(iter.len() - first_null_position);
-                    }
-                }
-            },
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for iter that have no nulls left when coming from the end (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
-
-        setup_and_assert_extended_cases(
-            |iter: &mut dyn SharedBetweenArrayIterAndSliceIter| {
-                // Until last non null
-                {
-                    let first_some_position = iter.clone().position(|item| item != None);
-
-                    // move the iterator to the location where there are only nulls
-                    if let Some(first_some_position) = first_some_position {
-                        // TODO - should be - 1?
-                        iter.nth_back(iter.len() - first_some_position);
-                    }
-                }
-            },
-            |actual, expected| {
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-                assert_eq!(
-                    o.get_value(actual),
-                    o.get_value(expected),
-                    "Failed on op {} for iter that only have nulls left when coming from the end (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
-            },
-        );
-
-        // TODO - move from the end
     }
 
     /// Helper function that will assert that the provided operation
@@ -1516,7 +1513,7 @@ mod tests {
 
         assert_array_iterator_cases(PartitionOp {
             description: "random",
-            predicate: |_| random_bool(0.5),
+            predicate: |_| rand::random_bool(0.5),
         });
     }
 }
