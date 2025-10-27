@@ -1623,8 +1623,10 @@ mod tests {
             .unwrap();
 
         let mut buf = Vec::new();
-        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
-        row_group_meta.write_thrift(&mut writer).unwrap();
+        {
+            let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+            row_group_meta.write_thrift(&mut writer).unwrap();
+        }
 
         let row_group_res = read_row_group(&mut buf, schema_descr).unwrap();
 
@@ -1705,8 +1707,10 @@ mod tests {
             .build()
             .unwrap();
         let mut buf = Vec::new();
-        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
-        row_group_meta_2cols.write_thrift(&mut writer).unwrap();
+        {
+            let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+            row_group_meta_2cols.write_thrift(&mut writer).unwrap();
+        }
 
         let err = read_row_group(&mut buf, schema_descr_3cols)
             .unwrap_err()
@@ -1756,8 +1760,10 @@ mod tests {
             .unwrap();
 
         let mut buf = Vec::new();
-        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
-        col_metadata.write_thrift(&mut writer).unwrap();
+        {
+            let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+            col_metadata.write_thrift(&mut writer).unwrap();
+        }
         let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
@@ -1772,8 +1778,10 @@ mod tests {
             .unwrap();
 
         let mut buf = Vec::new();
-        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
-        col_metadata.write_thrift(&mut writer).unwrap();
+        {
+            let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+            col_metadata.write_thrift(&mut writer).unwrap();
+        }
         let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);

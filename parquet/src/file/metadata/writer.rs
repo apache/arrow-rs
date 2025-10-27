@@ -554,8 +554,10 @@ impl MetadataObjectWriter {
             Some(file_encryptor) if file_encryptor.properties().encrypt_footer() => {
                 // First write FileCryptoMetadata
                 let crypto_metadata = Self::file_crypto_metadata(file_encryptor)?;
-                let mut protocol = ThriftCompactOutputProtocol::new(&mut sink);
-                crypto_metadata.write_thrift(&mut protocol)?;
+                {
+                    let mut protocol = ThriftCompactOutputProtocol::new(&mut sink);
+                    crypto_metadata.write_thrift(&mut protocol)?;
+                }
 
                 // Then write encrypted footer
                 let aad = create_footer_aad(file_encryptor.file_aad())?;

@@ -33,6 +33,7 @@ use std::{
 
 use crate::{
     errors::{ParquetError, Result},
+    file::writer::TrackedWrite,
     write_thrift_field,
 };
 use std::io::Error;
@@ -694,13 +695,31 @@ where
 ///
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
-    writer: W,
+    writer: TrackedWrite<W>,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
+    ///
+    /// This will first wrap `writer` in a [`TrackedWrite`]
     pub(crate) fn new(writer: W) -> Self {
+        Self::new_tracked(TrackedWrite::new(writer))
+    }
+
+    /// Create a new [`ThriftCompactOutputProtocol`], wrapping the input [`TrackedWrite`].
+    pub(crate) fn new_tracked(writer: TrackedWrite<W>) -> Self {
         Self { writer }
+    }
+
+    /// Return the number of bytes written to the inner [`Write`]
+    pub(crate) fn bytes_written(&self) -> usize {
+        self.writer.bytes_written()
+    }
+
+    /// Flush the underlying [`Write`] stream.
+    pub(crate) fn flush(&mut self) -> Result<()> {
+        self.writer.flush()?;
+        Ok(())
     }
 
     /// Write a single byte to the output stream.

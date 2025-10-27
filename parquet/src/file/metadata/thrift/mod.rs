@@ -1600,13 +1600,15 @@ pub(crate) mod tests {
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {
         let num_nodes = num_nodes(&schema)?;
         let mut buf = Vec::new();
-        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        {
+            let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
 
-        // kick off writing list
-        writer.write_list_begin(ElementType::Struct, num_nodes)?;
+            // kick off writing list
+            writer.write_list_begin(ElementType::Struct, num_nodes)?;
 
-        // write SchemaElements
-        write_schema(&schema, &mut writer)?;
+            // write SchemaElements
+            write_schema(&schema, &mut writer)?;
+        }
 
         let mut prot = ThriftSliceInputProtocol::new(&buf);
         let se: Vec<SchemaElement> = read_thrift_vec(&mut prot)?;
@@ -1616,13 +1618,15 @@ pub(crate) mod tests {
     pub(crate) fn schema_to_buf(schema: &TypePtr) -> Result<Vec<u8>> {
         let num_nodes = num_nodes(schema)?;
         let mut buf = Vec::new();
-        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        {
+            let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
 
-        // kick off writing list
-        writer.write_list_begin(ElementType::Struct, num_nodes)?;
+            // kick off writing list
+            writer.write_list_begin(ElementType::Struct, num_nodes)?;
 
-        // write SchemaElements
-        write_schema(schema, &mut writer)?;
+            // write SchemaElements
+            write_schema(schema, &mut writer)?;
+        }
         Ok(buf)
     }
 
