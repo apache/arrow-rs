@@ -284,6 +284,7 @@ impl ScalarZipper {
             DataType::LargeBinary => {
                 Arc::new(BytesScalarImpl::<LargeBinaryType>::new(truthy, falsy)) as Arc<dyn ZipImpl>
             },
+            // TODO: Handle Utf8View https://github.com/apache/arrow-rs/issues/8724
             _ => {
                 Arc::new(FallbackImpl::new(truthy, falsy)) as Arc<dyn ZipImpl>
             },
