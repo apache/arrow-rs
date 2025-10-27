@@ -122,8 +122,6 @@ pub struct ArrowReaderBuilder<T> {
     pub(crate) metrics: ArrowReaderMetrics,
 
     pub(crate) max_predicate_cache_size: usize,
-
-    pub(crate) row_number_column: Option<String>,
 }
 
 impl<T: Debug> Debug for ArrowReaderBuilder<T> {
@@ -141,7 +139,6 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
-            .field("row_number_column", &self.row_number_column)
             .finish()
     }
 }
@@ -162,7 +159,6 @@ impl<T> ArrowReaderBuilder<T> {
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
             max_predicate_cache_size: 100 * 1024 * 1024, // 100MB default cache size
-            row_number_column: None,
         }
     }
 
@@ -372,146 +368,6 @@ impl<T> ArrowReaderBuilder<T> {
             ..self
         }
     }
-
-    /// Include file row numbers in the output with the given column name
-    ///
-    /// This will add a column to the output record batch with the file row number
-    pub fn with_row_number_column(self, row_number_column: impl Into<String>) -> Self {
-        Self {
-            row_number_column: Some(row_number_column.into()),
-            ..self
-        }
-    }
-
-    // /// Include additional fields by appending them at the end of the fields.
-    // ///
-    // /// This will add columns to the output record batch.
-    // pub fn with_fields_appended(self, fields_to_append: Vec<Field>) -> Result<Self, ParquetError> {
-    //     use crate::arrow::schema::virtual_type::{RowNumber, is_virtual_column};
-    //     use crate::arrow::schema::VirtualColumnType;
-    //     use arrow_schema::extension::ExtensionType;
-
-    //     if fields_to_append.is_empty() {
-    //         return Ok(self);
-    //     }
-
-    //     // Verify all fields to append are virtual columns
-    //     for field in &fields_to_append {
-    //         if !is_virtual_column(field) {
-    //             return Err(ParquetError::ArrowError(
-    //                 "Only virtual columns can be appended via with_fields_appended".to_string()
-    //             ));
-    //         }
-    //     }
-
-    //     // Create extended schema
-    //     let mut all_fields: Vec<Field> = Vec::new();
-    //     all_fields.extend(self.schema.fields().iter().map(|f| f.as_ref().clone()));
-    //     all_fields.extend(fields_to_append.iter().cloned());
-    //     // TODO @vustef: Preserve metadata in the schema...
-    //     let extended_schema = Arc::new(Schema::new(all_fields));
-
-    //     // Get or create root ParquetField
-    //     let mut root_field = if self.schema.fields().is_empty() {
-    //         // If schema is empty, create an empty root group
-    //         ParquetField {
-    //             rep_level: 0,
-    //             def_level: 0,
-    //             nullable: false,
-    //             arrow_type: ArrowType::Struct(Fields::empty()),
-    //             field_type: ParquetFieldType::Group { children: vec![] },
-    //         }
-    //     } else if let Some(fields) = self.fields {
-    //         // Unwrap Arc and clone if needed
-    //         Arc::try_unwrap(fields).unwrap_or_else(|arc| (*arc).clone())
-    //     } else {
-    //         // If no fields exist yet, create root group from parquet schema
-    //         let parquet_schema = self.metadata.file_metadata().schema_descr();
-    //         let field_levels = parquet_to_arrow_field_levels(
-    //             parquet_schema,
-    //             ProjectionMask::all(),
-    //             None,
-    //         )?;
-    //         field_levels.levels.ok_or_else(|| {
-    //             ParquetError::ArrowError("Failed to create ParquetField from schema".to_string())
-    //         })?
-    //     };
-
-    //     // Convert virtual fields to ParquetFields and append them
-    //     match &mut root_field.field_type {
-    //         ParquetFieldType::Group { children } => {
-    //             for field in &fields_to_append {
-    //                 // Determine virtual column type
-    //                 let virtual_type = if field.try_extension_type::<RowNumber>().is_ok() {
-    //                     VirtualColumnType::RowNumber
-    //                 } else {
-    //                     return Err(ParquetError::ArrowError(format!(
-    //                         "Unsupported virtual column type for field '{}'",
-    //                         field.name()
-    //                     )));
-    //                 };
-
-    //                 let nullable = field.is_nullable();
-    //                 // TODO @vustef: Assert def_level and rep_level are 0?
-    //                 let parquet_field = ParquetField {
-    //                     rep_level: 0,
-    //                     def_level: if nullable { 1 } else { 0 },
-    //                     nullable,
-    //                     arrow_type: field.data_type().clone(),
-    //                     field_type: ParquetFieldType::Virtual(virtual_type),
-    //                 };
-
-    //                 children.push(parquet_field);
-    //             }
-
-    //             // Update the root field's arrow_type to match the extended schema
-    //             root_field.arrow_type = ArrowType::Struct(extended_schema.fields().clone());
-    //         }
-    //         ParquetFieldType::Primitive { .. } => {
-    //             // Root should never be primitive, but handle it by wrapping in a Group
-    //             let existing_field = root_field.clone();
-    //             let mut children = vec![existing_field];
-
-    //             for field in &fields_to_append {
-    //                 let virtual_type = if field.try_extension_type::<RowNumber>().is_ok() {
-    //                     VirtualColumnType::RowNumber
-    //                 } else {
-    //                     return Err(ParquetError::ArrowError(format!(
-    //                         "Unsupported virtual column type for field '{}'",
-    //                         field.name()
-    //                     )));
-    //                 };
-
-    //                 let nullable = field.is_nullable();
-    //                 let parquet_field = ParquetField {
-    //                     rep_level: 0,
-    //                     def_level: if nullable { 1 } else { 0 },
-    //                     nullable,
-    //                     arrow_type: field.data_type().clone(),
-    //                     field_type: ParquetFieldType::Virtual(virtual_type),
-    //                 };
-
-    //                 children.push(parquet_field);
-    //             }
-
-    //             root_field.field_type = ParquetFieldType::Group { children };
-    //             root_field.arrow_type = ArrowType::Struct(extended_schema.fields().clone());
-    //         }
-    //         ParquetFieldType::Virtual(_) => {
-    //             return Err(ParquetError::ArrowError(
-    //                 "Root field cannot be a Virtual column".to_string()
-    //             ));
-    //         }
-    //     }
-
-    //     // TODO @vustef: this makes virtual columns part of the schema, but when creating ProjectionMasks, they wouldn't easily be constructed to include them, since they are based on ParquetMetadata.
-    //     // Maybe masks shouldn't apply to virtual columns at the end of the schema.
-    //     Ok(Self {
-    //         schema: extended_schema,
-    //         fields: Some(Arc::new(root_field)),
-    //         ..self
-    //     })
-    // }
 }
 
 /// Options that control how metadata is read for a parquet file
@@ -749,7 +605,7 @@ impl ArrowReaderMetadata {
     /// See [`Self::load`] for more details.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
         match options.supplied_schema {
-            Some(supplied_schema) => Self::with_supplied_schema(metadata, supplied_schema.clone(), options.virtual_columns),
+            Some(supplied_schema) => Self::with_supplied_schema(metadata, supplied_schema.clone(), &options.virtual_columns),
             None => {
                 let kv_metadata = match options.skip_arrow_metadata {
                     true => None,
@@ -760,7 +616,7 @@ impl ArrowReaderMetadata {
                     metadata.file_metadata().schema_descr(),
                     ProjectionMask::all(),
                     kv_metadata,
-                    options.virtual_columns,
+                    &options.virtual_columns,
                 )?;
 
                 Ok(Self {
@@ -775,10 +631,9 @@ impl ArrowReaderMetadata {
     fn with_supplied_schema(
         metadata: Arc<ParquetMetaData>,
         supplied_schema: SchemaRef,
-        virtual_columns: Vec<Field>,
+        virtual_columns: &[Field],
     ) -> Result<Self> {
         let parquet_schema = metadata.file_metadata().schema_descr();
-        let virtual_columns_len = virtual_columns.len();
         let field_levels = parquet_to_arrow_field_levels(
             parquet_schema,
             ProjectionMask::all(),
@@ -787,7 +642,7 @@ impl ArrowReaderMetadata {
         )?;
         let fields = field_levels.fields;
         let inferred_len = fields.len();
-        let supplied_len = supplied_schema.fields().len() + virtual_columns_len;
+        let supplied_len = supplied_schema.fields().len() + virtual_columns.len();
         // Ensure the supplied schema has the same number of columns as the parquet schema.
         // parquet_to_arrow_field_levels is expected to throw an error if the schemas have
         // different lengths, but we check here to be safe.
@@ -1035,7 +890,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             metrics,
             // Not used for the sync reader, see https://github.com/apache/arrow-rs/issues/8000
             max_predicate_cache_size: _,
-            row_number_column
         } = self;
 
         // Try to avoid allocate large buffer
@@ -1065,14 +919,14 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 cache_projection.intersect(&projection);
 
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-                    .build_array_reader(fields.as_deref(), predicate.projection(), row_number_column.as_deref(),)?;
+                    .build_array_reader(fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
         }
 
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
-            .build_array_reader(fields.as_deref(), &projection, row_number_column.as_deref())?;
+            .build_array_reader(fields.as_deref(), &projection)?;
 
         let read_plan = plan_builder
             .limited(reader.num_rows())
@@ -1283,7 +1137,7 @@ impl ParquetRecordBatchReader {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
-            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all(), None)?;
+            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)

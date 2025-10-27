@@ -63,7 +63,7 @@ pub fn parquet_to_arrow_schema_by_columns(
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema> {
-    Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata, vec![])?.0)
+    Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata, &[])?.0)
 }
 
 /// Determines the Arrow Schema from a Parquet schema
@@ -75,7 +75,7 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
-    virtual_columns: Vec<Field>,
+    virtual_columns: &[Field],
 ) -> Result<(Schema, Option<ParquetField>)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     let maybe_schema = metadata
@@ -133,7 +133,7 @@ pub fn parquet_to_arrow_field_levels(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     hint: Option<&Fields>,
-    virtual_columns: Vec<Field>, // TODO @vustef: This is a public method, maybe preserve its signature. Or maybe it's good to change it, to be able to construct readers from pub API.
+    virtual_columns: &[Field], // TODO @vustef: This is a public method, maybe preserve its signature. Or maybe it's good to change it, to be able to construct readers from pub API.
 ) -> Result<FieldLevels> {
     match complex::convert_schema(schema, mask, hint, virtual_columns)? {
         Some(field) => match &field.arrow_type {

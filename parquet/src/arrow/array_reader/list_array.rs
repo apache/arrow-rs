@@ -561,13 +561,13 @@ mod tests {
             schema,
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),
-            vec![],
+            &[],
         )
         .unwrap();
 
         let metrics = ArrowReaderMetrics::disabled();
         let mut array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
-            .build_array_reader(fields.as_ref(), &mask, None)
+            .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
         let batch = array_reader.next_batch(100).unwrap();

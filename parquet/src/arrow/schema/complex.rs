@@ -132,17 +132,17 @@ impl VisitorContext {
 /// See [Logical Types] for more information on the conversion algorithm
 ///
 /// [Logical Types]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
-struct Visitor {
+struct Visitor<'a> {
     /// The column index of the next leaf column
     next_col_idx: usize,
 
     /// Mask of columns to include
     mask: ProjectionMask,
 
-    virtual_columns: Vec<Field>,
+    virtual_columns: &'a [Field],
 }
 
-impl Visitor {
+impl<'a> Visitor<'a> {
     fn visit_primitive(
         &mut self,
         primitive_type: &TypePtr,
@@ -248,7 +248,7 @@ impl Visitor {
         // we need to handle virtual columns?
         if rep_level == 0 && def_level == 0 {
             // TODO @vustef: assert is_virtual_column ? Or use types to our advantage somehow.
-            for virtual_column in &self.virtual_columns {
+            for virtual_column in self.virtual_columns {
                 child_fields.push(virtual_column.clone());
                 let child = convert_virtual_field(virtual_column, rep_level, def_level)?;
                 children.push(child);
@@ -660,7 +660,7 @@ pub fn convert_schema(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     embedded_arrow_schema: Option<&Fields>,
-    virtual_columns: Vec<Field>,
+    virtual_columns: &[Field], // TODO @vustef: Also a pub API change...
 ) -> Result<Option<ParquetField>> {
     let mut visitor = Visitor {
         next_col_idx: 0,
@@ -682,7 +682,7 @@ pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask: ProjectionMask::all(),
-        virtual_columns: vec![], // TODO @vustef: Maybe should be None rather?
+        virtual_columns: &[],
     };
 
     let context = VisitorContext {

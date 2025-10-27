@@ -516,7 +516,6 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             offset: self.offset,
             metrics: self.metrics,
             max_predicate_cache_size: self.max_predicate_cache_size,
-            row_number_column: self.row_number_column,
         };
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
@@ -573,8 +572,6 @@ struct ReaderFactory<T> {
 
     /// Maximum size of the predicate cache
     max_predicate_cache_size: usize,
-
-    row_number_column: Option<String>,
 }
 
 impl<T> ReaderFactory<T>
@@ -652,7 +649,7 @@ where
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
                     .with_cache_options(Some(&cache_options))
-                    .build_array_reader(self.fields.as_deref(), predicate.projection(), self.row_number_column.as_deref())?;
+                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
             }
@@ -709,7 +706,7 @@ where
         let cache_options = cache_options_builder.consumer();
         let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
             .with_cache_options(Some(&cache_options))
-            .build_array_reader(self.fields.as_deref(), &projection, self.row_number_column.as_deref())?;
+            .build_array_reader(self.fields.as_deref(), &projection)?;
 
         let reader = ParquetRecordBatchReader::new(array_reader, plan);
 
@@ -1223,6 +1220,7 @@ mod tests {
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
+    use crate::arrow::schema::virtual_type::RowNumber;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
@@ -1982,6 +1980,7 @@ mod tests {
             metadata.file_metadata().schema_descr(),
             ProjectionMask::all(),
             None,
+            &[],
         )
         .unwrap();
 
@@ -1998,7 +1997,6 @@ mod tests {
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
             max_predicate_cache_size: 0,
-            row_number_column: None,
         };
 
         let mut skip = true;
@@ -2464,7 +2462,6 @@ mod tests {
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
             max_predicate_cache_size: 0,
-            row_number_column: None,
         };
 
         // Provide an output projection that also selects the same nested leaf
@@ -2730,12 +2727,13 @@ mod tests {
                     .expect("Could not create runtime");
                 runtime.block_on(async move {
                     let file = tokio::fs::File::open(path).await.unwrap();
-                    let reader = ParquetRecordBatchStreamBuilder::new(file)
+                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber);
+                    let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
                         .await
                         .unwrap()
                         .with_row_selection(selection)
                         .with_batch_size(batch_size)
-                        .with_row_number_column("row_number")
                         .build()
                         .expect("Could not create reader");
                     reader.try_collect::<Vec<_>>().await.unwrap()
@@ -2755,13 +2753,14 @@ mod tests {
                     .expect("Could not create runtime");
                 runtime.block_on(async move {
                     let file = tokio::fs::File::open(path).await.unwrap();
-                    let reader = ParquetRecordBatchStreamBuilder::new(file)
+                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber);
+                    let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
                         .await
                         .unwrap()
                         .with_row_selection(selection)
                         .with_row_filter(row_filter.expect("No row filter"))
                         .with_batch_size(batch_size)
-                        .with_row_number_column("row_number")
                         .build()
                         .expect("Could not create reader");
                     reader.try_collect::<Vec<_>>().await.unwrap()
