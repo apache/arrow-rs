@@ -155,6 +155,7 @@ impl InMemoryRowGroup {
             &self.metadata.schema_descr_ptr(),
             self.mask.clone(),
             None,
+            vec![],
         )?;
 
         ParquetRecordBatchReader::try_new_with_row_groups(&levels, self, batch_size, selection)

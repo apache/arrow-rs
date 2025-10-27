@@ -258,7 +258,7 @@ pub struct ProjectionMask {
     /// A mask of `[true, false, true, false]` will result in a schema 2
     /// elements long:
     /// * `fields[0]`: `a`
-    /// * `fields[1]`: `c`    
+    /// * `fields[1]`: `c`
     ///
     /// A mask of `None` will result in a schema 4 elements long:
     /// * `fields[0]`: `a`

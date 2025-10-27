@@ -425,7 +425,7 @@ impl<'a> ArrayReaderBuilder<'a> {
     fn build_struct_reader(
         &self,
         field: &ParquetField,
-        mask: &ProjectionMask,
+        mask: &ProjectionMask, // TODO @vustef:Don't apply to the virtual columns.
         row_number_column: Option<&str>,
 ) -> Result<Option<Box<dyn ArrayReader>>> {
         let arrow_fields = match &field.arrow_type {
@@ -491,6 +491,7 @@ mod tests {
             file_metadata.schema_descr(),
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),
+            vec![],
         )
         .unwrap();
 
@@ -520,6 +521,7 @@ mod tests {
             file_metadata.schema_descr(),
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),
+            vec![],
         )
         .unwrap();
 

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::schema::virtual_type::{RowNumber, is_virtual_column};
+use crate::arrow::schema::virtual_type::RowNumber;
 use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
@@ -138,6 +138,8 @@ struct Visitor {
 
     /// Mask of columns to include
     mask: ProjectionMask,
+
+    virtual_columns: Vec<Field>,
 }
 
 impl Visitor {
@@ -207,8 +209,8 @@ impl Visitor {
             None => None,
         };
 
-        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len());
-        let mut children = Vec::with_capacity(parquet_fields.len());
+        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len() + self.virtual_columns.len());
+        let mut children = Vec::with_capacity(parquet_fields.len() + self.virtual_columns.len());
 
         // Perform a DFS of children
         for (idx, parquet_field) in parquet_fields.iter().enumerate() {
@@ -238,6 +240,17 @@ impl Visitor {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
                 child_fields.push(convert_field(parquet_field, &mut child, arrow_field)?);
+                children.push(child);
+            }
+        }
+
+        // TODO @vustef: Are all parquet schemas going to start with a struct? I.e. is this the only place where
+        // we need to handle virtual columns?
+        if rep_level == 0 && def_level == 0 {
+            // TODO @vustef: assert is_virtual_column ? Or use types to our advantage somehow.
+            for virtual_column in &self.virtual_columns {
+                child_fields.push(virtual_column.clone());
+                let child = convert_virtual_field(virtual_column, rep_level, def_level)?;
                 children.push(child);
             }
         }
@@ -577,7 +590,7 @@ fn convert_virtual_field(
 
     // Determine the virtual column type based on the extension type
     let virtual_type = if arrow_field.try_extension_type::<RowNumber>().is_ok() {
-        VirtualColumnType::RowNumber
+        VirtualColumnType::RowNumber // TODO @vustef: Don't like the ifelse approach...
     } else {
         return Err(ParquetError::ArrowError(format!(
             "unsupported virtual column type for field '{}'",
@@ -647,10 +660,12 @@ pub fn convert_schema(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     embedded_arrow_schema: Option<&Fields>,
+    virtual_columns: Vec<Field>,
 ) -> Result<Option<ParquetField>> {
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask,
+        virtual_columns,
     };
 
     let context = VisitorContext {
@@ -667,6 +682,7 @@ pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask: ProjectionMask::all(),
+        virtual_columns: vec![], // TODO @vustef: Maybe should be None rather?
     };
 
     let context = VisitorContext {

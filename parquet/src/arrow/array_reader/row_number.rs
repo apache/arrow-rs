@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::errors::{ParquetError, Result};
+use crate::errors::Result;
 use crate::file::metadata::RowGroupMetaData;
 use arrow_array::{ArrayRef, Int64Array};
 use arrow_schema::DataType;
