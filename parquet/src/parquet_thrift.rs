@@ -520,6 +520,7 @@ impl<'a> ThriftSliceInputProtocol<'a> {
     }
 
     /// Reset the underlying slice.
+    #[allow(dead_code)]
     pub fn reset(&mut self, buf: &'a [u8]) {
         self.buf = buf;
     }

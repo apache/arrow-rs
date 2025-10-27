@@ -418,11 +418,6 @@ fn read_column_metadata<'a>(
         if field_ident.field_type == FieldType::Stop {
             break;
         }
-        // FIXME(ets): remove this...just for testing stats skipping
-        // return if we've got all required fields
-        if field_ident.id > 11 && (seen_mask & COL_META_ALL_REQUIRED == COL_META_ALL_REQUIRED) {
-            return Ok(seen_mask);
-        }
         match field_ident.id {
             // 1: type is never used, we can use the column descriptor
             1 => {
@@ -504,10 +499,6 @@ fn read_column_metadata<'a>(
 fn read_column_chunk<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column_descr: &Arc<ColumnDescriptor>,
-    index: Option<&MetaIndex>,
-    rg_idx: usize,
-    col_idx: usize,
-    num_columns: usize,
 ) -> Result<ColumnChunkMetaData> {
     // create a default initialized ColumnMetaData
     let mut col = ColumnChunkMetaDataBuilder::new(column_descr.clone()).build()?;
@@ -544,17 +535,7 @@ fn read_column_chunk<'a>(
                 has_file_offset = true;
             }
             3 => {
-                if let Some(idx) = index {
-                    let current_pos = prot.as_slice();
-                    let col_meta_len =
-                        idx.column_meta_lengths[rg_idx * num_columns + col_idx] as usize;
-                    col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
-                    let new = &current_pos[col_meta_len..];
-                    //println!("meta_len {col_meta_len} og {} now {} new {}", current_pos.len(), prot.as_slice().len(), new.len());
-                    prot.reset(new);
-                } else {
-                    col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
-                }
+                col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
             }
             4 => {
                 col.offset_index_offset = Some(i64::read_thrift(&mut *prot)?);
@@ -604,8 +585,6 @@ fn read_column_chunk<'a>(
 fn read_row_group(
     prot: &mut ThriftSliceInputProtocol,
     schema_descr: &Arc<SchemaDescriptor>,
-    index: Option<&MetaIndex>,
-    rg_idx: usize,
 ) -> Result<RowGroupMetaData> {
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
@@ -643,16 +622,8 @@ fn read_row_group(
                         list_ident.size
                     ));
                 }
-                let num_columns = list_ident.size as usize;
-                for i in 0..num_columns {
-                    let col = read_column_chunk(
-                        prot,
-                        &schema_descr.columns()[i],
-                        index,
-                        rg_idx,
-                        i,
-                        num_columns,
-                    )?;
+                for i in 0..list_ident.size as usize {
+                    let col = read_column_chunk(prot, &schema_descr.columns()[i])?;
                     row_group.columns.push(col);
                 }
                 mask |= RG_COLUMNS;
@@ -699,6 +670,7 @@ fn read_row_group(
 }
 
 /// Extract the metadata index from the footer bytes. `buf` should contain the entire footer.
+#[allow(dead_code)]
 pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
     // TODO(ets): need constants to get rid of magic numbers
     if buf.len() < 13 {
@@ -735,9 +707,6 @@ pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
 /// Create [`ParquetMetaData`] from thrift input. Note that this only decodes the file metadata in
 /// the Parquet footer. Page indexes will need to be added later.
 pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData> {
-    // see if we have the index
-    let meta_idx = get_metadata_index(buf)?;
-
     let mut prot = ThriftSliceInputProtocol::new(buf);
 
     // begin reading the file metadata
@@ -792,13 +761,8 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 let schema_descr = schema_descr.as_ref().unwrap();
                 let list_ident = prot.read_list_begin()?;
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
-                for idx in 0..list_ident.size as usize {
-                    rg_vec.push(read_row_group(
-                        &mut prot,
-                        schema_descr,
-                        meta_idx.as_ref(),
-                        idx,
-                    )?);
+                for _ in 0..list_ident.size {
+                    rg_vec.push(read_row_group(&mut prot, schema_descr)?);
                 }
                 row_groups = Some(rg_vec);
             }
@@ -1760,7 +1724,7 @@ pub(crate) mod tests {
         schema_descr: Arc<SchemaDescriptor>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr, None, 0)
+        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr)
     }
 
     pub(crate) fn read_column_chunk(
@@ -1768,7 +1732,7 @@ pub(crate) mod tests {
         column_descr: Arc<ColumnDescriptor>,
     ) -> Result<ColumnChunkMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, None, 0, 0, 0)
+        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr)
     }
 
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {
