@@ -381,7 +381,17 @@ impl<T: DataType> DictDecoder<T> {
 impl<T: DataType> Decoder<T> for DictDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // First byte in `data` is bit width
+        if data.is_empty() {
+            return Err(eof_err!("Not enough bytes to decode bit_width"));
+        }
+
         let bit_width = data.as_ref()[0];
+        if bit_width > 32 {
+            return Err(general_err!(
+                "Invalid or corrupted RLE bit width {}. Max allowed is 32",
+                bit_width
+            ));
+        }
         let mut rle_decoder = RleDecoder::new(bit_width);
         rle_decoder.set_data(data.slice(1..));
         self.num_values = num_values;
@@ -1393,6 +1403,13 @@ mod tests {
         data[2].set_data(Bytes::from(String::from("flow")));
         let data_bytes = FixedLenByteArrayType::to_byte_array(&data[..]);
         test_plain_skip::<FixedLenByteArrayType>(Bytes::from(data_bytes), 3, 6, 4, &[]);
+    }
+
+    #[test]
+    fn test_dict_decoder_empty_data() {
+        let mut decoder = DictDecoder::<Int32Type>::new();
+        let err = decoder.set_data(Bytes::new(), 10).unwrap_err();
+        assert_eq!(err.to_string(), "EOF: Not enough bytes to decode bit_width");
     }
 
     fn test_plain_decode<T: DataType>(
