@@ -206,6 +206,9 @@ pub use self::schema::{
     parquet_to_arrow_field_levels, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
 };
 
+// Re-export virtual_type directly from the schema module.
+pub use self::schema::virtual_type;
+
 /// Schema metadata key used to store serialized Arrow schema
 ///
 /// The Arrow schema is encoded using the Arrow IPC format, and then base64
