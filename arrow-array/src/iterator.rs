@@ -391,38 +391,42 @@ mod tests {
         }
     }
 
-    /// Trait representing an operation on a BitIterator
+    /// Trait representing an operation on a [`ArrayIter`]
     /// that can be compared against a slice iterator
-    trait ArrayIteratorOp {
-        /// What the operation returns (e.g. Option<bool> for last/max, usize for count, etc)
+    ///
+    /// this is for consuming operations (e.g. `count`, `last`, etc)
+    trait ConsumingArrayIteratorOp {
+        /// What the operation returns (e.g. Option<i32> for last, usize for count, etc)
         type Output: PartialEq + Debug;
 
         /// The name of the operation, used for error messages
         fn name(&self) -> String;
 
         /// Get the value of the operation for the provided iterator
-        /// This will be either a BitIterator or a slice iterator to make sure they produce the same result
+        /// This will be either a [`ArrayIter`] or a slice iterator to make sure they produce the same result
         fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: T) -> Self::Output;
     }
 
-    /// Trait representing an operation on a BitIterator
-    /// that can be compared against a slice iterator
-    trait ArrayIteratorMutateOp {
-        /// What the operation returns (e.g. Option<bool> for last/max, usize for count, etc)
+    /// Trait representing an operation on a [`ArrayIter`]
+    /// that can be compared against a slice iterator.
+    ///
+    /// This is for mutating operations (e.g. `position`, `any`, `find`, etc)
+    trait MutatingArrayIteratorOp {
+        /// What the operation returns (e.g. Option<i32> for last, usize for count, etc)
         type Output: PartialEq + Debug;
 
         /// The name of the operation, used for error messages
         fn name(&self) -> String;
 
         /// Get the value of the operation for the provided iterator
-        /// This will be either a BitIterator or a slice iterator to make sure they produce the same result
+        /// This will be either a [`ArrayIter`] or a slice iterator to make sure they produce the same result
         fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut T) -> Self::Output;
     }
 
     /// Helper function that will assert that the provided operation
-    /// produces the same result for both BitIterator and slice iterator
+    /// produces the same result for both [`ArrayIter`] and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
-    fn assert_array_iterator_cases<O: ArrayIteratorOp>(o: O) {
+    fn assert_array_iterator_cases<O: ConsumingArrayIteratorOp>(o: O) {
         setup_and_assert_cases(NoSetup, |actual, expected| {
             let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
             assert_eq!(
@@ -607,42 +611,43 @@ mod tests {
     }
 
     /// Helper function that will assert that the provided operation
-    /// produces the same result for both BitIterator and slice iterator
+    /// produces the same result for both [`ArrayIter`] and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
-    fn assert_array_iterator_cases_mutate<O: ArrayIteratorMutateOp>(o: O) {
-        for (array, source) in get_int32_iterator_cases() {
-            for i in 0..source.len() {
-                let mut actual = ArrayIter::new(&array);
-                let mut expected = source.iter().copied();
+    ///
+    /// this is different from [`assert_array_iterator_cases`] as this also check that the state after the call is correct
+    /// to make sure we don't leave the iterator in incorrect state
+    fn assert_array_iterator_cases_mutate<O: MutatingArrayIteratorOp>(o: O) {
+        struct Adapter<O: MutatingArrayIteratorOp> {
+            o: O,
+        }
 
-                // calling nth(0) is the same as calling next()
-                // but we want to get to the ith position so we call nth(i - 1)
-                if i > 0 {
-                    actual.nth(i - 1);
-                    expected.nth(i - 1);
-                }
+        #[derive(Debug, PartialEq)]
+        struct AdapterOutput<Value> {
+            value: Value,
+            /// collect on the iterator after running the operation
+            leftover: Vec<Option<i32>>,
+        }
 
-                let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+        impl<O: MutatingArrayIteratorOp> ConsumingArrayIteratorOp for Adapter<O> {
+            type Output = AdapterOutput<O::Output>;
 
-                let actual_value = o.get_value(&mut actual);
-                let expected_value = o.get_value(&mut expected);
+            fn name(&self) -> String {
+                self.o.name()
+            }
 
-                assert_eq!(
-                    actual_value,
-                    expected_value,
-                    "Failed on op {} for iter that advanced to i {i} (left actual, right expected) ({current_iterator_values:?})",
-                    o.name()
-                );
+            fn get_value<T: SharedBetweenArrayIterAndSliceIter>(
+                &self,
+                mut iter: T,
+            ) -> Self::Output {
+                let value = self.o.get_value(&mut iter);
 
-                let left_over_actual: Vec<_> = actual.clone().collect();
-                let left_over_expected: Vec<_> = expected.clone().collect();
+                let leftover: Vec<_> = iter.collect();
 
-                assert_eq!(
-                    left_over_actual, left_over_expected,
-                    "state after mutable should be the same"
-                );
+                AdapterOutput { value, leftover }
             }
         }
+
+        assert_array_iterator_cases(Adapter { o })
     }
 
     #[derive(Debug, PartialEq)]
@@ -660,7 +665,7 @@ mod tests {
             number_of_false: usize,
         }
 
-        impl ArrayIteratorMutateOp for PositionOp {
+        impl MutatingArrayIteratorOp for PositionOp {
             type Output = CallTrackingWithInputType<Option<usize>>;
             fn name(&self) -> String {
                 if self.reverse {
@@ -830,7 +835,7 @@ mod tests {
     fn assert_for_each() {
         struct ForEachOp;
 
-        impl ArrayIteratorOp for ForEachOp {
+        impl ConsumingArrayIteratorOp for ForEachOp {
             type Output = CallTrackingOnly;
 
             fn name(&self) -> String {
@@ -866,7 +871,7 @@ mod tests {
             item: Option<i32>,
         }
 
-        impl ArrayIteratorOp for FoldOp {
+        impl ConsumingArrayIteratorOp for FoldOp {
             type Output = CallTrackingAndResult<Option<i32>, CallArgs>;
 
             fn name(&self) -> String {
@@ -910,7 +915,7 @@ mod tests {
     fn assert_count() {
         struct CountOp;
 
-        impl ArrayIteratorOp for CountOp {
+        impl ConsumingArrayIteratorOp for CountOp {
             type Output = usize;
 
             fn name(&self) -> String {
@@ -931,7 +936,7 @@ mod tests {
             false_count: usize,
         }
 
-        impl ArrayIteratorMutateOp for AnyOp {
+        impl MutatingArrayIteratorOp for AnyOp {
             type Output = CallTrackingWithInputType<bool>;
 
             fn name(&self) -> String {
@@ -974,7 +979,7 @@ mod tests {
             true_count: usize,
         }
 
-        impl ArrayIteratorMutateOp for AllOp {
+        impl MutatingArrayIteratorOp for AllOp {
             type Output = CallTrackingWithInputType<bool>;
 
             fn name(&self) -> String {
@@ -1018,7 +1023,7 @@ mod tests {
             false_count: usize,
         }
 
-        impl ArrayIteratorMutateOp for FindOp {
+        impl MutatingArrayIteratorOp for FindOp {
             type Output = CallTrackingWithInputType<Option<Option<i32>>>;
 
             fn name(&self) -> String {
@@ -1084,7 +1089,7 @@ mod tests {
             number_of_nones: usize,
         }
 
-        impl ArrayIteratorMutateOp for FindMapOp {
+        impl MutatingArrayIteratorOp for FindMapOp {
             type Output = CallTrackingWithInputType<Option<&'static str>>;
 
             fn name(&self) -> String {
@@ -1135,7 +1140,7 @@ mod tests {
             right: Vec<Option<i32>>,
         }
 
-        impl<F: Fn(usize, &Option<i32>) -> bool> ArrayIteratorOp for PartitionOp<F> {
+        impl<F: Fn(usize, &Option<i32>) -> bool> ConsumingArrayIteratorOp for PartitionOp<F> {
             type Output = CallTrackingWithInputType<PartitionResult>;
 
             fn name(&self) -> String {
