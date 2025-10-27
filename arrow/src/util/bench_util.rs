@@ -571,7 +571,11 @@ pub fn create_fsb_array(size: usize, null_density: f32, value_len: usize) -> Fix
 
 /// Create an offset vector used to build a list, given total number
 /// of items in the list's child array, and min max length of each list item
-pub fn random_list_offsets<K: OffsetSizeTrait>(total_items: usize, min: usize, max: usize) -> Vec<K> {
+pub fn random_list_offsets<K: OffsetSizeTrait>(
+    total_items: usize,
+    min: usize,
+    max: usize,
+) -> Vec<K> {
     let mut result = vec![K::zero()];
 
     let rng = &mut seedable_rng();
@@ -605,16 +609,15 @@ pub fn create_struct_list<K: OffsetSizeTrait>(
     let struct_arr = StructArray::try_new(
         fields.clone(),
         field_arrays,
-        nulls.map(|v| NullBuffer::from_iter(v)),
+        nulls.map(NullBuffer::from_iter),
     )
     .unwrap();
-    let list_arr = GenericListArray::<K>::new(
+    GenericListArray::<K>::new(
         Arc::new(Field::new_struct("item", fields, true)),
         OffsetBuffer::new(ScalarBuffer::<K>::from_iter(offsets)),
         Arc::new(struct_arr) as ArrayRef,
         list_nulls.map(|nulls: Vec<bool>| NullBuffer::from(nulls)),
-    );
-    list_arr
+    )
 }
 
 /// Creates a random (but fixed-seeded) dictionary array of a given size and null density

@@ -330,7 +330,7 @@ fn try_merge_dict_array_of_struct_list_arr<K: ArrowDictionaryKeyType, G: OffsetS
             return Ok(Some((total_child_items, arr_lengths, null_buffer)));
         }
     }
-    return Ok(None);
+    Ok(None)
 }
 
 fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
@@ -355,7 +355,7 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
                 arrays, indices, field_num, borrower, return_helper_stats),
             _ => unreachable!("illegal dictionary key type {}",field.data_type()),
         }?;
-        if let Some(_) = maybe_helper_stats {
+        if maybe_helper_stats.is_some() {
             helper_stats = maybe_helper_stats;
         }
     }
@@ -372,7 +372,7 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
             let list = x.as_list::<G>();
             let backed_struct = list.values().as_struct();
             for (field_num, col) in backed_struct.columns().iter().enumerate() {
-                if interleaved_merged.get(&field_num).is_some() {
+                if interleaved_merged.contains_key(&field_num) {
                     continue;
                 }
                 let sub_arrays = non_merged_arrays_by_field
@@ -390,7 +390,7 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
             Ok((
                 *num_field,
                 interleave_list_value_arrays_by_offset(
-                    &sub_arrays,
+                    sub_arrays,
                     &offsets,
                     total_child_values_after_interleave,
                     indices,
@@ -425,7 +425,7 @@ fn interleave_struct_list_containing_dictionaries<G: OffsetSizeTrait>(
 }
 
 // take only offsets included inside indices arrays and perform
-// merging the dictionaries key/value that remains 
+// merging the dictionaries key/value that remains
 fn merge_dictionaries_by_offset<K: ArrowDictionaryKeyType, G: OffsetSizeTrait>(
     dictionaries: &[&DictionaryArray<K>],
     offsets: &[&[G]],
