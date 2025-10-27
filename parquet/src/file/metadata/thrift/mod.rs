@@ -420,7 +420,7 @@ fn read_column_metadata<'a>(
         }
         // FIXME(ets): remove this...just for testing stats skipping
         // return if we've got all required fields
-        if seen_mask & COL_META_ALL_REQUIRED == COL_META_ALL_REQUIRED {
+        if field_ident.id > 11 && (seen_mask & COL_META_ALL_REQUIRED == COL_META_ALL_REQUIRED) {
             return Ok(seen_mask);
         }
         match field_ident.id {
@@ -549,7 +549,9 @@ fn read_column_chunk<'a>(
                     let col_meta_len =
                         idx.column_meta_lengths[rg_idx * num_columns + col_idx] as usize;
                     col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
-                    prot.reset(&current_pos[col_meta_len..]);
+                    let new = &current_pos[col_meta_len..];
+                    //println!("meta_len {col_meta_len} og {} now {} new {}", current_pos.len(), prot.as_slice().len(), new.len());
+                    prot.reset(new);
                 } else {
                     col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
                 }
