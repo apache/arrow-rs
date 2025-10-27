@@ -522,7 +522,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
         let projected_fields = match reader_factory.fields.as_deref().map(|pf| &pf.arrow_type) {
             Some(DataType::Struct(fields)) => {
-                fields.filter_leaves(|idx, _| self.projection.leaf_included(idx))
+                let projection_len = self.projection.mask.as_ref().map_or(usize::MAX, |m| m.len());
+                fields.filter_leaves(|idx, _| idx < projection_len && self.projection.leaf_included(idx))
             }
             None => Fields::empty(),
             _ => unreachable!("Must be Struct for root type"),
