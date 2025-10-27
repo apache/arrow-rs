@@ -704,7 +704,6 @@ impl MetadataIndexBuilder {
         }
     }
 
-    // TODO(ets): expose these via ThriftCompactOutputProtocol
     pub(crate) fn set_schema_range(&mut self, start: usize, end: usize) {
         let start = (start - self.start_offset) as i64;
         let end = (end - self.start_offset) as i64;
@@ -763,25 +762,39 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         self.index = Some(index);
     }
 
-    /// Get a mutable reference to the index builder.
-    pub(crate) fn index(&mut self) -> Option<&mut MetadataIndexBuilder> {
-        self.index.as_mut()
-    }
-
     /// Take the index from this writer, leaving `None` in its place
     pub(crate) fn take_index(&mut self) -> Option<MetadataIndexBuilder> {
         self.index.take()
     }
 
+    // pass-thru methods for the index
+    pub(crate) fn set_schema_range(&mut self, start: usize, end: usize) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.set_schema_range(start, end);
+        }
+    }
+
+    pub(crate) fn mark_row_group(&mut self) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.push_row_group(self.writer.bytes_written());
+        }
+    }
+
+    pub(crate) fn mark_column_chunk(&mut self) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.push_column(self.writer.bytes_written());
+        }
+    }
+
+    pub(crate) fn push_col_meta_length(&mut self, length: usize) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.push_col_meta_length(length);
+        }
+    }
+
     /// Return the number of bytes written to the inner [`Write`]
     pub(crate) fn bytes_written(&self) -> usize {
         self.writer.bytes_written()
-    }
-
-    /// Flush the underlying [`Write`] stream.
-    pub(crate) fn flush(&mut self) -> Result<()> {
-        self.writer.flush()?;
-        Ok(())
     }
 
     /// Write a single byte to the output stream.

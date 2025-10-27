@@ -1360,9 +1360,7 @@ impl<'a> WriteThrift for FileMeta<'a> {
         let schema_start = writer.bytes_written();
         write_schema(&root, writer)?;
         let schema_end = writer.bytes_written();
-        writer
-            .index()
-            .map(|i| i.set_schema_range(schema_start, schema_end));
+        writer.set_schema_range(schema_start, schema_end);
 
         // field 3 is num_rows
         self.file_metadata
@@ -1379,14 +1377,12 @@ impl<'a> WriteThrift for FileMeta<'a> {
         writer.write_list_begin(ElementType::Struct, self.row_groups.len())?;
         // write row groups and save positions
         for rg in self.row_groups {
-            let pos = writer.bytes_written();
-            writer.index().map(|i| i.push_row_group(pos));
+            writer.mark_row_group();
             rg.write_thrift(writer)?;
         }
 
         // record end of the last row group
-        let pos = writer.bytes_written();
-        writer.index().map(|i| i.push_row_group(pos));
+        writer.mark_row_group();
 
         let mut last_field_id = 4;
 
@@ -1546,13 +1542,11 @@ impl WriteThrift for RowGroupMetaData {
         writer.write_list_begin(ElementType::Struct, self.num_columns())?;
         for col in self.columns() {
             // save offset for this column chunk
-            let pos = writer.bytes_written();
-            writer.index().map(|i| i.push_column(pos));
+            writer.mark_column_chunk();
             col.write_thrift(writer)?;
         }
         // save offset of end of last column chunk
-        let pos = writer.bytes_written();
-        writer.index().map(|i| i.push_column(pos));
+        writer.mark_column_chunk();
 
         // write remain fields
         self.total_byte_size.write_thrift_field(writer, 2, 1)?;
@@ -1617,9 +1611,7 @@ impl WriteThrift for ColumnChunkMetaData {
             last_field_id = 3;
         }
         let col_meta_end = writer.bytes_written();
-        writer
-            .index()
-            .map(|i| i.push_col_meta_length(col_meta_end - col_meta_start));
+        writer.push_col_meta_length(col_meta_end - col_meta_start);
 
         if let Some(offset_idx_off) = self.offset_index_offset() {
             last_field_id = offset_idx_off.write_thrift_field(writer, 4, last_field_id)?;
