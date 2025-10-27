@@ -472,7 +472,7 @@ mod test {
             .unwrap();
         assert_eq!(
             err.to_string(),
-            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..357"
+            "EOF: Parquet file too small. Page index range 82..115 overlaps with file metadata 0..392"
         );
     }
 

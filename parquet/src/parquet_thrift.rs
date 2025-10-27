@@ -518,6 +518,11 @@ impl<'a> ThriftSliceInputProtocol<'a> {
     pub fn as_slice(&self) -> &'a [u8] {
         self.buf
     }
+
+    /// Reset the underlying slice.
+    pub fn reset(&mut self, buf: &'a [u8]) {
+        self.buf = buf;
+    }
 }
 
 impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a> {
@@ -762,30 +767,35 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
         self.index = Some(index);
     }
 
-    /// Take the index from this writer, leaving `None` in its place
+    /// Take the index from this writer, leaving `None` in its place.
     pub(crate) fn take_index(&mut self) -> Option<MetadataIndexBuilder> {
         self.index.take()
     }
 
     // pass-thru methods for the index
+
+    /// Set the start and end positions in the index for the schema.
     pub(crate) fn set_schema_range(&mut self, start: usize, end: usize) {
         if let Some(idx) = self.index.as_mut() {
             idx.set_schema_range(start, end);
         }
     }
 
+    /// Call to mark the position where a row group begins (or ends for last row group).
     pub(crate) fn mark_row_group(&mut self) {
         if let Some(idx) = self.index.as_mut() {
             idx.push_row_group(self.writer.bytes_written());
         }
     }
 
+    /// Call to mark the position where a column chunk begins (or ends for last column in row group).
     pub(crate) fn mark_column_chunk(&mut self) {
         if let Some(idx) = self.index.as_mut() {
             idx.push_column(self.writer.bytes_written());
         }
     }
 
+    /// Add a length to the list of `ColumnMetaData` encoded lengths.
     pub(crate) fn push_col_meta_length(&mut self, length: usize) {
         if let Some(idx) = self.index.as_mut() {
             idx.push_col_meta_length(length);
