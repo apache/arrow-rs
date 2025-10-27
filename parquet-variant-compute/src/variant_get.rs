@@ -21,7 +21,7 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::{Variant, VariantPath, VariantPathElement};
 
 use crate::VariantArray;
 use crate::variant_array::BorrowedShreddingState;
@@ -142,8 +142,11 @@ fn shredded_get_path(
             for i in 0..target.len() {
                 if target.is_null(i) {
                     builder.append_null()?;
+                } else if !cast_options.safe {
+                    let value = target.try_value(i)?;
+                    builder.append_value(value)?;
                 } else {
-                    builder.append_value(target.value(i))?;
+                    builder.append_value(target.try_value(i).unwrap_or(Variant::Null))?;
                 }
             }
             builder.finish()
@@ -3583,5 +3586,54 @@ mod test {
         assert!(err.to_string().contains(
             "Failed to cast to Decimal256(precision=76, scale=39) from variant Decimal16"
         ));
+    }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_invalid_time_variant_array, || {
+        // 86401000000 is invalid for Time64Microsecond (max is 86400000000)
+        Time64MicrosecondArray::from(vec![
+            Some(86401000000),
+            Some(86401000000),
+            Some(86401000000),
+        ])
+    });
+
+    #[test]
+    fn test_variant_get_error_when_cast_failure_and_safe_false() {
+        let variant_array = perfectly_shredded_invalid_time_variant_array();
+
+        let field = Field::new("result", DataType::Time64(TimeUnit::Microsecond), true);
+        let cast_options = CastOptions {
+            safe: false, // Will error on cast failure
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(cast_options);
+        let err = variant_get(&variant_array, options).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "Cast error: Cast failed: Invalid microsecond from midnight: 86401000000"
+            )
+        );
+    }
+
+    #[test]
+    fn test_variant_get_return_null_when_cast_failure_and_safe_true() {
+        let variant_array = perfectly_shredded_invalid_time_variant_array();
+
+        let field = Field::new("result", DataType::Time64(TimeUnit::Microsecond), true);
+        let cast_options = CastOptions {
+            safe: true, // Will Variant::Null on cast failure
+            ..Default::default()
+        };
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(cast_options);
+        let result = variant_get(&variant_array, options).unwrap();
+        assert_eq!(3, result.len());
+
+        for i in 0..3 {
+            assert!(result.is_null(i));
+        }
     }
 }
