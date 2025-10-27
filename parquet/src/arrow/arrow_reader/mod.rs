@@ -1221,7 +1221,6 @@ pub(crate) mod tests {
     use crate::file::metadata::ParquetMetaData;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
-    use crate::format::FileMetaData;
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::{Type, TypePtr};
     use crate::util::test_common::rand_gen::RandGen;
@@ -5184,17 +5183,17 @@ pub(crate) mod tests {
         let mut case = vec![];
         let mut remaining = metadata.file_metadata().num_rows();
         while remaining > 0 {
-            let row_count = rng.gen_range(1..=remaining);
+            let row_count = rng.random_range(1..=remaining);
             remaining -= row_count;
             case.push(RowSelector {
                 row_count: row_count as usize,
-                skip: rng.gen_bool(0.5),
+                skip: rng.random_bool(0.5),
             });
         }
 
         let filter = use_filter.then(|| {
             let filter = (0..metadata.file_metadata().num_rows())
-                .map(|_| rng.gen_bool(0.99))
+                .map(|_| rng.random_bool(0.99))
                 .collect::<Vec<_>>();
             let mut filter_offset = 0;
             RowFilter::new(vec![Box::new(ArrowPredicateFn::new(
@@ -5214,7 +5213,7 @@ pub(crate) mod tests {
         });
 
         let selection = RowSelection::from(case);
-        let batches = test_case(path, selection.clone(), filter, rng.gen_range(1..4096));
+        let batches = test_case(path, selection.clone(), filter, rng.random_range(1..4096));
 
         if selection.skipped_row_count() == metadata.file_metadata().num_rows() as usize {
             assert!(batches.into_iter().all(|batch| batch.num_rows() == 0));
@@ -5253,11 +5252,11 @@ pub(crate) mod tests {
         let mut writer =
             ArrowWriter::try_new(&mut buf, schema.clone(), None).expect("Could not create writer");
 
-        let mut values = 1..=rng.gen_range(1..4096);
+        let mut values = 1..=rng.random_range(1..4096);
         while !values.is_empty() {
             let batch_values = values
                 .by_ref()
-                .take(rng.gen_range(1..4096))
+                .take(rng.random_range(1..4096))
                 .collect::<Vec<_>>();
             let array = Arc::new(Int64Array::from(batch_values)) as ArrayRef;
             let batch =
