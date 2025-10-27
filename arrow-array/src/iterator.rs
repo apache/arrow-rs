@@ -1016,6 +1016,14 @@ mod tests {
         }
     }
 
+    #[derive(Debug, PartialEq)]
+    struct CallTrackingAndResult<Result: Debug + PartialEq, CallArgs: Debug + PartialEq> {
+        result: Result,
+        calls: Vec<CallArgs>,
+    }
+    type CallTrackingWithInputType<Result> = CallTrackingAndResult<Result, Option<i32>>;
+    type CallTrackingOnly = CallTrackingWithInputType<()>;
+
     #[test]
     fn assert_position() {
         struct PositionOp {
@@ -1024,7 +1032,7 @@ mod tests {
         }
 
         impl ArrayIteratorMutateOp for PositionOp {
-            type Output = (Option<usize>, Vec<Option<i32>>);
+            type Output = CallTrackingWithInputType<Option<usize>>;
             fn name(&self) -> String {
                 if self.reverse {
                     format!("rposition with {} false returned", self.number_of_false)
@@ -1064,7 +1072,10 @@ mod tests {
                     })
                 };
 
-                (position_result, items)
+                CallTrackingAndResult {
+                    result: position_result,
+                    calls: items,
+                }
             }
         }
 
@@ -1197,7 +1208,7 @@ mod tests {
         struct ForEachOp;
 
         impl ArrayIteratorOp for ForEachOp {
-            type Output = Vec<Option<i32>>;
+            type Output = CallTrackingWithInputType<()>;
 
             fn name(&self) -> String {
                 "for_each".to_string()
@@ -1210,7 +1221,10 @@ mod tests {
                     items.push(item);
                 });
 
-                items
+                CallTrackingAndResult {
+                    calls: items,
+                    result: ()
+                }
             }
         }
 
@@ -1223,8 +1237,14 @@ mod tests {
             reverse: bool,
         }
 
+        #[derive(Debug, PartialEq)]
+        struct CallArgs {
+            acc: Option<i32>,
+            item: Option<i32>
+        }
+
         impl ArrayIteratorOp for FoldOp {
-            type Output = Vec<(Option<i32>, Option<i32>)>;
+            type Output = CallTrackingAndResult<Option<i32>, CallArgs>;
 
             fn name(&self) -> String {
                 if self.reverse {
@@ -1237,25 +1257,31 @@ mod tests {
             fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: T) -> Self::Output {
                 let mut items = vec![];
 
-                if self.reverse {
-                    let result = iter.rfold(Some(1), |init, item| {
-                        items.push((init, item));
+                let result = if self.reverse {
+                    iter.rfold(Some(1), |acc, item| {
+                        items.push(CallArgs {
+                            item,
+                            acc
+                        });
 
-                        item
-                    });
+                        item.map(|val| val + 100)
+                    })
 
-                    items.push((None, result));
                 } else {
-                    let result = iter.fold(Some(1), |init, item| {
-                        items.push((init, item));
+                    iter.fold(Some(1), |acc, item| {
+                        items.push(CallArgs {
+                            item,
+                            acc
+                        });
 
-                        item
-                    });
+                        item.map(|val| val + 100)
+                    })
+                };
 
-                    items.push((None, result));
+                CallTrackingAndResult {
+                    calls: items,
+                    result
                 }
-
-                items
             }
         }
 
@@ -1289,7 +1315,7 @@ mod tests {
         }
 
         impl ArrayIteratorMutateOp for AnyOp {
-            type Output = (bool, Vec<Option<i32>>);
+            type Output = CallTrackingWithInputType<bool>;
 
             fn name(&self) -> String {
                 format!("any with {} false returned", self.false_count)
@@ -1313,7 +1339,10 @@ mod tests {
                     };
                 });
 
-                (res, items)
+                CallTrackingWithInputType {
+                    calls: items,
+                    result: res
+                }
             }
         }
 
@@ -1329,7 +1358,7 @@ mod tests {
         }
 
         impl ArrayIteratorMutateOp for AllOp {
-            type Output = (bool, Vec<Option<i32>>);
+            type Output = CallTrackingWithInputType<bool>;
 
             fn name(&self) -> String {
                 format!("all with {} false returned", self.true_count)
@@ -1353,7 +1382,10 @@ mod tests {
                     };
                 });
 
-                (res, items)
+                CallTrackingWithInputType {
+                    calls: items,
+                    result: res
+                }
             }
         }
 
@@ -1370,7 +1402,7 @@ mod tests {
         }
 
         impl ArrayIteratorMutateOp for FindOp {
-            type Output = (Option<Option<i32>>, Vec<Option<i32>>);
+            type Output = CallTrackingWithInputType<Option<Option<i32>>>;
 
             fn name(&self) -> String {
                 if self.reverse {
@@ -1412,7 +1444,10 @@ mod tests {
                     })
                 };
 
-                (position_result, items)
+                CallTrackingWithInputType {
+                    calls: items,
+                    result: position_result
+                }
             }
         }
 
@@ -1433,7 +1468,7 @@ mod tests {
         }
 
         impl ArrayIteratorMutateOp for FindMapOp {
-            type Output = (Option<&'static str>, Vec<Option<i32>>);
+            type Output = CallTrackingWithInputType<Option<&'static str>>;
 
             fn name(&self) -> String {
                 format!("find_map with {} None returned", self.number_of_nones)
@@ -1458,7 +1493,10 @@ mod tests {
                     };
                 });
 
-                (result, items)
+                CallTrackingAndResult {
+                    result,
+                    calls: items,
+                }
             }
         }
 
@@ -1474,8 +1512,14 @@ mod tests {
             predicate: F,
         }
 
+        #[derive(Debug, PartialEq)]
+        struct PartitionResult {
+            left: Vec<Option<i32>>,
+            right: Vec<Option<i32>>,
+        }
+
         impl<F: Fn(&Option<i32>) -> bool> ArrayIteratorOp for PartitionOp<F> {
-            type Output = ((Vec<Option<i32>>, Vec<Option<i32>>), Vec<Option<i32>>);
+            type Output = CallTrackingWithInputType<PartitionResult>;
 
             fn name(&self) -> String {
                 format!("partition by {}", self.description)
@@ -1487,13 +1531,19 @@ mod tests {
             ) -> Self::Output {
                 let mut items = vec![];
 
-                let result = iter.partition(|item| {
+                let (left, right) = iter.partition(|item| {
                     items.push(item.clone());
 
                     (self.predicate)(item)
                 });
 
-                (result, items)
+                CallTrackingAndResult {
+                    result: PartitionResult {
+                        left,
+                        right
+                    },
+                    calls: items,
+                }
             }
         }
 
