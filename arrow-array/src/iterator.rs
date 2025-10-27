@@ -691,6 +691,13 @@ mod tests {
         fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I);
     }
 
+    struct NoSetup;
+    impl SetupIter for NoSetup {
+        fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
+            // none
+        }
+    }
+
     fn setup_and_assert_base_cases(
         setup_iterator: impl SetupIter,
         assert_fn: impl Fn(ArrayIter<&Int32Array>, Copied<Iter<Option<i32>>>),
@@ -753,12 +760,6 @@ mod tests {
     /// produces the same result for both BitIterator and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
     fn assert_array_iterator_cases<O: ArrayIteratorOp>(o: O) {
-        struct NoSetup;
-        impl SetupIter for NoSetup {
-            fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
-                // none
-            }
-        }
         setup_and_assert_base_cases(
             NoSetup,
             |actual, expected| {
@@ -1004,8 +1005,8 @@ mod tests {
                     o.name()
                 );
 
-                let left_over_actual = actual.clone().collect();
-                let left_over_expected = expected.clone().collect();
+                let left_over_actual: Vec<_> = actual.clone().collect();
+                let left_over_expected: Vec<_> = expected.clone().collect();
 
                 assert_eq!(
                     left_over_actual, left_over_expected,
@@ -1080,7 +1081,7 @@ mod tests {
     #[test]
     fn assert_nth() {
         setup_and_assert_base_cases(
-            |_| {},
+            NoSetup,
             |actual, expected| {
                 {
                     let mut actual = actual.clone();
@@ -1120,7 +1121,7 @@ mod tests {
     #[test]
     fn assert_nth_back() {
         setup_and_assert_base_cases(
-            |_| {},
+            NoSetup,
             |actual, expected| {
                 {
                     let mut actual = actual.clone();
@@ -1468,12 +1469,12 @@ mod tests {
 
     #[test]
     fn assert_partition() {
-        struct PartitionOp<F: FnMut(&Option<i32>) -> bool> {
+        struct PartitionOp<F: Fn(&Option<i32>) -> bool> {
             description: &'static str,
             predicate: F,
         }
 
-        impl<F: FnMut(&Option<i32>) -> bool> ArrayIteratorOp for PartitionOp<F> {
+        impl<F: Fn(&Option<i32>) -> bool> ArrayIteratorOp for PartitionOp<F> {
             type Output = ((Vec<Option<i32>>, Vec<Option<i32>>), Vec<Option<i32>>);
 
             fn name(&self) -> String {
@@ -1489,7 +1490,7 @@ mod tests {
                 let result = iter.partition(|item| {
                     items.push(item.clone());
 
-                    self.predicate(item)
+                    (self.predicate)(item)
                 });
 
                 (result, items)
@@ -1498,7 +1499,7 @@ mod tests {
 
         assert_array_iterator_cases(PartitionOp {
             description: "None on one side and Some(*) on the other",
-            predicate: |item| item == None
+            predicate: |item| *item == None
         });
 
         assert_array_iterator_cases(PartitionOp {
