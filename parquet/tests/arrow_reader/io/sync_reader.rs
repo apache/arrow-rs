@@ -41,7 +41,7 @@ fn test_read_entire_file() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Event: Reader Built",
@@ -77,7 +77,7 @@ fn test_read_single_group() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Event: Reader Built",
@@ -105,7 +105,7 @@ fn test_read_single_column() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Event: Reader Built",
@@ -134,7 +134,7 @@ fn test_read_single_column_no_page_index() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "Event: Builder Configured",
         "Event: Reader Built",
         "Row Group 0, column 'b': DictionaryPage   (17 bytes  , 17 requests) [header]",
@@ -176,7 +176,7 @@ fn test_read_row_selection() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Event: Reader Built",
@@ -207,7 +207,7 @@ fn test_read_limit() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Event: Reader Built",
@@ -244,7 +244,7 @@ fn test_read_single_row_filter() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
@@ -295,7 +295,7 @@ fn test_read_multiple_row_filter() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Row Group 0, column 'a': DictionaryPage   (1617 bytes, 1 requests) [data]",
@@ -341,7 +341,7 @@ fn test_read_single_row_filter_all() {
         @r#"
     [
         "Footer: 8 bytes",
-        "Metadata: 1162",
+        "Metadata: 1222",
         "UNKNOWN: 22230..22877 (maybe Page Index)",
         "Event: Builder Configured",
         "Row Group 0, column 'b': DictionaryPage   (1617 bytes, 1 requests) [data]",
