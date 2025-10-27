@@ -1623,14 +1623,15 @@ impl WriteThrift for ColumnChunkMetaData {
             .file_offset()
             .write_thrift_field(writer, 2, last_field_id)?;
 
-        // save start of the `ColumnMetaData`
-        let col_meta_start = writer.bytes_written();
         #[cfg(feature = "encryption")]
         {
             // only write the ColumnMetaData if we haven't already encrypted it
             if self.encrypted_column_metadata.is_none() {
                 writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+                // save start of the `ColumnMetaData`
+                let col_meta_start = writer.bytes_written();
                 serialize_column_meta_data(self, writer)?;
+                writer.push_col_meta_length(writer.bytes_written() - col_meta_start);
                 last_field_id = 3;
             }
         }
@@ -1638,11 +1639,12 @@ impl WriteThrift for ColumnChunkMetaData {
         {
             // always write the ColumnMetaData
             writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+            // save start of the `ColumnMetaData`
+            let col_meta_start = writer.bytes_written();
             serialize_column_meta_data(self, writer)?;
+            writer.push_col_meta_length(writer.bytes_written() - col_meta_start);
             last_field_id = 3;
         }
-        let col_meta_end = writer.bytes_written();
-        writer.push_col_meta_length(col_meta_end - col_meta_start);
 
         if let Some(offset_idx_off) = self.offset_index_offset() {
             last_field_id = offset_idx_off.write_thrift_field(writer, 4, last_field_id)?;
