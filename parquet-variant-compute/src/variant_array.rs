@@ -18,7 +18,10 @@
 //! [`VariantArray`] implementation
 
 use crate::VariantArrayBuilder;
-use crate::type_conversion::{generic_conversion_single_value, primitive_conversion_single_value};
+use crate::type_conversion::{
+    generic_conversion_single_value, generic_conversion_single_value_with_result,
+    primitive_conversion_single_value,
+};
 use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
 use arrow::buffer::NullBuffer;
 use arrow::compute::cast;
@@ -27,6 +30,7 @@ use arrow::datatypes::{
     Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType,
     TimestampMicrosecondType, TimestampNanosecondType,
 };
+use arrow::error::Result;
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use chrono::{DateTime, NaiveTime};
@@ -58,11 +62,11 @@ impl ExtensionType for VariantType {
         Some(String::new())
     }
 
-    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
+    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata> {
         Ok("")
     }
 
-    fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
+    fn supports_data_type(&self, data_type: &DataType) -> Result<()> {
         if matches!(data_type, DataType::Struct(_)) {
             Ok(())
         } else {
@@ -72,7 +76,7 @@ impl ExtensionType for VariantType {
         }
     }
 
-    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
+    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self> {
         Self.supports_data_type(data_type)?;
         Ok(Self)
     }
@@ -249,7 +253,7 @@ impl VariantArray {
     /// int8.
     ///
     /// Currently, only [`BinaryViewArray`] are supported.
-    pub fn try_new(inner: &dyn Array) -> Result<Self, ArrowError> {
+    pub fn try_new(inner: &dyn Array) -> Result<Self> {
         // Workaround lack of support for Binary
         // https://github.com/apache/arrow-rs/issues/8387
         let inner = cast_to_binary_view_arrays(inner)?;
@@ -325,12 +329,32 @@ impl VariantArray {
 
     /// Return the [`Variant`] instance stored at the given row
     ///
-    /// Note: This method does not check for nulls and the value is arbitrary
-    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    /// This is a convenience wrapper that calls [`VariantArray::try_value`] and unwraps the `Result`.
+    /// Use `try_value` if you need to handle conversion errors gracefully.
     ///
     /// # Panics
     /// * if the index is out of bounds
     /// * if the array value is null
+    /// * if `try_value` returns an error.
+    pub fn value(&self, index: usize) -> Variant<'_, '_> {
+        self.try_value(index).unwrap()
+    }
+
+    /// Return the [`Variant`] instance stored at the given row
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    ///
+    /// Panics if
+    /// * the index is out of bounds
+    /// * the array value is null
+    ///
+    /// # Errors
+    ///
+    /// Errors if
+    /// - the data in `typed_value` cannot be interpreted as a valid `Variant`
     ///
     /// If this is a shredded variant but has no value at the shredded location, it
     /// will return [`Variant::Null`].
@@ -343,7 +367,7 @@ impl VariantArray {
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn value(&self, index: usize) -> Variant<'_, '_> {
+    pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>> {
         match (self.typed_value_field(), self.value_field()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
@@ -351,11 +375,11 @@ impl VariantArray {
             }
             // Otherwise fall back to value, if available
             (_, Some(value)) if value.is_valid(index) => {
-                Variant::new(self.metadata.value(index), value.value(index))
+                Ok(Variant::new(self.metadata.value(index), value.value(index)))
             }
             // It is technically invalid for neither value nor typed_value fields to be available,
             // but the spec specifically requires readers to return Variant::Null in this case.
-            _ => Variant::Null,
+            _ => Ok(Variant::Null),
         }
     }
 
@@ -603,7 +627,7 @@ impl ShreddedVariantFieldArray {
     ///    or be a list, large_list, list_view or struct
     ///
     /// Currently, only `value` columns of type [`BinaryViewArray`] are supported.
-    pub fn try_new(inner: &dyn Array) -> Result<Self, ArrowError> {
+    pub fn try_new(inner: &dyn Array) -> Result<Self> {
         let Some(inner_struct) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid ShreddedVariantFieldArray: requires StructArray as input".to_string(),
@@ -835,7 +859,7 @@ impl<'a> BorrowedShreddingState<'a> {
 impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
     type Error = ArrowError;
 
-    fn try_from(inner_struct: &'a StructArray) -> Result<Self, ArrowError> {
+    fn try_from(inner_struct: &'a StructArray) -> Result<Self> {
         // The `value` column need not exist, but if it does it must be a binary view.
         let value = if let Some(value_col) = inner_struct.column_by_name("value") {
             let Some(binary_view) = value_col.as_binary_view_opt() else {
@@ -856,7 +880,7 @@ impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
 impl TryFrom<&StructArray> for ShreddingState {
     type Error = ArrowError;
 
-    fn try_from(inner_struct: &StructArray) -> Result<Self, ArrowError> {
+    fn try_from(inner_struct: &StructArray) -> Result<Self> {
         Ok(BorrowedShreddingState::try_from(inner_struct)?.into())
     }
 }
@@ -914,34 +938,34 @@ fn typed_value_to_variant<'a>(
     typed_value: &'a ArrayRef,
     value: Option<&BinaryViewArray>,
     index: usize,
-) -> Variant<'a, 'a> {
+) -> Result<Variant<'a, 'a>> {
     let data_type = typed_value.data_type();
     if value.is_some_and(|v| !matches!(data_type, DataType::Struct(_)) && v.is_valid(index)) {
         // Only a partially shredded struct is allowed to have values for both columns
         panic!("Invalid variant, conflicting value and typed_value");
     }
     match data_type {
-        DataType::Null => Variant::Null,
+        DataType::Null => Ok(Variant::Null),
         DataType::Boolean => {
             let boolean_array = typed_value.as_boolean();
             let value = boolean_array.value(index);
-            Variant::from(value)
+            Ok(Variant::from(value))
         }
         // 16-byte FixedSizeBinary alway corresponds to a UUID; all other sizes are illegal.
         DataType::FixedSizeBinary(16) => {
             let array = typed_value.as_fixed_size_binary();
             let value = array.value(index);
-            Uuid::from_slice(value).unwrap().into() // unwrap is safe: slice is always 16 bytes
+            Ok(Uuid::from_slice(value).unwrap().into()) // unwrap is safe: slice is always 16 bytes
         }
         DataType::BinaryView => {
             let array = typed_value.as_binary_view();
             let value = array.value(index);
-            Variant::from(value)
+            Ok(Variant::from(value))
         }
         DataType::Utf8 => {
             let array = typed_value.as_string::<i32>();
             let value = array.value(index);
-            Variant::from(value)
+            Ok(Variant::from(value))
         }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
@@ -965,28 +989,28 @@ fn typed_value_to_variant<'a>(
             primitive_conversion_single_value!(Float64Type, typed_value, index)
         }
         DataType::Decimal32(_, s) => {
-            generic_conversion_single_value!(
+            generic_conversion_single_value_with_result!(
                 Decimal32Type,
                 as_primitive,
-                |v| VariantDecimal4::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
+                |v| VariantDecimal4::try_new(v, *s as u8),
                 typed_value,
                 index
             )
         }
         DataType::Decimal64(_, s) => {
-            generic_conversion_single_value!(
+            generic_conversion_single_value_with_result!(
                 Decimal64Type,
                 as_primitive,
-                |v| VariantDecimal8::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
+                |v| VariantDecimal8::try_new(v, *s as u8),
                 typed_value,
                 index
             )
         }
         DataType::Decimal128(_, s) => {
-            generic_conversion_single_value!(
+            generic_conversion_single_value_with_result!(
                 Decimal128Type,
                 as_primitive,
-                |v| VariantDecimal16::try_new(v, *s as u8).map_or(Variant::Null, Variant::from),
+                |v| VariantDecimal16::try_new(v, *s as u8),
                 typed_value,
                 index
             )
@@ -1001,14 +1025,14 @@ fn typed_value_to_variant<'a>(
             )
         }
         DataType::Time64(TimeUnit::Microsecond) => {
-            generic_conversion_single_value!(
+            generic_conversion_single_value_with_result!(
                 Time64MicrosecondType,
                 as_primitive,
                 |v| NaiveTime::from_num_seconds_from_midnight_opt(
                     (v / 1_000_000) as u32,
                     (v % 1_000_000) as u32 * 1000
                 )
-                .map_or(Variant::Null, Variant::from),
+                .ok_or_else(|| format!("Invalid microsecond from midnight: {}", v)),
                 typed_value,
                 index
             )
@@ -1060,7 +1084,7 @@ fn typed_value_to_variant<'a>(
                 "Unsupported typed_value type: {}",
                 typed_value.data_type()
             );
-            Variant::Null
+            Ok(Variant::Null)
         }
     }
 }
@@ -1075,7 +1099,7 @@ fn typed_value_to_variant<'a>(
 /// * `StructArray<metadata: BinaryView, value: BinaryView>`
 ///
 /// So cast them to get the right type.
-fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
+fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef> {
     let new_type = canonicalize_and_verify_data_type(array.data_type())?;
     if let Cow::Borrowed(_) = new_type {
         if let Some(array) = array.as_struct_opt() {
@@ -1088,9 +1112,7 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError>
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
 /// appear in a (possibly shredded) variant array. It also replaces Binary fields with BinaryView,
 /// since that's what comes back from the parquet reader and what the variant code expects to find.
-fn canonicalize_and_verify_data_type(
-    data_type: &DataType,
-) -> Result<Cow<'_, DataType>, ArrowError> {
+fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, DataType>> {
     use DataType::*;
 
     // helper macros
@@ -1188,7 +1210,7 @@ fn canonicalize_and_verify_data_type(
     Ok(new_data_type)
 }
 
-fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field>>, ArrowError> {
+fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field>>> {
     let Cow::Owned(new_data_type) = canonicalize_and_verify_data_type(field.data_type())? else {
         return Ok(Cow::Borrowed(field));
     };
@@ -1199,11 +1221,15 @@ fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field
 #[cfg(test)]
 mod test {
     use crate::VariantArrayBuilder;
+    use std::str::FromStr;
 
     use super::*;
-    use arrow::array::{BinaryViewArray, Int32Array};
+    use arrow::array::{
+        BinaryViewArray, Decimal32Array, Decimal64Array, Decimal128Array, Int32Array,
+        Time64MicrosecondArray,
+    };
     use arrow_schema::{Field, Fields};
-    use parquet_variant::ShortString;
+    use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, ShortString};
 
     #[test]
     fn invalid_not_a_struct_array() {
@@ -1535,4 +1561,65 @@ mod test {
             assert_ne!(v, v_sliced);
         }
     }
+
+    macro_rules! invalid_variant_array_test {
+        ($fn_name: ident, $invalid_typed_value: expr, $error_msg: literal) => {
+            #[test]
+            fn $fn_name() {
+                let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                    EMPTY_VARIANT_METADATA_BYTES,
+                    1,
+                ));
+                let invalid_typed_value = $invalid_typed_value;
+
+                let struct_array = StructArrayBuilder::new()
+                    .with_field("metadata", Arc::new(metadata), false)
+                    .with_field("typed_value", Arc::new(invalid_typed_value), true)
+                    .build();
+
+                let array: VariantArray = VariantArray::try_new(&struct_array)
+                    .expect("should create variant array")
+                    .into();
+
+                let result = array.try_value(0);
+                assert!(result.is_err());
+                let error = result.unwrap_err();
+                assert!(matches!(error, ArrowError::CastError(_)));
+
+                let expected: &str = $error_msg;
+                assert!(
+                    error.to_string().contains($error_msg),
+                    "error `{}` did not contain `{}`",
+                    error,
+                    expected
+                )
+            }
+        };
+    }
+
+    invalid_variant_array_test!(
+        test_variant_array_invalide_time,
+        Time64MicrosecondArray::from(vec![Some(86401000000)]),
+        "Cast failed: Invalid microsecond from midnight: 86401000000"
+    );
+
+    invalid_variant_array_test!(
+        test_variant_array_invalid_decimal32,
+        Decimal32Array::from(vec![Some(1234567890)]),
+        "Cast failed: Invalid argument error: 1234567890 is wider than max precision 9"
+    );
+
+    invalid_variant_array_test!(
+        test_variant_array_invalid_decimal64,
+        Decimal64Array::from(vec![Some(1234567890123456789)]),
+        "Cast failed: Invalid argument error: 1234567890123456789 is wider than max precision 18"
+    );
+
+    invalid_variant_array_test!(
+        test_variant_array_invalid_decimal128,
+        Decimal128Array::from(vec![Some(
+            i128::from_str("123456789012345678901234567890123456789").unwrap()
+        ),]),
+        "Cast failed: Invalid argument error: 123456789012345678901234567890123456789 is wider than max precision 38"
+    );
 }
