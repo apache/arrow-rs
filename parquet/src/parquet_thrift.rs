@@ -29,6 +29,7 @@
 use std::{
     cmp::Ordering,
     io::{Read, Write},
+    ops::Range,
 };
 
 use crate::{
@@ -683,6 +684,48 @@ where
     Ok(res)
 }
 
+/// Collects metadata index information during writes of the Parquet footer
+pub(crate) struct MetadataIndexBuilder {
+    start_offset: usize,
+    pub(crate) schema_range: Range<i64>,
+    pub(crate) row_group_offsets: Vec<i64>,
+    pub(crate) col_chunk_offsets: Vec<i64>,
+    pub(crate) col_meta_lengths: Vec<i64>,
+}
+
+impl MetadataIndexBuilder {
+    pub(crate) fn new(start_offset: usize, num_row_groups: usize, num_columns: usize) -> Self {
+        Self {
+            start_offset,
+            schema_range: Default::default(),
+            row_group_offsets: Vec::with_capacity(num_row_groups + 1),
+            col_chunk_offsets: Vec::with_capacity(num_row_groups * (num_columns + 1)),
+            col_meta_lengths: Vec::with_capacity(num_row_groups * num_columns),
+        }
+    }
+
+    // TODO(ets): expose these via ThriftCompactOutputProtocol
+    pub(crate) fn set_schema_range(&mut self, start: usize, end: usize) {
+        let start = (start - self.start_offset) as i64;
+        let end = (end - self.start_offset) as i64;
+        self.schema_range = start..end;
+    }
+
+    pub(crate) fn push_row_group(&mut self, offset: usize) {
+        self.row_group_offsets
+            .push((offset - self.start_offset) as i64);
+    }
+
+    pub(crate) fn push_column(&mut self, offset: usize) {
+        self.col_chunk_offsets
+            .push((offset - self.start_offset) as i64);
+    }
+
+    pub(crate) fn push_col_meta_length(&mut self, length: usize) {
+        self.col_meta_lengths.push(length as i64);
+    }
+}
+
 /////////////////////////
 // thrift compact output
 
@@ -696,6 +739,7 @@ where
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
     writer: TrackedWrite<W>,
+    index: Option<MetadataIndexBuilder>,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
@@ -708,7 +752,25 @@ impl<W: Write> ThriftCompactOutputProtocol<W> {
 
     /// Create a new [`ThriftCompactOutputProtocol`], wrapping the input [`TrackedWrite`].
     pub(crate) fn new_tracked(writer: TrackedWrite<W>) -> Self {
-        Self { writer }
+        Self {
+            writer,
+            index: None,
+        }
+    }
+
+    /// Add a `MetadataIndexBuilder` to this writer.
+    pub(crate) fn set_index(&mut self, index: MetadataIndexBuilder) {
+        self.index = Some(index);
+    }
+
+    /// Get a mutable reference to the index builder.
+    pub(crate) fn index(&mut self) -> Option<&mut MetadataIndexBuilder> {
+        self.index.as_mut()
+    }
+
+    /// Take the index from this writer, leaving `None` in its place
+    pub(crate) fn take_index(&mut self) -> Option<MetadataIndexBuilder> {
+        self.index.take()
     }
 
     /// Return the number of bytes written to the inner [`Write`]

@@ -49,7 +49,7 @@ use crate::{
         statistics::ValueStatistics,
     },
     parquet_thrift::{
-        ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
+        ElementType, FieldType, MetadataIndexBuilder, ReadThrift, ThriftCompactInputProtocol,
         ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
         read_thrift_vec,
     },
@@ -671,6 +671,7 @@ fn read_row_group(
 
 /// Extract the metadata index from the footer bytes. `buf` should contain the entire footer.
 pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
+    // TODO(ets): need constants to get rid of magic numbers
     if buf.len() < 13 {
         return Ok(None);
     }
@@ -1312,6 +1313,10 @@ pub(crate) struct MetaIndex {
   /// flattened matrix of offsets for each column in a row group, with the offset of the
   /// end of the last column as the last element of each row.
   4: required list<i64> column_offsets
+  /// vector of lengths for the `ColumnMetaData` portion of the column metadata. this
+  /// would allow for skipping elements like statistics quickly.
+  /// size is n_row_group * num_columns.
+  5: required list<i64> column_meta_lengths
 }
 );
 
@@ -1332,8 +1337,13 @@ impl<'a> WriteThrift for FileMeta<'a> {
     // needed for last_field_id w/o encryption
     #[allow(unused_assignments)]
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        // record the start of metadata
-        let start_pos = writer.bytes_written();
+        // add indexing to protocol writer
+        let metadata_index = MetadataIndexBuilder::new(
+            writer.bytes_written(),
+            self.row_groups.len(),
+            self.file_metadata.schema_descr().num_columns(),
+        );
+        writer.set_index(metadata_index);
 
         // field 1 is version
         self.file_metadata
@@ -1350,6 +1360,9 @@ impl<'a> WriteThrift for FileMeta<'a> {
         let schema_start = writer.bytes_written();
         write_schema(&root, writer)?;
         let schema_end = writer.bytes_written();
+        writer
+            .index()
+            .map(|i| i.set_schema_range(schema_start, schema_end));
 
         // field 3 is num_rows
         self.file_metadata
@@ -1359,23 +1372,21 @@ impl<'a> WriteThrift for FileMeta<'a> {
         // field 4 is row_groups
         // write row groups manually so we can track their start positions wrt the start of
         // the metadata.
-        let num_rg = self.row_groups.len();
-        let num_col = self.file_metadata.schema_descr().num_columns();
-        let mut rg_idx: Vec<i64> = Vec::with_capacity(num_rg + 1);
-        let mut col_idx: Vec<i64> = Vec::with_capacity(num_rg * (num_col + 1));
 
         // field header
         writer.write_field_begin(FieldType::List, 4, 3)?;
         // list header
-        writer.write_list_begin(ElementType::Struct, num_rg)?;
+        writer.write_list_begin(ElementType::Struct, self.row_groups.len())?;
         // write row groups and save positions
         for rg in self.row_groups {
-            rg_idx.push((writer.bytes_written() - start_pos) as i64);
-            write_row_group_with_index(rg, writer, start_pos, &mut col_idx)?;
+            let pos = writer.bytes_written();
+            writer.index().map(|i| i.push_row_group(pos));
+            rg.write_thrift(writer)?;
         }
 
         // record end of the last row group
-        rg_idx.push((writer.bytes_written() - start_pos) as i64);
+        let pos = writer.bytes_written();
+        writer.index().map(|i| i.push_row_group(pos));
 
         let mut last_field_id = 4;
 
@@ -1401,23 +1412,28 @@ impl<'a> WriteThrift for FileMeta<'a> {
         let mut index = Vec::<u8>::new();
         {
             let mut w = ThriftCompactOutputProtocol::new(&mut index);
-            let idx = MetaIndex {
-                schema_offset: schema_start as i64,
-                schema_length: (schema_end - schema_start) as i64,
-                row_group_offsets: rg_idx,
-                column_offsets: col_idx,
-            };
-            idx.write_thrift(&mut w)?;
+            if let Some(meta_index) = writer.take_index() {
+                let idx = MetaIndex {
+                    schema_offset: meta_index.schema_range.start,
+                    schema_length: meta_index.schema_range.end - meta_index.schema_range.start,
+                    row_group_offsets: meta_index.row_group_offsets,
+                    column_offsets: meta_index.col_chunk_offsets,
+                    column_meta_lengths: meta_index.col_meta_lengths,
+                };
+                idx.write_thrift(&mut w)?;
+            }
         }
 
-        // write footer for index
-        // TODO(ets): this should use UUID rather than simple string, but this works for prototype
-        let idx_len = index.len() as u64;
-        index.extend_from_slice(idx_len.as_bytes());
-        index.extend_from_slice("PARI".as_bytes());
+        if !index.is_empty() {
+            // write footer for index
+            // TODO(ets): this should use UUID rather than simple string, but this works for prototype
+            let idx_len = index.len() as u64;
+            index.extend_from_slice(idx_len.as_bytes());
+            index.extend_from_slice("PARI".as_bytes());
 
-        // write the index as binary extension type
-        index.as_slice().write_thrift_field(writer, 32767, 0)?;
+            // write the index as binary extension type
+            index.as_slice().write_thrift_field(writer, 32767, 0)?;
+        }
 
         writer.write_struct_end()
     }
@@ -1525,8 +1541,20 @@ impl WriteThrift for RowGroupMetaData {
     const ELEMENT_TYPE: ElementType = ElementType::Struct;
 
     fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        // this will call ColumnChunkMetaData::write_thrift
-        self.columns.write_thrift_field(writer, 1, 0)?;
+        // field 1 column chunks
+        writer.write_field_begin(FieldType::List, 1, 0)?;
+        writer.write_list_begin(ElementType::Struct, self.num_columns())?;
+        for col in self.columns() {
+            // save offset for this column chunk
+            let pos = writer.bytes_written();
+            writer.index().map(|i| i.push_column(pos));
+            col.write_thrift(writer)?;
+        }
+        // save offset of end of last column chunk
+        let pos = writer.bytes_written();
+        writer.index().map(|i| i.push_column(pos));
+
+        // write remain fields
         self.total_byte_size.write_thrift_field(writer, 2, 1)?;
         let mut last_field_id = self.num_rows.write_thrift_field(writer, 3, 2)?;
         if let Some(sorting_columns) = self.sorting_columns() {
@@ -1544,41 +1572,6 @@ impl WriteThrift for RowGroupMetaData {
         }
         writer.write_struct_end()
     }
-}
-
-fn write_row_group_with_index<W: Write>(
-    row_group: &RowGroupMetaData,
-    writer: &mut ThriftCompactOutputProtocol<W>,
-    start_pos: usize,
-    col_chunk_offsets: &mut Vec<i64>,
-) -> Result<()> {
-    // field 1 column chunks
-    writer.write_field_begin(FieldType::List, 1, 0)?;
-    writer.write_list_begin(ElementType::Struct, row_group.num_columns())?;
-    for col in row_group.columns() {
-        // save offset for this column chunk
-        col_chunk_offsets.push((writer.bytes_written() - start_pos) as i64);
-        col.write_thrift(writer)?;
-    }
-    // save offset of end of last column chunk
-    col_chunk_offsets.push((writer.bytes_written() - start_pos) as i64);
-
-    row_group.total_byte_size.write_thrift_field(writer, 2, 1)?;
-    let mut last_field_id = row_group.num_rows.write_thrift_field(writer, 3, 2)?;
-    if let Some(sorting_columns) = row_group.sorting_columns() {
-        last_field_id = sorting_columns.write_thrift_field(writer, 4, last_field_id)?;
-    }
-    if let Some(file_offset) = row_group.file_offset() {
-        last_field_id = file_offset.write_thrift_field(writer, 5, last_field_id)?;
-    }
-    // this is optional, but we'll always write it
-    last_field_id = row_group
-        .compressed_size()
-        .write_thrift_field(writer, 6, last_field_id)?;
-    if let Some(ordinal) = row_group.ordinal() {
-        ordinal.write_thrift_field(writer, 7, last_field_id)?;
-    }
-    writer.write_struct_end()
 }
 
 // struct ColumnChunk {
@@ -1605,6 +1598,8 @@ impl WriteThrift for ColumnChunkMetaData {
             .file_offset()
             .write_thrift_field(writer, 2, last_field_id)?;
 
+        // save start of the `ColumnMetaData`
+        let col_meta_start = writer.bytes_written();
         #[cfg(feature = "encryption")]
         {
             // only write the ColumnMetaData if we haven't already encrypted it
@@ -1621,6 +1616,10 @@ impl WriteThrift for ColumnChunkMetaData {
             serialize_column_meta_data(self, writer)?;
             last_field_id = 3;
         }
+        let col_meta_end = writer.bytes_written();
+        writer
+            .index()
+            .map(|i| i.push_col_meta_length(col_meta_end - col_meta_start));
 
         if let Some(offset_idx_off) = self.offset_index_offset() {
             last_field_id = offset_idx_off.write_thrift_field(writer, 4, last_field_id)?;
