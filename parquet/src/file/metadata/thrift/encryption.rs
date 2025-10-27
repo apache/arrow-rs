@@ -193,7 +193,7 @@ fn row_group_from_encrypted_thrift(
     Ok(RowGroupMetaData {
         columns,
         num_rows,
-        first_row_index,
+        first_row_index: Some(first_row_index),
         sorting_columns,
         total_byte_size,
         schema_descr,

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::array_reader::ArrayReader;
-use crate::errors::Result;
+use crate::errors::{ParquetError, Result};
 use crate::file::metadata::RowGroupMetaData;
 use arrow_array::{ArrayRef, Int64Array};
 use arrow_schema::DataType;
@@ -34,7 +34,9 @@ impl RowNumberReader {
     ) -> Result<Self> {
         let ranges = row_groups
             .map(|rg| {
-                let first_row_index = rg.first_row_index();
+                let first_row_index = rg.first_row_index().ok_or(ParquetError::General(
+                    "Row group missing row number".to_string(),
+                ))?;
                 Ok(first_row_index..first_row_index + rg.num_rows())
             })
             .collect::<Result<Vec<_>>>()?;

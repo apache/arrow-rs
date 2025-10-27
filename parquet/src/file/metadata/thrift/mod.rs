@@ -589,7 +589,7 @@ fn read_row_group(
 ) -> Result<RowGroupMetaData> {
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
-    row_group.first_row_index = first_row_index;
+    row_group.first_row_index = Some(first_row_index);
 
     // mask values for required fields
     const RG_COLUMNS: u8 = 1 << 1;
