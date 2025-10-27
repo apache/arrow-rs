@@ -53,7 +53,7 @@ use crate::bloom_filter::{
 };
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 
@@ -522,7 +522,8 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
         let projected_fields = match reader_factory.fields.as_deref().map(|pf| &pf.arrow_type) {
             Some(DataType::Struct(fields)) => {
-                fields.filter_leaves(|idx, _| self.projection.leaf_included(idx))
+                let projection_len = self.projection.mask.as_ref().map_or(usize::MAX, |m| m.len());
+                fields.filter_leaves(|idx, _| idx < projection_len && self.projection.leaf_included(idx))
             }
             None => Fields::empty(),
             _ => unreachable!("Must be Struct for root type"),
@@ -561,7 +562,7 @@ struct ReaderFactory<T> {
     /// Optional filter
     filter: Option<RowFilter>,
 
-    /// Limit to apply to remaining row groups.  
+    /// Limit to apply to remaining row groups.
     limit: Option<usize>,
 
     /// Offset to apply to the next
@@ -1130,6 +1131,10 @@ impl RowGroups for InMemoryRowGroup<'_> {
             }
         }
     }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(std::iter::once(self.metadata.row_group(self.row_group_idx)))
+    }
 }
 
 /// An in-memory column chunk
@@ -1210,11 +1215,13 @@ impl PageIterator for ColumnChunkIterator {}
 mod tests {
     use super::*;
     use crate::arrow::ArrowWriter;
+    use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
+    use crate::arrow::schema::virtual_type::RowNumber;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
@@ -1974,6 +1981,7 @@ mod tests {
             metadata.file_metadata().schema_descr(),
             ProjectionMask::all(),
             None,
+            &[],
         )
         .unwrap();
 
@@ -2706,6 +2714,59 @@ mod tests {
                 .map(|r| r.len())
                 .sum::<usize>(),
             92
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            false,
+            |path, selection, _row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber);
+                    let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_batch_size(batch_size)
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups_and_filter() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            true,
+            |path, selection, row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber);
+                    let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_row_filter(row_filter.expect("No row filter"))
+                        .with_batch_size(batch_size)
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
         );
     }
 }

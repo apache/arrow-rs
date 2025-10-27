@@ -561,6 +561,7 @@ mod tests {
             schema,
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),
+            &[],
         )
         .unwrap();
 

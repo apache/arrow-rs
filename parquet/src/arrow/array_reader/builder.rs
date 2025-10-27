@@ -15,9 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::sync::{Arc, Mutex};
-
 use arrow_schema::{DataType, Fields, SchemaBuilder};
+use std::sync::{Arc, Mutex};
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
@@ -26,13 +25,15 @@ use crate::arrow::array_reader::cached_array_reader::CachedArrayReader;
 use crate::arrow::array_reader::empty_array::make_empty_array_reader;
 use crate::arrow::array_reader::fixed_len_byte_array::make_fixed_len_byte_array_reader;
 use crate::arrow::array_reader::row_group_cache::RowGroupCache;
+use crate::arrow::array_reader::row_number::RowNumberReader;
 use crate::arrow::array_reader::{
     ArrayReader, FixedSizeListArrayReader, ListArrayReader, MapArrayReader, NullArrayReader,
     PrimitiveArrayReader, RowGroups, StructArrayReader, make_byte_array_dictionary_reader,
     make_byte_array_reader,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::schema::{ParquetField, ParquetFieldType};
+use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
+use crate::arrow::schema::virtual_type::RowNumber;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
@@ -113,7 +114,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: Option<&ParquetField>,
         mask: &ProjectionMask,
-    ) -> Result<Box<dyn ArrayReader>> {
+) -> Result<Box<dyn ArrayReader>> {
         let reader = field
             .and_then(|field| self.build_reader(field, mask).transpose())
             .transpose()?
@@ -131,7 +132,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+) -> Result<Option<Box<dyn ArrayReader>>> {
         match field.field_type {
             ParquetFieldType::Primitive { col_idx, .. } => {
                 let Some(reader) = self.build_primitive_reader(field, mask)? else {
@@ -153,6 +154,13 @@ impl<'a> ArrayReaderBuilder<'a> {
                     Ok(Some(reader))
                 }
             }
+            ParquetFieldType::Virtual(virtual_type) => {
+                // Virtual columns don't have data in the parquet file
+                // They need to be built by specialized readers
+                match virtual_type {
+                    VirtualColumnType::RowNumber => Ok(Some(self.build_row_number_reader()?)),
+                }
+            }
             ParquetFieldType::Group { .. } => match &field.arrow_type {
                 DataType::Map(_, _) => self.build_map_reader(field, mask),
                 DataType::Struct(_) => self.build_struct_reader(field, mask),
@@ -162,6 +170,10 @@ impl<'a> ArrayReaderBuilder<'a> {
                 d => unimplemented!("reading group type {} not implemented", d),
             },
         }
+    }
+
+    fn build_row_number_reader(&self) -> Result<Box<dyn ArrayReader>> {
+        Ok(Box::new(RowNumberReader::try_new(self.row_groups.row_groups())?))
     }
 
     /// Build array reader for map type.
@@ -401,7 +413,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-    ) -> Result<Option<Box<dyn ArrayReader>>> {
+) -> Result<Option<Box<dyn ArrayReader>>> {
         let arrow_fields = match &field.arrow_type {
             DataType::Struct(children) => children,
             _ => unreachable!(),
@@ -455,6 +467,7 @@ mod tests {
             file_metadata.schema_descr(),
             ProjectionMask::all(),
             file_metadata.key_value_metadata(),
+            &[],
         )
         .unwrap();
 
@@ -469,6 +482,40 @@ mod tests {
             DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
             true,
         )]));
+
+        assert_eq!(array_reader.get_data_type(), &arrow_type);
+    }
+
+    #[test]
+    fn test_create_array_reader_with_row_numbers() {
+        let file = get_test_file("nulls.snappy.parquet");
+        let file_reader: Arc<dyn FileReader> = Arc::new(SerializedFileReader::new(file).unwrap());
+
+        let file_metadata = file_reader.metadata().file_metadata();
+        let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
+        let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber);
+        let (_, fields) = parquet_to_arrow_schema_and_fields(
+            file_metadata.schema_descr(),
+            ProjectionMask::all(),
+            file_metadata.key_value_metadata(),
+            std::slice::from_ref(&row_number_field),
+        )
+        .unwrap();
+
+        let metrics = ArrowReaderMetrics::disabled();
+        let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .build_array_reader(fields.as_ref(), &mask)
+            .unwrap();
+
+        // Create arrow types
+        let arrow_type = DataType::Struct(Fields::from(vec![
+            Field::new(
+                "b_struct",
+                DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
+                true,
+            ),
+            row_number_field,
+        ]));
 
         assert_eq!(array_reader.get_data_type(), &arrow_type);
     }

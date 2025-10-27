@@ -34,6 +34,7 @@ use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
 mod extension;
+pub mod virtual_type;
 mod primitive;
 
 use super::PARQUET_FIELD_ID_META_KEY;
@@ -42,7 +43,7 @@ use crate::arrow::schema::extension::{
     has_extension_type, logical_type_for_fixed_size_binary, logical_type_for_string,
     logical_type_for_struct, try_add_extension_type,
 };
-pub(crate) use complex::{ParquetField, ParquetFieldType};
+pub(crate) use complex::{ParquetField, ParquetFieldType, VirtualColumnType};
 
 /// Convert Parquet schema to Arrow schema including optional metadata
 ///
@@ -62,7 +63,7 @@ pub fn parquet_to_arrow_schema_by_columns(
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<Schema> {
-    Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata)?.0)
+    Ok(parquet_to_arrow_schema_and_fields(parquet_schema, mask, key_value_metadata, &[])?.0)
 }
 
 /// Determines the Arrow Schema from a Parquet schema
@@ -74,6 +75,7 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
+    virtual_columns: &[Field],
 ) -> Result<(Schema, Option<ParquetField>)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     let maybe_schema = metadata
@@ -89,7 +91,7 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     }
 
     let hint = maybe_schema.as_ref().map(|s| s.fields());
-    let field_levels = parquet_to_arrow_field_levels(parquet_schema, mask, hint)?;
+    let field_levels = parquet_to_arrow_field_levels(parquet_schema, mask, hint, virtual_columns)?;
     let schema = Schema::new_with_metadata(field_levels.fields, metadata);
     Ok((schema, field_levels.levels))
 }
@@ -131,8 +133,9 @@ pub fn parquet_to_arrow_field_levels(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     hint: Option<&Fields>,
+    virtual_columns: &[Field], // TODO @vustef: This is a public method, maybe preserve its signature. Or maybe it's good to change it, to be able to construct readers from pub API.
 ) -> Result<FieldLevels> {
-    match complex::convert_schema(schema, mask, hint)? {
+    match complex::convert_schema(schema, mask, hint, virtual_columns)? {
         Some(field) => match &field.arrow_type {
             DataType::Struct(fields) => Ok(FieldLevels {
                 fields: fields.clone(),

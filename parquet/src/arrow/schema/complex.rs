@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
+use crate::arrow::schema::virtual_type::RowNumber;
 use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
@@ -77,8 +78,16 @@ impl ParquetField {
         match &self.field_type {
             ParquetFieldType::Primitive { .. } => None,
             ParquetFieldType::Group { children } => Some(children),
+            ParquetFieldType::Virtual(_) => None,
         }
     }
+}
+
+/// Types of virtual columns that can be computed at read time
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VirtualColumnType {
+    /// Row number within the file
+    RowNumber,
 }
 
 #[derive(Debug, Clone)]
@@ -92,6 +101,9 @@ pub enum ParquetFieldType {
     Group {
         children: Vec<ParquetField>,
     },
+    /// Virtual column that doesn't exist in the parquet file
+    /// but is computed at read time (e.g., row_number)
+    Virtual(VirtualColumnType),
 }
 
 /// Encodes the context of the parent of the field currently under consideration
@@ -119,15 +131,17 @@ impl VisitorContext {
 /// See [Logical Types] for more information on the conversion algorithm
 ///
 /// [Logical Types]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
-struct Visitor {
+struct Visitor<'a> {
     /// The column index of the next leaf column
     next_col_idx: usize,
 
     /// Mask of columns to include
     mask: ProjectionMask,
+
+    virtual_columns: &'a [Field],
 }
 
-impl Visitor {
+impl<'a> Visitor<'a> {
     fn visit_primitive(
         &mut self,
         primitive_type: &TypePtr,
@@ -194,8 +208,8 @@ impl Visitor {
             None => None,
         };
 
-        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len());
-        let mut children = Vec::with_capacity(parquet_fields.len());
+        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len() + self.virtual_columns.len());
+        let mut children = Vec::with_capacity(parquet_fields.len() + self.virtual_columns.len());
 
         // Perform a DFS of children
         for (idx, parquet_field) in parquet_fields.iter().enumerate() {
@@ -225,6 +239,17 @@ impl Visitor {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
                 child_fields.push(convert_field(parquet_field, &mut child, arrow_field)?);
+                children.push(child);
+            }
+        }
+
+        // TODO @vustef: Are all parquet schemas going to start with a struct? I.e. is this the only place where
+        // we need to handle virtual columns?
+        if rep_level == 0 && def_level == 0 {
+            // TODO @vustef: assert is_virtual_column ? Or use types to our advantage somehow.
+            for virtual_column in self.virtual_columns {
+                child_fields.push(virtual_column.clone());
+                let child = convert_virtual_field(virtual_column, rep_level, def_level)?;
                 children.push(child);
             }
         }
@@ -541,6 +566,46 @@ impl Visitor {
     }
 }
 
+/// Converts a virtual Arrow [`Field`] to a [`ParquetField`]
+///
+/// Virtual fields don't correspond to any data in the parquet file,
+/// but are computed at read time (e.g., row_number)
+///
+/// The levels are computed based on the parent context:
+/// - If nullable: def_level = parent_def_level + 1
+/// - If required: def_level = parent_def_level
+/// - rep_level = parent_rep_level (virtual fields are not repeated)
+fn convert_virtual_field(
+    arrow_field: &Field,
+    parent_rep_level: i16,
+    parent_def_level: i16,
+) -> Result<ParquetField> {
+    let nullable = arrow_field.is_nullable();
+    let def_level = if nullable {
+        parent_def_level + 1
+    } else {
+        parent_def_level
+    };
+
+    // Determine the virtual column type based on the extension type
+    let virtual_type = if arrow_field.try_extension_type::<RowNumber>().is_ok() {
+        VirtualColumnType::RowNumber // TODO @vustef: Don't like the ifelse approach...
+    } else {
+        return Err(ParquetError::ArrowError(format!(
+            "unsupported virtual column type for field '{}'",
+            arrow_field.name()
+        )));
+    };
+
+    Ok(ParquetField {
+        rep_level: parent_rep_level,
+        def_level,
+        nullable,
+        arrow_type: arrow_field.data_type().clone(),
+        field_type: ParquetFieldType::Virtual(virtual_type),
+    })
+}
+
 /// Computes the Arrow [`Field`] for a child column
 ///
 /// The resulting Arrow [`Field`] will have the type dictated by the Parquet `field`, a name
@@ -594,10 +659,12 @@ pub fn convert_schema(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     embedded_arrow_schema: Option<&Fields>,
+    virtual_columns: &[Field], // TODO @vustef: Also a pub API change...
 ) -> Result<Option<ParquetField>> {
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask,
+        virtual_columns,
     };
 
     let context = VisitorContext {
@@ -614,6 +681,7 @@ pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask: ProjectionMask::all(),
+        virtual_columns: &[],
     };
 
     let context = VisitorContext {

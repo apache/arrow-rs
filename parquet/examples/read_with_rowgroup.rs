@@ -129,6 +129,10 @@ impl RowGroups for InMemoryRowGroup {
             }
         }
     }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(std::iter::once(&self.metadata))
+    }
 }
 
 impl InMemoryRowGroup {
@@ -151,6 +155,7 @@ impl InMemoryRowGroup {
             &self.metadata.schema_descr_ptr(),
             self.mask.clone(),
             None,
+            &[],
         )?;
 
         ParquetRecordBatchReader::try_new_with_row_groups(&levels, self, batch_size, selection)
