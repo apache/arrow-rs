@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::vec;
+
 use crate::cast::*;
-use arrow_ord::partition::partition;
+use arrow_array::Array;
 
 /// Attempts to cast a `RunArray` with index type K into
 /// `to_type` for supported types.
@@ -134,17 +136,19 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
         ));
     }
 
-    // Partition the array to identify runs of consecutive equal values
-    let partitions = partition(&[Arc::clone(cast_array)])?;
-    let size = partitions.len();
-    let mut run_ends = Vec::with_capacity(size);
-    let mut values_indexes = Vec::with_capacity(size);
-    let mut last_partition_end = 0;
-    for partition in partitions.ranges() {
-        values_indexes.push(last_partition_end);
-        run_ends.push(partition.end);
-        last_partition_end = partition.end;
+    // Identify run boundaries by comparing consecutive values
+    let mut run_ends = Vec::new();
+    let mut values_indexes = vec![0usize]; // Always include the first index
+    let mut current_data = cast_array.slice(0, 1).to_data();
+    for idx in 1..cast_array.len() {
+        let next_data = cast_array.slice(idx, 1).to_data();
+        if current_data != next_data {
+            run_ends.push(idx);
+            values_indexes.push(idx);
+            current_data = next_data;
+        }
     }
+    run_ends.push(cast_array.len());
 
     // Build the run_ends array
     for run_end in run_ends {
