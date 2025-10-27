@@ -138,7 +138,7 @@ pub trait ColumnValueDecoder {
 ///
 /// This replaces `HashMap` lookups with direct indexing to avoid hashing overhead in the
 /// hot decoding paths.
-const ENCODING_SLOTS: usize = Encoding::BYTE_STREAM_SPLIT as usize + 1;
+const ENCODING_SLOTS: usize = Encoding::MAX_DISCRIMINANT as usize + 1;
 
 /// An implementation of [`ColumnValueDecoder`] for `[T::T]`
 pub struct ColumnValueDecoderImpl<T: DataType> {
