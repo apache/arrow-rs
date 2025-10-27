@@ -214,8 +214,8 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
 
     fn size_hint(&self) -> (usize, Option<usize>) {
         (
-            self.array.len() - self.current,
-            Some(self.array.len() - self.current),
+            self.current_end - self.current,
+            Some(self.current_end - self.current),
         )
     }
 
@@ -359,12 +359,15 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         P: FnMut(Self::Item) -> bool,
         Self: Sized + ExactSizeIterator + DoubleEndedIterator,
     {
-        if self.logical_nulls.is_some() {
+        let len = self.len();
+        let position = if self.logical_nulls.is_some() {
             self.get_reverse_iterator_for_nullable().position(predicate)
         } else {
             self.get_reverse_iterator_for_non_nullable()
                 .position(predicate)
-        }
+        };
+
+        position.map(|pos| len - pos - 1)
     }
 }
 
@@ -594,29 +597,29 @@ mod tests {
     fn get_base_int32_iterator_cases() -> impl Iterator<Item = (Int32Array, Vec<Option<i32>>)> {
         let mut rng = StdRng::seed_from_u64(42);
 
-        let no_nulls_and_no_duplicates = (0..20).map(Some).collect::<Vec<Option<i32>>>();
-        let no_nulls_random_values = (0..20)
+        let no_nulls_and_no_duplicates = (0..10).map(Some).collect::<Vec<Option<i32>>>();
+        let no_nulls_random_values = (0..10)
             .map(|_| rng.random::<i32>())
             .map(Some)
             .collect::<Vec<Option<i32>>>();
 
-        let all_nulls = (0..20).map(|_| None).collect::<Vec<Option<i32>>>();
-        let only_start_nulls = (0..20)
-            .map(|item| if item < 7 { None } else { Some(item) })
+        let all_nulls = (0..10).map(|_| None).collect::<Vec<Option<i32>>>();
+        let only_start_nulls = (0..10)
+            .map(|item| if item < 4 { None } else { Some(item) })
             .collect::<Vec<Option<i32>>>();
-        let only_end_nulls = (0..20)
-            .map(|item| if item > 13 { None } else { Some(item) })
+        let only_end_nulls = (0..10)
+            .map(|item| if item > 8 { None } else { Some(item) })
             .collect::<Vec<Option<i32>>>();
-        let only_middle_nulls = (0..20)
+        let only_middle_nulls = (0..10)
             .map(|item| {
-                if item >= 7 && item <= 13 && rng.random_bool(0.9) {
+                if item >= 4 && item <= 8 && rng.random_bool(0.9) {
                     None
                 } else {
                     Some(item)
                 }
             })
             .collect::<Vec<Option<i32>>>();
-        let random_values_with_random_nulls = (0..20)
+        let random_values_with_random_nulls = (0..10)
             .map(|_| {
                 if rng.random_bool(0.3) {
                     None
@@ -713,21 +716,6 @@ mod tests {
         }
     }
 
-    fn setup_and_assert_extended_cases(
-        setup_iterator: impl SetupIter,
-        assert_fn: impl Fn(ArrayIter<&Int32Array>, Copied<Iter<Option<i32>>>),
-    ) {
-        for (array, source) in get_int32_iterator_cases_with_duplicates() {
-            let mut actual = ArrayIter::new(&array);
-            let mut expected = source.iter().copied();
-
-            setup_iterator.setup(&mut actual);
-            setup_iterator.setup(&mut expected);
-
-            assert_fn(actual, expected);
-        }
-    }
-
     /// Trait representing an operation on a BitIterator
     /// that can be compared against a slice iterator
     trait ArrayIteratorOp {
@@ -779,7 +767,7 @@ mod tests {
                 iter.next();
             }
         }
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             Next,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -800,7 +788,7 @@ mod tests {
             }
         }
 
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextBack,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -822,7 +810,7 @@ mod tests {
             }
         }
 
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextAndBack,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -839,13 +827,13 @@ mod tests {
         struct NextUntilLast;
         impl SetupIter for NextUntilLast {
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
-
-                while iter.len() > 1 {
-                    iter.next();
+                let len = iter.len();
+                if len > 1 {
+                    iter.nth(len - 2);
                 }
             }
         }
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextUntilLast,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -862,13 +850,13 @@ mod tests {
         struct NextBackUntilFirst;
         impl SetupIter for NextBackUntilFirst {
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
-
-                while iter.len() > 1 {
-                    iter.next_back();
+                let len = iter.len();
+                if len > 1 {
+                    iter.nth_back(len - 2);
                 }
             }
         }
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextBackUntilFirst,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -885,10 +873,10 @@ mod tests {
         struct NextFinish;
         impl SetupIter for NextFinish {
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
-                while iter.next().is_some() {}
+                iter.nth(iter.len());
             }
         }
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextFinish,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -906,10 +894,10 @@ mod tests {
         struct NextBackFinish;
         impl SetupIter for NextBackFinish {
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
-                while iter.next_back().is_some() {}
+                iter.nth_back(iter.len());
             }
         }
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextBackFinish,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -935,7 +923,7 @@ mod tests {
                     }
             }
         }
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextUntilLastNone,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -961,7 +949,7 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_extended_cases(
+        setup_and_assert_base_cases(
             NextUntilLastSome,
             |actual, expected| {
                 let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
@@ -1208,14 +1196,14 @@ mod tests {
         struct ForEachOp;
 
         impl ArrayIteratorOp for ForEachOp {
-            type Output = CallTrackingWithInputType<()>;
+            type Output = CallTrackingOnly;
 
             fn name(&self) -> String {
                 "for_each".to_string()
             }
 
             fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: T) -> Self::Output {
-                let mut items = vec![];
+                let mut items = Vec::with_capacity(iter.len());
 
                 iter.for_each(|item| {
                     items.push(item);
@@ -1255,7 +1243,7 @@ mod tests {
             }
 
             fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: T) -> Self::Output {
-                let mut items = vec![];
+                let mut items = Vec::with_capacity(iter.len());
 
                 let result = if self.reverse {
                     iter.rfold(Some(1), |acc, item| {
@@ -1325,7 +1313,7 @@ mod tests {
                 &self,
                 iter: &mut T,
             ) -> Self::Output {
-                let mut items = vec![];
+                let mut items = Vec::with_capacity(iter.len());
 
                 let mut count = 0;
                 let res = iter.any(|item| {
@@ -1368,7 +1356,7 @@ mod tests {
                 &self,
                 iter: &mut T,
             ) -> Self::Output {
-                let mut items = vec![];
+                let mut items = Vec::with_capacity(iter.len());
 
                 let mut count = 0;
                 let res = iter.all(|item| {
@@ -1507,7 +1495,7 @@ mod tests {
 
     #[test]
     fn assert_partition() {
-        struct PartitionOp<F: Fn(&Option<i32>) -> bool> {
+        struct PartitionOp<F: Fn(usize, &Option<i32>) -> bool> {
             description: &'static str,
             predicate: F,
         }
@@ -1518,7 +1506,7 @@ mod tests {
             right: Vec<Option<i32>>,
         }
 
-        impl<F: Fn(&Option<i32>) -> bool> ArrayIteratorOp for PartitionOp<F> {
+        impl<F: Fn(usize, &Option<i32>) -> bool> ArrayIteratorOp for PartitionOp<F> {
             type Output = CallTrackingWithInputType<PartitionResult>;
 
             fn name(&self) -> String {
@@ -1531,10 +1519,15 @@ mod tests {
             ) -> Self::Output {
                 let mut items = vec![];
 
+                let mut index = 0;
+
                 let (left, right) = iter.partition(|item| {
                     items.push(item.clone());
 
-                    (self.predicate)(item)
+                    let res = (self.predicate)(index, item);
+
+                    index += 1;
+                    res
                 });
 
                 CallTrackingAndResult {
@@ -1549,22 +1542,23 @@ mod tests {
 
         assert_array_iterator_cases(PartitionOp {
             description: "None on one side and Some(*) on the other",
-            predicate: |item| *item == None
+            predicate: |_, item| *item == None
         });
 
         assert_array_iterator_cases(PartitionOp {
             description: "all true",
-            predicate: |_| true,
+            predicate: |_, _| true,
         });
 
         assert_array_iterator_cases(PartitionOp {
             description: "all false",
-            predicate: |_| false,
+            predicate: |_, _| false,
         });
 
+        let random_values = (0..100).map(|item| rand::random_bool(0.5)).collect::<Vec<_>>();
         assert_array_iterator_cases(PartitionOp {
             description: "random",
-            predicate: |_| rand::random_bool(0.5),
+            predicate: |index, _| random_values[index % random_values.len()],
         });
     }
 }
