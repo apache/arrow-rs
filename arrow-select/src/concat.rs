@@ -37,7 +37,9 @@ use arrow_array::builder::{
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::{ArrowNativeType, BooleanBufferBuilder, NullBuffer, OffsetBuffer};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBufferBuilder, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
+};
 use arrow_data::ArrayDataBuilder;
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
@@ -199,6 +201,63 @@ fn concat_lists<OffsetSize: OffsetSizeTrait>(
     let array = GenericListArray::<OffsetSize>::try_new(
         Arc::clone(field),
         value_offset_buffer,
+        concatenated_values,
+        lists_nulls,
+    )?;
+
+    Ok(Arc::new(array))
+}
+
+fn concat_list_view<OffsetSize: OffsetSizeTrait>(
+    arrays: &[&dyn Array],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let mut output_len = 0;
+    let mut list_has_nulls = false;
+
+    let lists = arrays
+        .iter()
+        .map(|x| x.as_list_view::<OffsetSize>())
+        .inspect(|l| {
+            output_len += l.len();
+            list_has_nulls |= l.null_count() != 0;
+        })
+        .collect::<Vec<_>>();
+
+    let lists_nulls = list_has_nulls.then(|| {
+        let mut nulls = BooleanBufferBuilder::new(output_len);
+        for l in &lists {
+            match l.nulls() {
+                Some(n) => nulls.append_buffer(n.inner()),
+                None => nulls.append_n(l.len(), true),
+            }
+        }
+        NullBuffer::new(nulls.finish())
+    });
+
+    let values: Vec<&dyn Array> = lists.iter().map(|l| l.values().as_ref()).collect();
+
+    let concatenated_values = concat(values.as_slice())?;
+
+    let sizes: ScalarBuffer<OffsetSize> = lists.iter().flat_map(|x| x.sizes()).copied().collect();
+
+    let mut offsets = MutableBuffer::with_capacity(lists.iter().map(|l| l.offsets().len()).sum());
+    let mut global_offset = OffsetSize::zero();
+    for l in lists.iter() {
+        for &offset in l.offsets() {
+            offsets.push(offset + global_offset);
+        }
+
+        // advance the offsets
+        global_offset += OffsetSize::from_usize(l.values().len()).unwrap();
+    }
+
+    let offsets = ScalarBuffer::from(offsets);
+
+    let array = GenericListViewArray::try_new(
+        field.clone(),
+        offsets,
+        sizes,
         concatenated_values,
         lists_nulls,
     )?;
@@ -422,6 +481,8 @@ pub fn concat(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError> {
         }
         DataType::List(field) => concat_lists::<i32>(arrays, field),
         DataType::LargeList(field) => concat_lists::<i64>(arrays, field),
+        DataType::ListView(field) => concat_list_view::<i32>(arrays, field),
+        DataType::LargeListView(field) => concat_list_view::<i64>(arrays, field),
         DataType::Struct(fields) => concat_structs(arrays, fields),
         DataType::Utf8 => concat_bytes::<Utf8Type>(arrays),
         DataType::LargeUtf8 => concat_bytes::<LargeUtf8Type>(arrays),
@@ -500,7 +561,9 @@ pub fn concat_batches<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::builder::{GenericListBuilder, StringDictionaryBuilder};
+    use arrow_array::builder::{
+        GenericListBuilder, Int64Builder, ListViewBuilder, StringDictionaryBuilder,
+    };
     use arrow_schema::{Field, Schema};
     use std::fmt::Debug;
 
@@ -768,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_list_arrays() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), Some(-1), Some(2), None, None]),
             Some(vec![]),
             None,
@@ -776,14 +839,14 @@ mod tests {
         ];
         let list1_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone());
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None, Some(101)]),
             Some(vec![Some(102)]),
         ];
         let list2_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone());
 
-        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
         let list3_array = ListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone());
 
         let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
@@ -796,7 +859,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_list_arrays_slices() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), Some(-1), Some(2), None, None]),
             Some(vec![]), // In slice
             None,         // In slice
@@ -806,7 +869,7 @@ mod tests {
         let list1_array = list1_array.slice(1, 2);
         let list1_values = list1.into_iter().skip(1).take(2);
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None, Some(101)]),
             Some(vec![Some(102)]),
@@ -825,7 +888,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_list_arrays_sliced_lengths() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), Some(-1), Some(2), None, None]), // In slice
             Some(vec![]),                                        // In slice
             None,                                                // In slice
@@ -835,7 +898,7 @@ mod tests {
         let list1_array = list1_array.slice(0, 3); // no offset, but not all values
         let list1_values = list1.into_iter().take(3);
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None, Some(101)]),
             Some(vec![Some(102)]),
@@ -856,7 +919,7 @@ mod tests {
 
     #[test]
     fn test_concat_primitive_fixed_size_list_arrays() {
-        let list1 = vec![
+        let list1 = [
             Some(vec![Some(-1), None]),
             None,
             Some(vec![Some(10), Some(20)]),
@@ -864,7 +927,7 @@ mod tests {
         let list1_array =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list1.clone(), 2);
 
-        let list2 = vec![
+        let list2 = [
             None,
             Some(vec![Some(100), None]),
             Some(vec![Some(102), Some(103)]),
@@ -872,7 +935,7 @@ mod tests {
         let list2_array =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list2.clone(), 2);
 
-        let list3 = vec![Some(vec![Some(1000), Some(1001)])];
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
         let list3_array =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(list3.clone(), 2);
 
@@ -881,6 +944,105 @@ mod tests {
         let expected = list1.into_iter().chain(list2).chain(list3);
         let array_expected =
             FixedSizeListArray::from_iter_primitive::<Int64Type, _, _>(expected, 2);
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_list_view_arrays() {
+        let list1 = [
+            Some(vec![Some(-1), None]),
+            None,
+            Some(vec![Some(10), Some(20)]),
+        ];
+        let mut list1_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list1.iter() {
+            list1_array.append_option(v.clone());
+        }
+        let list1_array = list1_array.finish();
+
+        let list2 = [
+            None,
+            Some(vec![Some(100), None]),
+            Some(vec![Some(102), Some(103)]),
+        ];
+        let mut list2_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list2.iter() {
+            list2_array.append_option(v.clone());
+        }
+        let list2_array = list2_array.finish();
+
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
+        let mut list3_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list3.iter() {
+            list3_array.append_option(v.clone());
+        }
+        let list3_array = list3_array.finish();
+
+        let array_result = concat(&[&list1_array, &list2_array, &list3_array]).unwrap();
+
+        let expected: Vec<_> = list1.into_iter().chain(list2).chain(list3).collect();
+        let mut array_expected = ListViewBuilder::new(Int64Builder::new());
+        for v in expected.iter() {
+            array_expected.append_option(v.clone());
+        }
+        let array_expected = array_expected.finish();
+
+        assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
+    }
+
+    #[test]
+    fn test_concat_sliced_list_view_arrays() {
+        let list1 = [
+            Some(vec![Some(-1), None]),
+            None,
+            Some(vec![Some(10), Some(20)]),
+        ];
+        let mut list1_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list1.iter() {
+            list1_array.append_option(v.clone());
+        }
+        let list1_array = list1_array.finish();
+
+        let list2 = [
+            None,
+            Some(vec![Some(100), None]),
+            Some(vec![Some(102), Some(103)]),
+        ];
+        let mut list2_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list2.iter() {
+            list2_array.append_option(v.clone());
+        }
+        let list2_array = list2_array.finish();
+
+        let list3 = [Some(vec![Some(1000), Some(1001)])];
+        let mut list3_array = ListViewBuilder::new(Int64Builder::new());
+        for v in list3.iter() {
+            list3_array.append_option(v.clone());
+        }
+        let list3_array = list3_array.finish();
+
+        // Concat sliced arrays.
+        // ListView slicing will slice the offset/sizes but preserve the original values child.
+        let array_result = concat(&[
+            &list1_array.slice(1, 2),
+            &list2_array.slice(1, 2),
+            &list3_array.slice(0, 1),
+        ])
+        .unwrap();
+
+        let expected: Vec<_> = vec![
+            None,
+            Some(vec![Some(10), Some(20)]),
+            Some(vec![Some(100), None]),
+            Some(vec![Some(102), Some(103)]),
+            Some(vec![Some(1000), Some(1001)]),
+        ];
+        let mut array_expected = ListViewBuilder::new(Int64Builder::new());
+        for v in expected.iter() {
+            array_expected.append_option(v.clone());
+        }
+        let array_expected = array_expected.finish();
 
         assert_eq!(array_result.as_ref(), &array_expected as &dyn Array);
     }

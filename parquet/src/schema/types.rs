@@ -845,7 +845,9 @@ pub struct ColumnDescriptor {
 
 impl HeapSize for ColumnDescriptor {
     fn heap_size(&self) -> usize {
-        self.primitive_type.heap_size() + self.path.heap_size()
+        // Don't include the heap size of primitive_type, this is already
+        // accounted for via SchemaDescriptor::schema
+        self.path.heap_size()
     }
 }
 
@@ -1348,19 +1350,23 @@ fn schema_from_array_helper<'a>(
                 .with_logical_type(logical_type)
                 .with_fields(fields)
                 .with_id(field_id);
-            if let Some(rep) = repetition {
-                // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
-                // REPEATED for root node.
-                //
-                // We only set repetition for group types that are not top-level message
-                // type. According to parquet-format:
-                //   Root of the schema does not have a repetition_type.
-                //   All other types must have one.
-                if !is_root_node {
-                    builder = builder.with_repetition(rep);
-                }
+
+            // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
+            // REPEATED for root node.
+            //
+            // We only set repetition for group types that are not top-level message
+            // type. According to parquet-format:
+            //   Root of the schema does not have a repetition_type.
+            //   All other types must have one.
+            if !is_root_node {
+                let Some(rep) = repetition else {
+                    return Err(general_err!(
+                        "Repetition level must be defined for non-root types"
+                    ));
+                };
+                builder = builder.with_repetition(rep);
             }
-            Ok((next_index, Arc::new(builder.build().unwrap())))
+            Ok((next_index, Arc::new(builder.build()?)))
         }
     }
 }
