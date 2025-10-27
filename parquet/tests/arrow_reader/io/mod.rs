@@ -291,7 +291,7 @@ impl TestRowGroups {
                         let dictionary_page_location = col_meta.dictionary_page_offset();
 
                         // We can find the byte range of the entire column chunk
-                        let (start_offset, length) = col_meta.byte_range();
+                        let (start_offset, length) = col_meta.byte_range().unwrap();
                         let start_offset = start_offset as usize;
                         let end_offset = start_offset + length as usize;
 
