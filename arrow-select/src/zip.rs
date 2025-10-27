@@ -17,8 +17,9 @@
 
 //! [`zip`]: Combine values from two arrays based on boolean mask
 
-use crate::filter::SlicesIterator;
+use crate::filter::{SlicesIterator, prep_null_mask_filter};
 use arrow_array::*;
+use arrow_buffer::BooleanBuffer;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
 
@@ -127,7 +128,8 @@ pub fn zip(
     // keep track of how much is filled
     let mut filled = 0;
 
-    SlicesIterator::new(mask).for_each(|(start, end)| {
+    let mask = maybe_prep_null_mask_filter(mask);
+    SlicesIterator::from(&mask).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
             if falsy_is_scalar {
@@ -166,9 +168,22 @@ pub fn zip(
     Ok(make_array(data))
 }
 
+fn maybe_prep_null_mask_filter(predicate: &BooleanArray) -> BooleanBuffer {
+    // Nulls are treated as false
+    if predicate.null_count() == 0 {
+        predicate.values().clone()
+    } else {
+        let cleaned = prep_null_mask_filter(predicate);
+        let (boolean_buffer, _) = cleaned.into_parts();
+        boolean_buffer
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+    use arrow_array::cast::AsArray;
+    use arrow_buffer::{BooleanBuffer, NullBuffer};
 
     #[test]
     fn test_zip_kernel_one() {
@@ -277,6 +292,112 @@ mod test {
         let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
         let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
         let expected = Int32Array::from(vec![None, None, Some(42), Some(42), None]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_primitive_array_with_nulls_is_mask_should_be_treated_as_false() {
+        let truthy = Int32Array::from_iter_values(vec![1, 2, 3, 4, 5, 6]);
+        let falsy = Int32Array::from_iter_values(vec![7, 8, 9, 10, 11, 12]);
+
+        let mask = {
+            let booleans = BooleanBuffer::from(vec![true, true, false, true, false, false]);
+            let nulls = NullBuffer::from(vec![
+                true, true, true,
+                false, // null treated as false even though in the original mask it was true
+                true, true,
+            ]);
+            BooleanArray::new(booleans, Some(nulls))
+        };
+        let out = zip(&mask, &truthy, &falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![
+            Some(1),
+            Some(2),
+            Some(9),
+            Some(10), // true in mask but null
+            Some(11),
+            Some(12),
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_primitive_scalar_with_boolean_array_mask_with_nulls_should_be_treated_as_false()
+     {
+        let scalar_truthy = Scalar::new(Int32Array::from_value(42, 1));
+        let scalar_falsy = Scalar::new(Int32Array::from_value(123, 1));
+
+        let mask = {
+            let booleans = BooleanBuffer::from(vec![true, true, false, true, false, false]);
+            let nulls = NullBuffer::from(vec![
+                true, true, true,
+                false, // null treated as false even though in the original mask it was true
+                true, true,
+            ]);
+            BooleanArray::new(booleans, Some(nulls))
+        };
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<Int32Array>().unwrap();
+        let expected = Int32Array::from(vec![
+            Some(42),
+            Some(42),
+            Some(123),
+            Some(123), // true in mask but null
+            Some(123),
+            Some(123),
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_string_array_with_nulls_is_mask_should_be_treated_as_false() {
+        let truthy = StringArray::from_iter_values(vec!["1", "2", "3", "4", "5", "6"]);
+        let falsy = StringArray::from_iter_values(vec!["7", "8", "9", "10", "11", "12"]);
+
+        let mask = {
+            let booleans = BooleanBuffer::from(vec![true, true, false, true, false, false]);
+            let nulls = NullBuffer::from(vec![
+                true, true, true,
+                false, // null treated as false even though in the original mask it was true
+                true, true,
+            ]);
+            BooleanArray::new(booleans, Some(nulls))
+        };
+        let out = zip(&mask, &truthy, &falsy).unwrap();
+        let actual = out.as_string::<i32>();
+        let expected = StringArray::from_iter_values(vec![
+            "1", "2", "9", "10", // true in mask but null
+            "11", "12",
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_large_string_scalar_with_boolean_array_mask_with_nulls_should_be_treated_as_false()
+     {
+        let scalar_truthy = Scalar::new(LargeStringArray::from_iter_values(["test"]));
+        let scalar_falsy = Scalar::new(LargeStringArray::from_iter_values(["something else"]));
+
+        let mask = {
+            let booleans = BooleanBuffer::from(vec![true, true, false, true, false, false]);
+            let nulls = NullBuffer::from(vec![
+                true, true, true,
+                false, // null treated as false even though in the original mask it was true
+                true, true,
+            ]);
+            BooleanArray::new(booleans, Some(nulls))
+        };
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_any().downcast_ref::<LargeStringArray>().unwrap();
+        let expected = LargeStringArray::from_iter(vec![
+            Some("test"),
+            Some("test"),
+            Some("something else"),
+            Some("something else"), // true in mask but null
+            Some("something else"),
+            Some("something else"),
+        ]);
         assert_eq!(actual, &expected);
     }
 }
