@@ -76,6 +76,3 @@ harness = false
 name = "parse_decimal"
 harness = false
 
-[[bench]]
-name = "cast_ree"
-harness = false
