@@ -38,6 +38,9 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
     to_type: &DataType,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
+    // Fast-path dispatch: most physical types can reuse `runs_for_primitive`, the remainder fall
+    // through to specialized implementations below.
+    // Route to the most specialized helper for the physical layout of `array`.
     match array.data_type() {
         DataType::RunEndEncoded(_, _) => {
             let run_array = array
@@ -269,6 +272,7 @@ fn runs_for_boolean(array: &BooleanArray) -> (Vec<usize>, Vec<usize>) {
     let mut current_value = if current_valid { array.value(0) } else { false };
 
     for idx in 1..len {
+        // Treat a change in validity the same as a change in value so null boundaries are recorded.
         let valid = array.is_valid(idx);
         let mut boundary = false;
         if current_valid && valid {
@@ -309,6 +313,7 @@ fn runs_for_primitive<T: ArrowPrimitiveType>(
         let mut current = unsafe { *values.get_unchecked(0) };
         let mut idx = 1;
         while idx < len {
+            // Attempt to advance in 16-byte chunks before falling back to scalar comparison.
             let boundary = scan_run_end::<T>(values, current, idx);
             if boundary == len {
                 break;
@@ -394,6 +399,7 @@ fn runs_for_binary_like<T: Copy>(
         for idx in 1..len {
             let start = to_usize(offsets[idx]);
             let end = to_usize(offsets[idx + 1]);
+            // Any difference in byte length or payload means a new run.
             if (end - start) != (current_end - current_start)
                 || values[start..end] != values[current_start..current_end]
             {
@@ -413,6 +419,7 @@ fn runs_for_binary_like<T: Copy>(
                 let start = to_usize(offsets[idx]);
                 let end = to_usize(offsets[idx + 1]);
                 let (current_start, current_end) = current_range;
+                // Keep reusing the current byte-range as long as both validity and payload match.
                 if (end - start) != (current_end - current_start)
                     || values[start..end] != values[current_start..current_end]
                 {
@@ -482,6 +489,7 @@ fn runs_for_fixed_size_binary(array: &FixedSizeBinaryArray) -> (Vec<usize>, Vec<
         for idx in 1..len {
             let start = idx * width;
             let slice = &values[start..start + width];
+            // Width is constant, so a simple byte slice comparison suffices.
             if slice != current_slice {
                 ensure_capacity(&mut run_boundaries, len);
                 run_boundaries.push(idx);
@@ -538,6 +546,7 @@ fn runs_generic(array: &dyn Array) -> (Vec<usize>, Vec<usize>) {
     let mut current_data = array.slice(0, 1).to_data();
     for idx in 1..len {
         let next_data = array.slice(idx, 1).to_data();
+        // Fallback for exotic types: compare `ArrayData` views directly.
         if current_data != next_data {
             ensure_capacity(&mut run_boundaries, len);
             run_boundaries.push(idx);
@@ -566,6 +575,7 @@ fn ensure_capacity(vec: &mut Vec<usize>, total_len: usize) {
 
 fn finalize_runs(mut run_boundaries: Vec<usize>, len: usize) -> (Vec<usize>, Vec<usize>) {
     let mut values_indexes = Vec::with_capacity(run_boundaries.len() + 1);
+    // Values array always pulls the first element of each run; index 0 is by definition a run start.
     values_indexes.push(0);
     values_indexes.extend_from_slice(&run_boundaries);
     run_boundaries.push(len);
@@ -579,6 +589,7 @@ fn scan_run_end<T: ArrowPrimitiveType>(
     start: usize,
 ) -> usize {
     let element_size = std::mem::size_of::<T::Native>();
+    // Only attempt the chunked search when the element size divides evenly into 16 bytes.
     if element_size <= 8 && 16 % element_size == 0 {
         let elements_per_chunk = 16 / element_size;
         return scan_run_end_chunk::<T>(values, current, start, elements_per_chunk, element_size);
@@ -601,6 +612,9 @@ fn scan_run_end_chunk<T: ArrowPrimitiveType>(
     }
 
     let mut pattern_bytes = [0u8; 16];
+    // Safety: `T::Native` is guaranteed by `ArrowPrimitiveType` to have a plain-old-data layout,
+    // allowing the value to be viewed as raw bytes. We copy exactly `element_size` bytes, so the
+    // slice built from `current` stays within bounds.
     unsafe {
         let value_bytes =
             std::slice::from_raw_parts(&current as *const T::Native as *const u8, element_size);
@@ -611,6 +625,7 @@ fn scan_run_end_chunk<T: ArrowPrimitiveType>(
     let pattern = u128::from_ne_bytes(pattern_bytes);
 
     while idx + elements_per_chunk <= len {
+        // SAFETY: pointer arithmetic stays within the backing slice; unaligned reads are allowed.
         let chunk = unsafe { (values.as_ptr().add(idx) as *const u128).read_unaligned() };
         if chunk != pattern {
             for offset in 0..elements_per_chunk {
@@ -619,7 +634,6 @@ fn scan_run_end_chunk<T: ArrowPrimitiveType>(
                     return idx + offset;
                 }
             }
-            unreachable!("chunk mismatch without locating differing element");
         }
         idx += elements_per_chunk;
     }
