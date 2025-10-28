@@ -671,6 +671,7 @@ fn read_row_group(
 
 /// Extract the metadata index from the footer bytes. `buf` should contain the entire footer.
 #[allow(dead_code)]
+#[inline(never)]
 pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
     // TODO(ets): need constants to get rid of magic numbers
     if buf.len() < 13 {
@@ -707,7 +708,8 @@ pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
 /// Create [`ParquetMetaData`] from thrift input. Note that this only decodes the file metadata in
 /// the Parquet footer. Page indexes will need to be added later.
 pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData> {
-    let mut prot = ThriftSliceInputProtocol::new(buf);
+    // check for index
+    let index = get_metadata_index(buf)?;
 
     // begin reading the file metadata
     let mut version: Option<i32> = None;
@@ -723,6 +725,22 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
 
     // this will need to be set before parsing row groups
     let mut schema_descr: Option<Arc<SchemaDescriptor>> = None;
+
+    // if the index is available, read the schema first
+    if let Some(meta_idx) = index.as_ref() {
+        let start = meta_idx.schema_offset as usize;
+        let end = start + meta_idx.schema_length as usize;
+        let schema_bytes = &buf[start..end];
+
+        let mut prot = ThriftSliceInputProtocol::new(schema_bytes);
+        let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+        let val = parquet_schema_from_array(val)?;
+        schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
+    }
+
+    // TODO(ets): if only reading schema return now
+
+    let mut prot = ThriftSliceInputProtocol::new(buf);
 
     // struct FileMetaData {
     //   1: required i32 version
@@ -746,10 +764,20 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 version = Some(i32::read_thrift(&mut prot)?);
             }
             2 => {
-                // read schema and convert to SchemaDescriptor for use when reading row groups
-                let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
-                let val = parquet_schema_from_array(val)?;
-                schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
+                // if we already have a schema, then don't decode it again
+                if schema_descr.is_some() {
+                    if let Some(meta_idx) = index.as_ref() {
+                        prot.skip_bytes(meta_idx.schema_length as usize)?;
+                    } else {
+                        prot.skip(field_ident.field_type)?;
+                    }
+                } else {
+                    // read schema and convert to SchemaDescriptor for use when reading row groups
+                    let val =
+                        read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                    let val = parquet_schema_from_array(val)?;
+                    schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
+                }
             }
             3 => {
                 num_rows = Some(i64::read_thrift(&mut prot)?);
@@ -761,8 +789,21 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 let schema_descr = schema_descr.as_ref().unwrap();
                 let list_ident = prot.read_list_begin()?;
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
-                for _ in 0..list_ident.size {
-                    rg_vec.push(read_row_group(&mut prot, schema_descr)?);
+
+                if let Some(meta_idx) = index.as_ref() {
+                    for i in 0..list_ident.size as usize {
+                        let rg_len = (meta_idx.row_group_offsets[i + 1]
+                            - meta_idx.row_group_offsets[i])
+                            as usize;
+                        let rg_bytes = &prot.as_slice()[..rg_len];
+                        let mut rg_prot = ThriftSliceInputProtocol::new(rg_bytes);
+                        rg_vec.push(read_row_group(&mut rg_prot, schema_descr)?);
+                        prot.skip_bytes(rg_len)?;
+                    }
+                } else {
+                    for _ in 0..list_ident.size {
+                        rg_vec.push(read_row_group(&mut prot, schema_descr)?);
+                    }
                 }
                 row_groups = Some(rg_vec);
             }
@@ -1352,9 +1393,11 @@ impl<'a> WriteThrift for FileMeta<'a> {
         let root = self.file_metadata.schema_descr().root_schema_ptr();
         let schema_len = num_nodes(&root)?;
         writer.write_field_begin(FieldType::List, 2, 1)?;
+
+        // schema range needs to include the list header
+        let schema_start = writer.bytes_written();
         writer.write_list_begin(ElementType::Struct, schema_len)?;
         // recursively write Type nodes as SchemaElements
-        let schema_start = writer.bytes_written();
         write_schema(&root, writer)?;
         let schema_end = writer.bytes_written();
         writer.set_schema_range(schema_start, schema_end);
