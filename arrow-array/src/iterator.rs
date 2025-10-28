@@ -431,6 +431,10 @@ mod tests {
 
         /// Get the value of the operation for the provided iterator
         /// This will be either a [`ArrayIter`] or a slice iterator to make sure they produce the same result
+        ///
+        /// Example implementation:
+        /// 1. for `last` it will be the last value
+        /// 2. for `count` it will be the returned length
         fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: T) -> Self::Output;
     }
 
@@ -447,6 +451,10 @@ mod tests {
 
         /// Get the value of the operation for the provided iterator
         /// This will be either a [`ArrayIter`] or a slice iterator to make sure they produce the same result
+        ///
+        /// Example implementation:
+        /// 1. for `for_each` it will be the iterator element that the function was called with
+        /// 2. for `fold` it will be the accumulator and the iterator element from each call, as well as the final result
         fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut T) -> Self::Output;
     }
 
