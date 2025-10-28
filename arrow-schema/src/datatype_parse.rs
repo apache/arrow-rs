@@ -116,7 +116,7 @@ impl<'a> Parser<'a> {
     /// E.g: List(nullable Int64, field: 'foo')
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.nullable();
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("List")?;
         self.expect_token(Token::RParen)?;
@@ -129,7 +129,7 @@ impl<'a> Parser<'a> {
     /// E.g: ListView(nullable Int64, field: 'foo')
     fn parse_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.nullable();
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("ListView")?;
         self.expect_token(Token::RParen)?;
@@ -142,7 +142,7 @@ impl<'a> Parser<'a> {
     /// E.g: LargeList(nullable Int64, field: 'foo')
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.nullable();
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("LargeList")?;
         self.expect_token(Token::RParen)?;
@@ -155,7 +155,7 @@ impl<'a> Parser<'a> {
     /// E.g: LargeListView(nullable Int64, field: 'foo')
     fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.nullable();
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("LargeListView")?;
         self.expect_token(Token::RParen)?;
@@ -170,7 +170,7 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let length = self.parse_i32("FixedSizeList")?;
         self.expect_token(Token::X)?;
-        let nullable = self.nullable();
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
         let field = self.parse_list_field_name("FixedSizeList")?;
         self.expect_token(Token::RParen)?;
@@ -429,7 +429,7 @@ impl<'a> Parser<'a> {
             };
             self.expect_token(Token::Colon)?;
 
-            let nullable = self.nullable();
+            let nullable = self.parse_opt_nullable();
             let field_type = self.parse_next_type()?;
             fields.push(Arc::new(Field::new(field_name, field_type, nullable)));
             match self.next_token()? {
@@ -449,7 +449,7 @@ impl<'a> Parser<'a> {
     }
 
     /// return and consume if the next token is `Token::Nullable`
-    fn nullable(&mut self) -> bool {
+    fn parse_opt_nullable(&mut self) -> bool {
         self.tokenizer
             .next_if(|next| matches!(next, Ok(Token::Nullable)))
             .is_some()
