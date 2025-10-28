@@ -384,7 +384,10 @@ impl RleDecoder {
             } else if self.bit_packed_left > 0 {
                 let mut num_values =
                     cmp::min(buffer.len() - values_read, self.bit_packed_left as usize);
-                let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| ParquetError::General("bit_reader should be set".into()))?;
 
                 num_values = bit_reader.get_batch::<T>(
                     &mut buffer[values_read..values_read + num_values],
@@ -416,7 +419,10 @@ impl RleDecoder {
             } else if self.bit_packed_left > 0 {
                 let mut num_values =
                     cmp::min(num_values - values_skipped, self.bit_packed_left as usize);
-                let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
                 num_values = bit_reader.skip(num_values, self.bit_width as usize);
                 if num_values == 0 {
@@ -460,7 +466,10 @@ impl RleDecoder {
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {
-                let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
                 loop {
                     let to_read = index_buf
@@ -499,7 +508,10 @@ impl RleDecoder {
 
     #[inline]
     fn reload(&mut self) -> Result<bool> {
-        let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
+        let bit_reader = self
+            .bit_reader
+            .as_mut()
+            .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
         if let Some(indicator_value) = bit_reader.get_vlq_int() {
             // fastparquet adds padding to the end of pages. This is not spec-compliant
@@ -514,9 +526,9 @@ impl RleDecoder {
                 self.rle_left = (indicator_value >> 1) as u32;
                 let value_width = bit_util::ceil(self.bit_width as usize, 8);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                if self.current_value.is_none() {
-                    return Err(ParquetError::General("parquet_data_error: not enough data for RLE decoding".into()))
-                }
+                self.current_value.ok_or_else(|| {
+                    general_err!("parquet_data_error: not enough data for RLE decoding")
+                })?;
             }
             Ok(true)
         } else {
