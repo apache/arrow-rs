@@ -366,11 +366,15 @@ mod tests {
     }
 
     trait SetupIter {
+        fn description(&self) -> String;
         fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I);
     }
 
     struct NoSetup;
     impl SetupIter for NoSetup {
+        fn description(&self) -> String {
+            "no setup".to_string()
+        }
         fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, _iter: &mut I) {
             // none
         }
@@ -388,6 +392,29 @@ mod tests {
             setup_iterator.setup(&mut expected);
 
             assert_fn(actual, expected);
+        }
+    }
+
+    fn setup_and_assert_cases_on_single_operation(
+        o: &impl ConsumingArrayIteratorOp,
+        setup_iterator: impl SetupIter,
+    ) {
+        for (array, source) in get_int32_iterator_cases() {
+            let mut actual = ArrayIter::new(&array);
+            let mut expected = source.iter().copied();
+
+            setup_iterator.setup(&mut actual);
+            setup_iterator.setup(&mut expected);
+
+            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
+
+            assert_eq!(
+                o.get_value(actual),
+                o.get_value(expected),
+                "Failed on op {} for {} (left actual, right expected) ({current_iterator_values:?})",
+                setup_iterator.description(),
+                o.name()
+            );
         }
     }
 
@@ -427,72 +454,51 @@ mod tests {
     /// produces the same result for both [`ArrayIter`] and slice iterator
     /// under various consumption patterns (e.g. some calls to next/next_back/consume_all/etc)
     fn assert_array_iterator_cases<O: ConsumingArrayIteratorOp>(o: O) {
-        setup_and_assert_cases(NoSetup, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NoSetup);
 
         struct Next;
         impl SetupIter for Next {
+            fn description(&self) -> String {
+                "new iter after consuming 1 element from the start".to_string()
+            }
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.next();
             }
         }
-        setup_and_assert_cases(Next, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter after consuming 1 element from the start (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, Next);
 
         struct NextBack;
         impl SetupIter for NextBack {
+            fn description(&self) -> String {
+                "new iter after consuming 1 element from the end".to_string()
+            }
+
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.next_back();
             }
         }
 
-        setup_and_assert_cases(NextBack, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter after consuming 1 element from the end (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextBack);
 
         struct NextAndBack;
         impl SetupIter for NextAndBack {
+            fn description(&self) -> String {
+                "new iter after consuming 1 element from start and end".to_string()
+            }
+
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.next();
                 iter.next_back();
             }
         }
 
-        setup_and_assert_cases(NextAndBack, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter after consuming 1 element from start and end (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextAndBack);
 
         struct NextUntilLast;
         impl SetupIter for NextUntilLast {
+            fn description(&self) -> String {
+                "new iter after consuming all from the start but 1".to_string()
+            }
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 let len = iter.len();
                 if len > 1 {
@@ -500,19 +506,14 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_cases(NextUntilLast, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter after consuming all from the start but 1 (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextUntilLast);
 
         struct NextBackUntilFirst;
         impl SetupIter for NextBackUntilFirst {
+            fn description(&self) -> String {
+                "new iter after consuming all from the end but 1".to_string()
+            }
+
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 let len = iter.len();
                 if len > 1 {
@@ -520,53 +521,35 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_cases(NextBackUntilFirst, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter after consuming all from the end but 1 (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextBackUntilFirst);
 
         struct NextFinish;
         impl SetupIter for NextFinish {
+            fn description(&self) -> String {
+                "new iter after consuming all from the start".to_string()
+            }
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.nth(iter.len());
             }
         }
-        setup_and_assert_cases(NextFinish, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter after consuming all from the start (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextFinish);
 
         struct NextBackFinish;
         impl SetupIter for NextBackFinish {
+            fn description(&self) -> String {
+                "new iter after consuming all from the end".to_string()
+            }
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 iter.nth_back(iter.len());
             }
         }
-        setup_and_assert_cases(NextBackFinish, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for new iter after consuming all from the end (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextBackFinish);
 
         struct NextUntilLastNone;
         impl SetupIter for NextUntilLastNone {
+            fn description(&self) -> String {
+                "new iter that have no nulls left".to_string()
+            }
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 let last_null_position = iter.clone().rposition(|item| item.is_none());
 
@@ -576,19 +559,13 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_cases(NextUntilLastNone, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for iter that have no nulls left (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextUntilLastNone);
 
         struct NextUntilLastSome;
         impl SetupIter for NextUntilLastSome {
+            fn description(&self) -> String {
+                "iter that only have nulls left".to_string()
+            }
             fn setup<I: SharedBetweenArrayIterAndSliceIter>(&self, iter: &mut I) {
                 let last_some_position = iter.clone().rposition(|item| item.is_some());
 
@@ -598,16 +575,7 @@ mod tests {
                 }
             }
         }
-        setup_and_assert_cases(NextUntilLastSome, |actual, expected| {
-            let current_iterator_values: Vec<Option<i32>> = expected.clone().collect();
-
-            assert_eq!(
-                o.get_value(actual),
-                o.get_value(expected),
-                "Failed on op {} for iter that only have nulls left (left actual, right expected) ({current_iterator_values:?})",
-                o.name()
-            );
-        });
+        setup_and_assert_cases_on_single_operation(&o, NextUntilLastSome);
     }
 
     /// Helper function that will assert that the provided operation
@@ -641,6 +609,7 @@ mod tests {
             ) -> Self::Output {
                 let value = self.o.get_value(&mut iter);
 
+                // Get the rest of the iterator to make sure we leave the iterator in a valid state
                 let leftover: Vec<_> = iter.collect();
 
                 AdapterOutput { value, leftover }
@@ -674,6 +643,7 @@ mod tests {
                     format!("position with {} false returned", self.number_of_false)
                 }
             }
+
             fn get_value<T: SharedBetweenArrayIterAndSliceIter>(
                 &self,
                 iter: &mut T,
