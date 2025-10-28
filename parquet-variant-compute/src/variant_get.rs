@@ -21,7 +21,7 @@ use arrow::{
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{Variant, VariantPath, VariantPathElement};
+use parquet_variant::{VariantPath, VariantPathElement};
 
 use crate::VariantArray;
 use crate::variant_array::BorrowedShreddingState;
@@ -146,7 +146,13 @@ fn shredded_get_path(
                     let value = target.try_value(i)?;
                     builder.append_value(value)?;
                 } else {
-                    builder.append_value(target.try_value(i).unwrap_or(Variant::Null))?;
+                    let _ = match target.try_value(i) {
+                        Ok(v) => builder.append_value(v)?,
+                        Err(_) => {
+                            builder.append_null()?;
+                            false // add this to make match arms have the same return type
+                        }
+                    };
                 }
             }
             builder.finish()
@@ -3612,7 +3618,7 @@ mod test {
         let err = variant_get(&variant_array, options).unwrap_err();
         assert!(
             err.to_string().contains(
-                "Cast error: Cast failed: Invalid microsecond from midnight: 86401000000"
+                "Cast error: Cast failed at index 0 (array type: Time64(µs)): Invalid microsecond from midnight: 86401000000"
             )
         );
     }
@@ -3623,7 +3629,7 @@ mod test {
 
         let field = Field::new("result", DataType::Time64(TimeUnit::Microsecond), true);
         let cast_options = CastOptions {
-            safe: true, // Will Variant::Null on cast failure
+            safe: true, // Will return null on cast failure
             ..Default::default()
         };
         let options = GetOptions::new()

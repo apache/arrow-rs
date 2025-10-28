@@ -308,7 +308,11 @@ macro_rules! generic_conversion_single_value_with_result {
         let v = arr.value($index);
         match ($cast_fn)(v) {
             Ok(var) => Ok(Variant::from(var)),
-            Err(e) => Err(ArrowError::CastError(format!("Cast failed: {e}"))),
+            Err(e) => Err(ArrowError::CastError(format!(
+                "Cast failed at index {idx} (array type: {ty}): {e}",
+                idx = $index,
+                ty = <$t as ::arrow::datatypes::ArrowPrimitiveType>::DATA_TYPE
+            ))),
         }
     }};
 }

@@ -1600,19 +1600,19 @@ mod test {
     invalid_variant_array_test!(
         test_variant_array_invalide_time,
         Time64MicrosecondArray::from(vec![Some(86401000000)]),
-        "Cast failed: Invalid microsecond from midnight: 86401000000"
+        "Cast error: Cast failed at index 0 (array type: Time64(µs)): Invalid microsecond from midnight: 86401000000"
     );
 
     invalid_variant_array_test!(
         test_variant_array_invalid_decimal32,
         Decimal32Array::from(vec![Some(1234567890)]),
-        "Cast failed: Invalid argument error: 1234567890 is wider than max precision 9"
+        "Cast error: Cast failed at index 0 (array type: Decimal32(9, 2)): Invalid argument error: 1234567890 is wider than max precision 9"
     );
 
     invalid_variant_array_test!(
         test_variant_array_invalid_decimal64,
         Decimal64Array::from(vec![Some(1234567890123456789)]),
-        "Cast failed: Invalid argument error: 1234567890123456789 is wider than max precision 18"
+        "Cast error: Cast failed at index 0 (array type: Decimal64(18, 6)): Invalid argument error: 1234567890123456789 is wider than max precision 18"
     );
 
     invalid_variant_array_test!(
@@ -1620,6 +1620,6 @@ mod test {
         Decimal128Array::from(vec![Some(
             i128::from_str("123456789012345678901234567890123456789").unwrap()
         ),]),
-        "Cast failed: Invalid argument error: 123456789012345678901234567890123456789 is wider than max precision 38"
+        "Cast error: Cast failed at index 0 (array type: Decimal128(38, 10)): Invalid argument error: 123456789012345678901234567890123456789 is wider than max precision 38"
     );
 }
