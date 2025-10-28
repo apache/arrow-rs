@@ -73,10 +73,10 @@ The `parquet` crate provides the following features which may be enabled in your
 
 ## Parquet Feature Status
 
-Please see the [Implementation Status Page] on the [Apache Parquet] website for 
+Please see the [Implementation Status Page] on the [Apache Parquet] website for
 information on the status of this implementation.
 
-[Implementation Status Page]: https://parquet.apache.org/docs/file-format/implementationstatus/
+[implementation status page]: https://parquet.apache.org/docs/file-format/implementationstatus/
 
 ## License
 
