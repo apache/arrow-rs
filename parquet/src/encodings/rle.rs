@@ -350,14 +350,17 @@ impl RleDecoder {
                 &self
                     .current_value
                     .as_mut()
-                    .expect("current_value should be Some")
+                    .ok_or_else(|| general_err!("current_value should be Some"))?
                     .to_ne_bytes(),
             )?;
             self.rle_left -= 1;
             rle_value
         } else {
             // self.bit_packed_left > 0
-            let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be Some");
+            let bit_reader = self
+                .bit_reader
+                .as_mut()
+                .ok_or_else(|| general_err!("bit_reader should be Some"))?;
             let bit_packed_value = bit_reader
                 .get_value(self.bit_width as usize)
                 .ok_or_else(|| eof_err!("Not enough data for 'bit_packed_value'"))?;
