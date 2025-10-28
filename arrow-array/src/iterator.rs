@@ -152,8 +152,6 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     use std::fmt::Debug;
-    use std::iter::Copied;
-    use std::slice::Iter;
     use std::sync::Arc;
 
     #[test]
@@ -380,21 +378,6 @@ mod tests {
         }
     }
 
-    fn setup_and_assert_cases(
-        setup_iterator: impl SetupIter,
-        assert_fn: impl Fn(ArrayIter<&Int32Array>, Copied<Iter<Option<i32>>>),
-    ) {
-        for (array, source) in get_int32_iterator_cases() {
-            let mut actual = ArrayIter::new(&array);
-            let mut expected = source.iter().copied();
-
-            setup_iterator.setup(&mut actual);
-            setup_iterator.setup(&mut expected);
-
-            assert_fn(actual, expected);
-        }
-    }
-
     fn setup_and_assert_cases_on_single_operation(
         o: &impl ConsumingArrayIteratorOp,
         setup_iterator: impl SetupIter,
@@ -412,8 +395,8 @@ mod tests {
                 o.get_value(actual),
                 o.get_value(expected),
                 "Failed on op {} for {} (left actual, right expected) ({current_iterator_values:?})",
+                o.name(),
                 setup_iterator.description(),
-                o.name()
             );
         }
     }
@@ -696,7 +679,9 @@ mod tests {
 
     #[test]
     fn assert_nth() {
-        setup_and_assert_cases(NoSetup, |actual, expected| {
+        for (array, source) in get_int32_iterator_cases() {
+            let actual = ArrayIter::new(&array);
+            let expected = source.iter().copied();
             {
                 let mut actual = actual.clone();
                 let mut expected = expected.clone();
@@ -728,12 +713,14 @@ mod tests {
                     assert_eq!(actual_val, expected_val, "Failed on nth(2)");
                 }
             }
-        });
+        }
     }
 
     #[test]
     fn assert_nth_back() {
-        setup_and_assert_cases(NoSetup, |actual, expected| {
+        for (array, source) in get_int32_iterator_cases() {
+            let actual = ArrayIter::new(&array);
+            let expected = source.iter().copied();
             {
                 let mut actual = actual.clone();
                 let mut expected = expected.clone();
@@ -765,7 +752,7 @@ mod tests {
                     assert_eq!(actual_val, expected_val, "Failed on nth_back(2)");
                 }
             }
-        });
+        }
     }
 
     #[test]
