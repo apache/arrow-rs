@@ -67,6 +67,11 @@ impl Partitions {
     pub fn is_empty(&self) -> bool {
         self.0.is_none()
     }
+
+    /// Returns the inner [`BooleanBuffer`]
+    pub fn into_inner(self) -> BooleanBuffer {
+        self.0.expect("Partitions is empty")
+    }
 }
 
 /// Given a list of lexicographically sorted columns, computes the [`Partitions`],

@@ -16,7 +16,9 @@
 // under the License.
 
 use crate::cast::*;
+use arrow_buffer::BooleanBuffer;
 use arrow_ord::partition::partition;
+use arrow_select::{concat::concat, filter::filter};
 
 /// Attempts to cast a `RunArray` with index type K into
 /// `to_type` for supported types.
@@ -134,31 +136,34 @@ pub(crate) fn cast_to_run_end_encoded<K: RunEndIndexType>(
         ));
     }
 
-    // Partition the array to identify runs of consecutive equal values
+    // Partition the array to identify runs of consecutive equal values,
+    // then build the run_ends array
     let partitions = partition(&[Arc::clone(cast_array)])?;
-    let mut run_ends = Vec::new();
-    let mut values_indexes = Vec::new();
+    let size = partitions.len();
+    let mut run_ends = Vec::with_capacity(size);
+    let mut values_indexes = Vec::with_capacity(size);
     let mut last_partition_end = 0;
     for partition in partitions.ranges() {
         values_indexes.push(last_partition_end);
         run_ends.push(partition.end);
         last_partition_end = partition.end;
     }
-
-    // Build the run_ends array
     for run_end in run_ends {
         run_ends_builder.append_value(K::Native::from_usize(run_end).ok_or_else(|| {
             ArrowError::CastError(format!("Run end index out of range: {}", run_end))
         })?);
     }
     let run_ends_array = run_ends_builder.finish();
-    // Build the values array by taking elements at the run start positions
-    let indices = PrimitiveArray::<UInt32Type>::from_iter_values(
-        values_indexes.iter().map(|&idx| idx as u32),
-    );
-    let values_array = take(&cast_array, &indices, None)?;
 
-    // Create and return the RunArray
-    let run_array = RunArray::<K>::try_new(&run_ends_array, values_array.as_ref())?;
+    // Build the values array
+    let filter_buffer: BooleanBuffer = partitions.into_inner();
+    let mut buffer = BooleanBufferBuilder::new(size);
+    buffer.append(true);
+    buffer.append_buffer(&filter_buffer);
+    let filter_buffer = buffer.finish();
+    let filter_array = BooleanArray::from(filter_buffer);
+    let values_array = filter(&cast_array, &filter_array)?;
+
+    let run_array = RunArray::<K>::try_new(&run_ends_array, &values_array)?;
     Ok(Arc::new(run_array))
 }
