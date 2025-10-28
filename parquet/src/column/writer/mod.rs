@@ -1359,13 +1359,12 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                         encryption_properties,
                         &self.descr,
                     ))
-                    .clear_statistics()    
+                    .clear_statistics()
             } else {
-                builder
-                    .set_column_crypto_metadata(get_column_crypto_metadata(
-                        encryption_properties,
-                        &self.descr,
-                    ))    
+                builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                    encryption_properties,
+                    &self.descr,
+                ))
             }
         } else {
             builder
