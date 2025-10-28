@@ -585,6 +585,7 @@ fn read_column_chunk<'a>(
 fn read_row_group(
     prot: &mut ThriftSliceInputProtocol,
     schema_descr: &Arc<SchemaDescriptor>,
+    index: Option<MetadataIndexSlice>,
 ) -> Result<RowGroupMetaData> {
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
@@ -622,9 +623,22 @@ fn read_row_group(
                         list_ident.size
                     ));
                 }
-                for i in 0..list_ident.size as usize {
-                    let col = read_column_chunk(prot, &schema_descr.columns()[i])?;
-                    row_group.columns.push(col);
+                if let Some(meta_idx) = index.as_ref() {
+                    for i in 0..list_ident.size as usize {
+                        let col_len = (meta_idx.col_chunk_offsets[i + 1]
+                            - meta_idx.col_chunk_offsets[i])
+                            as usize;
+                        let col_bytes = &prot.as_slice()[..col_len];
+                        let mut col_prot = ThriftSliceInputProtocol::new(col_bytes);
+                        let col = read_column_chunk(&mut col_prot, &schema_descr.columns()[i])?;
+                        row_group.columns.push(col);
+                        prot.skip_bytes(col_len)?;
+                    }
+                } else {
+                    for i in 0..list_ident.size as usize {
+                        let col = read_column_chunk(prot, &schema_descr.columns()[i])?;
+                        row_group.columns.push(col);
+                    }
                 }
                 mask |= RG_COLUMNS;
             }
@@ -703,6 +717,29 @@ pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
     let idx = MetaIndex::read_thrift(&mut prot)?;
 
     Ok(Some(idx))
+}
+
+#[allow(dead_code)]
+struct MetadataIndexSlice<'a> {
+    col_chunk_offsets: &'a [i64],
+    col_meta_lengths: &'a [i64],
+}
+
+impl<'a> MetadataIndexSlice<'a> {
+    fn new(index: &'a MetaIndex, rg_idx: usize, schema_descr: &Arc<SchemaDescriptor>) -> Self {
+        let num_cols = schema_descr.num_columns();
+        let start = rg_idx * (num_cols + 1);
+        let end = start + num_cols + 1;
+        let col_chunk_offsets = &index.column_offsets[start..end];
+        let start = rg_idx * num_cols;
+        let end = start + num_cols;
+        let col_meta_lengths = &index.column_meta_lengths[start..end];
+
+        Self {
+            col_chunk_offsets,
+            col_meta_lengths,
+        }
+    }
 }
 
 /// Create [`ParquetMetaData`] from thrift input. Note that this only decodes the file metadata in
@@ -792,17 +829,18 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
 
                 if let Some(meta_idx) = index.as_ref() {
                     for i in 0..list_ident.size as usize {
+                        let slice = MetadataIndexSlice::new(&meta_idx, i, schema_descr);
                         let rg_len = (meta_idx.row_group_offsets[i + 1]
                             - meta_idx.row_group_offsets[i])
                             as usize;
                         let rg_bytes = &prot.as_slice()[..rg_len];
                         let mut rg_prot = ThriftSliceInputProtocol::new(rg_bytes);
-                        rg_vec.push(read_row_group(&mut rg_prot, schema_descr)?);
+                        rg_vec.push(read_row_group(&mut rg_prot, schema_descr, Some(slice))?);
                         prot.skip_bytes(rg_len)?;
                     }
                 } else {
                     for _ in 0..list_ident.size {
-                        rg_vec.push(read_row_group(&mut prot, schema_descr)?);
+                        rg_vec.push(read_row_group(&mut prot, schema_descr, None)?);
                     }
                 }
                 row_groups = Some(rg_vec);
@@ -1767,7 +1805,7 @@ pub(crate) mod tests {
         schema_descr: Arc<SchemaDescriptor>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr)
+        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr, None)
     }
 
     pub(crate) fn read_column_chunk(
