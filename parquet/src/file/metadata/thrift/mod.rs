@@ -829,7 +829,7 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
 
                 if let Some(meta_idx) = index.as_ref() {
                     for i in 0..list_ident.size as usize {
-                        let slice = MetadataIndexSlice::new(&meta_idx, i, schema_descr);
+                        let slice = MetadataIndexSlice::new(meta_idx, i, schema_descr);
                         let rg_len = (meta_idx.row_group_offsets[i + 1]
                             - meta_idx.row_group_offsets[i])
                             as usize;
