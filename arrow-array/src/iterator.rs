@@ -660,28 +660,21 @@ mod tests {
 
                 let mut count = 0;
 
+                let cb = |item| {
+                    items.push(item);
+
+                    if count < self.number_of_false {
+                        count += 1;
+                        false
+                    } else {
+                        true
+                    }
+                };
+
                 let position_result = if self.reverse {
-                    iter.rposition(|item| {
-                        items.push(item);
-
-                        if count < self.number_of_false {
-                            count += 1;
-                            false
-                        } else {
-                            true
-                        }
-                    })
+                    iter.rposition(cb)
                 } else {
-                    iter.position(|item| {
-                        items.push(item);
-
-                        if count < self.number_of_false {
-                            count += 1;
-                            false
-                        } else {
-                            true
-                        }
-                    })
+                    iter.position(cb)
                 };
 
                 CallTrackingAndResult {
@@ -863,19 +856,17 @@ mod tests {
             fn get_value<T: SharedBetweenArrayIterAndSliceIter>(&self, iter: T) -> Self::Output {
                 let mut items = Vec::with_capacity(iter.len());
 
-                let result = if self.reverse {
-                    iter.rfold(Some(1), |acc, item| {
-                        items.push(CallArgs { item, acc });
+                let cb = |acc, item| {
+                    items.push(CallArgs { item, acc });
 
-                        item.map(|val| val + 100)
-                    })
+                    item.map(|val| val + 100)
+                };
+
+                let result = if self.reverse {
+                    iter.rfold(Some(1), cb)
                 } else {
                     #[allow(clippy::manual_try_fold)]
-                    iter.fold(Some(1), |acc, item| {
-                        items.push(CallArgs { item, acc });
-
-                        item.map(|val| val + 100)
-                    })
+                    iter.fold(Some(1), cb)
                 };
 
                 CallTrackingAndResult {
@@ -1020,28 +1011,21 @@ mod tests {
 
                 let mut count = 0;
 
+                let cb = |item: &Option<i32>| {
+                    items.push(*item);
+
+                    if count < self.false_count {
+                        count += 1;
+                        false
+                    } else {
+                        true
+                    }
+                };
+
                 let position_result = if self.reverse {
-                    iter.rfind(|item| {
-                        items.push(*item);
-
-                        if count < self.false_count {
-                            count += 1;
-                            false
-                        } else {
-                            true
-                        }
-                    })
+                    iter.rfind(cb)
                 } else {
-                    iter.find(|item| {
-                        items.push(*item);
-
-                        if count < self.false_count {
-                            count += 1;
-                            false
-                        } else {
-                            true
-                        }
-                    })
+                    iter.find(cb)
                 };
 
                 CallTrackingWithInputType {
