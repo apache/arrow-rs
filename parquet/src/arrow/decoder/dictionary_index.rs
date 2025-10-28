@@ -42,18 +42,18 @@ pub struct DictIndexDecoder {
 impl DictIndexDecoder {
     /// Create a new [`DictIndexDecoder`] with the provided data page, the number of levels
     /// associated with this data page, and the number of non-null values (if known)
-    pub fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
+    pub fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
         let bit_width = data[0];
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(data.slice(1..));
+        decoder.set_data(data.slice(1..))?;
 
-        Self {
+        Ok(Self {
             decoder,
             index_buf: Box::new([0; 1024]),
             index_buf_len: 0,
             index_offset: 0,
             max_remaining_values: num_values.unwrap_or(num_levels),
-        }
+        })
     }
 
     /// Read up to `len` values, returning the number of values read
