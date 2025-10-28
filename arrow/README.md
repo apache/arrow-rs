@@ -32,7 +32,7 @@ The API documentation for most recent, unreleased code is available [here](https
 ## Arrow Implementation Status
 
 Please see the [Implementation Status Page] on the Apache Arrow website for which
-Arrow features are supported by this crate
+Arrow features are supported by this crate.
 
 [Implementation Status Page]: https://arrow.apache.org/docs/status.html
 
