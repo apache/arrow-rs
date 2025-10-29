@@ -517,9 +517,13 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             total_len: usize,
         }
 
+        let mut groups = vec![];
+        let one_group = [GcCopyGroup {
+            total_buffer_bytes: total_large,
+            total_len: len,
+        }];
         let gc_copy_groups = if total_large > i32::MAX as usize {
             // Slow-path: need to split into multiple copy groups
-            let mut groups = vec![];
             let mut current_length = 0;
             let mut current_elements = 0;
 
@@ -545,15 +549,11 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                     total_len: current_elements,
                 });
             }
-            groups
+            &groups
         } else {
-            let gc_copy_group = GcCopyGroup {
-                total_buffer_bytes: total_large,
-                total_len: len,
-            };
-            vec![gc_copy_group]
+            one_group.as_slice()
         };
-        assert!(gc_copy_groups.len() <= i32::MAX as usize);
+        debug_assert!(gc_copy_groups.len() <= i32::MAX as usize);
 
         // 3) Copy the buffers group by group
         let mut views_buf = Vec::with_capacity(len);
@@ -1463,6 +1463,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore)] // Takes too long
     fn test_gc_huge_array() {
         // Construct multiple 128 MiB BinaryView entries so total > 4 GiB
         let block_len: usize = 128 * 1024 * 1024; // 128 MiB per view
