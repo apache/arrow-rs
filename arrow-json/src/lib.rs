@@ -20,18 +20,28 @@
 //! See the module level documentation for the
 //! [`reader`] and [`writer`] for usage examples.
 //!
-//! # Binary Data
+//! # Binary Data uses `Base16` Encoding
 //!
-//! As per [RFC7159] JSON cannot encode arbitrary binary data. A common approach to workaround
-//! this is to use a [binary-to-text encoding] scheme, such as base64, to encode the
-//! input data and then decode it on output.
+//! As per [RFC7159] JSON cannot encode arbitrary binary data. This crate works around that
+//! limitation by encoding/decoding binary data as a [hexadecimal] string (i.e.
+//! [`Base16` encoding]).
+//!
+//! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
+//! as the original). If that is an issue, we recommend to convert binary data to/from a different
+//! encoding format such as `Base64` instead. See the following example for details.
+//!
+//! ## `Base64` Encoding Example
+//!
+//! [`Base64`] is a common [binary-to-text encoding] scheme with a space efficiency of 75%. The
+//! following example shows how to use the [`arrow_cast`] crate to encode binary data to `Base64`
+//! before converting it to JSON and how to decode it back.
 //!
 //! ```
 //! # use std::io::Cursor;
 //! # use std::sync::Arc;
 //! # use arrow_array::{BinaryArray, RecordBatch, StringArray};
 //! # use arrow_array::cast::AsArray;
-//! # use arrow_cast::base64::{b64_decode, b64_encode, BASE64_STANDARD};
+//! use arrow_cast::base64::{b64_decode, b64_encode, BASE64_STANDARD};
 //! # use arrow_json::{LineDelimitedWriter, ReaderBuilder};
 //! #
 //! // The data we want to write
@@ -61,7 +71,9 @@
 //!
 //! [RFC7159]: https://datatracker.ietf.org/doc/html/rfc7159#section-8.1
 //! [binary-to-text encoding]: https://en.wikipedia.org/wiki/Binary-to-text_encoding
-//!
+//! [hexadecimal]: https://en.wikipedia.org/wiki/Hexadecimal
+//! [`Base16` encoding]: https://en.wikipedia.org/wiki/Base16#Base16
+//! [`Base64`]: https://en.wikipedia.org/wiki/Base64
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
