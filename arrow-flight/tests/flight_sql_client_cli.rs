@@ -38,7 +38,7 @@ use arrow_flight::{
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema, TimeUnit};
-use assert_cmd::Command;
+use assert_cmd::cargo;
 use bytes::Bytes;
 use futures::{Stream, TryStreamExt};
 use prost::Message;
@@ -53,7 +53,7 @@ async fn test_simple() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
+        cargo::cargo_bin_cmd!("flight_sql_client")
             .unwrap()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
@@ -94,7 +94,7 @@ async fn test_get_catalogs() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
+        cargo::cargo_bin_cmd!("flight_sql_client")
             .unwrap()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
@@ -133,7 +133,7 @@ async fn test_get_db_schemas() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
+        cargo::cargo_bin_cmd!("flight_sql_client")
             .unwrap()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
@@ -173,7 +173,7 @@ async fn test_get_tables() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
+        cargo::cargo_bin_cmd!("flight_sql_client")
             .unwrap()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
@@ -212,7 +212,7 @@ async fn test_get_tables_db_filter() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
+        cargo::cargo_bin_cmd!("flight_sql_client")
             .unwrap()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
@@ -253,7 +253,7 @@ async fn test_get_tables_types() {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
+        cargo::cargo_bin_cmd!("flight_sql_client")
             .unwrap()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
@@ -295,7 +295,7 @@ async fn test_do_put_prepared_statement(test_server: FlightSqlServiceImpl) {
     let addr = fixture.addr;
 
     let stdout = tokio::task::spawn_blocking(move || {
-        Command::cargo_bin("flight_sql_client")
+        cargo::cargo_bin_cmd!("flight_sql_client")
             .unwrap()
             .env_clear()
             .env("RUST_BACKTRACE", "1")
