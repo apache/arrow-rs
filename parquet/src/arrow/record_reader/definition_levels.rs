@@ -133,12 +133,10 @@ impl ColumnLevelDecoder for DefinitionLevelBufferDecoder {
 
     fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
         match &mut self.decoder {
-            MaybePacked::Packed(d) => {
-                d.set_data(encoding, data);
-                Ok(())
-            }
-            MaybePacked::Fallback(d) => d.set_data(encoding, data),
-        }
+            MaybePacked::Packed(d) => d.set_data(encoding, data),
+            MaybePacked::Fallback(d) => d.set_data(encoding, data)?,
+        };
+        Ok(())
     }
 }
 
