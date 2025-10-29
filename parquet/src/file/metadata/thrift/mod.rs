@@ -625,9 +625,7 @@ fn read_row_group(
                 }
                 if let Some(meta_idx) = index.as_ref() {
                     for i in 0..list_ident.size as usize {
-                        let col_len = (meta_idx.col_chunk_offsets[i + 1]
-                            - meta_idx.col_chunk_offsets[i])
-                            as usize;
+                        let col_len = meta_idx.column_chunk_len(i);
                         let col_bytes = &prot.as_slice()[..col_len];
                         let mut col_prot = ThriftSliceInputProtocol::new(col_bytes);
                         let col = read_column_chunk(&mut col_prot, &schema_descr.columns()[i])?;
@@ -726,35 +724,9 @@ struct MetadataIndexSlice<'a> {
 }
 
 impl<'a> MetadataIndexSlice<'a> {
-    fn try_new(
-        index: &'a MetaIndex,
-        rg_idx: usize,
-        schema_descr: &Arc<SchemaDescriptor>,
-    ) -> Option<Self> {
-        let num_cols = schema_descr.num_columns();
-        if index.column_meta_lengths.len() % num_cols != 0 {
-            return None;
-        }
-        if index.column_offsets.len() % (num_cols + 1) != 0 {
-            return None;
-        }
-        let start = rg_idx * (num_cols + 1);
-        let end = start + num_cols + 1;
-        if end > index.column_offsets.len() {
-            return None;
-        }
-        let col_chunk_offsets = &index.column_offsets[start..end];
-        let start = rg_idx * num_cols;
-        let end = start + num_cols;
-        if end > index.column_meta_lengths.len() {
-            return None;
-        }
-        let col_meta_lengths = &index.column_meta_lengths[start..end];
-
-        Some(Self {
-            col_chunk_offsets,
-            col_meta_lengths,
-        })
+    // This assumes `is_valid` has been called on the `MetaIndex` this came from.
+    fn column_chunk_len(&self, col_idx: usize) -> usize {
+        (self.col_chunk_offsets[col_idx + 1] - self.col_chunk_offsets[col_idx]) as usize
     }
 }
 
@@ -841,17 +813,19 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 }
                 let schema_descr = schema_descr.as_ref().unwrap();
                 let list_ident = prot.read_list_begin()?;
-                let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
+                let num_rg = list_ident.size as usize;
+                let mut rg_vec = Vec::with_capacity(num_rg);
 
-                if let Some(meta_idx) = index.as_ref() {
-                    for i in 0..list_ident.size as usize {
-                        let slice = MetadataIndexSlice::try_new(meta_idx, i, schema_descr);
-                        let rg_len = (meta_idx.row_group_offsets[i + 1]
-                            - meta_idx.row_group_offsets[i])
-                            as usize;
+                // if there's an index and it's properly sized then use it to read row groups
+                if let Some(meta_idx) = index.as_ref()
+                    && meta_idx.is_valid(num_rg, schema_descr.num_columns())
+                {
+                    for i in 0..num_rg {
+                        let slice = meta_idx.get_slice(i, schema_descr);
+                        let rg_len = meta_idx.row_group_len(i);
                         let rg_bytes = &prot.as_slice()[..rg_len];
                         let mut rg_prot = ThriftSliceInputProtocol::new(rg_bytes);
-                        rg_vec.push(read_row_group(&mut rg_prot, schema_descr, slice)?);
+                        rg_vec.push(read_row_group(&mut rg_prot, schema_descr, Some(slice))?);
                         prot.skip_bytes(rg_len)?;
                     }
                 } else {
@@ -1411,6 +1385,45 @@ pub(crate) struct MetaIndex {
   5: required list<i64> column_meta_lengths
 }
 );
+
+impl MetaIndex {
+    /// Perform a check that the lists are appropriately sized. This must be called before using
+    /// any of the other functions in this impl.
+    fn is_valid(&self, num_rg: usize, num_col: usize) -> bool {
+        self.row_group_offsets.len() == num_rg + 1
+            && self.column_meta_lengths.len() == num_rg * num_col
+            && self.column_offsets.len() == num_rg * (num_col + 1)
+    }
+
+    /// Return the length of the row group at the given index.
+    ///
+    /// This may panic if [`Self::is_valid`] is not `true` or `rg_idx` is out of bounds.
+    fn row_group_len(&self, rg_idx: usize) -> usize {
+        (self.row_group_offsets[rg_idx + 1] - self.row_group_offsets[rg_idx]) as usize
+    }
+
+    /// Return a slice of the index for the row group at the given index.
+    ///
+    /// This may panic if [`Self::is_valid`] is not `true` or `rg_idx` is out of bounds.
+    fn get_slice(
+        &'_ self,
+        rg_idx: usize,
+        schema_descr: &Arc<SchemaDescriptor>,
+    ) -> MetadataIndexSlice<'_> {
+        let num_cols = schema_descr.num_columns();
+        let start = rg_idx * (num_cols + 1);
+        let end = start + num_cols + 1;
+        let col_chunk_offsets = &self.column_offsets[start..end];
+        let start = rg_idx * num_cols;
+        let end = start + num_cols;
+        let col_meta_lengths = &self.column_meta_lengths[start..end];
+
+        MetadataIndexSlice {
+            col_chunk_offsets,
+            col_meta_lengths,
+        }
+    }
+}
 
 // struct FileMetaData {
 //   1: required i32 version
