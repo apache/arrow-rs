@@ -773,6 +773,7 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
         let schema_bytes = &buf[start..end];
 
         let mut prot = ThriftSliceInputProtocol::new(schema_bytes);
+        // TODO: could match here and ignore index if it's wrong about the schema location
         let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
         let val = parquet_schema_from_array(val)?;
         schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
@@ -832,7 +833,9 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 let mut rg_vec = Vec::with_capacity(num_rg);
 
                 // if there's an index and it's properly sized then use it to read row groups
-                if let Some(meta_idx) = index.as_ref()
+                // the following is unstable before 1.88.0 2024 edition
+                // see https://github.com/rust-lang/rust/issues/53667
+                /*if let Some(meta_idx) = index.as_ref()
                     && meta_idx.is_valid(num_rg, schema_descr.num_columns())
                 {
                     for i in 0..num_rg {
@@ -846,6 +849,23 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 } else {
                     for _ in 0..list_ident.size {
                         rg_vec.push(read_row_group(&mut prot, schema_descr, None)?);
+                    }
+                }*/
+                match index.as_ref() {
+                    Some(meta_idx) if meta_idx.is_valid(num_rg, schema_descr.num_columns()) => {
+                        for i in 0..num_rg {
+                            let slice = meta_idx.get_slice(i, schema_descr);
+                            let rg_len = meta_idx.row_group_len(i);
+                            let rg_bytes = &prot.as_slice()[..rg_len];
+                            let mut rg_prot = ThriftSliceInputProtocol::new(rg_bytes);
+                            rg_vec.push(read_row_group(&mut rg_prot, schema_descr, Some(slice))?);
+                            prot.skip_bytes(rg_len)?;
+                        }
+                    }
+                    _ => {
+                        for _ in 0..list_ident.size {
+                            rg_vec.push(read_row_group(&mut prot, schema_descr, None)?);
+                        }
                     }
                 }
                 row_groups = Some(rg_vec);
