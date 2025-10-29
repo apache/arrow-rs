@@ -591,7 +591,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     ///   inside one of `self.buffers`.
     /// - `data_buf` must be ready to have additional bytes appended.
     /// - After this call, the returned view will have its
-    ///   `buffer_index` reset to `0` and its `offset` updated so that it points
+    ///   `buffer_index` reset to `buffer_idx` and its `offset` updated so that it points
     ///   into the bytes just appended at the end of `data_buf`.
     #[inline(always)]
     unsafe fn copy_view_to_buffer(
