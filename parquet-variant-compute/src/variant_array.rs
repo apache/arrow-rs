@@ -1506,7 +1506,7 @@ mod test {
         assert!(!variant_array.is_null(1));
         assert_eq!(variant_array.value(1), Variant::BooleanFalse);
 
-        assert!(!variant_array.is_null(3));
+        assert!(!variant_array.is_null(2));
         assert_eq!(
             variant_array.value(2),
             Variant::ShortString(ShortString::try_new("norm").unwrap())
