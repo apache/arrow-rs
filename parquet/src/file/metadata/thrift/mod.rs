@@ -499,6 +499,7 @@ fn read_column_metadata<'a>(
 fn read_column_chunk<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column_descr: &Arc<ColumnDescriptor>,
+    col_meta_len: Option<usize>,
 ) -> Result<ColumnChunkMetaData> {
     // create a default initialized ColumnMetaData
     let mut col = ColumnChunkMetaDataBuilder::new(column_descr.clone()).build()?;
@@ -535,7 +536,14 @@ fn read_column_chunk<'a>(
                 has_file_offset = true;
             }
             3 => {
-                col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
+                if let Some(meta_len) = col_meta_len {
+                    let meta_bytes = &prot.as_slice()[..meta_len];
+                    let mut meta_prot = ThriftSliceInputProtocol::new(meta_bytes);
+                    col_meta_mask = read_column_metadata(&mut meta_prot, &mut col)?;
+                    prot.skip_bytes(meta_len)?;
+                } else {
+                    col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
+                }
             }
             4 => {
                 col.offset_index_offset = Some(i64::read_thrift(&mut *prot)?);
@@ -626,15 +634,20 @@ fn read_row_group(
                 if let Some(meta_idx) = index.as_ref() {
                     for i in 0..list_ident.size as usize {
                         let col_len = meta_idx.column_chunk_len(i);
+                        let col_meta_len = meta_idx.column_meta_len(i);
                         let col_bytes = &prot.as_slice()[..col_len];
                         let mut col_prot = ThriftSliceInputProtocol::new(col_bytes);
-                        let col = read_column_chunk(&mut col_prot, &schema_descr.columns()[i])?;
+                        let col = read_column_chunk(
+                            &mut col_prot,
+                            &schema_descr.columns()[i],
+                            Some(col_meta_len),
+                        )?;
                         row_group.columns.push(col);
                         prot.skip_bytes(col_len)?;
                     }
                 } else {
                     for i in 0..list_ident.size as usize {
-                        let col = read_column_chunk(prot, &schema_descr.columns()[i])?;
+                        let col = read_column_chunk(prot, &schema_descr.columns()[i], None)?;
                         row_group.columns.push(col);
                     }
                 }
@@ -682,8 +695,6 @@ fn read_row_group(
 }
 
 /// Extract the metadata index from the footer bytes. `buf` should contain the entire footer.
-#[allow(dead_code)]
-#[inline(never)]
 pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
     // TODO(ets): need constants to get rid of magic numbers
     if buf.len() < 13 {
@@ -717,7 +728,6 @@ pub(crate) fn get_metadata_index(buf: &[u8]) -> Result<Option<MetaIndex>> {
     Ok(Some(idx))
 }
 
-#[allow(dead_code)]
 struct MetadataIndexSlice<'a> {
     col_chunk_offsets: &'a [i64],
     col_meta_lengths: &'a [i64],
@@ -727,6 +737,11 @@ impl<'a> MetadataIndexSlice<'a> {
     // This assumes `is_valid` has been called on the `MetaIndex` this came from.
     fn column_chunk_len(&self, col_idx: usize) -> usize {
         (self.col_chunk_offsets[col_idx + 1] - self.col_chunk_offsets[col_idx]) as usize
+    }
+
+    // This assumes `is_valid` has been called on the `MetaIndex` this came from.
+    fn column_meta_len(&self, col_idx: usize) -> usize {
+        self.col_meta_lengths[col_idx] as usize
     }
 }
 
@@ -1842,7 +1857,7 @@ pub(crate) mod tests {
         column_descr: Arc<ColumnDescriptor>,
     ) -> Result<ColumnChunkMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr)
+        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, None)
     }
 
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {
