@@ -61,13 +61,10 @@ enum Type {
 
 // ----------------------------------------------------------------------
 // Mirrors thrift enum `ConvertedType`
-//
-// Cannot use macros because of added field `None`
 
 // TODO(ets): Adding the `NONE` variant to this enum is a bit awkward. We should
-// look into removing it and using `Option<ConvertedType>` instead. Then all of this
-// handwritten code could go away.
-
+// look into removing it and using `Option<ConvertedType>` instead.
+thrift_enum!(
 /// Common types (converted types) used by frameworks when using Parquet.
 ///
 /// This helps map between types in those frameworks to the base types in Parquet.
@@ -75,142 +72,101 @@ enum Type {
 ///
 /// This struct was renamed from `LogicalType` in version 4.0.0.
 /// If targeting Parquet format 2.4.0 or above, please use [LogicalType] instead.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(non_camel_case_types)]
-pub enum ConvertedType {
-    /// No type conversion.
-    NONE,
-    /// A BYTE_ARRAY actually contains UTF8 encoded chars.
-    UTF8,
+enum ConvertedType {
+  /// Not defined in the spec, used internally to indicate no type conversion
+  NONE = -1;
 
-    /// A map is converted as an optional field containing a repeated key/value pair.
-    MAP,
+  /// A BYTE_ARRAY actually contains UTF8 encoded chars.
+  UTF8 = 0;
 
-    /// A key/value pair is converted into a group of two fields.
-    MAP_KEY_VALUE,
+  /// A map is converted as an optional field containing a repeated key/value pair.
+  MAP = 1;
 
-    /// A list is converted into an optional field containing a repeated field for its
-    /// values.
-    LIST,
+  /// A key/value pair is converted into a group of two fields.
+  MAP_KEY_VALUE = 2;
 
-    /// An enum is converted into a binary field
-    ENUM,
+  /// A list is converted into an optional field containing a repeated field for its
+  /// values.
+  LIST = 3;
 
-    /// A decimal value.
-    /// This may be used to annotate binary or fixed primitive types. The
-    /// underlying byte array stores the unscaled value encoded as two's
-    /// complement using big-endian byte order (the most significant byte is the
-    /// zeroth element).
-    ///
-    /// This must be accompanied by a (maximum) precision and a scale in the
-    /// SchemaElement. The precision specifies the number of digits in the decimal
-    /// and the scale stores the location of the decimal point. For example 1.23
-    /// would have precision 3 (3 total digits) and scale 2 (the decimal point is
-    /// 2 digits over).
-    DECIMAL,
+  /// An enum is converted into a BYTE_ARRAY field
+  ENUM = 4;
 
-    /// A date stored as days since Unix epoch, encoded as the INT32 physical type.
-    DATE,
+  /// A decimal value.
+  ///
+  /// This may be used to annotate BYTE_ARRAY or FIXED_LEN_BYTE_ARRAY primitive
+  /// types. The underlying byte array stores the unscaled value encoded as two's
+  /// complement using big-endian byte order (the most significant byte is the
+  /// zeroth element). The value of the decimal is the value * 10^{-scale}.
+  ///
+  /// This must be accompanied by a (maximum) precision and a scale in the
+  /// SchemaElement. The precision specifies the number of digits in the decimal
+  /// and the scale stores the location of the decimal point. For example 1.23
+  /// would have precision 3 (3 total digits) and scale 2 (the decimal point is
+  /// 2 digits over).
+  DECIMAL = 5;
 
-    /// The total number of milliseconds since midnight. The value is stored as an INT32
-    /// physical type.
-    TIME_MILLIS,
+  /// A date stored as days since Unix epoch, encoded as the INT32 physical type.
+  DATE = 6;
 
-    /// The total number of microseconds since midnight. The value is stored as an INT64
-    /// physical type.
-    TIME_MICROS,
+  /// The total number of milliseconds since midnight. The value is stored as an INT32
+  /// physical type.
+  TIME_MILLIS = 7;
 
-    /// Date and time recorded as milliseconds since the Unix epoch.
-    /// Recorded as a physical type of INT64.
-    TIMESTAMP_MILLIS,
+  /// The total number of microseconds since midnight. The value is stored as an INT64
+  /// physical type.
+  TIME_MICROS = 8;
 
-    /// Date and time recorded as microseconds since the Unix epoch.
-    /// The value is stored as an INT64 physical type.
-    TIMESTAMP_MICROS,
+  /// Date and time recorded as milliseconds since the Unix epoch.
+  /// Recorded as a physical type of INT64.
+  TIMESTAMP_MILLIS = 9;
 
-    /// An unsigned 8 bit integer value stored as INT32 physical type.
-    UINT_8,
+  /// Date and time recorded as microseconds since the Unix epoch.
+  /// The value is stored as an INT64 physical type.
+  TIMESTAMP_MICROS = 10;
 
-    /// An unsigned 16 bit integer value stored as INT32 physical type.
-    UINT_16,
+  /// An unsigned 8 bit integer value stored as INT32 physical type.
+  UINT_8 = 11;
 
-    /// An unsigned 32 bit integer value stored as INT32 physical type.
-    UINT_32,
+  /// An unsigned 16 bit integer value stored as INT32 physical type.
+  UINT_16 = 12;
 
-    /// An unsigned 64 bit integer value stored as INT64 physical type.
-    UINT_64,
+  /// An unsigned 32 bit integer value stored as INT32 physical type.
+  UINT_32 = 13;
 
-    /// A signed 8 bit integer value stored as INT32 physical type.
-    INT_8,
+  /// An unsigned 64 bit integer value stored as INT64 physical type.
+  UINT_64 = 14;
 
-    /// A signed 16 bit integer value stored as INT32 physical type.
-    INT_16,
+  /// A signed 8 bit integer value stored as INT32 physical type.
+  INT_8 = 15;
 
-    /// A signed 32 bit integer value stored as INT32 physical type.
-    INT_32,
+  /// A signed 16 bit integer value stored as INT32 physical type.
+  INT_16 = 16;
 
-    /// A signed 64 bit integer value stored as INT64 physical type.
-    INT_64,
+  /// A signed 32 bit integer value stored as INT32 physical type.
+  INT_32 = 17;
 
-    /// A JSON document embedded within a single UTF8 column.
-    JSON,
+  /// A signed 64 bit integer value stored as INT64 physical type.
+  INT_64 = 18;
 
-    /// A BSON document embedded within a single BINARY column.
-    BSON,
+  /// A JSON document embedded within a single UTF8 column.
+  JSON = 19;
 
-    /// An interval of time.
-    ///
-    /// This type annotates data stored as a FIXED_LEN_BYTE_ARRAY of length 12.
-    /// This data is composed of three separate little endian unsigned integers.
-    /// Each stores a component of a duration of time. The first integer identifies
-    /// the number of months associated with the duration, the second identifies
-    /// the number of days associated with the duration and the third identifies
-    /// the number of milliseconds associated with the provided duration.
-    /// This duration of time is independent of any particular timezone or date.
-    INTERVAL,
+   /// A BSON document embedded within a single BINARY column.
+  BSON = 20;
+
+  /// An interval of time
+  ///
+  /// This type annotates data stored as a FIXED_LEN_BYTE_ARRAY of length 12.
+  /// This data is composed of three separate little endian unsigned integers.
+  /// Each stores a component of a duration of time. The first integer identifies
+  /// the number of months associated with the duration, the second identifies
+  /// the number of days associated with the duration and the third identifies
+  /// the number of milliseconds associated with the provided duration.
+  /// This duration of time is independent of any particular timezone or date.
+  INTERVAL = 21;
 }
-
-impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for ConvertedType {
-    fn read_thrift(prot: &mut R) -> Result<Self> {
-        let val = prot.read_i32()?;
-        Ok(match val {
-            0 => Self::UTF8,
-            1 => Self::MAP,
-            2 => Self::MAP_KEY_VALUE,
-            3 => Self::LIST,
-            4 => Self::ENUM,
-            5 => Self::DECIMAL,
-            6 => Self::DATE,
-            7 => Self::TIME_MILLIS,
-            8 => Self::TIME_MICROS,
-            9 => Self::TIMESTAMP_MILLIS,
-            10 => Self::TIMESTAMP_MICROS,
-            11 => Self::UINT_8,
-            12 => Self::UINT_16,
-            13 => Self::UINT_32,
-            14 => Self::UINT_64,
-            15 => Self::INT_8,
-            16 => Self::INT_16,
-            17 => Self::INT_32,
-            18 => Self::INT_64,
-            19 => Self::JSON,
-            20 => Self::BSON,
-            21 => Self::INTERVAL,
-            _ => return Err(general_err!("Unexpected ConvertedType {}", val)),
-        })
-    }
-}
-
-impl WriteThrift for ConvertedType {
-    const ELEMENT_TYPE: ElementType = ElementType::I32;
-
-    fn write_thrift<W: Write>(&self, writer: &mut ThriftCompactOutputProtocol<W>) -> Result<()> {
-        // because we've added NONE, the variant values are off by 1, so correct that here
-        writer.write_i32(*self as i32 - 1)
-    }
-}
-
-write_thrift_field!(ConvertedType, FieldType::I32);
+);
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `TimeUnit`
@@ -741,7 +697,7 @@ pub struct EncodingMask(i32);
 
 impl EncodingMask {
     /// Highest valued discriminant in the [`Encoding`] enum
-    const MAX_ENCODING: i32 = Encoding::BYTE_STREAM_SPLIT as i32;
+    const MAX_ENCODING: i32 = Encoding::MAX_DISCRIMINANT;
     /// A mask consisting of unused bit positions, used for validation. This includes the never
     /// used GROUP_VAR_INT encoding value of `1`.
     const ALLOWED_MASK: u32 =
@@ -1326,12 +1282,6 @@ impl WriteThrift for ColumnOrder {
 
 // ----------------------------------------------------------------------
 // Display handlers
-
-impl fmt::Display for ConvertedType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
-}
 
 impl fmt::Display for Compression {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {

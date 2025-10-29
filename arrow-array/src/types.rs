@@ -1324,7 +1324,7 @@ pub trait DecimalType:
     /// Maximum no of digits after the decimal point (note the scale can be negative)
     const MAX_SCALE: i8;
     /// The maximum value for each precision in `0..=MAX_PRECISION`: [0, 9, 99, ...]
-    const MAX_FOR_EACH_PRECISION: &[Self::Native];
+    const MAX_FOR_EACH_PRECISION: &'static [Self::Native];
     /// fn to create its [`DataType`]
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType;
     /// Default values for [`DataType`]
@@ -1395,7 +1395,8 @@ impl DecimalType for Decimal32Type {
     const BYTE_LENGTH: usize = 4;
     const MAX_PRECISION: u8 = DECIMAL32_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL32_MAX_SCALE;
-    const MAX_FOR_EACH_PRECISION: &[i32] = &arrow_data::decimal::MAX_DECIMAL32_FOR_EACH_PRECISION;
+    const MAX_FOR_EACH_PRECISION: &'static [i32] =
+        &arrow_data::decimal::MAX_DECIMAL32_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal32;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal32(DECIMAL32_MAX_PRECISION, DECIMAL32_DEFAULT_SCALE);
@@ -1430,7 +1431,8 @@ impl DecimalType for Decimal64Type {
     const BYTE_LENGTH: usize = 8;
     const MAX_PRECISION: u8 = DECIMAL64_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL64_MAX_SCALE;
-    const MAX_FOR_EACH_PRECISION: &[i64] = &arrow_data::decimal::MAX_DECIMAL64_FOR_EACH_PRECISION;
+    const MAX_FOR_EACH_PRECISION: &'static [i64] =
+        &arrow_data::decimal::MAX_DECIMAL64_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal64;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal64(DECIMAL64_MAX_PRECISION, DECIMAL64_DEFAULT_SCALE);
@@ -1465,7 +1467,8 @@ impl DecimalType for Decimal128Type {
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL128_MAX_SCALE;
-    const MAX_FOR_EACH_PRECISION: &[i128] = &arrow_data::decimal::MAX_DECIMAL128_FOR_EACH_PRECISION;
+    const MAX_FOR_EACH_PRECISION: &'static [i128] =
+        &arrow_data::decimal::MAX_DECIMAL128_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
@@ -1500,7 +1503,8 @@ impl DecimalType for Decimal256Type {
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL256_MAX_SCALE;
-    const MAX_FOR_EACH_PRECISION: &[i256] = &arrow_data::decimal::MAX_DECIMAL256_FOR_EACH_PRECISION;
+    const MAX_FOR_EACH_PRECISION: &'static [i256] =
+        &arrow_data::decimal::MAX_DECIMAL256_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
