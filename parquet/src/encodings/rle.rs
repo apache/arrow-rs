@@ -328,7 +328,10 @@ impl RleDecoder {
             self.bit_reader = Some(BitReader::new(data));
         }
 
-        self.reload()?;
+        // Initialize decoder state. The boolean only reports whether the first run contained data,
+        // and `get`/`get_batch` already interpret that result to drive iteration. We only need
+        // errors propagated here, so the flag returned is intentionally ignored.
+        let _ = self.reload()?;
         Ok(())
     }
 
