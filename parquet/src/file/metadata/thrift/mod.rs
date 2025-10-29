@@ -726,19 +726,35 @@ struct MetadataIndexSlice<'a> {
 }
 
 impl<'a> MetadataIndexSlice<'a> {
-    fn new(index: &'a MetaIndex, rg_idx: usize, schema_descr: &Arc<SchemaDescriptor>) -> Self {
+    fn try_new(
+        index: &'a MetaIndex,
+        rg_idx: usize,
+        schema_descr: &Arc<SchemaDescriptor>,
+    ) -> Option<Self> {
         let num_cols = schema_descr.num_columns();
+        if index.column_meta_lengths.len() % num_cols != 0 {
+            return None;
+        }
+        if index.column_offsets.len() % (num_cols + 1) != 0 {
+            return None;
+        }
         let start = rg_idx * (num_cols + 1);
         let end = start + num_cols + 1;
+        if end > index.column_offsets.len() {
+            return None;
+        }
         let col_chunk_offsets = &index.column_offsets[start..end];
         let start = rg_idx * num_cols;
         let end = start + num_cols;
+        if end > index.column_meta_lengths.len() {
+            return None;
+        }
         let col_meta_lengths = &index.column_meta_lengths[start..end];
 
-        Self {
+        Some(Self {
             col_chunk_offsets,
             col_meta_lengths,
-        }
+        })
     }
 }
 
@@ -829,13 +845,13 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
 
                 if let Some(meta_idx) = index.as_ref() {
                     for i in 0..list_ident.size as usize {
-                        let slice = MetadataIndexSlice::new(meta_idx, i, schema_descr);
+                        let slice = MetadataIndexSlice::try_new(meta_idx, i, schema_descr);
                         let rg_len = (meta_idx.row_group_offsets[i + 1]
                             - meta_idx.row_group_offsets[i])
                             as usize;
                         let rg_bytes = &prot.as_slice()[..rg_len];
                         let mut rg_prot = ThriftSliceInputProtocol::new(rg_bytes);
-                        rg_vec.push(read_row_group(&mut rg_prot, schema_descr, Some(slice))?);
+                        rg_vec.push(read_row_group(&mut rg_prot, schema_descr, slice)?);
                         prot.skip_bytes(rg_len)?;
                     }
                 } else {
