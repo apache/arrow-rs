@@ -29,6 +29,14 @@ There are several [examples](https://github.com/apache/arrow-rs/tree/main/arrow/
 
 The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/arrow/index.html).
 
+## Arrow Implementation Status
+
+Please see the [Implementation Status Page] on the Apache Arrow website for which
+Arrow features are supported by this crate.
+
+[Implementation Status Page]: https://arrow.apache.org/docs/status.html
+
+
 ## Rust Version Compatibility
 
 This crate is tested with the latest stable version of Rust. We do not currently test against other, older versions.
