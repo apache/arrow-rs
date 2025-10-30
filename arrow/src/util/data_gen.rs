@@ -20,8 +20,8 @@
 use std::sync::Arc;
 
 use rand::{
-    distr::uniform::{SampleRange, SampleUniform},
     Rng,
+    distr::uniform::{SampleRange, SampleUniform},
 };
 
 use crate::array::*;
@@ -118,7 +118,7 @@ pub fn create_random_array(
         Float16 => {
             return Err(ArrowError::NotYetImplemented(
                 "Float16 is not implemented".to_string(),
-            ))
+            ));
         }
         Float32 => Arc::new(create_primitive_array::<Float32Type>(
             size,
@@ -174,7 +174,7 @@ pub fn create_random_array(
             _ => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Unsupported unit {unit:?} for Time32"
-                )))
+                )));
             }
         },
         Time64(unit) => match unit {
@@ -188,7 +188,7 @@ pub fn create_random_array(
             _ => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Unsupported unit {unit:?} for Time64"
-                )))
+                )));
             }
         },
         Utf8 => Arc::new(create_string_array::<i32>(size, primitive_null_density)),
@@ -228,7 +228,7 @@ pub fn create_random_array(
         other => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Generating random arrays not yet implemented for {other:?}"
-            )))
+            )));
         }
     })
 }
@@ -299,7 +299,7 @@ fn create_random_list_array(
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot create list array for field {field}"
-            )))
+            )));
         }
     };
 
@@ -337,7 +337,7 @@ fn create_random_struct_array(
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot create struct array for field {field}"
-            )))
+            )));
         }
     };
 
@@ -383,7 +383,7 @@ fn create_random_map_array(
         _ => {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Cannot create map array for field {field:?}"
-            )))
+            )));
         }
     };
 

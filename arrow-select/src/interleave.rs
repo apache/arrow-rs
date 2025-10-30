@@ -286,21 +286,29 @@ fn interleave_struct(
 ) -> Result<ArrayRef, ArrowError> {
     let interleaved = Interleave::<'_, StructArray>::new(values, indices);
 
-    let mut struct_fields_array = vec![];
-
-    for i in 0..fields.len() {
-        let field_values: Vec<&dyn Array> = interleaved
-            .arrays
-            .iter()
-            .map(|x| x.column(i).as_ref())
-            .collect();
-        let interleaved = interleave(&field_values, indices)?;
-        struct_fields_array.push(interleaved);
+    if fields.is_empty() {
+        let array = StructArray::try_new_with_length(
+            fields.clone(),
+            vec![],
+            interleaved.nulls,
+            indices.len(),
+        )?;
+        return Ok(Arc::new(array));
     }
 
-    let struct_array =
-        StructArray::try_new(fields.clone(), struct_fields_array, interleaved.nulls)?;
+    let struct_fields_array: Result<Vec<_>, _> = (0..fields.len())
+        .map(|i| {
+            let field_values: Vec<&dyn Array> = interleaved
+                .arrays
+                .iter()
+                .map(|x| x.column(i).as_ref())
+                .collect();
+            interleave(&field_values, indices)
+        })
+        .collect();
 
+    let struct_array =
+        StructArray::try_new(fields.clone(), struct_fields_array?, interleaved.nulls)?;
     Ok(Arc::new(struct_array))
 }
 
@@ -1164,5 +1172,14 @@ mod tests {
             actual.push(value);
         }
         assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_struct_no_fields() {
+        let fields = Fields::empty();
+        let a = StructArray::try_new_with_length(fields.clone(), vec![], None, 10).unwrap();
+        let v = interleave(&[&a], &[(0, 0)]).unwrap();
+        assert_eq!(v.len(), 1);
+        assert_eq!(v.data_type(), &DataType::Struct(fields));
     }
 }

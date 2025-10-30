@@ -513,7 +513,10 @@ impl RleDecoder {
                 self.rle_left = (indicator_value >> 1) as u32;
                 let value_width = bit_util::ceil(self.bit_width as usize, 8);
                 self.current_value = bit_reader.get_aligned::<u64>(value_width);
-                assert!(self.current_value.is_some());
+                assert!(
+                    self.current_value.is_some(),
+                    "parquet_data_error: not enough data for RLE decoding"
+                );
             }
             true
         } else {
@@ -527,7 +530,7 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, distr::StandardUniform, rng, Rng, SeedableRng};
+    use rand::{self, Rng, SeedableRng, distr::StandardUniform, rng};
 
     const MAX_WIDTH: usize = 32;
 
@@ -1025,11 +1028,11 @@ mod tests {
                 .collect();
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&seed_vec[0..seed_len]);
-            let mut gen = rand::rngs::StdRng::from_seed(seed);
+            let mut r#gen = rand::rngs::StdRng::from_seed(seed);
 
             let mut parity = false;
             for _ in 0..ngroups {
-                let mut group_size = gen.random_range(1..20);
+                let mut group_size = r#gen.random_range(1..20);
                 if group_size > max_group_size {
                     group_size = 1;
                 }

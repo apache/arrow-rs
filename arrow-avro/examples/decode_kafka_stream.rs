@@ -171,8 +171,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let id_v0: u32 = 0;
     let id_v1: u32 = 1;
 
-    // Confluent SchemaStore keyed by integer IDs (FingerprintAlgorithm::None)
-    let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::None);
+    // Confluent SchemaStore keyed by integer IDs (FingerprintAlgorithm::Id)
+    let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
     store.set(Fingerprint::Id(id_v0), writer_v0.clone())?;
     store.set(Fingerprint::Id(id_v1), writer_v1.clone())?;
 

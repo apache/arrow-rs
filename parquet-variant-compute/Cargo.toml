@@ -26,7 +26,7 @@ homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "variant"]
-edition = "2024"
+edition = { workspace = true }
 rust-version = { workspace = true }
 
 

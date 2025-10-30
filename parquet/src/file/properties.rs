@@ -169,7 +169,7 @@ pub struct WriterProperties {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     #[cfg(feature = "encryption")]
-    pub(crate) file_encryption_properties: Option<FileEncryptionProperties>,
+    pub(crate) file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
 
 impl Default for WriterProperties {
@@ -432,7 +432,7 @@ impl WriterProperties {
     ///
     /// For more details see [`WriterPropertiesBuilder::with_file_encryption_properties`]
     #[cfg(feature = "encryption")]
-    pub fn file_encryption_properties(&self) -> Option<&FileEncryptionProperties> {
+    pub fn file_encryption_properties(&self) -> Option<&Arc<FileEncryptionProperties>> {
         self.file_encryption_properties.as_ref()
     }
 }
@@ -458,7 +458,7 @@ pub struct WriterPropertiesBuilder {
     statistics_truncate_length: Option<usize>,
     coerce_types: bool,
     #[cfg(feature = "encryption")]
-    file_encryption_properties: Option<FileEncryptionProperties>,
+    file_encryption_properties: Option<Arc<FileEncryptionProperties>>,
 }
 
 impl Default for WriterPropertiesBuilder {
@@ -642,7 +642,10 @@ impl WriterPropertiesBuilder {
     /// [`Index`]: crate::file::page_index::column_index::ColumnIndexMetaData
     pub fn set_column_index_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
-            assert!(value > 0, "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+            assert!(
+                value > 0,
+                "Cannot have a 0 column index truncate length. If you wish to disable min/max value truncation, set it to `None`."
+            );
         }
 
         self.column_index_truncate_length = max_length;
@@ -668,7 +671,10 @@ impl WriterPropertiesBuilder {
     /// [`Statistics`]: crate::file::statistics::Statistics
     pub fn set_statistics_truncate_length(mut self, max_length: Option<usize>) -> Self {
         if let Some(value) = max_length {
-            assert!(value > 0, "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`.");
+            assert!(
+                value > 0,
+                "Cannot have a 0 statistics truncate length. If you wish to disable min/max value truncation, set it to `None`."
+            );
         }
 
         self.statistics_truncate_length = max_length;
@@ -703,7 +709,7 @@ impl WriterPropertiesBuilder {
     #[cfg(feature = "encryption")]
     pub fn with_file_encryption_properties(
         mut self,
-        file_encryption_properties: FileEncryptionProperties,
+        file_encryption_properties: Arc<FileEncryptionProperties>,
     ) -> Self {
         self.file_encryption_properties = Some(file_encryption_properties);
         self
@@ -1345,9 +1351,11 @@ mod tests {
             props.statistics_enabled(&ColumnPath::from("col")),
             DEFAULT_STATISTICS_ENABLED
         );
-        assert!(props
-            .bloom_filter_properties(&ColumnPath::from("col"))
-            .is_none());
+        assert!(
+            props
+                .bloom_filter_properties(&ColumnPath::from("col"))
+                .is_none()
+        );
     }
 
     #[test]

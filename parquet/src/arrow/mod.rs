@@ -190,8 +190,14 @@ pub mod async_reader;
 #[cfg(feature = "async")]
 pub mod async_writer;
 
+pub mod push_decoder;
+
+mod in_memory_row_group;
 mod record_reader;
+
 experimental!(mod schema);
+
+use std::fmt::Debug;
 
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]
@@ -202,8 +208,8 @@ use crate::schema::types::SchemaDescriptor;
 use arrow_schema::{FieldRef, Schema};
 
 pub use self::schema::{
-    add_encoded_arrow_schema_to_metadata, encode_arrow_schema, parquet_to_arrow_field_levels,
-    parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns, ArrowSchemaConverter, FieldLevels,
+    ArrowSchemaConverter, FieldLevels, add_encoded_arrow_schema_to_metadata, encode_arrow_schema,
+    parquet_to_arrow_field_levels, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
 };
 
 /// Schema metadata key used to store serialized Arrow schema

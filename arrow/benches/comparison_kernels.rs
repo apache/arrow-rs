@@ -27,8 +27,8 @@ use arrow_buffer::IntervalMonthDayNano;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_scalar;
 use criterion::Criterion;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
 use std::hint;
 
 const SIZE: usize = 65536;

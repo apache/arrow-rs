@@ -25,7 +25,7 @@ authors = { workspace = true }
 license = { workspace = true }
 keywords = { workspace = true }
 include = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
@@ -43,12 +43,13 @@ canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
-avro_custom_types = []
+avro_custom_types = ["dep:arrow-select"]
 
 [dependencies]
 arrow-schema = { workspace = true }
 arrow-buffer = { workspace = true }
 arrow-array = { workspace = true }
+arrow-select = { workspace = true, optional = true }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 serde = { version = "1.0.188", features = ["derive"] }
 flate2 = { version = "1.0", default-features = false, features = [

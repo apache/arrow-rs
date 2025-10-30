@@ -18,8 +18,8 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::distr::{Distribution, StandardUniform, Uniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform, Uniform};
 use std::hint;
 
 use chrono::DateTime;
@@ -358,6 +358,46 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast binary view to string view", |b| {
         b.iter(|| cast_array(&binary_view_array, DataType::Utf8View))
+    });
+
+    c.bench_function("cast string single run to ree<int32>", |b| {
+        let source_array = StringArray::from(vec!["a"; 8192]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast runs of 10 string to ree<int32>", |b| {
+        let source_array: Int32Array = (0..8192).map(|i| i / 10).collect();
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast runs of 1000 int32s to ree<int32>", |b| {
+        let source_array: Int32Array = (0..8192).map(|i| i / 1000).collect();
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast no runs of int32s to ree<int32>", |b| {
+        let source_array: Int32Array = (0..8192).collect();
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
 }
 

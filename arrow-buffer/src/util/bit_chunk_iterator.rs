@@ -221,7 +221,10 @@ pub struct BitChunks<'a> {
 impl<'a> BitChunks<'a> {
     /// Create a new [`BitChunks`] from a byte array, and an offset and length in bits
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
-        assert!(ceil(offset + len, 8) <= buffer.len() * 8);
+        assert!(
+            ceil(offset + len, 8) <= buffer.len(),
+            "offset + len out of bounds"
+        );
 
         let byte_offset = offset / 8;
         let bit_offset = offset % 8;
@@ -474,6 +477,57 @@ mod tests {
 
         assert_eq!(u64::MAX, bitchunks.iter().last().unwrap());
         assert_eq!(0x7F, bitchunks.remainder_bits());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_length_is_more_than_buffer_length() {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(0, (ALLOC_SIZE + 1) * 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_length_is_more_than_buffer_length_but_not_when_not_using_ceil()
+     {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(0, (ALLOC_SIZE * 8) + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_when_offset_is_not_zero_and_length_is_the_entire_buffer_length()
+     {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(8, ALLOC_SIZE * 8);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_out_of_bound_should_panic_when_offset_is_not_zero_and_length_is_the_entire_buffer_length_with_ceil()
+     {
+        const ALLOC_SIZE: usize = 4 * 1024;
+        let input = vec![0xFF_u8; ALLOC_SIZE];
+
+        let buffer: Buffer = Buffer::from_vec(input);
+
+        // We are reading more than exists in the buffer
+        buffer.bit_chunks(1, ALLOC_SIZE * 8);
     }
 
     #[test]

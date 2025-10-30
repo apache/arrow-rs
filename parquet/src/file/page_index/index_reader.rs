@@ -27,8 +27,8 @@ use crate::file::page_index::column_index::{
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::ChunkReader;
 use crate::parquet_thrift::{
-    read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
-    ThriftCompactOutputProtocol, ThriftSliceInputProtocol, WriteThrift, WriteThriftField,
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    ThriftSliceInputProtocol, WriteThrift, WriteThriftField, read_thrift_vec,
 };
 use crate::thrift_struct;
 use std::io::Write;

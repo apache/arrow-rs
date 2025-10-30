@@ -27,13 +27,13 @@ repository = { workspace = true }
 authors = { workspace = true }
 keywords = ["arrow", "parquet", "geometry", "geography"]
 readme = "README.md"
-edition = "2024"
+edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
 arrow-schema = { workspace = true }
 geo-traits = { version = "0.3" }
-wkb = { version = "0.9" }
+wkb = { version = "0.9.1" }
 
 [dev-dependencies]
 wkt = { version = "0.14" }

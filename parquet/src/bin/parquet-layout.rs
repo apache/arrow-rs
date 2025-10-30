@@ -17,6 +17,10 @@
 
 //! Binary that prints the physical layout of a parquet file
 //!
+//! NOTE: due to this binary's use of the deprecated [`parquet::format`] module, it
+//! will no longer be maintained, and will likely be removed in the future.
+//! Alternatives to this include [`parquet-cli`] and [`parquet-viewer`].
+//!
 //! # Install
 //!
 //! `parquet-layout` can be installed using `cargo`:
@@ -32,6 +36,9 @@
 //! ```
 //! cargo run --features=cli --bin parquet-layout XYZ.parquet
 //! ```
+//!
+//! [`parquet-cli`]: https://github.com/apache/parquet-java/tree/master/parquet-cli
+//! [`parquet-viewer`]: https://github.com/xiangpenghao/parquet-viewer
 
 use std::fs::File;
 use std::io::Read;
@@ -44,12 +51,25 @@ use thrift::protocol::TCompactInputProtocol;
 use parquet::basic::Compression;
 use parquet::errors::Result;
 use parquet::file::reader::ChunkReader;
+#[allow(deprecated)]
 use parquet::format::PageHeader;
 use parquet::thrift::TSerializable;
 
 #[derive(Serialize, Debug)]
+struct Index {
+    offset: i64,
+    length: Option<i32>,
+}
+
+#[derive(Serialize, Debug)]
+struct Footer {
+    metadata_size: Option<usize>,
+}
+
+#[derive(Serialize, Debug)]
 struct ParquetFile {
     row_groups: Vec<RowGroup>,
+    footer: Footer,
 }
 
 #[derive(Serialize, Debug)]
@@ -64,6 +84,9 @@ struct ColumnChunk {
     has_offset_index: bool,
     has_column_index: bool,
     has_bloom_filter: bool,
+    offset_index: Option<Index>,
+    column_index: Option<Index>,
+    bloom_filter: Option<Index>,
     pages: Vec<Page>,
 }
 
@@ -79,8 +102,12 @@ struct Page {
     num_values: i32,
 }
 
+#[allow(deprecated)]
 fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
-    let metadata = ParquetMetaDataReader::new().parse_and_finish(reader)?;
+    let mut metadata_reader = ParquetMetaDataReader::new();
+    metadata_reader.try_parse(reader)?;
+    let metadata_size = metadata_reader.metadata_size();
+    let metadata = metadata_reader.finish()?;
     let schema = metadata.file_metadata().schema_descr();
 
     let row_groups = (0..metadata.num_row_groups())
@@ -146,6 +173,18 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         has_offset_index: column.offset_index_offset().is_some(),
                         has_column_index: column.column_index_offset().is_some(),
                         has_bloom_filter: column.bloom_filter_offset().is_some(),
+                        offset_index: column.offset_index_offset().map(|offset| Index {
+                            offset,
+                            length: column.offset_index_length(),
+                        }),
+                        column_index: column.column_index_offset().map(|offset| Index {
+                            offset,
+                            length: column.column_index_length(),
+                        }),
+                        bloom_filter: column.bloom_filter_offset().map(|offset| Index {
+                            offset,
+                            length: column.bloom_filter_length(),
+                        }),
                         pages,
                     })
                 })
@@ -158,11 +197,15 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(ParquetFile { row_groups })
+    Ok(ParquetFile {
+        row_groups,
+        footer: Footer { metadata_size },
+    })
 }
 
 /// Reads the page header at `offset` from `reader`, returning
 /// both the `PageHeader` and its length in bytes
+#[allow(deprecated)]
 fn read_page_header<C: ChunkReader>(reader: &C, offset: u64) -> Result<(usize, PageHeader)> {
     struct TrackedRead<R>(R, usize);
 

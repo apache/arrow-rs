@@ -22,6 +22,8 @@
 //!
 //!
 
+use crate::file::metadata::HeapSize;
+
 /// A geospatial instance has at least two coordinate dimensions: X and Y for 2D coordinates of each point.
 /// X represents longitude/easting and Y represents latitude/northing. A geospatial instance can optionally
 /// have Z and/or M values associated with each point.
@@ -167,6 +169,12 @@ impl BoundingBox {
     /// Returns `true` if both mmin and mmax are present.
     pub fn is_m_valid(&self) -> bool {
         self.m_range.is_some()
+    }
+}
+
+impl HeapSize for BoundingBox {
+    fn heap_size(&self) -> usize {
+        0 // no heap allocations
     }
 }
 

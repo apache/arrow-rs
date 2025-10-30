@@ -913,9 +913,13 @@ impl RowConverter {
             0,
             "can't construct Rows instance from array with nulls"
         );
+        let (offsets, values, _) = array.into_parts();
+        let offsets = offsets.iter().map(|&i| i.as_usize()).collect();
+        // Try zero-copy, if it does not succeed, fall back to copying the values.
+        let buffer = values.into_vec().unwrap_or_else(|values| values.to_vec());
         Rows {
-            buffer: array.values().to_vec(),
-            offsets: array.offsets().iter().map(|&i| i.as_usize()).collect(),
+            buffer,
+            offsets,
             config: RowConfig {
                 fields: Arc::clone(&self.fields),
                 validate_utf8: true,
@@ -2472,6 +2476,19 @@ mod tests {
         assert_eq!(rows.row(3), rows.row(4));
         assert_eq!(rows.row(4), rows.row(5));
         assert!(rows.row(3) < rows.row(0));
+    }
+
+    #[test]
+    fn test_from_binary_shared_buffer() {
+        let converter = RowConverter::new(vec![SortField::new(DataType::Binary)]).unwrap();
+        let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
+        let rows = converter.convert_columns(&[array]).unwrap();
+        let binary_rows = rows.try_into_binary().expect("known-small rows");
+        let _binary_rows_shared_buffer = binary_rows.clone();
+
+        let parsed = converter.from_binary(binary_rows);
+
+        converter.convert_rows(parsed.iter()).unwrap();
     }
 
     #[test]

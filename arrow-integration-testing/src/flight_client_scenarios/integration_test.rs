@@ -31,11 +31,11 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_flight::{
-    flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
-    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, IpcMessage, Location, Ticket,
+    FlightData, FlightDescriptor, IpcMessage, Location, Ticket, flight_descriptor::DescriptorType,
+    flight_service_client::FlightServiceClient, utils::flight_data_to_arrow_batch,
 };
-use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
-use tonic::{transport::Endpoint, Request, Streaming};
+use futures::{StreamExt, channel::mpsc, sink::SinkExt, stream};
+use tonic::{Request, Streaming, transport::Endpoint};
 
 use arrow::datatypes::Schema;
 use std::sync::Arc;

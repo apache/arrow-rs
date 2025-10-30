@@ -18,7 +18,7 @@
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{make_array, Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::{ProjectionMask, PARQUET_FIELD_ID_META_KEY};
+use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
@@ -189,7 +189,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected struct got {}",
                     d
-                ))
+                ));
             }
             None => None,
         };
@@ -326,7 +326,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected map got {}",
                     d
-                ))
+                ));
             }
             None => (None, None, None, false),
         };
@@ -426,7 +426,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected list got {}",
                     d
-                ))
+                ));
             }
             None => None,
         };

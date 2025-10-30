@@ -22,8 +22,8 @@ use std::io::Write;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::HeapSize;
 use crate::parquet_thrift::{
-    read_thrift_vec, ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol,
-    ThriftCompactOutputProtocol, WriteThrift, WriteThriftField,
+    ElementType, FieldType, ReadThrift, ThriftCompactInputProtocol, ThriftCompactOutputProtocol,
+    WriteThrift, WriteThriftField, read_thrift_vec,
 };
 use crate::{thrift_struct, thrift_union};
 

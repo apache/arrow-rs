@@ -48,6 +48,12 @@ fn make_prefix(fp: Fingerprint) -> Vec<u8> {
             buf.extend_from_slice(&id.to_be_bytes()); // big-endian
             buf
         }
+        Fingerprint::Id64(id) => {
+            let mut buf = Vec::with_capacity(CONFLUENT_MAGIC.len() + size_of::<u64>());
+            buf.extend_from_slice(&CONFLUENT_MAGIC); // 00
+            buf.extend_from_slice(&id.to_be_bytes()); // big-endian
+            buf
+        }
         #[cfg(feature = "md5")]
         Fingerprint::MD5(val) => {
             let mut buf = Vec::with_capacity(SINGLE_OBJECT_MAGIC.len() + size_of_val(&val));
@@ -366,7 +372,7 @@ fn new_decoder_id(
     id: u32,
 ) -> arrow_avro::reader::Decoder {
     let schema = AvroSchema::new(schema_json.parse().unwrap());
-    let mut store = arrow_avro::schema::SchemaStore::new_with_type(FingerprintAlgorithm::None);
+    let mut store = arrow_avro::schema::SchemaStore::new_with_type(FingerprintAlgorithm::Id);
     // Register the schema with a provided Confluent-style ID
     store
         .set(Fingerprint::Id(id), schema.clone())

@@ -46,10 +46,10 @@ use parquet::arrow::arrow_reader::{
 };
 use parquet::arrow::{ArrowWriter, ProjectionMask};
 use parquet::data_type::AsBytes;
+use parquet::file::FOOTER_SIZE;
 use parquet::file::metadata::{FooterTail, ParquetMetaData, ParquetOffsetIndex};
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::file::properties::WriterProperties;
-use parquet::file::FOOTER_SIZE;
 use parquet::schema::types::SchemaDescriptor;
 use std::collections::BTreeMap;
 use std::fmt::Display;

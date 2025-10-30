@@ -31,7 +31,7 @@ use std::ops::Deref;
 
 use crate::{
     basic::BoundaryOrder,
-    data_type::{private::ParquetValueType, Int96},
+    data_type::{Int96, private::ParquetValueType},
     file::page_index::index_reader::ThriftColumnIndex,
 };
 

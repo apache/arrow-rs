@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::file::metadata::thrift_gen::{EncryptionAlgorithm, FileMeta};
+use crate::file::metadata::thrift::FileMeta;
 use crate::file::metadata::{
     ColumnChunkMetaData, ParquetColumnIndex, ParquetOffsetIndex, RowGroupMetaData,
 };
@@ -27,16 +27,16 @@ use crate::{
 #[cfg(feature = "encryption")]
 use crate::{
     encryption::{
-        encrypt::{encrypt_thrift_object, write_signed_plaintext_thrift_object, FileEncryptor},
-        modules::{create_footer_aad, create_module_aad, ModuleType},
+        encrypt::{FileEncryptor, encrypt_thrift_object, write_signed_plaintext_thrift_object},
+        modules::{ModuleType, create_footer_aad, create_module_aad},
     },
     file::column_crypto_metadata::ColumnCryptoMetaData,
-    file::metadata::thrift_gen::{AesGcmV1, FileCryptoMetaData},
+    file::metadata::thrift::encryption::{AesGcmV1, EncryptionAlgorithm, FileCryptoMetaData},
 };
 use crate::{errors::Result, file::page_index::column_index::ColumnIndexMetaData};
 
 use crate::{
-    file::writer::{get_file_magic, TrackedWrite},
+    file::writer::{TrackedWrite, get_file_magic},
     parquet_thrift::WriteThrift,
 };
 use crate::{
@@ -174,9 +174,22 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .object_writer
             .apply_row_group_encryption(self.row_groups)?;
 
+        #[cfg(feature = "encryption")]
         let (encryption_algorithm, footer_signing_key_metadata) =
             self.object_writer.get_plaintext_footer_crypto_metadata();
+        #[cfg(feature = "encryption")]
+        let file_metadata = FileMetaData::new(
+            self.writer_version,
+            num_rows,
+            self.created_by,
+            self.key_value_metadata,
+            self.schema_descr.clone(),
+            column_orders,
+        )
+        .with_encryption_algorithm(encryption_algorithm)
+        .with_footer_signing_key_metadata(footer_signing_key_metadata);
 
+        #[cfg(not(feature = "encryption"))]
         let file_metadata = FileMetaData::new(
             self.writer_version,
             num_rows,
@@ -189,8 +202,6 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let file_meta = FileMeta {
             file_metadata: &file_metadata,
             row_groups: &row_groups,
-            encryption_algorithm,
-            footer_signing_key_metadata,
         };
 
         // Write file metadata
@@ -524,12 +535,6 @@ impl MetadataObjectWriter {
     pub fn get_file_magic(&self) -> &[u8; 4] {
         get_file_magic()
     }
-
-    fn get_plaintext_footer_crypto_metadata(
-        &self,
-    ) -> (Option<EncryptionAlgorithm>, Option<Vec<u8>>) {
-        (None, None)
-    }
 }
 
 /// Implementations of [`MetadataObjectWriter`] methods that rely on encryption being enabled
@@ -557,7 +562,7 @@ impl MetadataObjectWriter {
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
                 encrypt_thrift_object(file_metadata, &mut encryptor, &mut sink, &aad)
             }
-            Some(file_encryptor) if file_metadata.encryption_algorithm.is_some() => {
+            Some(file_encryptor) if file_metadata.file_metadata.encryption_algorithm.is_some() => {
                 let aad = create_footer_aad(file_encryptor.file_aad())?;
                 let mut encryptor = file_encryptor.get_footer_encryptor()?;
                 write_signed_plaintext_thrift_object(file_metadata, &mut encryptor, &mut sink, &aad)
@@ -750,14 +755,14 @@ impl MetadataObjectWriter {
     ) -> Result<ColumnChunkMetaData> {
         // Column crypto metadata should have already been set when the column was created.
         // Here we apply the encryption by encrypting the column metadata if required.
-        match column_chunk.column_crypto_metadata.as_ref() {
+        match column_chunk.column_crypto_metadata.as_deref() {
             None => {}
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
                 // When uniform encryption is used the footer is already encrypted,
                 // so the column chunk does not need additional encryption.
             }
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(col_key)) => {
-                use crate::file::metadata::thrift_gen::serialize_column_meta_data;
+                use crate::file::metadata::thrift::serialize_column_meta_data;
 
                 let column_path = col_key.path_in_schema.join(".");
                 let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;

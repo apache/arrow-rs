@@ -25,7 +25,7 @@ authors = { workspace = true }
 license = { workspace = true }
 keywords = { workspace = true }
 include = { workspace = true }
-edition = "2024"
+edition = { workspace = true }
 rust-version = { workspace = true }
 
 [lib]
@@ -59,3 +59,8 @@ harness = false
 [[bench]]
 name = "offset"
 harness = false
+
+[[bench]]
+name = "mutable_buffer_repeat_slice"
+harness = false
+

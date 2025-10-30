@@ -35,8 +35,9 @@ use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
     ObjectFieldBuilder, Variant, VariantBuilderExt, VariantDecimal4, VariantDecimal8,
-    VariantDecimal16, VariantMetadata,
+    VariantDecimal16, VariantDecimalType, VariantMetadata,
 };
+use std::marker::PhantomData;
 use uuid::Uuid;
 
 /// Removes all (nested) typed_value columns from a VariantArray by converting them back to binary
@@ -95,9 +96,9 @@ enum UnshredVariantRowBuilder<'a> {
     PrimitiveInt64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Int64Type>>),
     PrimitiveFloat32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float32Type>>),
     PrimitiveFloat64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Float64Type>>),
-    Decimal32(DecimalUnshredRowBuilder<'a, Decimal32Spec>),
-    Decimal64(DecimalUnshredRowBuilder<'a, Decimal64Spec>),
-    Decimal128(DecimalUnshredRowBuilder<'a, Decimal128Spec>),
+    Decimal32(DecimalUnshredRowBuilder<'a, Decimal32Type, VariantDecimal4>),
+    Decimal64(DecimalUnshredRowBuilder<'a, Decimal64Type, VariantDecimal8>),
+    Decimal128(DecimalUnshredRowBuilder<'a, Decimal128Type, VariantDecimal16>),
     PrimitiveDate32(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Date32Type>>),
     PrimitiveTime64(UnshredPrimitiveRowBuilder<'a, PrimitiveArray<Time64MicrosecondType>>),
     TimestampMicrosecond(TimestampUnshredRowBuilder<'a, TimestampMicrosecondType>),
@@ -185,25 +186,23 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Int64 => primitive_builder!(PrimitiveInt64, as_primitive),
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
-            DataType::Decimal32(_, scale) => Self::Decimal32(DecimalUnshredRowBuilder::new(
-                value,
-                typed_value.as_primitive(),
-                *scale,
-            )),
-            DataType::Decimal64(_, scale) => Self::Decimal64(DecimalUnshredRowBuilder::new(
-                value,
-                typed_value.as_primitive(),
-                *scale,
-            )),
-            DataType::Decimal128(_, scale) => Self::Decimal128(DecimalUnshredRowBuilder::new(
-                value,
-                typed_value.as_primitive(),
-                *scale,
-            )),
-            DataType::Decimal256(_, _) => {
-                return Err(ArrowError::InvalidArgumentError(
-                    "Decimal256 is not a valid variant shredding type".to_string(),
-                ));
+            DataType::Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => {
+                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+            }
+            DataType::Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
+                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+            }
+            DataType::Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => {
+                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+            }
+            DataType::Decimal32(_, _)
+            | DataType::Decimal64(_, _)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _) => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "{} is not a valid variant shredding type",
+                    typed_value.data_type()
+                )));
             }
             DataType::Date32 => primitive_builder!(PrimitiveDate32, as_primitive),
             DataType::Time64(TimeUnit::Microsecond) => {
@@ -214,20 +213,12 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                     "Time64({time_unit}) is not a valid variant shredding type",
                 )));
             }
-            DataType::Timestamp(TimeUnit::Microsecond, timezone) => {
-                Self::TimestampMicrosecond(TimestampUnshredRowBuilder::new(
-                    value,
-                    typed_value.as_primitive(),
-                    timezone.is_some(),
-                ))
-            }
-            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => {
-                Self::TimestampNanosecond(TimestampUnshredRowBuilder::new(
-                    value,
-                    typed_value.as_primitive(),
-                    timezone.is_some(),
-                ))
-            }
+            DataType::Timestamp(TimeUnit::Microsecond, timezone) => Self::TimestampMicrosecond(
+                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
+            ),
+            DataType::Timestamp(TimeUnit::Nanosecond, timezone) => Self::TimestampNanosecond(
+                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
+            ),
             DataType::Timestamp(time_unit, _) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Timestamp({time_unit}) is not a valid variant shredding type",
@@ -474,12 +465,12 @@ struct TimestampUnshredRowBuilder<'a, T: TimestampType> {
 impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
     fn new(
         value: Option<&'a BinaryViewArray>,
-        typed_value: &'a PrimitiveArray<T>,
+        typed_value: &'a dyn Array,
         has_timezone: bool,
     ) -> Self {
         Self {
             value,
-            typed_value,
+            typed_value: typed_value.as_primitive(),
             has_timezone,
         }
     }
@@ -504,78 +495,27 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
     }
 }
 
-/// Trait to unify decimal unshredding across Decimal32/64/128 types
-trait DecimalSpec {
-    type Arrow: ArrowPrimitiveType + DecimalType;
-
-    fn into_variant(
-        raw: <Self::Arrow as ArrowPrimitiveType>::Native,
-        scale: i8,
-    ) -> Result<Variant<'static, 'static>>;
-}
-
-/// Spec for Decimal32 -> VariantDecimal4
-struct Decimal32Spec;
-
-impl DecimalSpec for Decimal32Spec {
-    type Arrow = Decimal32Type;
-
-    fn into_variant(raw: i32, scale: i8) -> Result<Variant<'static, 'static>> {
-        let scale =
-            u8::try_from(scale).map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
-        let value = VariantDecimal4::try_new(raw, scale)
-            .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
-        Ok(value.into())
-    }
-}
-
-/// Spec for Decimal64 -> VariantDecimal8
-struct Decimal64Spec;
-
-impl DecimalSpec for Decimal64Spec {
-    type Arrow = Decimal64Type;
-
-    fn into_variant(raw: i64, scale: i8) -> Result<Variant<'static, 'static>> {
-        let scale =
-            u8::try_from(scale).map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
-        let value = VariantDecimal8::try_new(raw, scale)
-            .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
-        Ok(value.into())
-    }
-}
-
-/// Spec for Decimal128 -> VariantDecimal16
-struct Decimal128Spec;
-
-impl DecimalSpec for Decimal128Spec {
-    type Arrow = Decimal128Type;
-
-    fn into_variant(raw: i128, scale: i8) -> Result<Variant<'static, 'static>> {
-        let scale =
-            u8::try_from(scale).map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
-        let value = VariantDecimal16::try_new(raw, scale)
-            .map_err(|e| ArrowError::InvalidArgumentError(e.to_string()))?;
-        Ok(value.into())
-    }
-}
-
-/// Generic builder for decimal unshredding that caches scale
-struct DecimalUnshredRowBuilder<'a, S: DecimalSpec> {
+/// Generic builder for decimal unshredding
+struct DecimalUnshredRowBuilder<'a, A: DecimalType, V>
+where
+    V: VariantDecimalType<Native = A::Native>,
+{
     value: Option<&'a BinaryViewArray>,
-    typed_value: &'a PrimitiveArray<S::Arrow>,
+    typed_value: &'a PrimitiveArray<A>,
     scale: i8,
+    _phantom: PhantomData<V>,
 }
 
-impl<'a, S: DecimalSpec> DecimalUnshredRowBuilder<'a, S> {
-    fn new(
-        value: Option<&'a BinaryViewArray>,
-        typed_value: &'a PrimitiveArray<S::Arrow>,
-        scale: i8,
-    ) -> Self {
+impl<'a, A: DecimalType, V> DecimalUnshredRowBuilder<'a, A, V>
+where
+    V: VariantDecimalType<Native = A::Native>,
+{
+    fn new(value: Option<&'a BinaryViewArray>, typed_value: &'a dyn Array, scale: i8) -> Self {
         Self {
             value,
-            typed_value,
+            typed_value: typed_value.as_primitive(),
             scale,
+            _phantom: PhantomData,
         }
     }
 
@@ -588,7 +528,7 @@ impl<'a, S: DecimalSpec> DecimalUnshredRowBuilder<'a, S> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         let raw = self.typed_value.value(index);
-        let variant = S::into_variant(raw, self.scale)?;
+        let variant = V::try_new_with_signed_scale(raw, self.scale)?;
         builder.append_value(variant);
         Ok(())
     }

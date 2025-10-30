@@ -20,8 +20,8 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types;
 use arrow_schema::ArrowError;
-use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
 use parquet::arrow::ProjectionMask;
+use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ParquetRecordBatchReaderBuilder};
 use std::fs::File;
 
 pub fn read_plaintext_footer_file_without_decryption_properties() {

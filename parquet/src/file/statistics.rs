@@ -45,7 +45,7 @@ use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::PageStatistics;
+use crate::file::metadata::thrift::PageStatistics;
 use crate::util::bit_util::FromBytes;
 
 pub(crate) mod private {
@@ -210,13 +210,21 @@ pub(crate) fn from_thrift_page_stats(
                 Type::INT96 => {
                     // INT96 statistics may not be correct, because comparison is signed
                     let min = if let Some(data) = min {
-                        assert_eq!(data.len(), 12);
+                        if data.len() != 12 {
+                            return Err(ParquetError::General(
+                                "Incorrect Int96 min statistics".to_string(),
+                            ));
+                        }
                         Some(Int96::try_from_le_slice(&data)?)
                     } else {
                         None
                     };
                     let max = if let Some(data) = max {
-                        assert_eq!(data.len(), 12);
+                        if data.len() != 12 {
+                            return Err(ParquetError::General(
+                                "Incorrect Int96 max statistics".to_string(),
+                            ));
+                        }
                         Some(Int96::try_from_le_slice(&data)?)
                     } else {
                         None
@@ -1084,5 +1092,33 @@ mod tests {
             null_count,
             is_min_max_deprecated,
         ))
+    }
+
+    #[test]
+    fn test_int96_invalid_statistics() {
+        let mut thrift_stats = PageStatistics {
+            max: None,
+            min: Some((0..13).collect()),
+            null_count: Some(0),
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+
+        let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 min statistics"
+        );
+
+        thrift_stats.min = None;
+        thrift_stats.max = Some((0..13).collect());
+        let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 max statistics"
+        );
     }
 }

@@ -727,9 +727,7 @@ mod tests {
     fn make_listi32(range: Range<i32>) -> (Vec<u8>, Vec<u8>) {
         let mut variant_builder = VariantBuilder::new();
         let mut list_builder = variant_builder.new_list();
-        for i in range {
-            list_builder.append_value(i);
-        }
+        list_builder.extend(range);
         list_builder.finish();
         variant_builder.finish()
     }
@@ -738,9 +736,7 @@ mod tests {
     fn make_listi64(range: Range<i64>) -> (Vec<u8>, Vec<u8>) {
         let mut variant_builder = VariantBuilder::new();
         let mut list_builder = variant_builder.new_list();
-        for i in range {
-            list_builder.append_value(i);
-        }
+        list_builder.extend(range);
         list_builder.finish();
         variant_builder.finish()
     }
