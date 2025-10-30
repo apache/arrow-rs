@@ -720,6 +720,90 @@ fn test_write_uniform_encryption_plaintext_footer() {
 }
 
 #[test]
+pub fn test_row_group_statistics_plaintext_encrypted_write() {
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_key = b"1234567890123450".to_vec();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
+
+    let file_encryption_properties = FileEncryptionProperties::builder(footer_key)
+        .with_plaintext_footer(true)
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
+
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(file_encryption_properties)
+        .build();
+
+    // Write encrypted data with plaintext footer
+    let values = Int32Array::from(vec![8, 3, 4, 19, 5]);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", values.data_type().clone(), true),
+        Field::new("y", values.data_type().clone(), true),
+    ]));
+
+    let values = Arc::new(values);
+    let record_batches =
+        vec![RecordBatch::try_new(schema.clone(), vec![values.clone(), values]).unwrap()];
+
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, schema, Some(props)).unwrap();
+    for batch in record_batches.clone() {
+        writer.write(&batch).unwrap();
+    }
+    let _file_metadata = writer.close().unwrap();
+
+    // Check column statistics are read given plaintext footer and available decryption properties
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
+    let metadata = reader_metadata.metadata();
+
+    assert_eq!(metadata.num_row_groups(), 1);
+
+    let row_group = &metadata.row_groups()[0];
+    assert_eq!(row_group.columns().len(), 2);
+
+    // Statistics should be available from decrypted data
+    assert!(&row_group.columns()[0].statistics().is_some());
+    let column_stats = &row_group.columns()[0].statistics().unwrap();
+    assert_eq!(
+        column_stats.min_bytes_opt(),
+        Some(3i32.to_le_bytes().as_slice())
+    );
+    assert_eq!(
+        column_stats.max_bytes_opt(),
+        Some(19i32.to_le_bytes().as_slice())
+    );
+
+    // Check column statistics are not read given plaintext footer and not available decryption properties
+    let options = ArrowReaderOptions::default();
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
+    let metadata = reader_metadata.metadata();
+
+    assert_eq!(metadata.num_row_groups(), 1);
+
+    let row_group = &metadata.row_groups()[0];
+    assert_eq!(row_group.columns().len(), 2);
+    assert!(&row_group.columns()[0].statistics().is_none());
+    assert!(&row_group.columns()[1].statistics().is_some());
+
+    let column_stats = &row_group.columns()[1].statistics().unwrap();
+    assert_eq!(
+        column_stats.min_bytes_opt(),
+        Some(3i32.to_le_bytes().as_slice())
+    );
+    assert_eq!(
+        column_stats.max_bytes_opt(),
+        Some(19i32.to_le_bytes().as_slice())
+    );
+}
+
+#[test]
 fn test_write_uniform_encryption() {
     let testdata = arrow::util::test_util::parquet_test_data();
     let path = format!("{testdata}/uniform_encryption.parquet.encrypted");
