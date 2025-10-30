@@ -194,10 +194,10 @@ macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{
         let array = $array;
         if array.is_null($index) {
-            Variant::Null
+            Ok(Variant::Null)
         } else {
             let cast_value = $cast_fn(array.value($index));
-            Variant::from(cast_value)
+            Ok(Variant::from(cast_value))
         }
     }};
 }
@@ -216,6 +216,23 @@ macro_rules! generic_conversion_single_value {
     }};
 }
 pub(crate) use generic_conversion_single_value;
+
+macro_rules! generic_conversion_single_value_with_result {
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
+        let arr = $input.$method::<$t>();
+        let v = arr.value($index);
+        match ($cast_fn)(v) {
+            Ok(var) => Ok(Variant::from(var)),
+            Err(e) => Err(ArrowError::CastError(format!(
+                "Cast failed at index {idx} (array type: {ty}): {e}",
+                idx = $index,
+                ty = <$t as ::arrow::datatypes::ArrowPrimitiveType>::DATA_TYPE
+            ))),
+        }
+    }};
+}
+
+pub(crate) use generic_conversion_single_value_with_result;
 
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! primitive_conversion_single_value {
