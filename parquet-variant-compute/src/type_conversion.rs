@@ -17,8 +17,13 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::datatypes::{self, ArrowPrimitiveType, ArrowTimestampType, Date32Type};
-use parquet_variant::Variant;
+use arrow::compute::{DecimalCast, rescale_decimal};
+use arrow::datatypes::{
+    self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
+    DecimalType,
+};
+use chrono::Timelike;
+use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
 /// Options for controlling the behavior of `cast_to_variant_with_options`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,8 +87,11 @@ impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
 impl_primitive_from_variant!(
     datatypes::Date32Type,
     as_naive_date,
-    Date32Type::from_naive_date
+    datatypes::Date32Type::from_naive_date
 );
+impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
+    (v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64
+});
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_ntz_micros,
@@ -109,15 +117,87 @@ impl_timestamp_from_variant!(
     |timestamp| Self::make_value(timestamp.naive_utc())
 );
 
+/// Returns the unscaled integer representation for Arrow decimal type `O`
+/// from a `Variant`.
+///
+/// - `precision` and `scale` specify the target Arrow decimal parameters
+/// - Integer variants (`Int8/16/32/64`) are treated as decimals with scale 0
+/// - Decimal variants (`Decimal4/8/16`) use their embedded precision and scale
+///
+/// The value is rescaled to (`precision`, `scale`) using `rescale_decimal` and
+/// returns `None` if it cannot fit the requested precision.
+pub(crate) fn variant_to_unscaled_decimal<O>(
+    variant: &Variant<'_, '_>,
+    precision: u8,
+    scale: i8,
+) -> Option<O::Native>
+where
+    O: DecimalType,
+    O::Native: DecimalCast,
+{
+    match variant {
+        Variant::Int8(i) => rescale_decimal::<Decimal32Type, O>(
+            *i as i32,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int16(i) => rescale_decimal::<Decimal32Type, O>(
+            *i as i32,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int32(i) => rescale_decimal::<Decimal32Type, O>(
+            *i,
+            VariantDecimal4::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Int64(i) => rescale_decimal::<Decimal64Type, O>(
+            *i,
+            VariantDecimal8::MAX_PRECISION,
+            0,
+            precision,
+            scale,
+        ),
+        Variant::Decimal4(d) => rescale_decimal::<Decimal32Type, O>(
+            d.integer(),
+            VariantDecimal4::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        ),
+        Variant::Decimal8(d) => rescale_decimal::<Decimal64Type, O>(
+            d.integer(),
+            VariantDecimal8::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        ),
+        Variant::Decimal16(d) => rescale_decimal::<Decimal128Type, O>(
+            d.integer(),
+            VariantDecimal16::MAX_PRECISION,
+            d.scale() as i8,
+            precision,
+            scale,
+        ),
+        _ => None,
+    }
+}
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! non_generic_conversion_single_value {
     ($array:expr, $cast_fn:expr, $index:expr) => {{
         let array = $array;
         if array.is_null($index) {
-            Variant::Null
+            Ok(Variant::Null)
         } else {
             let cast_value = $cast_fn(array.value($index));
-            Variant::from(cast_value)
+            Ok(Variant::from(cast_value))
         }
     }};
 }
@@ -137,6 +217,23 @@ macro_rules! generic_conversion_single_value {
 }
 pub(crate) use generic_conversion_single_value;
 
+macro_rules! generic_conversion_single_value_with_result {
+    ($t:ty, $method:ident, $cast_fn:expr, $input:expr, $index:expr) => {{
+        let arr = $input.$method::<$t>();
+        let v = arr.value($index);
+        match ($cast_fn)(v) {
+            Ok(var) => Ok(Variant::from(var)),
+            Err(e) => Err(ArrowError::CastError(format!(
+                "Cast failed at index {idx} (array type: {ty}): {e}",
+                idx = $index,
+                ty = <$t as ::arrow::datatypes::ArrowPrimitiveType>::DATA_TYPE
+            ))),
+        }
+    }};
+}
+
+pub(crate) use generic_conversion_single_value_with_result;
+
 /// Convert the value at a specific index in the given array into a `Variant`.
 macro_rules! primitive_conversion_single_value {
     ($t:ty, $input:expr, $index:expr) => {{
@@ -150,22 +247,3 @@ macro_rules! primitive_conversion_single_value {
     }};
 }
 pub(crate) use primitive_conversion_single_value;
-
-/// Convert a decimal value to a `VariantDecimal`
-macro_rules! decimal_to_variant_decimal {
-    ($v:ident, $scale:expr, $value_type:ty, $variant_type:ty) => {{
-        let (v, scale) = if *$scale < 0 {
-            // For negative scale, we need to multiply the value by 10^|scale|
-            // For example: 123 with scale -2 becomes 12300 with scale 0
-            let multiplier = <$value_type>::pow(10, (-*$scale) as u32);
-            (<$value_type>::checked_mul($v, multiplier), 0u8)
-        } else {
-            (Some($v), *$scale as u8)
-        };
-
-        // Return an Option to allow callers to decide whether to error (strict)
-        // or append null (non-strict) on conversion failure
-        v.and_then(|v| <$variant_type>::try_new(v, scale).ok())
-    }};
-}
-pub(crate) use decimal_to_variant_decimal;

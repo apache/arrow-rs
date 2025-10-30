@@ -346,6 +346,10 @@ pub fn make_encoder<'a>(
             let array = array.as_string_view();
             NullableEncoder::new(Box::new(StringViewEncoder(array)), array.nulls().cloned())
         }
+        DataType::BinaryView => {
+            let array = array.as_binary_view();
+            NullableEncoder::new(Box::new(BinaryViewEncoder(array)), array.nulls().cloned())
+        }
         DataType::List(_) => {
             let array = array.as_list::<i32>();
             NullableEncoder::new(Box::new(ListEncoder::try_new(field, array, options)?), array.nulls().cloned())
@@ -438,6 +442,14 @@ pub fn make_encoder<'a>(
 fn encode_string(s: &str, out: &mut Vec<u8>) {
     let mut serializer = serde_json::Serializer::new(out);
     serializer.serialize_str(s).unwrap();
+}
+
+fn encode_binary(bytes: &[u8], out: &mut Vec<u8>) {
+    out.push(b'"');
+    for byte in bytes {
+        write!(out, "{byte:02x}").unwrap();
+    }
+    out.push(b'"');
 }
 
 struct FieldEncoder<'a> {
@@ -606,6 +618,14 @@ struct StringViewEncoder<'a>(&'a StringViewArray);
 impl Encoder for StringViewEncoder<'_> {
     fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
         encode_string(self.0.value(idx), out);
+    }
+}
+
+struct BinaryViewEncoder<'a>(&'a BinaryViewArray);
+
+impl Encoder for BinaryViewEncoder<'_> {
+    fn encode(&mut self, idx: usize, out: &mut Vec<u8>) {
+        encode_binary(self.0.value(idx), out);
     }
 }
 
@@ -784,7 +804,10 @@ impl<'a> MapEncoder<'a> {
         let values = array.values();
         let keys = array.keys();
 
-        if !matches!(keys.data_type(), DataType::Utf8 | DataType::LargeUtf8) {
+        if !matches!(
+            keys.data_type(),
+            DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+        ) {
             return Err(ArrowError::JsonError(format!(
                 "Only UTF8 keys supported by JSON MapArray Writer: got {:?}",
                 keys.data_type()

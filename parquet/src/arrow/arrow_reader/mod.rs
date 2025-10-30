@@ -58,6 +58,7 @@ pub mod statistics;
 ///
 /// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
 /// * `async` API: [`ParquetRecordBatchStreamBuilder::new`]
+/// * decoder API: [`ParquetDecoderBuilder::new`]
 ///
 /// # Features
 /// * Projection pushdown: [`Self::with_projection`]
@@ -93,6 +94,7 @@ pub mod statistics;
 /// Millisecond Latency] Arrow blog post.
 ///
 /// [`ParquetRecordBatchStreamBuilder::new`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new
+/// [`ParquetDecoderBuilder::new`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::new
 /// [Apache Arrow]: https://arrow.apache.org/
 /// [`StatisticsConverter`]: statistics::StatisticsConverter
 /// [Querying Parquet with Millisecond Latency]: https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/
@@ -387,7 +389,7 @@ pub struct ArrowReaderOptions {
     pub(crate) page_index_policy: PageIndexPolicy,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
-    pub(crate) file_decryption_properties: Option<FileDecryptionProperties>,
+    pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 impl ArrowReaderOptions {
@@ -508,7 +510,7 @@ impl ArrowReaderOptions {
     #[cfg(feature = "encryption")]
     pub fn with_file_decryption_properties(
         self,
-        file_decryption_properties: FileDecryptionProperties,
+        file_decryption_properties: Arc<FileDecryptionProperties>,
     ) -> Self {
         Self {
             file_decryption_properties: Some(file_decryption_properties),
@@ -528,7 +530,7 @@ impl ArrowReaderOptions {
     /// This can be set via
     /// [`file_decryption_properties`][Self::with_file_decryption_properties].
     #[cfg(feature = "encryption")]
-    pub fn file_decryption_properties(&self) -> Option<&FileDecryptionProperties> {
+    pub fn file_decryption_properties(&self) -> Option<&Arc<FileDecryptionProperties>> {
         self.file_decryption_properties.as_ref()
     }
 }
@@ -572,8 +574,9 @@ impl ArrowReaderMetadata {
         let metadata =
             ParquetMetaDataReader::new().with_page_index_policy(options.page_index_policy);
         #[cfg(feature = "encryption")]
-        let metadata =
-            metadata.with_decryption_properties(options.file_decryption_properties.as_ref());
+        let metadata = metadata.with_decryption_properties(
+            options.file_decryption_properties.as_ref().map(Arc::clone),
+        );
         let metadata = metadata.parse_and_finish(reader)?;
         Self::try_new(Arc::new(metadata), options)
     }
@@ -991,10 +994,24 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 
 /// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
 /// read from a parquet data source
+///
+/// This reader is created by [`ParquetRecordBatchReaderBuilder`], and has all
+/// the buffered state (DataPages, etc) necessary to decode the parquet data into
+/// Arrow arrays.
 pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     read_plan: ReadPlan,
+}
+
+impl Debug for ParquetRecordBatchReader {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParquetRecordBatchReader")
+            .field("array_reader", &"...")
+            .field("schema", &self.schema)
+            .field("read_plan", &self.read_plan)
+            .finish()
+    }
 }
 
 impl Iterator for ParquetRecordBatchReader {
@@ -1160,7 +1177,7 @@ mod tests {
         Time64MicrosecondType,
     };
     use arrow_array::*;
-    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, i256};
+    use arrow_buffer::{ArrowNativeType, Buffer, IntervalDayTime, NullBuffer, i256};
     use arrow_data::{ArrayData, ArrayDataBuilder};
     use arrow_schema::{
         ArrowError, DataType as ArrowDataType, Field, Fields, Schema, SchemaRef, TimeUnit,
@@ -2352,6 +2369,63 @@ mod tests {
         writer.write(&batch).unwrap();
         writer.close().unwrap();
         let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 3)
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(read.len(), 1);
+        assert_eq!(&batch, &read[0])
+    }
+
+    #[test]
+    fn test_read_nullable_structs_with_binary_dict_as_first_child_column() {
+        // the `StructArrayReader` will check the definition and repetition levels of the first
+        // child column in the struct to determine nullability for the struct. If the first
+        // column's is being read by `ByteArrayDictionaryReader` we need to ensure that the
+        // nullability is interpreted  correctly from the rep/def level buffers managed by the
+        // buffers managed by this array reader.
+
+        let struct_fields = Fields::from(vec![
+            Field::new(
+                "city",
+                ArrowDataType::Dictionary(
+                    Box::new(ArrowDataType::UInt8),
+                    Box::new(ArrowDataType::Utf8),
+                ),
+                true,
+            ),
+            Field::new("name", ArrowDataType::Utf8, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "items",
+            ArrowDataType::Struct(struct_fields.clone()),
+            true,
+        )]));
+
+        let items_arr = StructArray::new(
+            struct_fields,
+            vec![
+                Arc::new(DictionaryArray::new(
+                    UInt8Array::from_iter_values(vec![0, 1, 1, 0, 2]),
+                    Arc::new(StringArray::from_iter_values(vec![
+                        "quebec",
+                        "fredericton",
+                        "halifax",
+                    ])),
+                )),
+                Arc::new(StringArray::from_iter_values(vec![
+                    "albert", "terry", "lance", "", "tim",
+                ])),
+            ],
+            Some(NullBuffer::from_iter(vec![true, true, true, false, true])),
+        );
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(items_arr)]).unwrap();
+        let mut buffer = Vec::with_capacity(1024);
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let read = ParquetRecordBatchReader::try_new(Bytes::from(buffer), 8)
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();

@@ -15,8 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Avro Writer Formats for Arrow.
+
 use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
-use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+use crate::schema::{AvroSchema, AvroSchemaOptions, SCHEMA_METADATA_KEY};
 use crate::writer::encoder::write_long;
 use arrow_schema::{ArrowError, Schema};
 use rand::RngCore;
@@ -63,7 +65,13 @@ impl AvroFormat for AvroOcfFormat {
         // Choose the Avro schema JSON that the file will advertise.
         // If `schema.metadata[SCHEMA_METADATA_KEY]` exists, AvroSchema::try_from
         // uses it verbatim; otherwise it is generated from the Arrow schema.
-        let avro_schema = AvroSchema::try_from(schema)?;
+        let avro_schema = AvroSchema::from_arrow_with_options(
+            schema,
+            Some(AvroSchemaOptions {
+                null_order: None,
+                strip_metadata: true,
+            }),
+        )?;
         // Magic
         writer
             .write_all(b"Obj\x01")
@@ -104,9 +112,9 @@ impl AvroFormat for AvroOcfFormat {
 /// See: <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
 /// See: <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
 #[derive(Debug, Default)]
-pub struct AvroBinaryFormat {}
+pub struct AvroSoeFormat {}
 
-impl AvroFormat for AvroBinaryFormat {
+impl AvroFormat for AvroSoeFormat {
     const NEEDS_PREFIX: bool = true;
     fn start_stream<W: Write>(
         &mut self,
@@ -116,10 +124,9 @@ impl AvroFormat for AvroBinaryFormat {
     ) -> Result<(), ArrowError> {
         if compression.is_some() {
             return Err(ArrowError::InvalidArgumentError(
-                "Compression not supported for Avro binary streaming".to_string(),
+                "Compression not supported for Avro SOE streaming".to_string(),
             ));
         }
-
         Ok(())
     }
 

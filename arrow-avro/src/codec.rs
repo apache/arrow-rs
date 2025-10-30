@@ -349,7 +349,8 @@ impl AvroDataType {
             Codec::Int64
             | Codec::TimeMicros
             | Codec::TimestampMillis(_)
-            | Codec::TimestampMicros(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
+            | Codec::TimestampMicros(_)
+            | Codec::TimestampNanos(_) => AvroLiteral::Long(parse_json_i64(default_json, "long")?),
             #[cfg(feature = "avro_custom_types")]
             Codec::DurationNanos
             | Codec::DurationMicros
@@ -652,6 +653,11 @@ pub(crate) enum Codec {
     /// Maps to Arrow's Timestamp(TimeUnit::Microsecond) data type
     /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
     TimestampMicros(bool),
+    /// Represents Avro timestamp-nanos or local-timestamp-nanos logical type
+    ///
+    /// Maps to Arrow's Timestamp(TimeUnit::Nanosecond) data type
+    /// The boolean parameter indicates whether the timestamp has a UTC timezone (true) or is local time (false)
+    TimestampNanos(bool),
     /// Represents Avro fixed type, maps to Arrow's FixedSizeBinary data type
     /// The i32 parameter indicates the fixed binary size
     Fixed(i32),
@@ -714,6 +720,9 @@ impl Codec {
             }
             Self::TimestampMicros(is_utc) => {
                 DataType::Timestamp(TimeUnit::Microsecond, is_utc.then(|| "+00:00".into()))
+            }
+            Self::TimestampNanos(is_utc) => {
+                DataType::Timestamp(TimeUnit::Nanosecond, is_utc.then(|| "+00:00".into()))
             }
             Self::Interval => DataType::Interval(IntervalUnit::MonthDayNano),
             Self::Fixed(size) => DataType::FixedSizeBinary(*size),
@@ -917,6 +926,8 @@ enum UnionFieldKind {
     TimestampMillisLocal,
     TimestampMicrosUtc,
     TimestampMicrosLocal,
+    TimestampNanosUtc,
+    TimestampNanosLocal,
     Duration,
     Fixed,
     Decimal,
@@ -946,6 +957,8 @@ impl From<&Codec> for UnionFieldKind {
             Codec::TimestampMillis(false) => Self::TimestampMillisLocal,
             Codec::TimestampMicros(true) => Self::TimestampMicrosUtc,
             Codec::TimestampMicros(false) => Self::TimestampMicrosLocal,
+            Codec::TimestampNanos(true) => Self::TimestampNanosUtc,
+            Codec::TimestampNanos(false) => Self::TimestampNanosLocal,
             Codec::Interval => Self::Duration,
             Codec::Fixed(_) => Self::Fixed,
             Codec::Decimal(..) => Self::Decimal,
@@ -1399,7 +1412,17 @@ impl<'a> Maker<'a> {
                     (Some("local-timestamp-micros"), c @ Codec::Int64) => {
                         *c = Codec::TimestampMicros(false)
                     }
-                    (Some("uuid"), c @ Codec::Utf8) => *c = Codec::Uuid,
+                    (Some("timestamp-nanos"), c @ Codec::Int64) => *c = Codec::TimestampNanos(true),
+                    (Some("local-timestamp-nanos"), c @ Codec::Int64) => {
+                        *c = Codec::TimestampNanos(false)
+                    }
+                    (Some("uuid"), c @ Codec::Utf8) => {
+                        // Map Avro string+logicalType=uuid into the UUID Codec,
+                        // and preserve the logicalType in Arrow field metadata
+                        // so writers can round-trip it correctly.
+                        *c = Codec::Uuid;
+                        field.metadata.insert("logicalType".into(), "uuid".into());
+                    }
                     #[cfg(feature = "avro_custom_types")]
                     (Some("arrow.duration-nanos"), c @ Codec::Int64) => *c = Codec::DurationNanos,
                     #[cfg(feature = "avro_custom_types")]
@@ -1436,6 +1459,18 @@ impl<'a> Maker<'a> {
                         field.metadata.insert("logicalType".into(), logical.into());
                     }
                     (None, _) => {}
+                }
+                if matches!(field.codec, Codec::Int64) {
+                    if let Some(unit) = t
+                        .attributes
+                        .additional
+                        .get("arrowTimeUnit")
+                        .and_then(|v| v.as_str())
+                    {
+                        if unit == "nanosecond" {
+                            field.codec = Codec::TimestampNanos(false);
+                        }
+                    }
                 }
                 if !t.attributes.additional.is_empty() {
                     for (k, v) in &t.attributes.additional {

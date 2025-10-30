@@ -25,7 +25,7 @@ use crate::compression::{Codec, create_codec};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::{CryptoContext, read_and_decrypt};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use crate::file::statistics;
 use crate::file::{
@@ -392,6 +392,9 @@ pub(crate) fn decode_page(
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
+            if offset > buffer.len() || offset > uncompressed_page_size {
+                return Err(general_err!("Invalid page header"));
+            }
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer[..offset]);
@@ -458,7 +461,10 @@ pub(crate) fn decode_page(
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            unimplemented!("Page type {:?} is not supported", page_header.r#type)
+            return Err(general_err!(
+                "Page type {:?} is not supported",
+                page_header.r#type
+            ));
         }
     };
 
@@ -769,7 +775,7 @@ impl SerializedPageReaderContext {
                 if self.read_stats {
                     Ok(PageHeader::read_thrift(&mut prot)?)
                 } else {
-                    use crate::file::metadata::thrift_gen::PageHeader;
+                    use crate::file::metadata::thrift::PageHeader;
 
                     Ok(PageHeader::read_thrift_without_stats(&mut prot)?)
                 }
@@ -1122,6 +1128,7 @@ mod tests {
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
+    use crate::file::metadata::thrift::DataPageHeaderV2;
     #[allow(deprecated)]
     use crate::file::page_index::index_reader::{read_columns_indexes, read_offset_indexes};
     use crate::file::writer::SerializedFileWriter;
@@ -1130,6 +1137,72 @@ mod tests {
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
 
     use super::*;
+
+    #[test]
+    fn test_decode_page_invalid_offset() {
+        let page_header = PageHeader {
+            r#type: PageType::DATA_PAGE_V2,
+            uncompressed_page_size: 10,
+            compressed_page_size: 10,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            crc: None,
+            data_page_header_v2: Some(DataPageHeaderV2 {
+                num_nulls: 0,
+                num_rows: 0,
+                num_values: 0,
+                encoding: Encoding::PLAIN,
+                definition_levels_byte_length: 11,
+                repetition_levels_byte_length: 0,
+                is_compressed: None,
+                statistics: None,
+            }),
+        };
+
+        let buffer = Bytes::new();
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("DataPage v2 header contains implausible values")
+        );
+    }
+
+    #[test]
+    fn test_decode_unsupported_page() {
+        let mut page_header = PageHeader {
+            r#type: PageType::INDEX_PAGE,
+            uncompressed_page_size: 10,
+            compressed_page_size: 10,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            crc: None,
+            data_page_header_v2: None,
+        };
+        let buffer = Bytes::new();
+        let err = decode_page(page_header.clone(), buffer.clone(), Type::INT32, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Page type INDEX_PAGE is not supported"
+        );
+
+        page_header.data_page_header_v2 = Some(DataPageHeaderV2 {
+            num_nulls: 0,
+            num_rows: 0,
+            num_values: 0,
+            encoding: Encoding::PLAIN,
+            definition_levels_byte_length: 11,
+            repetition_levels_byte_length: 0,
+            is_compressed: None,
+            statistics: None,
+        });
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("DataPage v2 header contains implausible values")
+        );
+    }
 
     #[test]
     fn test_cursor_and_file_has_the_same_behaviour() {

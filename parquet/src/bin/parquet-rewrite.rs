@@ -39,7 +39,7 @@ use arrow_array::RecordBatchReader;
 use clap::{Parser, ValueEnum, builder::PossibleValue};
 use parquet::{
     arrow::{ArrowWriter, arrow_reader::ParquetRecordBatchReaderBuilder},
-    basic::{Compression, Encoding},
+    basic::{BrotliLevel, Compression, Encoding, GzipLevel, ZstdLevel},
     file::{
         properties::{BloomFilterPosition, EnabledStatistics, WriterProperties, WriterVersion},
         reader::FileReader,
@@ -74,18 +74,31 @@ enum CompressionArgs {
     Lz4Raw,
 }
 
-impl From<CompressionArgs> for Compression {
-    fn from(value: CompressionArgs) -> Self {
-        match value {
-            CompressionArgs::None => Self::UNCOMPRESSED,
-            CompressionArgs::Snappy => Self::SNAPPY,
-            CompressionArgs::Gzip => Self::GZIP(Default::default()),
-            CompressionArgs::Lzo => Self::LZO,
-            CompressionArgs::Brotli => Self::BROTLI(Default::default()),
-            CompressionArgs::Lz4 => Self::LZ4,
-            CompressionArgs::Zstd => Self::ZSTD(Default::default()),
-            CompressionArgs::Lz4Raw => Self::LZ4_RAW,
-        }
+fn compression_from_args(codec: CompressionArgs, level: Option<u32>) -> Compression {
+    match codec {
+        CompressionArgs::None => Compression::UNCOMPRESSED,
+        CompressionArgs::Snappy => Compression::SNAPPY,
+        CompressionArgs::Gzip => match level {
+            Some(lvl) => {
+                Compression::GZIP(GzipLevel::try_new(lvl).expect("invalid gzip compression level"))
+            }
+            None => Compression::GZIP(Default::default()),
+        },
+        CompressionArgs::Lzo => Compression::LZO,
+        CompressionArgs::Brotli => match level {
+            Some(lvl) => Compression::BROTLI(
+                BrotliLevel::try_new(lvl).expect("invalid brotli compression level"),
+            ),
+            None => Compression::BROTLI(Default::default()),
+        },
+        CompressionArgs::Lz4 => Compression::LZ4,
+        CompressionArgs::Zstd => match level {
+            Some(lvl) => Compression::ZSTD(
+                ZstdLevel::try_new(lvl as i32).expect("invalid zstd compression level"),
+            ),
+            None => Compression::ZSTD(Default::default()),
+        },
+        CompressionArgs::Lz4Raw => Compression::LZ4_RAW,
     }
 }
 
@@ -219,6 +232,10 @@ struct Args {
     #[clap(long, value_enum)]
     compression: Option<CompressionArgs>,
 
+    /// Compression level for gzip/brotli/zstd.
+    #[clap(long)]
+    compression_level: Option<u32>,
+
     /// Encoding used for all columns, if dictionary is not enabled.
     #[clap(long, value_enum)]
     encoding: Option<EncodingArgs>,
@@ -286,6 +303,10 @@ struct Args {
     #[clap(long)]
     writer_version: Option<WriterVersionArgs>,
 
+    /// Sets write batch size.
+    #[clap(long)]
+    write_batch_size: Option<usize>,
+
     /// Sets whether to coerce Arrow types to match Parquet specification
     #[clap(long)]
     coerce_types: Option<bool>,
@@ -313,8 +334,10 @@ fn main() {
     .expect("parquet open");
 
     let mut writer_properties_builder = WriterProperties::builder().set_key_value_metadata(kv_md);
+
     if let Some(value) = args.compression {
-        writer_properties_builder = writer_properties_builder.set_compression(value.into());
+        let compression = compression_from_args(value, args.compression_level);
+        writer_properties_builder = writer_properties_builder.set_compression(compression);
     }
 
     // setup encoding
@@ -381,6 +404,9 @@ fn main() {
     }
     if let Some(value) = args.coerce_types {
         writer_properties_builder = writer_properties_builder.set_coerce_types(value);
+    }
+    if let Some(value) = args.write_batch_size {
+        writer_properties_builder = writer_properties_builder.set_write_batch_size(value);
     }
     let writer_properties = writer_properties_builder.build();
     let mut parquet_writer = ArrowWriter::try_new(
