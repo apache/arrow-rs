@@ -17,11 +17,11 @@
 
 //! Common Avro errors and macros.
 
+use arrow_schema::ArrowError;
 use core::num::TryFromIntError;
 use std::error::Error;
 use std::string::FromUtf8Error;
 use std::{cell, io, result, str};
-use arrow_schema::ArrowError;
 
 /// Avro error enumeration
 
@@ -44,6 +44,12 @@ pub enum AvroError {
     /// Error when the requested index is more than the
     /// number of items expected
     IndexOutOfBound(usize, usize),
+    /// Error indicating that an unexpected or bad argument was passed to a function.
+    InvalidArgument(String),
+    /// Error indicating that a value could not be parsed.
+    ParseError(String),
+    /// Error indicating that a schema is invalid.
+    SchemaError(String),
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
     /// Returned when a function needs more data to complete properly. The `usize` field indicates
@@ -66,6 +72,11 @@ impl std::fmt::Display for AvroError {
             AvroError::IndexOutOfBound(index, bound) => {
                 write!(fmt, "Index {index} out of bound: {bound}")
             }
+            AvroError::InvalidArgument(message) => {
+                write!(fmt, "Invalid argument: {message}")
+            }
+            AvroError::ParseError(message) => write!(fmt, "Parse error: {message}"),
+            AvroError::SchemaError(message) => write!(fmt, "Schema error: {message}"),
             AvroError::External(e) => write!(fmt, "External: {e}"),
             AvroError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
             AvroError::NeedMoreDataRange(range) => {
@@ -133,35 +144,6 @@ impl From<AvroError> for io::Error {
 }
 
 // ----------------------------------------------------------------------
-// Convenient macros for different errors
-
-macro_rules! general_err {
-    ($fmt:expr) => (AvroError::General($fmt.to_owned()));
-    ($fmt:expr, $($args:expr),*) => (AvroError::General(format!($fmt, $($args),*)));
-    ($e:expr, $fmt:expr) => (AvroError::General($fmt.to_owned(), $e));
-    ($e:ident, $fmt:expr, $($args:tt),*) => (
-        AvroError::General(&format!($fmt, $($args),*), $e));
-}
-
-macro_rules! nyi_err {
-    ($fmt:expr) => (AvroError::NYI($fmt.to_owned()));
-    ($fmt:expr, $($args:expr),*) => (AvroError::NYI(format!($fmt, $($args),*)));
-}
-
-macro_rules! eof_err {
-    ($fmt:expr) => (AvroError::EOF($fmt.to_owned()));
-    ($fmt:expr, $($args:expr),*) => (AvroError::EOF(format!($fmt, $($args),*)));
-}
-
-macro_rules! arrow_err {
-    ($fmt:expr) => (AvroError::ArrowError($fmt.to_owned()));
-    ($fmt:expr, $($args:expr),*) => (AvroError::ArrowError(format!($fmt, $($args),*)));
-    ($e:expr, $fmt:expr) => (AvroError::ArrowError($fmt.to_owned(), $e));
-    ($e:ident, $fmt:expr, $($args:tt),*) => (
-        AvroError::ArrowError(&format!($fmt, $($args),*), $e));
-}
-
-// ----------------------------------------------------------------------
 // Convert avro error into other errors
 
 impl From<AvroError> for ArrowError {
@@ -169,4 +151,3 @@ impl From<AvroError> for ArrowError {
         Self::AvroError(format!("{p}"))
     }
 }
-

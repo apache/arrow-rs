@@ -480,6 +480,7 @@
 //!
 //! ---
 use crate::codec::AvroFieldBuilder;
+use crate::errors::{AvroError, Result};
 use crate::reader::header::read_header;
 use crate::schema::{
     AvroSchema, CONFLUENT_MAGIC, Fingerprint, FingerprintAlgorithm, SCHEMA_METADATA_KEY,
@@ -499,11 +500,10 @@ mod header;
 mod record;
 mod vlq;
 
-fn is_incomplete_data(err: &ArrowError) -> bool {
+fn is_incomplete_data(err: &AvroError) -> bool {
     matches!(
         err,
-        ArrowError::ParseError(msg)
-            if msg.contains("Unexpected EOF")
+        AvroError::EOF(_) | AvroError::NeedMoreData(_) | AvroError::NeedMoreDataRange(_)
     )
 }
 
@@ -687,7 +687,7 @@ impl Decoder {
                         continue;
                     }
                     Err(ref e) if is_incomplete_data(e) => break,
-                    err => return err,
+                    Err(e) => return Err(e.into()),
                 };
             }
             match self.handle_prefix(&data[total_consumed..])? {
@@ -711,7 +711,7 @@ impl Decoder {
     // * Ok(None) – buffer does not start with the prefix.
     // * Ok(Some(0)) – prefix detected, but the buffer is too short; caller should await more bytes.
     // * Ok(Some(n)) – consumed `n > 0` bytes of a complete prefix (magic and fingerprint).
-    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>, ArrowError> {
+    fn handle_prefix(&mut self, buf: &[u8]) -> Result<Option<usize>> {
         match self.fingerprint_algorithm {
             FingerprintAlgorithm::Rabin => {
                 self.handle_prefix_common(buf, &SINGLE_OBJECT_MAGIC, |bytes| {
@@ -749,7 +749,7 @@ impl Decoder {
         buf: &[u8],
         magic: &[u8; MAGIC_LEN],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>, ArrowError> {
+    ) -> Result<Option<usize>> {
         // Need at least the magic bytes to decide
         // 2 bytes for Avro Spec and 1 byte for Confluent Wire Protocol.
         if buf.len() < MAGIC_LEN {
@@ -774,7 +774,7 @@ impl Decoder {
         &mut self,
         buf: &[u8],
         fingerprint_from: impl FnOnce([u8; N]) -> Fingerprint,
-    ) -> Result<Option<usize>, ArrowError> {
+    ) -> Result<Option<usize>> {
         // Need enough bytes to get fingerprint (next N bytes)
         let Some(fingerprint_bytes) = buf.get(..N) else {
             return Ok(None); // insufficient bytes
@@ -784,7 +784,7 @@ impl Decoder {
         // If the fingerprint indicates a schema change, prepare to switch decoders.
         if self.active_fingerprint != Some(new_fingerprint) {
             let Some(new_decoder) = self.cache.shift_remove(&new_fingerprint) else {
-                return Err(ArrowError::ParseError(format!(
+                return Err(AvroError::ParseError(format!(
                     "Unknown fingerprint: {new_fingerprint:?}"
                 )));
             };
@@ -816,7 +816,7 @@ impl Decoder {
         }
     }
 
-    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn flush_and_reset(&mut self) -> Result<Option<RecordBatch>> {
         if self.batch_is_empty() {
             return Ok(None);
         }
@@ -835,7 +835,7 @@ impl Decoder {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
         self.apply_pending_schema();
-        batch
+        batch.map_err(ArrowError::from)
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
@@ -856,7 +856,7 @@ impl Decoder {
     // Decode either the block count or remaining capacity from `data` (an OCF block payload).
     //
     // Returns the number of bytes consumed from `data` along with the number of records decoded.
-    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize), ArrowError> {
+    fn decode_block(&mut self, data: &[u8], count: usize) -> Result<(usize, usize)> {
         // OCF decoding never interleaves records across blocks, so no chunking.
         let to_decode = std::cmp::min(count, self.remaining_capacity);
         if to_decode == 0 {
@@ -869,7 +869,7 @@ impl Decoder {
 
     // Produce a `RecordBatch` if at least one row is fully decoded, returning
     // `Ok(None)` if no new rows are available.
-    fn flush_block(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    fn flush_block(&mut self) -> Result<Option<RecordBatch>> {
         self.flush_and_reset()
     }
 }
@@ -979,7 +979,7 @@ impl ReaderBuilder {
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&Schema>,
-    ) -> Result<RecordDecoder, ArrowError> {
+    ) -> Result<RecordDecoder> {
         let mut builder = AvroFieldBuilder::new(writer_schema);
         if let Some(reader_schema) = reader_schema {
             builder = builder.with_reader_schema(reader_schema);
@@ -995,7 +995,7 @@ impl ReaderBuilder {
         &self,
         writer_schema: &Schema,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<RecordDecoder, ArrowError> {
+    ) -> Result<RecordDecoder> {
         let reader_schema_raw = reader_schema.map(|s| s.schema()).transpose()?;
         self.make_record_decoder(writer_schema, reader_schema_raw.as_ref())
     }
@@ -1023,13 +1023,13 @@ impl ReaderBuilder {
         &self,
         header: Option<&Header>,
         reader_schema: Option<&AvroSchema>,
-    ) -> Result<Decoder, ArrowError> {
+    ) -> Result<Decoder> {
         if let Some(hdr) = header {
             let writer_schema = hdr
                 .schema()
-                .map_err(|e| ArrowError::ExternalError(Box::new(e)))?
+                .map_err(|e| AvroError::External(Box::new(e)))?
                 .ok_or_else(|| {
-                    ArrowError::ParseError("No Avro schema present in file header".into())
+                    AvroError::ParseError("No Avro schema present in file header".into())
                 })?;
             let projected_reader_schema = self
                 .projection
@@ -1066,11 +1066,11 @@ impl ReaderBuilder {
             ));
         }
         let store = self.writer_schema_store.as_ref().ok_or_else(|| {
-            ArrowError::ParseError("Writer schema store required for raw Avro".into())
+            AvroError::ParseError("Writer schema store required for raw Avro".into())
         })?;
         let fingerprints = store.fingerprints();
         if fingerprints.is_empty() {
-            return Err(ArrowError::ParseError(
+            return Err(AvroError::ParseError(
                 "Writer schema store must contain at least one schema".into(),
             ));
         }
@@ -1078,7 +1078,7 @@ impl ReaderBuilder {
             .active_fingerprint
             .or_else(|| fingerprints.first().copied())
             .ok_or_else(|| {
-                ArrowError::ParseError("Could not determine initial schema fingerprint".into())
+                AvroError::ParseError("Could not determine initial schema fingerprint".into())
             })?;
         let projection = self.projection.as_deref();
         let projected_reader_schema = match (projection, reader_schema) {
@@ -1091,7 +1091,7 @@ impl ReaderBuilder {
             let avro_schema = match store.lookup(&fingerprint) {
                 Some(schema) => schema,
                 None => {
-                    return Err(ArrowError::ComputeError(format!(
+                    return Err(AvroError::General(format!(
                         "Fingerprint {fingerprint:?} not found in schema store",
                     )));
                 }
@@ -1121,7 +1121,7 @@ impl ReaderBuilder {
             }
         }
         let active_decoder = active_decoder.ok_or_else(|| {
-            ArrowError::ComputeError(format!(
+            AvroError::General(format!(
                 "Initial fingerprint {start_fingerprint:?} not found in schema store"
             ))
         })?;
@@ -1296,6 +1296,7 @@ impl ReaderBuilder {
             ));
         }
         self.make_decoder(None, self.reader_schema.as_ref())
+            .map_err(ArrowError::from)
     }
 }
 
@@ -1372,7 +1373,7 @@ impl<R: BufRead> Reader<R> {
                 self.block_count -= records_decoded;
             }
         }
-        self.decoder.flush_block()
+        self.decoder.flush_block().map_err(ArrowError::from)
     }
 }
 
