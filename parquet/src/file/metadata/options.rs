@@ -47,7 +47,6 @@ impl MetadataOptions {
     pub fn with_schema(self, val: SchemaDescPtr) -> Self {
         Self {
             schema_descr: Some(val),
-            ..self
         }
     }
 }

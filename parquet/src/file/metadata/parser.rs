@@ -173,7 +173,6 @@ mod inner {
         pub(crate) fn with_metadata_options(self, options: Option<MetadataOptions>) -> Self {
             Self {
                 metadata_options: options,
-                ..self
             }
         }
 
