@@ -15,11 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! [`merge`] and [`merge_n`]: Combine values from two or more arrays
+
 use crate::filter::SlicesIterator;
-use arrow_array::{make_array, new_empty_array, Array, ArrayRef, BooleanArray, Datum};
-use arrow_data::transform::MutableArrayData;
+use arrow_array::{Array, ArrayRef, BooleanArray, Datum, make_array, new_empty_array};
 use arrow_data::ArrayData;
+use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
+use crate::zip::zip;
 
 /// An index for the [merge] function.
 ///
@@ -29,7 +32,7 @@ use arrow_schema::ArrowError;
 ///
 /// Implementation must ensure that all values which return `None` from [MergeIndex::index] are
 /// considered equal by the [PartialEq] and [Eq] implementations.
-pub trait MergeIndex : PartialEq + Eq + Copy {
+pub trait MergeIndex: PartialEq + Eq + Copy {
     /// Returns the index value as an `Option<usize>`.
     ///
     /// `None` values returned by this function indicate holes in the index array and will result
@@ -281,7 +284,7 @@ pub fn merge(
 
 #[cfg(test)]
 mod tests {
-    use crate::merge::{merge, merge_n, MergeIndex};
+    use crate::merge::{MergeIndex, merge, merge_n};
     use arrow_array::cast::AsArray;
     use arrow_array::{Array, BooleanArray, StringArray};
 
@@ -305,14 +308,7 @@ mod tests {
         let a1 = StringArray::from(vec![Some("A"), Some("B"), Some("E"), None]);
         let a2 = StringArray::from(vec![Some("C"), Some("D")]);
 
-        let indices = BooleanArray::from(vec![
-            true,
-            false,
-            true,
-            false,
-            true,
-            true
-        ]);
+        let indices = BooleanArray::from(vec![true, false, true, false, true, true]);
 
         let merged = merge(&indices, &a1, &a2).unwrap();
         let merged = merged.as_string::<i32>();
