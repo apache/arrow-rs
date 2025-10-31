@@ -337,7 +337,6 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
             return Ok(in_progress);
         }
 
-
         // todo: it shouldn't  be possible to read more than 10 bytes
         // TODO real error
         panic!("Thrift VLQ encoding should not be more than 10 bytes long");
