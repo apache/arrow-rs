@@ -84,7 +84,7 @@ canonical_extension_types = ["arrow-schema/canonical_extension_types"]
 
 [dev-dependencies]
 chrono = { workspace = true }
-criterion = { version = "0.6", default-features = false }
+criterion = { workspace = true, default-features = false }
 half = { version = "2.1", default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
