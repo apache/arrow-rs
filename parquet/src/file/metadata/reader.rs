@@ -73,6 +73,7 @@ pub struct ParquetMetaDataReader {
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
     prefetch_hint: Option<usize>,
+    metadata_options: Option<MetadataOptions>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
@@ -160,6 +161,12 @@ impl ParquetMetaDataReader {
     /// Sets the [`PageIndexPolicy`] for the offset index
     pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
         self.offset_index = policy;
+        self
+    }
+
+    /// Sets the [`MetadataOptions`] to use when decoding
+    pub fn with_metadata_options(mut self, options: Option<MetadataOptions>) -> Self {
+        self.metadata_options = options;
         self
     }
 
@@ -360,7 +367,8 @@ impl ParquetMetaDataReader {
 
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index);
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
@@ -506,7 +514,8 @@ impl ParquetMetaDataReader {
         let file_size = u64::MAX;
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index);
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
@@ -756,7 +765,8 @@ impl ParquetMetaDataReader {
         let push_decoder =
             ParquetMetaDataPushDecoder::try_new_with_footer_tail(file_size, footer_tail)?
                 // NOTE: DO NOT enable page indexes here, they are handled separately
-                .with_page_index_policy(PageIndexPolicy::Skip);
+                .with_page_index_policy(PageIndexPolicy::Skip)
+                .with_metadata_options(self.metadata_options.clone());
 
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
         push_decoder.push_range(range, buf)?;
