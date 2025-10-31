@@ -190,7 +190,7 @@ impl fmt::Display for FormatMetadata<'_> {
             let mut entries: Vec<(&String, &String)> = metadata.iter().collect();
             entries.sort_by(|a, b| a.0.cmp(b.0));
             write!(f, ", metadata: ")?;
-            f.debug_map().entries(entries.into_iter()).finish()
+            f.debug_map().entries(entries).finish()
         }
     }
 }
