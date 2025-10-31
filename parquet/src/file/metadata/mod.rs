@@ -42,7 +42,6 @@
 //! * [`ParquetMetaDataPushDecoder`] for decoding from bytes without I/O
 //! * [`ParquetMetaDataWriter`] for writing.
 //!
-//!
 //! # Examples
 //!
 //! Please see [`external_metadata.rs`]
@@ -92,17 +91,17 @@ mod memory;
 mod parser;
 mod push_decoder;
 pub(crate) mod reader;
-pub(crate) mod thrift_gen;
+pub(crate) mod thrift;
 mod writer;
 
-use crate::basic::PageType;
+use crate::basic::{EncodingMask, PageType};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;
 #[cfg(feature = "encryption")]
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
 pub(crate) use crate::file::metadata::memory::HeapSize;
 #[cfg(feature = "encryption")]
-use crate::file::metadata::thrift_gen::EncryptionAlgorithm;
+use crate::file::metadata::thrift::encryption::EncryptionAlgorithm;
 use crate::file::page_index::column_index::{ByteArrayColumnIndex, PrimitiveColumnIndex};
 use crate::file::page_index::{column_index::ColumnIndexMetaData, offset_index::PageLocation};
 use crate::file::statistics::Statistics;
@@ -287,11 +286,17 @@ impl ParquetMetaData {
     ///
     /// 4. Does not include any allocator overheads
     pub fn memory_size(&self) -> usize {
+        #[cfg(feature = "encryption")]
+        let encryption_size = self.file_decryptor.heap_size();
+        #[cfg(not(feature = "encryption"))]
+        let encryption_size = 0usize;
+
         std::mem::size_of::<Self>()
             + self.file_metadata.heap_size()
             + self.row_groups.heap_size()
             + self.column_index.heap_size()
             + self.offset_index.heap_size()
+            + encryption_size
     }
 
     /// Override the column index
@@ -782,13 +787,18 @@ impl RowGroupMetaDataBuilder {
 
         Ok(self.0)
     }
+
+    /// Build row group metadata without validation.
+    pub(super) fn build_unchecked(self) -> RowGroupMetaData {
+        self.0
+    }
 }
 
 /// Metadata for a column chunk.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ColumnChunkMetaData {
     column_descr: ColumnDescPtr,
-    encodings: Vec<Encoding>,
+    encodings: EncodingMask,
     file_path: Option<String>,
     file_offset: i64,
     num_values: i64,
@@ -968,7 +978,12 @@ impl ColumnChunkMetaData {
     }
 
     /// All encodings used for this column.
-    pub fn encodings(&self) -> &Vec<Encoding> {
+    pub fn encodings(&self) -> impl Iterator<Item = Encoding> {
+        self.encodings.encodings()
+    }
+
+    /// All encodings used for this column, returned as a bitmask.
+    pub fn encodings_mask(&self) -> &EncodingMask {
         &self.encodings
     }
 
@@ -1148,7 +1163,7 @@ impl ColumnChunkMetaDataBuilder {
     fn new(column_descr: ColumnDescPtr) -> Self {
         Self(ColumnChunkMetaData {
             column_descr,
-            encodings: Vec::new(),
+            encodings: Default::default(),
             file_path: None,
             file_offset: 0,
             num_values: 0,
@@ -1179,6 +1194,12 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets list of encodings for this column chunk.
     pub fn set_encodings(mut self, encodings: Vec<Encoding>) -> Self {
+        self.0.encodings = EncodingMask::new_from_encodings(encodings.iter());
+        self
+    }
+
+    /// Sets the encodings mask for this column chunk.
+    pub fn set_encodings_mask(mut self, encodings: EncodingMask) -> Self {
         self.0.encodings = encodings;
         self
     }
@@ -1587,7 +1608,7 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::metadata::thrift_gen::tests::{read_column_chunk, read_row_group};
+    use crate::file::metadata::thrift::tests::{read_column_chunk, read_row_group};
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1704,9 +1725,10 @@ mod tests {
     #[test]
     fn test_column_chunk_metadata_thrift_conversion() {
         let column_descr = get_test_schema_descr().column(0);
-
         let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
-            .set_encodings(vec![Encoding::PLAIN, Encoding::RLE])
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
             .set_file_path("file_path".to_owned())
             .set_num_values(1000)
             .set_compression(Compression::SNAPPY)
@@ -1858,9 +1880,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2312;
+        let base_expected_size = 2766;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2480;
+        let base_expected_size = 2934;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1889,13 +1911,88 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2738;
+        let bigger_expected_size = 3192;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 2906;
+        let bigger_expected_size = 3360;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
         assert_eq!(parquet_meta.memory_size(), bigger_expected_size);
+    }
+
+    #[test]
+    #[cfg(feature = "encryption")]
+    fn test_memory_size_with_decryptor() {
+        use crate::encryption::decrypt::FileDecryptionProperties;
+        use crate::file::metadata::thrift::encryption::AesGcmV1;
+
+        let schema_descr = get_test_schema_descr();
+
+        let columns = schema_descr
+            .columns()
+            .iter()
+            .map(|column_descr| ColumnChunkMetaData::builder(column_descr.clone()).build())
+            .collect::<Result<Vec<_>>>()
+            .unwrap();
+        let row_group_meta = RowGroupMetaData::builder(schema_descr.clone())
+            .set_num_rows(1000)
+            .set_column_metadata(columns)
+            .build()
+            .unwrap();
+        let row_group_meta = vec![row_group_meta];
+
+        let version = 2;
+        let num_rows = 1000;
+        let aad_file_unique = vec![1u8; 8];
+        let aad_prefix = vec![2u8; 8];
+        let encryption_algorithm = EncryptionAlgorithm::AES_GCM_V1(AesGcmV1 {
+            aad_prefix: Some(aad_prefix.clone()),
+            aad_file_unique: Some(aad_file_unique.clone()),
+            supply_aad_prefix: Some(true),
+        });
+        let footer_key_metadata = Some(vec![3u8; 8]);
+        let file_metadata =
+            FileMetaData::new(version, num_rows, None, None, schema_descr.clone(), None)
+                .with_encryption_algorithm(Some(encryption_algorithm))
+                .with_footer_signing_key_metadata(footer_key_metadata.clone());
+
+        let parquet_meta_data = ParquetMetaDataBuilder::new(file_metadata.clone())
+            .set_row_groups(row_group_meta.clone())
+            .build();
+
+        let base_expected_size = 2058;
+        assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
+
+        let footer_key = "0123456789012345".as_bytes();
+        let column_key = "1234567890123450".as_bytes();
+        let mut decryption_properties_builder =
+            FileDecryptionProperties::builder(footer_key.to_vec())
+                .with_aad_prefix(aad_prefix.clone());
+        for column in schema_descr.columns() {
+            decryption_properties_builder = decryption_properties_builder
+                .with_column_key(&column.path().string(), column_key.to_vec());
+        }
+        let decryption_properties = decryption_properties_builder.build().unwrap();
+        let decryptor = FileDecryptor::new(
+            &decryption_properties,
+            footer_key_metadata.as_deref(),
+            aad_file_unique,
+            aad_prefix,
+        )
+        .unwrap();
+
+        let parquet_meta_data = ParquetMetaDataBuilder::new(file_metadata.clone())
+            .set_row_groups(row_group_meta.clone())
+            .set_file_decryptor(Some(decryptor))
+            .build();
+
+        let expected_size_with_decryptor = 3072;
+        assert!(expected_size_with_decryptor > base_expected_size);
+
+        assert_eq!(
+            parquet_meta_data.memory_size(),
+            expected_size_with_decryptor
+        );
     }
 
     /// Returns sample schema descriptor so we can create column metadata.

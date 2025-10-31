@@ -18,6 +18,7 @@
 use crate::errors::ParquetError;
 use crate::errors::ParquetError::General;
 use crate::errors::Result;
+use crate::file::metadata::HeapSize;
 use ring::aead::{AES_128_GCM, Aad, LessSafeKey, NonceSequence, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
@@ -27,7 +28,7 @@ pub(crate) const NONCE_LEN: usize = 12;
 pub(crate) const TAG_LEN: usize = 16;
 pub(crate) const SIZE_LEN: usize = 4;
 
-pub(crate) trait BlockDecryptor: Debug + Send + Sync {
+pub(crate) trait BlockDecryptor: Debug + Send + Sync + HeapSize {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 
     fn compute_plaintext_tag(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>>;
@@ -47,6 +48,13 @@ impl RingGcmBlockDecryptor {
         Ok(Self {
             key: LessSafeKey::new(key),
         })
+    }
+}
+
+impl HeapSize for RingGcmBlockDecryptor {
+    fn heap_size(&self) -> usize {
+        // Ring's LessSafeKey doesn't allocate on the heap
+        0
     }
 }
 

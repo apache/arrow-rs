@@ -381,7 +381,17 @@ impl<T: DataType> DictDecoder<T> {
 impl<T: DataType> Decoder<T> for DictDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
         // First byte in `data` is bit width
+        if data.is_empty() {
+            return Err(eof_err!("Not enough bytes to decode bit_width"));
+        }
+
         let bit_width = data.as_ref()[0];
+        if bit_width > 32 {
+            return Err(general_err!(
+                "Invalid or corrupted RLE bit width {}. Max allowed is 32",
+                bit_width
+            ));
+        }
         let mut rle_decoder = RleDecoder::new(bit_width);
         rle_decoder.set_data(data.slice(1..));
         self.num_values = num_values;
@@ -631,6 +641,19 @@ where
             self.next_block()
         }
     }
+
+    /// Verify the bit width is smaller then the integer type that it is trying to decode.
+    #[inline]
+    fn check_bit_width(&self, bit_width: usize) -> Result<()> {
+        if bit_width > std::mem::size_of::<T::T>() * 8 {
+            return Err(general_err!(
+                "Invalid delta bit width {} which is larger than expected {} ",
+                bit_width,
+                std::mem::size_of::<T::T>() * 8
+            ));
+        }
+        Ok(())
+    }
 }
 
 impl<T: DataType> Decoder<T> for DeltaBitPackDecoder<T>
@@ -726,6 +749,7 @@ where
             }
 
             let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            self.check_bit_width(bit_width)?;
             let batch_to_read = self.mini_block_remaining.min(to_read - read);
 
             let batch_read = self
@@ -796,6 +820,7 @@ where
             }
 
             let bit_width = self.mini_block_bit_widths[self.mini_block_idx] as usize;
+            self.check_bit_width(bit_width)?;
             let mini_block_to_skip = self.mini_block_remaining.min(to_skip - skip);
             let mini_block_should_skip = mini_block_to_skip;
 
@@ -1378,6 +1403,13 @@ mod tests {
         data[2].set_data(Bytes::from(String::from("flow")));
         let data_bytes = FixedLenByteArrayType::to_byte_array(&data[..]);
         test_plain_skip::<FixedLenByteArrayType>(Bytes::from(data_bytes), 3, 6, 4, &[]);
+    }
+
+    #[test]
+    fn test_dict_decoder_empty_data() {
+        let mut decoder = DictDecoder::<Int32Type>::new();
+        let err = decoder.set_data(Bytes::new(), 10).unwrap_err();
+        assert_eq!(err.to_string(), "EOF: Not enough bytes to decode bit_width");
     }
 
     fn test_plain_decode<T: DataType>(
@@ -2090,5 +2122,52 @@ mod tests {
             }
             v
         }
+    }
+
+    #[test]
+    // Allow initializing a vector and pushing to it for clarity in this test
+    #[allow(clippy::vec_init_then_push)]
+    fn test_delta_bit_packed_invalid_bit_width() {
+        // Manually craft a buffer with an invalid bit width
+        let mut buffer = vec![];
+        // block_size = 128
+        buffer.push(128);
+        buffer.push(1);
+        // mini_blocks_per_block = 4
+        buffer.push(4);
+        // num_values = 32
+        buffer.push(32);
+        // first_value = 0
+        buffer.push(0);
+        // min_delta = 0
+        buffer.push(0);
+        // bit_widths, one for each of the 4 mini blocks
+        buffer.push(33); // Invalid bit width
+        buffer.push(0);
+        buffer.push(0);
+        buffer.push(0);
+
+        let corrupted_buffer = Bytes::from(buffer);
+
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(corrupted_buffer.clone(), 32).unwrap();
+        let mut read_buffer = vec![0; 32];
+        let err = decoder.get(&mut read_buffer).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid delta bit width 33 which is larger than expected 32"),
+            "{}",
+            err
+        );
+
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        decoder.set_data(corrupted_buffer, 32).unwrap();
+        let err = decoder.skip(32).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid delta bit width 33 which is larger than expected 32"),
+            "{}",
+            err
+        );
     }
 }
