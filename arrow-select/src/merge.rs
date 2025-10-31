@@ -61,15 +61,16 @@ impl MergeIndex for Option<usize> {
 ///
 /// # Implementation notes
 ///
-/// This algorithm is similar in nature to both `zip` and `interleave`, but there are some important
-/// differences.
+/// This algorithm is similar in nature to both [zip](crate::zip::zip) and
+/// [interleave](crate::interleave::interleave), but there are some important differences.
 ///
-/// In contrast to `zip`, this function supports multiple input arrays. Instead of a boolean
-/// selection vector, an index array is to take values from the input arrays, and a special marker
-/// value is used to indicate null values.
+/// In contrast to [zip](crate::zip::zip), this function supports multiple input arrays. Instead of
+/// a boolean selection vector, an index array is to take values from the input arrays, and a special
+/// marker values can be used to indicate null values.
 ///
-/// In contrast to `interleave`, this function does not use pairs of indices. The values in
-/// `indices` serve the same purpose as the first value in the pairs passed to `interleave`.
+/// In contrast to [interleave](crate::interleave::interleave), this function does not use pairs of
+/// indices. The values in `indices` serve the same purpose as the first value in the pairs passed
+/// to `interleave`.
 /// The index in the array is implicit and is derived from the number of times a particular array
 /// index occurs.
 /// The more constrained indexing mechanism used by this algorithm makes it easier to copy values
@@ -177,7 +178,7 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
 
 /// Merges two arrays in the order specified by a boolean mask.
 ///
-/// This algorithm is a variant of [zip] that does not require the truthy and
+/// This algorithm is a variant of [zip](crate::zip::zip) that does not require the truthy and
 /// falsy arrays to have the same length.
 ///
 /// # Example
