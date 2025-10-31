@@ -20,7 +20,6 @@
 use crate::array::*;
 use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
-
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use half::f16;
 use rand::Rng;

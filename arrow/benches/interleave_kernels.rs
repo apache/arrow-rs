@@ -18,7 +18,6 @@
 #[macro_use]
 extern crate criterion;
 
-use arrow_buffer::{OffsetBuffer, ScalarBuffer};
 use criterion::Criterion;
 use std::ops::Range;
 
