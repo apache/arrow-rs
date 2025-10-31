@@ -276,21 +276,71 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
 
     /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
-        // try the happy path first
+        // manually unrolled the loop
         let byte = self.read_byte()?;
-        if byte & 0x80 == 0 {
-            return Ok(byte as u64);
-        }
         let mut in_progress = (byte & 0x7f) as u64;
-        let mut shift = 7;
-        loop {
-            let byte = self.read_byte()?;
-            in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
-            if byte & 0x80 == 0 {
-                return Ok(in_progress);
-            }
-            shift += 7;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
         }
+        // byte 2
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 7;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 3
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 14;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 4
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 21;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 5
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 28;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 6
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 35;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 7
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 42;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 8
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 49;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 9
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 56;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+        // byte 10
+        let byte = self.read_byte()?;
+        in_progress |= ((byte & 0x7f) as u64) << 63;
+        if byte & 0x80 == 0 {
+            return Ok(in_progress);
+        }
+
+
+        // todo: it shouldn't  be possible to read more than 10 bytes
+        // TODO real error
+        panic!("Thrift VLQ encoding should not be more than 10 bytes long");
     }
 
     /// Read a zig-zag encoded signed varint from the input.
