@@ -22,7 +22,6 @@ use arrow_array::{Array, ArrayRef, BooleanArray, Datum, make_array, new_empty_ar
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
-use crate::zip::zip;
 
 /// An index for the [merge] function.
 ///
