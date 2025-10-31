@@ -113,7 +113,7 @@ pub fn interleave(
             _ => unreachable!("illegal dictionary key type {k}")
         },
         DataType::Struct(fields) => interleave_struct(fields, values, indices),
-        _ => interleave_fallback(values, indices,true)
+        _ => interleave_fallback(values, indices, true)
     }
 }
 
@@ -452,9 +452,13 @@ fn interleave_fallback(
     let mut array_data = match MutableArrayData::try_new(arrays, false, indices.len()) {
         Ok(array_data) => array_data,
         Err(ArrowError::DictionaryKeyOverflowError) => {
+            // this function is invoked recursively, and only call itself
+            // after observing this error once
             if !allow_dictionary_overflow {
                 return Err(ArrowError::DictionaryKeyOverflowError);
             }
+            // some children arrays of these values already overflow
+            // try merging them (which sacrifice some performance)
             let new_values = merge_descendant_dictionaries(values)?;
             return interleave_fallback(
                 &new_values
