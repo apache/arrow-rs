@@ -51,3 +51,47 @@ impl MetadataOptions {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+
+    use crate::{
+        DecodeResult,
+        file::metadata::{MetadataOptions, ParquetMetaDataPushDecoder},
+        util::test_common::file_util::get_test_file,
+    };
+    use std::io::Read;
+
+    #[test]
+    fn test_provide_schema() {
+        let mut buf: Vec<u8> = Vec::new();
+        get_test_file("alltypes_plain.parquet")
+            .read_to_end(&mut buf)
+            .unwrap();
+
+        let footer = Bytes::from(buf);
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(footer.len() as u64).unwrap();
+        decoder
+            .push_range(0..footer.len() as u64, footer.clone())
+            .unwrap();
+
+        let expected = match decoder.try_decode().unwrap() {
+            DecodeResult::Data(m) => m,
+            _ => panic!("could not parse metadata"),
+        };
+
+        let options =
+            MetadataOptions::new().with_schema(expected.file_metadata().schema_descr_ptr());
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(footer.len() as u64)
+            .unwrap()
+            .with_metadata_options(Some(options));
+        decoder.push_range(0..footer.len() as u64, footer).unwrap();
+        let metadata = match decoder.try_decode().unwrap() {
+            DecodeResult::Data(m) => m,
+            _ => panic!("could not parse metadata"),
+        };
+
+        assert_eq!(expected, metadata);
+    }
+}
