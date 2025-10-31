@@ -18,6 +18,7 @@
 //! Avro Encoder for Arrow types.
 
 use crate::codec::{AvroDataType, AvroField, Codec};
+use crate::errors::{AvroError, Result};
 use crate::schema::{Fingerprint, Nullability, Prefix};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
@@ -40,9 +41,7 @@ use arrow_array::{
 #[cfg(feature = "small_decimals")]
 use arrow_array::{Decimal32Array, Decimal64Array};
 use arrow_buffer::{ArrowNativeType, NullBuffer};
-use arrow_schema::{
-    ArrowError, DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode,
-};
+use arrow_schema::{DataType, Field, IntervalUnit, Schema as ArrowSchema, TimeUnit, UnionMode};
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -51,7 +50,7 @@ use uuid::Uuid;
 ///
 /// Spec: <https://avro.apache.org/docs/1.11.1/specification/#binary-encoding>
 #[inline]
-pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(), ArrowError> {
+pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<()> {
     let mut zz = ((value << 1) ^ (value >> 63)) as u64;
     // At most 10 bytes for 64-bit varint
     let mut buf = [0u8; 10];
@@ -63,26 +62,26 @@ pub(crate) fn write_long<W: Write + ?Sized>(out: &mut W, value: i64) -> Result<(
     }
     buf[i] = (zz & 0x7F) as u8;
     i += 1;
-    out.write_all(&buf[..i])
-        .map_err(|e| ArrowError::IoError(format!("write long: {e}"), e))
+    out.write_all(&buf[..i])?;
+    Ok(())
 }
 
 #[inline]
-fn write_int<W: Write + ?Sized>(out: &mut W, value: i32) -> Result<(), ArrowError> {
+fn write_int<W: Write + ?Sized>(out: &mut W, value: i32) -> Result<()> {
     write_long(out, value as i64)
 }
 
 #[inline]
-fn write_len_prefixed<W: Write + ?Sized>(out: &mut W, bytes: &[u8]) -> Result<(), ArrowError> {
+fn write_len_prefixed<W: Write + ?Sized>(out: &mut W, bytes: &[u8]) -> Result<()> {
     write_long(out, bytes.len() as i64)?;
-    out.write_all(bytes)
-        .map_err(|e| ArrowError::IoError(format!("write bytes: {e}"), e))
+    out.write_all(bytes)?;
+    Ok(())
 }
 
 #[inline]
-fn write_bool<W: Write + ?Sized>(out: &mut W, v: bool) -> Result<(), ArrowError> {
-    out.write_all(&[if v { 1 } else { 0 }])
-        .map_err(|e| ArrowError::IoError(format!("write bool: {e}"), e))
+fn write_bool<W: Write + ?Sized>(out: &mut W, v: bool) -> Result<()> {
+    out.write_all(&[if v { 1 } else { 0 }])?;
+    Ok(())
 }
 
 /// Minimal two's-complement big-endian representation helper for Avro decimal (bytes).
@@ -129,16 +128,11 @@ fn minimal_twos_complement(be: &[u8]) -> &[u8] {
 ///
 /// Used for encoding Avro decimal values into `fixed(N)` fields.
 #[inline]
-fn write_sign_extended<W: Write + ?Sized>(
-    out: &mut W,
-    src_be: &[u8],
-    n: usize,
-) -> Result<(), ArrowError> {
+fn write_sign_extended<W: Write + ?Sized>(out: &mut W, src_be: &[u8], n: usize) -> Result<()> {
     let len = src_be.len();
     if len == n {
-        return out
-            .write_all(src_be)
-            .map_err(|e| ArrowError::IoError(format!("write decimal fixed: {e}"), e));
+        out.write_all(src_be)?;
+        return Ok(());
     }
     let sign_byte = if len > 0 && (src_be[0] & 0x80) != 0 {
         0xFF
@@ -155,13 +149,12 @@ fn write_sign_extended<W: Write + ?Sized>(
         if src_be[..extra].iter().any(|&b| b != sign_byte)
             || ((src_be[extra] ^ sign_byte) & 0x80) != 0
         {
-            return Err(ArrowError::InvalidArgumentError(format!(
+            return Err(AvroError::InvalidArgument(format!(
                 "Decimal value with {len} bytes cannot be represented in {n} bytes without overflow",
             )));
         }
-        return out
-            .write_all(&src_be[extra..])
-            .map_err(|e| ArrowError::IoError(format!("write decimal fixed: {e}"), e));
+        out.write_all(&src_be[extra..])?;
+        return Ok(());
     }
     // len < n: prepend sign bytes (sign extension) then the payload
     let pad_len = n - len;
@@ -177,16 +170,14 @@ fn write_sign_extended<W: Write + ?Sized>(
     // then write the original bytes.
     let mut rem = pad_len;
     while rem >= pad.len() {
-        out.write_all(pad)
-            .map_err(|e| ArrowError::IoError(format!("write decimal fixed: {e}"), e))?;
+        out.write_all(pad)?;
         rem -= pad.len();
     }
     if rem > 0 {
-        out.write_all(&pad[..rem])
-            .map_err(|e| ArrowError::IoError(format!("write decimal fixed: {e}"), e))?;
+        out.write_all(&pad[..rem])?;
     }
-    out.write_all(src_be)
-        .map_err(|e| ArrowError::IoError(format!("write decimal fixed: {e}"), e))
+    out.write_all(src_be)?;
+    Ok(())
 }
 
 /// Write the union branch index for an optional field.
@@ -198,10 +189,10 @@ fn write_optional_index<W: Write + ?Sized>(
     out: &mut W,
     is_null: bool,
     null_order: Nullability,
-) -> Result<(), ArrowError> {
+) -> Result<(), AvroError> {
     let byte = union_value_branch_byte(null_order, is_null);
     out.write_all(&[byte])
-        .map_err(|e| ArrowError::IoError(format!("write union branch: {e}"), e))
+        .map_err(|e| AvroError::General(format!("write union branch: {e}")))
 }
 
 #[derive(Debug, Clone)]
@@ -230,7 +221,7 @@ impl<'a> FieldEncoder<'a> {
         field: &Field,
         plan: &FieldPlan,
         nullability: Option<Nullability>,
-    ) -> Result<Self, ArrowError> {
+    ) -> Result<Self> {
         let encoder = match plan {
             FieldPlan::Scalar => match array.data_type() {
                 DataType::Null => Encoder::Null,
@@ -245,25 +236,21 @@ impl<'a> FieldEncoder<'a> {
                     let arr = array
                         .as_any()
                         .downcast_ref::<StringViewArray>()
-                        .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected StringViewArray".into())
-                        })?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected StringViewArray".into()))?;
                     Encoder::Utf8View(Utf8ViewEncoder(arr))
                 }
                 DataType::BinaryView => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<BinaryViewArray>()
-                        .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected BinaryViewArray".into())
-                        })?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected BinaryViewArray".into()))?;
                     Encoder::BinaryView(BinaryViewEncoder(arr))
                 }
                 DataType::Int32 => Encoder::Int(IntEncoder(array.as_primitive::<Int32Type>())),
                 DataType::Int64 => Encoder::Long(LongEncoder(array.as_primitive::<Int64Type>())),
                 DataType::Date32 => Encoder::Date32(IntEncoder(array.as_primitive::<Date32Type>())),
                 DataType::Date64 => {
-                    return Err(ArrowError::NotYetImplemented(
+                    return Err(AvroError::NYI(
                         "Avro logical type 'date' is days since epoch (int). Arrow Date64 (ms) has no direct Avro logical type; cast to Date32 or to a Timestamp."
                             .into(),
                     ));
@@ -275,13 +262,13 @@ impl<'a> FieldEncoder<'a> {
                     Encoder::Time32Millis(IntEncoder(array.as_primitive::<Time32MillisecondType>()))
                 }
                 DataType::Time32(TimeUnit::Microsecond) => {
-                    return Err(ArrowError::InvalidArgumentError(
+                    return Err(AvroError::InvalidArgument(
                         "Arrow Time32 only supports Second or Millisecond. Use Time64 for microseconds."
                             .into(),
                     ));
                 }
                 DataType::Time32(TimeUnit::Nanosecond) => {
-                    return Err(ArrowError::InvalidArgumentError(
+                    return Err(AvroError::InvalidArgument(
                         "Arrow Time32 only supports Second or Millisecond. Use Time64 for nanoseconds."
                             .into(),
                     ));
@@ -290,19 +277,19 @@ impl<'a> FieldEncoder<'a> {
                     array.as_primitive::<Time64MicrosecondType>(),
                 )),
                 DataType::Time64(TimeUnit::Nanosecond) => {
-                    return Err(ArrowError::NotYetImplemented(
+                    return Err(AvroError::NYI(
                         "Avro writer does not support time-nanos; cast to Time64(Microsecond)."
                             .into(),
                     ));
                 }
                 DataType::Time64(TimeUnit::Millisecond) => {
-                    return Err(ArrowError::InvalidArgumentError(
+                    return Err(AvroError::InvalidArgument(
                         "Arrow Time64 with millisecond unit is not a valid Arrow type (use Time32 for millis)."
                             .into(),
                     ));
                 }
                 DataType::Time64(TimeUnit::Second) => {
-                    return Err(ArrowError::InvalidArgumentError(
+                    return Err(AvroError::InvalidArgument(
                         "Arrow Time64 with second unit is not a valid Arrow type (use Time32 for seconds)."
                             .into(),
                     ));
@@ -322,7 +309,7 @@ impl<'a> FieldEncoder<'a> {
                         .as_any()
                         .downcast_ref::<FixedSizeBinaryArray>()
                         .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected FixedSizeBinaryArray".into())
+                            AvroError::SchemaError("Expected FixedSizeBinaryArray".into())
                         })?;
                     Encoder::Fixed(FixedEncoder(arr))
                 }
@@ -368,7 +355,7 @@ impl<'a> FieldEncoder<'a> {
                     )),
                 },
                 other => {
-                    return Err(ArrowError::NotYetImplemented(format!(
+                    return Err(AvroError::NYI(format!(
                         "Avro scalar type not yet supported: {other:?}"
                     )));
                 }
@@ -377,7 +364,7 @@ impl<'a> FieldEncoder<'a> {
                 let arr = array
                     .as_any()
                     .downcast_ref::<StructArray>()
-                    .ok_or_else(|| ArrowError::SchemaError("Expected StructArray".into()))?;
+                    .ok_or_else(|| AvroError::SchemaError("Expected StructArray".into()))?;
                 Encoder::Struct(Box::new(StructEncoder::try_new(arr, bindings)?))
             }
             FieldPlan::List {
@@ -388,7 +375,7 @@ impl<'a> FieldEncoder<'a> {
                     let arr = array
                         .as_any()
                         .downcast_ref::<ListArray>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected ListArray".into()))?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected ListArray".into()))?;
                     Encoder::List(Box::new(ListEncoder32::try_new(
                         arr,
                         *items_nullability,
@@ -399,7 +386,7 @@ impl<'a> FieldEncoder<'a> {
                     let arr = array
                         .as_any()
                         .downcast_ref::<LargeListArray>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected LargeListArray".into()))?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected LargeListArray".into()))?;
                     Encoder::LargeList(Box::new(ListEncoder64::try_new(
                         arr,
                         *items_nullability,
@@ -410,7 +397,7 @@ impl<'a> FieldEncoder<'a> {
                     let arr = array
                         .as_any()
                         .downcast_ref::<ListViewArray>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected ListViewArray".into()))?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected ListViewArray".into()))?;
                     Encoder::ListView(Box::new(ListViewEncoder32::try_new(
                         arr,
                         *items_nullability,
@@ -422,7 +409,7 @@ impl<'a> FieldEncoder<'a> {
                         .as_any()
                         .downcast_ref::<LargeListViewArray>()
                         .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected LargeListViewArray".into())
+                            AvroError::SchemaError("Expected LargeListViewArray".into())
                         })?;
                     Encoder::LargeListView(Box::new(ListViewEncoder64::try_new(
                         arr,
@@ -435,7 +422,7 @@ impl<'a> FieldEncoder<'a> {
                         .as_any()
                         .downcast_ref::<FixedSizeListArray>()
                         .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected FixedSizeListArray".into())
+                            AvroError::SchemaError("Expected FixedSizeListArray".into())
                         })?;
                     Encoder::FixedSizeList(Box::new(FixedSizeListEncoder::try_new(
                         arr,
@@ -444,7 +431,7 @@ impl<'a> FieldEncoder<'a> {
                     )?))
                 }
                 other => {
-                    return Err(ArrowError::SchemaError(format!(
+                    return Err(AvroError::SchemaError(format!(
                         "Avro array site requires Arrow List/LargeList/ListView/LargeListView/FixedSizeList, found: {other:?}"
                     )));
                 }
@@ -455,7 +442,7 @@ impl<'a> FieldEncoder<'a> {
                     let arr = array
                         .as_any()
                         .downcast_ref::<Decimal32Array>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal32Array".into()))?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected Decimal32Array".into()))?;
                     Encoder::Decimal32(DecimalEncoder::<4, Decimal32Array>::new(arr, *size))
                 }
                 #[cfg(feature = "small_decimals")]
@@ -463,29 +450,25 @@ impl<'a> FieldEncoder<'a> {
                     let arr = array
                         .as_any()
                         .downcast_ref::<Decimal64Array>()
-                        .ok_or_else(|| ArrowError::SchemaError("Expected Decimal64Array".into()))?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected Decimal64Array".into()))?;
                     Encoder::Decimal64(DecimalEncoder::<8, Decimal64Array>::new(arr, *size))
                 }
                 DataType::Decimal128(_, _) => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<Decimal128Array>()
-                        .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected Decimal128Array".into())
-                        })?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected Decimal128Array".into()))?;
                     Encoder::Decimal128(DecimalEncoder::<16, Decimal128Array>::new(arr, *size))
                 }
                 DataType::Decimal256(_, _) => {
                     let arr = array
                         .as_any()
                         .downcast_ref::<Decimal256Array>()
-                        .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected Decimal256Array".into())
-                        })?;
+                        .ok_or_else(|| AvroError::SchemaError("Expected Decimal256Array".into()))?;
                     Encoder::Decimal256(DecimalEncoder::<32, Decimal256Array>::new(arr, *size))
                 }
                 other => {
-                    return Err(ArrowError::SchemaError(format!(
+                    return Err(AvroError::SchemaError(format!(
                         "Avro decimal site requires Arrow Decimal 32, 64, 128, or 256, found: {other:?}"
                     )));
                 }
@@ -495,7 +478,7 @@ impl<'a> FieldEncoder<'a> {
                     .as_any()
                     .downcast_ref::<FixedSizeBinaryArray>()
                     .ok_or_else(|| {
-                        ArrowError::SchemaError("Expected FixedSizeBinaryArray".into())
+                        AvroError::SchemaError("Expected FixedSizeBinaryArray".into())
                     })?;
                 Encoder::Uuid(UuidEncoder(arr))
             }
@@ -506,7 +489,7 @@ impl<'a> FieldEncoder<'a> {
                 let arr = array
                     .as_any()
                     .downcast_ref::<MapArray>()
-                    .ok_or_else(|| ArrowError::SchemaError("Expected MapArray".into()))?;
+                    .ok_or_else(|| AvroError::SchemaError("Expected MapArray".into()))?;
                 Encoder::Map(Box::new(MapEncoder::try_new(
                     arr,
                     *values_nullability,
@@ -516,7 +499,7 @@ impl<'a> FieldEncoder<'a> {
             FieldPlan::Enum { symbols } => match array.data_type() {
                 DataType::Dictionary(key_dt, value_dt) => {
                     if **key_dt != DataType::Int32 || **value_dt != DataType::Utf8 {
-                        return Err(ArrowError::SchemaError(
+                        return Err(AvroError::SchemaError(
                             "Avro enum requires Dictionary<Int32, Utf8>".into(),
                         ));
                     }
@@ -524,17 +507,17 @@ impl<'a> FieldEncoder<'a> {
                         .as_any()
                         .downcast_ref::<DictionaryArray<Int32Type>>()
                         .ok_or_else(|| {
-                            ArrowError::SchemaError("Expected DictionaryArray<Int32>".into())
+                            AvroError::SchemaError("Expected DictionaryArray<Int32>".into())
                         })?;
                     let values = dict
                         .values()
                         .as_any()
                         .downcast_ref::<StringArray>()
                         .ok_or_else(|| {
-                            ArrowError::SchemaError("Dictionary values must be Utf8".into())
+                            AvroError::SchemaError("Dictionary values must be Utf8".into())
                         })?;
                     if values.len() != symbols.len() {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Enum symbol length {} != dictionary size {}",
                             symbols.len(),
                             values.len()
@@ -542,7 +525,7 @@ impl<'a> FieldEncoder<'a> {
                     }
                     for i in 0..values.len() {
                         if values.value(i) != symbols[i].as_str() {
-                            return Err(ArrowError::SchemaError(format!(
+                            return Err(AvroError::SchemaError(format!(
                                 "Enum symbol mismatch at {i}: schema='{}' dict='{}'",
                                 symbols[i],
                                 values.value(i)
@@ -553,7 +536,7 @@ impl<'a> FieldEncoder<'a> {
                     Encoder::Enum(EnumEncoder { keys })
                 }
                 other => {
-                    return Err(ArrowError::SchemaError(format!(
+                    return Err(AvroError::SchemaError(format!(
                         "Avro enum site requires DataType::Dictionary, found: {other:?}"
                     )));
                 }
@@ -562,7 +545,7 @@ impl<'a> FieldEncoder<'a> {
                 let arr = array
                     .as_any()
                     .downcast_ref::<UnionArray>()
-                    .ok_or_else(|| ArrowError::SchemaError("Expected UnionArray".into()))?;
+                    .ok_or_else(|| AvroError::SchemaError("Expected UnionArray".into()))?;
 
                 Encoder::Union(Box::new(UnionEncoder::try_new(arr, bindings)?))
             }
@@ -574,13 +557,13 @@ impl<'a> FieldEncoder<'a> {
                 let values_field = match dt {
                     DataType::RunEndEncoded(_re_field, v_field) => v_field.as_ref(),
                     other => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Avro RunEndEncoded site requires Arrow DataType::RunEndEncoded, found: {other:?}"
                         )));
                     }
                 };
                 // Helper closure to build a typed RunEncodedEncoder<R>
-                let build = |run_arr_any: &'a dyn Array| -> Result<Encoder<'a>, ArrowError> {
+                let build = |run_arr_any: &'a dyn Array| -> Result<Encoder<'a>> {
                     if let Some(arr) = run_arr_any.as_any().downcast_ref::<RunArray<Int16Type>>() {
                         let values_enc = prepare_value_site_encoder(
                             arr.values().as_ref(),
@@ -620,7 +603,7 @@ impl<'a> FieldEncoder<'a> {
                             arr, values_enc
                         ))));
                     }
-                    Err(ArrowError::SchemaError(
+                    Err(AvroError::SchemaError(
                         "Unsupported run-ends index type for RunEndEncoded; expected Int16/Int32/Int64"
                             .into(),
                     ))
@@ -632,7 +615,7 @@ impl<'a> FieldEncoder<'a> {
         let null_state = match (nullability, array.null_count() > 0) {
             (None, false) => NullState::NonNullable,
             (None, true) => {
-                return Err(ArrowError::InvalidArgumentError(format!(
+                return Err(AvroError::InvalidArgument(format!(
                     "Avro site '{}' is non-nullable, but array contains nulls",
                     field.name()
                 )));
@@ -645,7 +628,7 @@ impl<'a> FieldEncoder<'a> {
             }
             (Some(null_order), true) => {
                 let Some(nulls) = array.nulls().cloned() else {
-                    return Err(ArrowError::InvalidArgumentError(format!(
+                    return Err(AvroError::InvalidArgument(format!(
                         "Array for Avro site '{}' reports nulls but has no null buffer",
                         field.name()
                     )));
@@ -659,12 +642,12 @@ impl<'a> FieldEncoder<'a> {
         })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         match &self.null_state {
             NullState::NonNullable => {}
-            NullState::NullableNoNulls { union_value_byte } => out
-                .write_all(&[*union_value_byte])
-                .map_err(|e| ArrowError::IoError(format!("write union value branch: {e}"), e))?,
+            NullState::NullableNoNulls { union_value_byte } => {
+                out.write_all(&[*union_value_byte])?
+            }
             NullState::Nullable { nulls, null_order } if nulls.is_null(idx) => {
                 return write_optional_index(out, true, *null_order); // no value to write
             }
@@ -751,10 +734,10 @@ impl<'a> RecordEncoderBuilder<'a> {
 
     /// Build the `RecordEncoder` by walking the Avro **record** root in Avro order,
     /// resolving each field to an Arrow index by name.
-    pub(crate) fn build(self) -> Result<RecordEncoder, ArrowError> {
+    pub(crate) fn build(self) -> Result<RecordEncoder> {
         let avro_root_dt = self.avro_root.data_type();
         let Codec::Struct(root_fields) = avro_root_dt.codec() else {
-            return Err(ArrowError::SchemaError(
+            return Err(AvroError::SchemaError(
                 "Top-level Avro schema must be a record/struct".into(),
             ));
         };
@@ -762,7 +745,7 @@ impl<'a> RecordEncoderBuilder<'a> {
         for root_field in root_fields.as_ref() {
             let name = root_field.name();
             let arrow_index = self.arrow_schema.index_of(name).map_err(|e| {
-                ArrowError::SchemaError(format!("Schema mismatch for field '{name}': {e}"))
+                AvroError::SchemaError(format!("Schema mismatch for field '{name}': {e}"))
             })?;
             columns.push(FieldBinding {
                 arrow_index,
@@ -793,10 +776,7 @@ pub(crate) struct RecordEncoder {
 }
 
 impl RecordEncoder {
-    fn prepare_for_batch<'a>(
-        &'a self,
-        batch: &'a RecordBatch,
-    ) -> Result<Vec<FieldEncoder<'a>>, ArrowError> {
+    fn prepare_for_batch<'a>(&'a self, batch: &'a RecordBatch) -> Result<Vec<FieldEncoder<'a>>> {
         let schema_binding = batch.schema();
         let fields = schema_binding.fields();
         let arrays = batch.columns();
@@ -804,7 +784,7 @@ impl RecordEncoder {
         for col_plan in self.columns.iter() {
             let arrow_index = col_plan.arrow_index;
             let array = arrays.get(arrow_index).ok_or_else(|| {
-                ArrowError::SchemaError(format!("Column index {arrow_index} out of range"))
+                AvroError::SchemaError(format!("Column index {arrow_index} out of range"))
             })?;
             let field = fields[arrow_index].as_ref();
             #[cfg(not(feature = "avro_custom_types"))]
@@ -828,18 +808,13 @@ impl RecordEncoder {
     /// Encode a `RecordBatch` using this encoder plan.
     ///
     /// Tip: Wrap `out` in a `std::io::BufWriter` to reduce the overhead of many small writes.
-    pub(crate) fn encode<W: Write>(
-        &self,
-        out: &mut W,
-        batch: &RecordBatch,
-    ) -> Result<(), ArrowError> {
+    pub(crate) fn encode<W: Write>(&self, out: &mut W, batch: &RecordBatch) -> Result<()> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         let n = batch.num_rows();
         match self.prefix {
             Some(prefix) => {
                 for row in 0..n {
-                    out.write_all(prefix.as_slice())
-                        .map_err(|e| ArrowError::IoError(format!("write prefix: {e}"), e))?;
+                    out.write_all(prefix.as_slice())?;
                     for enc in column_encoders.iter_mut() {
                         enc.encode(out, row)?;
                     }
@@ -869,7 +844,7 @@ fn find_map_value_field_index(fields: &arrow_schema::Fields) -> Option<usize> {
 }
 
 impl FieldPlan {
-    fn build(avro_dt: &AvroDataType, arrow_field: &Field) -> Result<Self, ArrowError> {
+    fn build(avro_dt: &AvroDataType, arrow_field: &Field) -> Result<Self> {
         #[cfg(not(feature = "avro_custom_types"))]
         if let DataType::RunEndEncoded(_re_field, values_field) = arrow_field.data_type() {
             let values_nullability = avro_dt.nullability();
@@ -878,7 +853,7 @@ impl FieldPlan {
                     .iter()
                     .find(|b| !matches!(b.codec(), Codec::Null))
                     .ok_or_else(|| {
-                        ArrowError::SchemaError(
+                        AvroError::SchemaError(
                             "Avro union at RunEndEncoded site has no non-null branch".into(),
                         )
                     })?,
@@ -911,7 +886,7 @@ impl FieldPlan {
                 == Some("uuid");
             if ext_is_uuid || md_is_uuid {
                 if *len != 16 {
-                    return Err(ArrowError::InvalidArgumentError(
+                    return Err(AvroError::InvalidArgument(
                         "logicalType=uuid requires FixedSizeBinary(16)".into(),
                     ));
                 }
@@ -923,7 +898,7 @@ impl FieldPlan {
                 let fields = match arrow_field.data_type() {
                     DataType::Struct(struct_fields) => struct_fields,
                     other => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Avro struct maps to Arrow Struct, found: {other:?}"
                         )));
                     }
@@ -932,7 +907,7 @@ impl FieldPlan {
                 for avro_field in avro_fields.iter() {
                     let name = avro_field.name().to_string();
                     let idx = find_struct_child_index(fields, &name).ok_or_else(|| {
-                        ArrowError::SchemaError(format!(
+                        AvroError::SchemaError(format!(
                             "Struct field '{name}' not present in Arrow field '{}'",
                             arrow_field.name()
                         ))
@@ -957,7 +932,7 @@ impl FieldPlan {
                     items_nullability: items_dt.nullability(),
                     item_plan: Box::new(FieldPlan::build(items_dt.as_ref(), field_ref.as_ref())?),
                 }),
-                other => Err(ArrowError::SchemaError(format!(
+                other => Err(AvroError::SchemaError(format!(
                     "Avro array maps to Arrow List/LargeList/ListView/LargeListView/FixedSizeList, found: {other:?}"
                 ))),
             },
@@ -965,7 +940,7 @@ impl FieldPlan {
                 let entries_field = match arrow_field.data_type() {
                     DataType::Map(entries, _sorted) => entries.as_ref(),
                     other => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Avro map maps to Arrow DataType::Map, found: {other:?}"
                         )));
                     }
@@ -973,14 +948,14 @@ impl FieldPlan {
                 let entries_struct_fields = match entries_field.data_type() {
                     DataType::Struct(fs) => fs,
                     other => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Arrow Map entries must be Struct, found: {other:?}"
                         )));
                     }
                 };
                 let value_idx =
                     find_map_value_field_index(entries_struct_fields).ok_or_else(|| {
-                        ArrowError::SchemaError("Map entries struct missing value field".into())
+                        AvroError::SchemaError("Map entries struct missing value field".into())
                     })?;
                 let value_field = entries_struct_fields[value_idx].as_ref();
                 let value_plan = FieldPlan::build(values_dt.as_ref(), value_field)?;
@@ -992,12 +967,12 @@ impl FieldPlan {
             Codec::Enum(symbols) => match arrow_field.data_type() {
                 DataType::Dictionary(key_dt, value_dt) => {
                     if **key_dt != DataType::Int32 {
-                        return Err(ArrowError::SchemaError(
+                        return Err(AvroError::SchemaError(
                             "Avro enum requires Dictionary<Int32, Utf8>".into(),
                         ));
                     }
                     if **value_dt != DataType::Utf8 {
-                        return Err(ArrowError::SchemaError(
+                        return Err(AvroError::SchemaError(
                             "Avro enum requires Dictionary<Int32, Utf8>".into(),
                         ));
                     }
@@ -1005,7 +980,7 @@ impl FieldPlan {
                         symbols: symbols.clone(),
                     })
                 }
-                other => Err(ArrowError::SchemaError(format!(
+                other => Err(AvroError::SchemaError(format!(
                     "Avro enum maps to Arrow Dictionary<Int32, Utf8>, found: {other:?}"
                 ))),
             },
@@ -1019,7 +994,7 @@ impl FieldPlan {
                     DataType::Decimal128(p, s) => (*p as usize, *s as i32),
                     DataType::Decimal256(p, s) => (*p as usize, *s as i32),
                     other => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Avro decimal requires Arrow decimal, got {other:?} for field '{}'",
                             arrow_field.name()
                         )));
@@ -1027,7 +1002,7 @@ impl FieldPlan {
                 };
                 let sc = scale_opt.unwrap_or(0) as i32; // Avro scale defaults to 0 if absent
                 if ap != *precision || as_ != sc {
-                    return Err(ArrowError::SchemaError(format!(
+                    return Err(AvroError::SchemaError(format!(
                         "Decimal precision/scale mismatch for field '{}': Avro({precision},{sc}) vs Arrow({ap},{as_})",
                         arrow_field.name()
                     )));
@@ -1040,7 +1015,7 @@ impl FieldPlan {
                 DataType::Interval(
                     IntervalUnit::MonthDayNano | IntervalUnit::YearMonth | IntervalUnit::DayTime,
                 ) => Ok(FieldPlan::Scalar),
-                other => Err(ArrowError::SchemaError(format!(
+                other => Err(AvroError::SchemaError(format!(
                     "Avro duration logical type requires Arrow Interval(MonthDayNano), found: {other:?}"
                 ))),
             },
@@ -1048,18 +1023,18 @@ impl FieldPlan {
                 let arrow_union_fields = match arrow_field.data_type() {
                     DataType::Union(fields, UnionMode::Dense) => fields,
                     DataType::Union(_, UnionMode::Sparse) => {
-                        return Err(ArrowError::NotYetImplemented(
+                        return Err(AvroError::NYI(
                             "Sparse Arrow unions are not yet supported".to_string(),
                         ));
                     }
                     other => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Avro union maps to Arrow Union, found: {other:?}"
                         )));
                     }
                 };
                 if avro_branches.len() != arrow_union_fields.len() {
-                    return Err(ArrowError::SchemaError(format!(
+                    return Err(AvroError::SchemaError(format!(
                         "Mismatched number of branches between Avro union ({}) and Arrow union ({}) for field '{}'",
                         avro_branches.len(),
                         arrow_union_fields.len(),
@@ -1077,10 +1052,10 @@ impl FieldPlan {
                             plan: FieldPlan::build(avro_branch, arrow_child_field)?,
                         })
                     })
-                    .collect::<Result<Vec<_>, ArrowError>>()?;
+                    .collect::<Result<Vec<_>>>()?;
                 Ok(FieldPlan::Union { bindings })
             }
-            Codec::Union(_, _, UnionMode::Sparse) => Err(ArrowError::NotYetImplemented(
+            Codec::Union(_, _, UnionMode::Sparse) => Err(AvroError::NYI(
                 "Sparse Arrow unions are not yet supported".to_string(),
             )),
             #[cfg(feature = "avro_custom_types")]
@@ -1088,7 +1063,7 @@ impl FieldPlan {
                 let values_field = match arrow_field.data_type() {
                     DataType::RunEndEncoded(_run_ends_field, values_field) => values_field.as_ref(),
                     other => {
-                        return Err(ArrowError::SchemaError(format!(
+                        return Err(AvroError::SchemaError(format!(
                             "Avro RunEndEncoded maps to Arrow DataType::RunEndEncoded, found: {other:?}"
                         )));
                     }
@@ -1162,7 +1137,7 @@ enum Encoder<'a> {
 
 impl<'a> Encoder<'a> {
     /// Encode the value at `idx`.
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         match self {
             Encoder::Boolean(e) => e.encode(out, idx),
             Encoder::Int(e) => e.encode(out, idx),
@@ -1217,7 +1192,7 @@ impl<'a> Encoder<'a> {
 
 struct BooleanEncoder<'a>(&'a arrow_array::BooleanArray);
 impl BooleanEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         write_bool(out, self.0.value(idx))
     }
 }
@@ -1225,7 +1200,7 @@ impl BooleanEncoder<'_> {
 /// Generic Avro `int` encoder for primitive arrays with `i32` native values.
 struct IntEncoder<'a, P: ArrowPrimitiveType<Native = i32>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         write_int(out, self.0.value(idx))
     }
 }
@@ -1233,7 +1208,7 @@ impl<'a, P: ArrowPrimitiveType<Native = i32>> IntEncoder<'a, P> {
 /// Generic Avro `long` encoder for primitive arrays with `i64` native values.
 struct LongEncoder<'a, P: ArrowPrimitiveType<Native = i64>>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         write_long(out, self.0.value(idx))
     }
 }
@@ -1242,11 +1217,11 @@ impl<'a, P: ArrowPrimitiveType<Native = i64>> LongEncoder<'a, P> {
 struct Time32SecondsToMillisEncoder<'a>(&'a PrimitiveArray<Time32SecondType>);
 impl<'a> Time32SecondsToMillisEncoder<'a> {
     #[inline]
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let secs = self.0.value(idx);
-        let millis = secs.checked_mul(1000).ok_or_else(|| {
-            ArrowError::InvalidArgumentError("time32(secs) * 1000 overflowed".into())
-        })?;
+        let millis = secs
+            .checked_mul(1000)
+            .ok_or_else(|| AvroError::InvalidArgument("time32(secs) * 1000 overflowed".into()))?;
         write_int(out, millis)
     }
 }
@@ -1255,10 +1230,10 @@ impl<'a> Time32SecondsToMillisEncoder<'a> {
 struct TimestampSecondsToMillisEncoder<'a>(&'a PrimitiveArray<TimestampSecondType>);
 impl<'a> TimestampSecondsToMillisEncoder<'a> {
     #[inline]
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let secs = self.0.value(idx);
         let millis = secs.checked_mul(1000).ok_or_else(|| {
-            ArrowError::InvalidArgumentError("timestamp(secs) * 1000 overflowed".into())
+            AvroError::InvalidArgument("timestamp(secs) * 1000 overflowed".into())
         })?;
         write_long(out, millis)
     }
@@ -1267,7 +1242,7 @@ impl<'a> TimestampSecondsToMillisEncoder<'a> {
 /// Unified binary encoder generic over offset size (i32/i64).
 struct BinaryEncoder<'a, O: OffsetSizeTrait>(&'a GenericBinaryArray<O>);
 impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         write_len_prefixed(out, self.0.value(idx))
     }
 }
@@ -1275,7 +1250,7 @@ impl<'a, O: OffsetSizeTrait> BinaryEncoder<'a, O> {
 /// BinaryView (byte view) encoder.
 struct BinaryViewEncoder<'a>(&'a BinaryViewArray);
 impl BinaryViewEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         write_len_prefixed(out, self.0.value(idx))
     }
 }
@@ -1283,35 +1258,34 @@ impl BinaryViewEncoder<'_> {
 /// StringView encoder.
 struct Utf8ViewEncoder<'a>(&'a StringViewArray);
 impl Utf8ViewEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         write_len_prefixed(out, self.0.value(idx).as_bytes())
     }
 }
 
 struct F32Encoder<'a>(&'a arrow_array::Float32Array);
 impl F32Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         // Avro float: 4 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
-        out.write_all(&bits.to_le_bytes())
-            .map_err(|e| ArrowError::IoError(format!("write f32: {e}"), e))
+        out.write_all(&bits.to_le_bytes())?;
+        Ok(())
     }
 }
 
 struct F64Encoder<'a>(&'a arrow_array::Float64Array);
 impl F64Encoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         // Avro double: 8 bytes, IEEE-754 little-endian
         let bits = self.0.value(idx).to_bits();
-        out.write_all(&bits.to_le_bytes())
-            .map_err(|e| ArrowError::IoError(format!("write f64: {e}"), e))
+        out.write_all(&bits.to_le_bytes()).map_err(Into::into)
     }
 }
 
 struct Utf8GenericEncoder<'a, O: OffsetSizeTrait>(&'a GenericStringArray<O>);
 
 impl<'a, O: OffsetSizeTrait> Utf8GenericEncoder<'a, O> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         write_len_prefixed(out, self.0.value(idx).as_bytes())
     }
 }
@@ -1337,13 +1311,13 @@ impl<'a> MapEncoder<'a> {
         map: &'a MapArray,
         values_nullability: Option<Nullability>,
         value_plan: &FieldPlan,
-    ) -> Result<Self, ArrowError> {
+    ) -> Result<Self> {
         let keys_arr = map.keys();
         let keys_kind = match keys_arr.data_type() {
             DataType::Utf8 => KeyKind::Utf8(keys_arr.as_string::<i32>()),
             DataType::LargeUtf8 => KeyKind::LargeUtf8(keys_arr.as_string::<i64>()),
             other => {
-                return Err(ArrowError::SchemaError(format!(
+                return Err(AvroError::SchemaError(format!(
                     "Avro map requires string keys; Arrow key type must be Utf8/LargeUtf8, found: {other:?}"
                 )));
             }
@@ -1353,20 +1327,20 @@ impl<'a> MapEncoder<'a> {
             DataType::Map(entries, _) => match entries.data_type() {
                 DataType::Struct(fs) => fs,
                 other => {
-                    return Err(ArrowError::SchemaError(format!(
+                    return Err(AvroError::SchemaError(format!(
                         "Arrow Map entries must be Struct, found: {other:?}"
                     )));
                 }
             },
             _ => {
-                return Err(ArrowError::SchemaError(
+                return Err(AvroError::SchemaError(
                     "Expected MapArray with DataType::Map".into(),
                 ));
             }
         };
 
         let v_idx = find_map_value_field_index(entries_struct_fields).ok_or_else(|| {
-            ArrowError::SchemaError("Map entries struct missing value field".into())
+            AvroError::SchemaError("Map entries struct missing value field".into())
         })?;
         let value_field = entries_struct_fields[v_idx].as_ref();
 
@@ -1392,8 +1366,8 @@ impl<'a> MapEncoder<'a> {
         keys_offset: usize,
         start: usize,
         end: usize,
-        mut write_item: impl FnMut(&mut W, usize) -> Result<(), ArrowError>,
-    ) -> Result<(), ArrowError>
+        mut write_item: impl FnMut(&mut W, usize) -> Result<()>,
+    ) -> Result<()>
     where
         W: Write + ?Sized,
         O: OffsetSizeTrait,
@@ -1405,7 +1379,7 @@ impl<'a> MapEncoder<'a> {
         })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let offsets = self.map.offsets();
         let start = offsets[idx] as usize;
         let end = offsets[idx + 1] as usize;
@@ -1444,7 +1418,7 @@ struct EnumEncoder<'a> {
     keys: &'a PrimitiveArray<Int32Type>,
 }
 impl EnumEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, row: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, row: usize) -> Result<()> {
         write_int(out, self.keys.value(row))
     }
 }
@@ -1455,13 +1429,13 @@ struct UnionEncoder<'a> {
 }
 
 impl<'a> UnionEncoder<'a> {
-    fn try_new(array: &'a UnionArray, field_bindings: &[FieldBinding]) -> Result<Self, ArrowError> {
+    fn try_new(array: &'a UnionArray, field_bindings: &[FieldBinding]) -> Result<Self> {
         let DataType::Union(fields, UnionMode::Dense) = array.data_type() else {
-            return Err(ArrowError::SchemaError("Expected Dense UnionArray".into()));
+            return Err(AvroError::SchemaError("Expected Dense UnionArray".into()));
         };
 
         if fields.len() != field_bindings.len() {
-            return Err(ArrowError::SchemaError(format!(
+            return Err(AvroError::SchemaError(format!(
                 "Mismatched number of union branches between Arrow array ({}) and encoding plan ({})",
                 fields.len(),
                 field_bindings.len()
@@ -1471,7 +1445,7 @@ impl<'a> UnionEncoder<'a> {
         for (type_id, field_ref) in fields.iter() {
             let binding = field_bindings
                 .get(type_id as usize)
-                .ok_or_else(|| ArrowError::SchemaError("Binding and field mismatch".to_string()))?;
+                .ok_or_else(|| AvroError::SchemaError("Binding and field mismatch".to_string()))?;
 
             let child = array.child(type_id).as_ref();
 
@@ -1486,7 +1460,7 @@ impl<'a> UnionEncoder<'a> {
         Ok(Self { encoders, array })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let type_id = self.array.type_ids()[idx];
         let branch_index = type_id as usize;
         write_int(out, type_id as i32)?;
@@ -1495,7 +1469,7 @@ impl<'a> UnionEncoder<'a> {
         let encoder = self
             .encoders
             .get_mut(branch_index)
-            .ok_or_else(|| ArrowError::SchemaError(format!("Invalid type_id {type_id}")))?;
+            .ok_or_else(|| AvroError::SchemaError(format!("Invalid type_id {type_id}")))?;
 
         encoder.encode(out, child_row)
     }
@@ -1506,21 +1480,18 @@ struct StructEncoder<'a> {
 }
 
 impl<'a> StructEncoder<'a> {
-    fn try_new(
-        array: &'a StructArray,
-        field_bindings: &[FieldBinding],
-    ) -> Result<Self, ArrowError> {
+    fn try_new(array: &'a StructArray, field_bindings: &[FieldBinding]) -> Result<Self> {
         let DataType::Struct(fields) = array.data_type() else {
-            return Err(ArrowError::SchemaError("Expected Struct".into()));
+            return Err(AvroError::SchemaError("Expected Struct".into()));
         };
         let mut encoders = Vec::with_capacity(field_bindings.len());
         for field_binding in field_bindings {
             let idx = field_binding.arrow_index;
             let column = array.columns().get(idx).ok_or_else(|| {
-                ArrowError::SchemaError(format!("Struct child index {idx} out of range"))
+                AvroError::SchemaError(format!("Struct child index {idx} out of range"))
             })?;
             let field = fields.get(idx).ok_or_else(|| {
-                ArrowError::SchemaError(format!("Struct child index {idx} out of range"))
+                AvroError::SchemaError(format!("Struct child index {idx} out of range"))
             })?;
             let encoder = prepare_value_site_encoder(
                 column.as_ref(),
@@ -1533,7 +1504,7 @@ impl<'a> StructEncoder<'a> {
         Ok(Self { encoders })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         for encoder in self.encoders.iter_mut() {
             encoder.encode(out, idx)?;
         }
@@ -1549,9 +1520,9 @@ fn encode_blocked_range<W: Write + ?Sized, F>(
     start: usize,
     end: usize,
     mut write_item: F,
-) -> Result<(), ArrowError>
+) -> Result<()>
 where
-    F: FnMut(&mut W, usize) -> Result<(), ArrowError>,
+    F: FnMut(&mut W, usize) -> Result<()>,
 {
     let len = end.saturating_sub(start);
     if len == 0 {
@@ -1582,12 +1553,12 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
         list: &'a GenericListArray<O>,
         items_nullability: Option<Nullability>,
         item_plan: &FieldPlan,
-    ) -> Result<Self, ArrowError> {
+    ) -> Result<Self> {
         let child_field = match list.data_type() {
             DataType::List(field) => field.as_ref(),
             DataType::LargeList(field) => field.as_ref(),
             _ => {
-                return Err(ArrowError::SchemaError(
+                return Err(AvroError::SchemaError(
                     "Expected List or LargeList for ListEncoder".into(),
                 ));
             }
@@ -1610,23 +1581,20 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
         out: &mut W,
         start: usize,
         end: usize,
-    ) -> Result<(), ArrowError> {
+    ) -> Result<()> {
         encode_blocked_range(out, start, end, |out, row| {
             self.values
                 .encode(out, row.saturating_sub(self.values_offset))
         })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let offsets = self.list.offsets();
         let start = offsets[idx].to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Error converting offset[{idx}] to usize"))
+            AvroError::InvalidArgument(format!("Error converting offset[{idx}] to usize"))
         })?;
         let end = offsets[idx + 1].to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Error converting offset[{}] to usize",
-                idx + 1
-            ))
+            AvroError::InvalidArgument(format!("Error converting offset[{}] to usize", idx + 1))
         })?;
         self.encode_list_range(out, start, end)
     }
@@ -1646,12 +1614,12 @@ impl<'a, O: OffsetSizeTrait> ListViewEncoder<'a, O> {
         list: &'a GenericListViewArray<O>,
         items_nullability: Option<Nullability>,
         item_plan: &FieldPlan,
-    ) -> Result<Self, ArrowError> {
+    ) -> Result<Self> {
         let child_field = match list.data_type() {
             DataType::ListView(field) => field.as_ref(),
             DataType::LargeListView(field) => field.as_ref(),
             _ => {
-                return Err(ArrowError::SchemaError(
+                return Err(AvroError::SchemaError(
                     "Expected ListView or LargeListView for ListViewEncoder".into(),
                 ));
             }
@@ -1669,14 +1637,12 @@ impl<'a, O: OffsetSizeTrait> ListViewEncoder<'a, O> {
         })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let start = self.list.value_offset(idx).to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Error converting value_offset[{idx}] to usize"
-            ))
+            AvroError::InvalidArgument(format!("Error converting value_offset[{idx}] to usize"))
         })?;
         let len = self.list.value_size(idx).to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!("Error converting value_size[{idx}] to usize"))
+            AvroError::InvalidArgument(format!("Error converting value_size[{idx}] to usize"))
         })?;
         let start = start + self.values_offset;
         let end = start + len;
@@ -1700,11 +1666,11 @@ impl<'a> FixedSizeListEncoder<'a> {
         list: &'a FixedSizeListArray,
         items_nullability: Option<Nullability>,
         item_plan: &FieldPlan,
-    ) -> Result<Self, ArrowError> {
+    ) -> Result<Self> {
         let child_field = match list.data_type() {
             DataType::FixedSizeList(field, _len) => field.as_ref(),
             _ => {
-                return Err(ArrowError::SchemaError(
+                return Err(AvroError::SchemaError(
                     "Expected FixedSizeList for FixedSizeListEncoder".into(),
                 ));
             }
@@ -1723,7 +1689,7 @@ impl<'a> FixedSizeListEncoder<'a> {
         })
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         // Starting index is relative to values() start
         let rel = self.list.value_offset(idx) as usize;
         let start = self.values_offset + rel;
@@ -1740,7 +1706,7 @@ fn prepare_value_site_encoder<'a>(
     value_field: &Field,
     nullability: Option<Nullability>,
     plan: &FieldPlan,
-) -> Result<FieldEncoder<'a>, ArrowError> {
+) -> Result<FieldEncoder<'a>> {
     // Effective nullability is computed here from the writer-declared site nullability and data.
     FieldEncoder::make_encoder(values_array, value_field, plan, nullability)
 }
@@ -1749,10 +1715,10 @@ fn prepare_value_site_encoder<'a>(
 /// Spec: a fixed is encoded as exactly `size` bytes, with no length prefix.
 struct FixedEncoder<'a>(&'a FixedSizeBinaryArray);
 impl FixedEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let v = self.0.value(idx); // &[u8] of fixed width
-        out.write_all(v)
-            .map_err(|e| ArrowError::IoError(format!("write fixed bytes: {e}"), e))
+        out.write_all(v)?;
+        Ok(())
     }
 }
 
@@ -1760,15 +1726,15 @@ impl FixedEncoder<'_> {
 /// Spec: uuid is a logical type over string (RFC‑4122). We output hyphenated form.
 struct UuidEncoder<'a>(&'a FixedSizeBinaryArray);
 impl UuidEncoder<'_> {
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let mut buf = [0u8; 1 + uuid::fmt::Hyphenated::LENGTH];
         buf[0] = 0x48;
         let v = self.0.value(idx);
         let u = Uuid::from_slice(v)
-            .map_err(|e| ArrowError::InvalidArgumentError(format!("Invalid UUID bytes: {e}")))?;
+            .map_err(|e| AvroError::InvalidArgument(format!("Invalid UUID bytes: {e}")))?;
         let _ = u.hyphenated().encode_lower(&mut buf[1..]);
-        out.write_all(&buf)
-            .map_err(|e| ArrowError::IoError(format!("write uuid: {e}"), e))
+        out.write_all(&buf)?;
+        Ok(())
     }
 }
 
@@ -1780,25 +1746,25 @@ struct DurationParts {
 }
 /// Trait mapping an Arrow interval native value to Avro duration `(months, days, millis)`.
 trait IntervalToDurationParts: ArrowPrimitiveType {
-    fn duration_parts(native: Self::Native) -> Result<DurationParts, ArrowError>;
+    fn duration_parts(native: Self::Native) -> Result<DurationParts>;
 }
 impl IntervalToDurationParts for IntervalMonthDayNanoType {
-    fn duration_parts(native: Self::Native) -> Result<DurationParts, ArrowError> {
+    fn duration_parts(native: Self::Native) -> Result<DurationParts> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(native);
         if months < 0 || days < 0 || nanos < 0 {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "Avro 'duration' cannot encode negative months/days/nanoseconds".into(),
             ));
         }
         if nanos % 1_000_000 != 0 {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "Avro 'duration' requires whole milliseconds; nanoseconds must be divisible by 1_000_000"
                     .into(),
             ));
         }
         let millis = nanos / 1_000_000;
         if millis > u32::MAX as i64 {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "Avro 'duration' milliseconds exceed u32::MAX".into(),
             ));
         }
@@ -1810,9 +1776,9 @@ impl IntervalToDurationParts for IntervalMonthDayNanoType {
     }
 }
 impl IntervalToDurationParts for IntervalYearMonthType {
-    fn duration_parts(native: Self::Native) -> Result<DurationParts, ArrowError> {
+    fn duration_parts(native: Self::Native) -> Result<DurationParts> {
         if native < 0 {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "Avro 'duration' cannot encode negative months".into(),
             ));
         }
@@ -1824,10 +1790,10 @@ impl IntervalToDurationParts for IntervalYearMonthType {
     }
 }
 impl IntervalToDurationParts for IntervalDayTimeType {
-    fn duration_parts(native: Self::Native) -> Result<DurationParts, ArrowError> {
+    fn duration_parts(native: Self::Native) -> Result<DurationParts> {
         let (days, millis) = IntervalDayTimeType::to_parts(native);
         if days < 0 || millis < 0 {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(AvroError::InvalidArgument(
                 "Avro 'duration' cannot encode negative days or milliseconds".into(),
             ));
         }
@@ -1844,7 +1810,7 @@ impl IntervalToDurationParts for IntervalDayTimeType {
 struct DurationEncoder<'a, P: ArrowPrimitiveType + IntervalToDurationParts>(&'a PrimitiveArray<P>);
 impl<'a, P: ArrowPrimitiveType + IntervalToDurationParts> DurationEncoder<'a, P> {
     #[inline(always)]
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let parts = P::duration_parts(self.0.value(idx))?;
         let months = parts.months.to_le_bytes();
         let days = parts.days.to_le_bytes();
@@ -1860,16 +1826,16 @@ impl<'a, P: ArrowPrimitiveType + IntervalToDurationParts> DurationEncoder<'a, P>
         //   indices. [std docs; Rust Performance Book on bounds-check elimination]
         // - Memory safety: The `[u8; 12]` array is built on the stack by value, with no
         //   aliasing and no uninitialized memory. There is no `unsafe`.
-        // - I/O: `write_all(&buf)` is fallible and its `Result` is propagated and mapped
-        //   into `ArrowError`, so I/O errors are reported, not panicked.
+        // - I/O: `write_all(&buf)` is fallible and its `Result` is propagated as an AvroError,
+        //   so I/O errors are reported, not panicked.
         // Consequently, constructing `buf` with the constant indices below is safe and
         // panic-free under these validated preconditions.
         let buf = [
             months[0], months[1], months[2], months[3], days[0], days[1], days[2], days[3], ms[0],
             ms[1], ms[2], ms[3],
         ];
-        out.write_all(&buf)
-            .map_err(|e| ArrowError::IoError(format!("write duration: {e}"), e))
+        out.write_all(&buf)?;
+        Ok(())
     }
 }
 
@@ -1917,7 +1883,7 @@ impl<'a, const N: usize, A: DecimalBeBytes<N>> DecimalEncoder<'a, N, A> {
         Self { arr, fixed_size }
     }
 
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         let be = self.arr.value_be_bytes(idx);
         match self.fixed_size {
             Some(n) => write_sign_extended(out, &be, n),
@@ -1971,7 +1937,7 @@ impl<'a, R: RunEndIndexType> RunEncodedEncoder<'a, R> {
     /// Advance `cur_run` so that `idx` is within the run ending at `cur_end`.
     /// Uses the REE invariant: run ends are strictly increasing, positive, and 1-based.
     #[inline(always)]
-    fn advance_to_row(&mut self, idx: usize) -> Result<(), ArrowError> {
+    fn advance_to_row(&mut self, idx: usize) -> Result<()> {
         if idx < self.cur_end {
             return Ok(());
         }
@@ -1983,7 +1949,7 @@ impl<'a, R: RunEndIndexType> RunEncodedEncoder<'a, R> {
         if idx < self.cur_end {
             Ok(())
         } else {
-            Err(ArrowError::InvalidArgumentError(format!(
+            Err(AvroError::InvalidArgument(format!(
                 "row index {idx} out of bounds for run-ends ({} runs)",
                 self.len
             )))
@@ -1991,7 +1957,7 @@ impl<'a, R: RunEndIndexType> RunEncodedEncoder<'a, R> {
     }
 
     #[inline(always)]
-    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+    fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<()> {
         self.advance_to_row(idx)?;
         // For REE values, the value for any logical row within a run is at
         // the physical index of that run.
@@ -2387,10 +2353,10 @@ mod tests {
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
-            ArrowError::InvalidArgumentError(msg) => {
+            AvroError::InvalidArgument(msg) => {
                 assert!(msg.contains("Invalid UUID bytes"))
             }
-            other => panic!("expected InvalidArgumentError, got {other:?}"),
+            other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
 
@@ -2754,10 +2720,10 @@ mod tests {
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
-            ArrowError::InvalidArgumentError(msg) => {
+            AvroError::InvalidArgument(msg) => {
                 assert!(msg.contains("cannot encode negative months"))
             }
-            other => panic!("expected InvalidArgumentError, got {other:?}"),
+            other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
 
@@ -2782,10 +2748,10 @@ mod tests {
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
-            ArrowError::InvalidArgumentError(msg) => {
+            AvroError::InvalidArgument(msg) => {
                 assert!(msg.contains("cannot encode negative days"))
             }
-            other => panic!("expected InvalidArgumentError, got {other:?}"),
+            other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
 
@@ -2810,10 +2776,10 @@ mod tests {
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
-            ArrowError::InvalidArgumentError(msg) => {
+            AvroError::InvalidArgument(msg) => {
                 assert!(msg.contains("requires whole milliseconds") || msg.contains("divisible"))
             }
-            other => panic!("expected InvalidArgumentError, got {other:?}"),
+            other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
 
@@ -2843,8 +2809,8 @@ mod tests {
         // truncation overflow
         let err = write_sign_extended(&mut out, &[0x01, 0x00], 1).unwrap_err();
         match err {
-            ArrowError::InvalidArgumentError(_) => {}
-            _ => panic!("expected InvalidArgumentError"),
+            AvroError::InvalidArgument(_) => {}
+            _ => panic!("expected InvalidArgument"),
         }
     }
 
@@ -2859,8 +2825,8 @@ mod tests {
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
-            ArrowError::InvalidArgumentError(msg) => assert!(msg.contains("exceed u32::MAX")),
-            _ => panic!("expected InvalidArgumentError"),
+            AvroError::InvalidArgument(msg) => assert!(msg.contains("exceed u32::MAX")),
+            _ => panic!("expected InvalidArgument"),
         }
     }
 
@@ -2873,7 +2839,7 @@ mod tests {
         let avro_dt = AvroDataType::new(Codec::Decimal(10, Some(2), None), HashMap::new(), None);
         let err = FieldPlan::build(&avro_dt, &arrow_field).unwrap_err();
         match err {
-            ArrowError::SchemaError(msg) => {
+            AvroError::SchemaError(msg) => {
                 assert!(msg.contains("Decimal precision/scale mismatch"))
             }
             _ => panic!("expected SchemaError"),
@@ -3035,13 +3001,13 @@ mod tests {
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
-            arrow_schema::ArrowError::InvalidArgumentError(msg) => {
+            AvroError::InvalidArgument(msg) => {
                 assert!(
                     msg.contains("overflowed") || msg.contains("overflow"),
                     "unexpected message: {msg}"
                 )
             }
-            other => panic!("expected InvalidArgumentError, got {other:?}"),
+            other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
 
@@ -3078,13 +3044,13 @@ mod tests {
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
-            arrow_schema::ArrowError::InvalidArgumentError(msg) => {
+            AvroError::InvalidArgument(msg) => {
                 assert!(
                     msg.contains("overflowed") || msg.contains("overflow"),
                     "unexpected message: {msg}"
                 )
             }
-            other => panic!("expected InvalidArgumentError, got {other:?}"),
+            other => panic!("expected InvalidArgument, got {other:?}"),
         }
     }
 

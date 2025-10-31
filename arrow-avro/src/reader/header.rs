@@ -18,13 +18,13 @@
 //! Decoder for [`Header`]
 
 use crate::compression::{CODEC_METADATA_KEY, CompressionCodec};
+use crate::errors::{AvroError, Result};
 use crate::reader::vlq::VLQDecoder;
 use crate::schema::{SCHEMA_METADATA_KEY, Schema};
-use arrow_schema::ArrowError;
 use std::io::BufRead;
 
 /// Read the Avro file header (magic, metadata, sync marker) from `reader`.
-pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowError> {
+pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<Header> {
     let mut decoder = HeaderDecoder::default();
     loop {
         let buf = reader.fill_buf()?;
@@ -39,7 +39,7 @@ pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<Header, ArrowErro
         }
     }
     decoder.flush().ok_or_else(|| {
-        ArrowError::ParseError("Unexpected EOF while reading Avro header".to_string())
+        AvroError::ParseError("Unexpected EOF while reading Avro header".to_string())
     })
 }
 
@@ -96,7 +96,7 @@ impl Header {
     }
 
     /// Returns the [`CompressionCodec`] if any
-    pub fn compression(&self) -> Result<Option<CompressionCodec>, ArrowError> {
+    pub fn compression(&self) -> Result<Option<CompressionCodec>> {
         let v = self.get(CODEC_METADATA_KEY);
         match v {
             None | Some(b"null") => Ok(None),
@@ -105,7 +105,7 @@ impl Header {
             Some(b"zstandard") => Ok(Some(CompressionCodec::ZStandard)),
             Some(b"bzip2") => Ok(Some(CompressionCodec::Bzip2)),
             Some(b"xz") => Ok(Some(CompressionCodec::Xz)),
-            Some(v) => Err(ArrowError::ParseError(format!(
+            Some(v) => Err(AvroError::ParseError(format!(
                 "Unrecognized compression codec \'{}\'",
                 String::from_utf8_lossy(v)
             ))),
@@ -113,11 +113,11 @@ impl Header {
     }
 
     /// Returns the `Schema` if any
-    pub(crate) fn schema(&self) -> Result<Option<Schema<'_>>, ArrowError> {
+    pub(crate) fn schema(&self) -> Result<Option<Schema<'_>>> {
         self.get(SCHEMA_METADATA_KEY)
             .map(|x| {
                 serde_json::from_slice(x).map_err(|e| {
-                    ArrowError::ParseError(format!("Failed to parse Avro schema JSON: {e}"))
+                    AvroError::ParseError(format!("Failed to parse Avro schema JSON: {e}"))
                 })
             })
             .transpose()
@@ -175,7 +175,7 @@ impl HeaderDecoder {
     /// input bytes, and the header can be obtained with [`Self::flush`]
     ///
     /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
-    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
+    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize> {
         let max_read = buf.len();
         while !buf.is_empty() {
             match self.state {
@@ -183,7 +183,7 @@ impl HeaderDecoder {
                     let remaining = &MAGIC[MAGIC.len() - self.bytes_remaining..];
                     let to_decode = buf.len().min(remaining.len());
                     if !buf.starts_with(&remaining[..to_decode]) {
-                        return Err(ArrowError::ParseError("Incorrect avro magic".to_string()));
+                        return Err(AvroError::ParseError("Incorrect avro magic".to_string()));
                     }
                     self.bytes_remaining -= to_decode;
                     buf = &buf[to_decode..];
@@ -310,7 +310,7 @@ mod test {
         let mut decoder = HeaderDecoder::default();
         decoder.decode(b"Ob").unwrap();
         let err = decoder.decode(b"s").unwrap_err().to_string();
-        assert_eq!(err, "Parser error: Incorrect avro magic");
+        assert_eq!(err, "Parse error: Incorrect avro magic");
     }
 
     fn decode_file(file: &str) -> Header {
