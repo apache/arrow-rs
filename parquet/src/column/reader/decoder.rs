@@ -83,6 +83,18 @@ pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
     ///
     /// Returns the number of values skipped, and the number of levels skipped.
     fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)>;
+
+    /// Append `num_levels` copies of `null_level` to `out`, returning how
+    /// many of those levels correspond to non-null values given `max_level`.
+    ///
+    /// This is used when synthesising all-null pages for sparse column chunks.
+    fn append_null_def_levels(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_levels: usize,
+        null_def_level: i16,
+        max_level: i16,
+    ) -> Result<usize>;
 }
 
 /// Decodes value data
@@ -352,6 +364,22 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
         }
 
         Ok((value_skip, level_skip))
+    }
+
+    fn append_null_def_levels(
+        &mut self,
+        out: &mut Self::Buffer,
+        num_levels: usize,
+        null_def_level: i16,
+        max_level: i16,
+    ) -> Result<usize> {
+        let start = out.len();
+        out.resize(start + num_levels, null_def_level);
+        Ok(if null_def_level == max_level {
+            num_levels
+        } else {
+            0
+        })
     }
 }
 

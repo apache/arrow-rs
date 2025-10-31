@@ -19,7 +19,7 @@
 
 use bytes::Bytes;
 
-use super::page::{Page, PageReader};
+use super::page::{Page, PageMetadata, PageReader};
 use crate::basic::*;
 use crate::column::reader::decoder::{
     ColumnValueDecoder, ColumnValueDecoderImpl, DefinitionLevelDecoder, DefinitionLevelDecoderImpl,
@@ -126,6 +126,10 @@ pub struct GenericColumnReader<R, D, V> {
     /// True if the end of the current data page denotes the end of a record
     has_record_delimiter: bool,
 
+    /// True if the currently buffered page is a synthetic all-null page created
+    /// to handle sparse column chunks with missing data pages.
+    synthetic_page: bool,
+
     /// The decoder for the definition levels if any
     def_level_decoder: Option<D>,
 
@@ -182,6 +186,7 @@ where
             num_decoded_values: 0,
             values_decoder,
             has_record_delimiter: false,
+            synthetic_page: false,
         }
     }
 
@@ -213,6 +218,49 @@ where
         while total_records_read < max_records && self.has_next()? {
             let remaining_records = max_records - total_records_read;
             let remaining_levels = self.num_buffered_values - self.num_decoded_values;
+
+            if self.synthetic_page {
+                // A previous sparse column chunk did not contain a physical data page; emit the
+                // implicit null records described by the page metadata before reading further.
+                debug_assert!(self.rep_level_decoder.is_none());
+                let levels_to_emit = remaining_records.min(remaining_levels);
+
+                if levels_to_emit == 0 {
+                    self.synthetic_page = false;
+                    continue;
+                }
+
+                let mut values_from_levels = 0;
+                if self.descr.max_def_level() > 0 {
+                    let out = def_levels
+                        .as_mut()
+                        .ok_or_else(|| general_err!("must specify definition levels"))?;
+
+                    let null_def_level = self.descr.max_def_level().saturating_sub(1);
+                    let decoder = self
+                        .def_level_decoder
+                        .as_mut()
+                        .expect("nullable column requires definition level decoder");
+
+                    values_from_levels = decoder.append_null_def_levels(
+                        out,
+                        levels_to_emit,
+                        null_def_level,
+                        self.descr.max_def_level(),
+                    )?;
+                }
+
+                self.num_decoded_values += levels_to_emit;
+                total_records_read += levels_to_emit;
+                total_levels_read += levels_to_emit;
+                total_values_read += values_from_levels;
+
+                if self.num_decoded_values == self.num_buffered_values {
+                    self.synthetic_page = false;
+                }
+
+                continue;
+            }
 
             let (records_read, levels_to_read) = match self.rep_level_decoder.as_mut() {
                 Some(reader) => {
@@ -327,6 +375,20 @@ where
             // The number of levels in the current data page
             let remaining_levels = self.num_buffered_values - self.num_decoded_values;
 
+            if self.synthetic_page {
+                // When synthesising null rows there is no physical data to skip; advance the
+                // virtual counters until the synthetic page is fully consumed.
+                debug_assert!(self.rep_level_decoder.is_none());
+                let to_skip = remaining_records.min(remaining_levels);
+                self.num_decoded_values += to_skip;
+                remaining_records -= to_skip;
+
+                if self.num_buffered_values == self.num_decoded_values {
+                    self.synthetic_page = false;
+                }
+                continue;
+            }
+
             let (records_read, rep_levels_read) = match self.rep_level_decoder.as_mut() {
                 Some(decoder) => {
                     let (mut records_read, levels_read) =
@@ -403,7 +465,27 @@ where
     /// Returns false if there's no page left.
     fn read_new_page(&mut self) -> Result<bool> {
         loop {
-            match self.page_reader.get_next_page()? {
+            let page_result = match self.page_reader.get_next_page() {
+                Ok(page) => page,
+                Err(err) => {
+                    return match err {
+                        ParquetError::General(message)
+                            if message
+                                .starts_with("Invalid offset in sparse column chunk data:") =>
+                        {
+                            let metadata = self.page_reader.peek_next_page()?;
+                            // Some writers omit data pages for sparse column chunks and encode the gap
+                            // as a reader-visible error. Use the metadata peek to synthesise a page of
+                            // null definition levels so downstream consumers see consistent row counts.
+                            self.try_create_synthetic_page(metadata)?;
+                            Ok(true)
+                        }
+                        _ => Err(err),
+                    };
+                }
+            };
+
+            match page_result {
                 // No more page to read
                 None => return Ok(false),
                 Some(current_page) => {
@@ -415,6 +497,7 @@ where
                             encoding,
                             is_sorted,
                         } => {
+                            self.synthetic_page = false;
                             self.values_decoder
                                 .set_dict(buf, num_values, encoding, is_sorted)?;
                             continue;
@@ -428,6 +511,7 @@ where
                             rep_level_encoding,
                             statistics: _,
                         } => {
+                            self.synthetic_page = false;
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
 
@@ -497,6 +581,7 @@ where
                                 ));
                             }
 
+                            self.synthetic_page = false;
                             self.num_buffered_values = num_values as _;
                             self.num_decoded_values = 0;
 
@@ -539,6 +624,44 @@ where
                 }
             }
         }
+    }
+
+    fn try_create_synthetic_page(&mut self, metadata: Option<PageMetadata>) -> Result<()> {
+        if self.descr.max_rep_level() != 0 {
+            return Err(general_err!(
+                "cannot synthesise sparse page for column with repetition levels ({message})"
+            ));
+        }
+
+        if self.descr.max_def_level() == 0 {
+            return Err(general_err!(
+                "cannot synthesise sparse page for required column ({message})"
+            ));
+        }
+
+        let Some(meta) = metadata else {
+            return Err(general_err!(
+                "missing page metadata for sparse column chunk ({message})"
+            ));
+        };
+
+        if meta.is_dict {
+            return Err(general_err!(
+                "unexpected dictionary page error while synthesising sparse page ({message})"
+            ));
+        }
+
+        let num_levels = meta.num_levels.or(meta.num_rows).ok_or_else(|| {
+            general_err!("page metadata missing level counts for sparse column chunk ({message})")
+        })?;
+
+        self.page_reader.skip_next_page()?;
+
+        self.num_buffered_values = num_levels;
+        self.num_decoded_values = 0;
+        self.synthetic_page = true;
+        self.has_record_delimiter = true;
+        Ok(())
     }
 
     /// Check whether there is more data to read from this column,
@@ -598,6 +721,7 @@ mod tests {
     use std::{collections::VecDeque, sync::Arc};
 
     use crate::basic::Type as PhysicalType;
+    use crate::column::page::{Page, PageMetadata};
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::test_common::page_util::InMemoryPageReader;
     use crate::util::test_common::rand_gen::make_pages;
@@ -1060,6 +1184,137 @@ mod tests {
             i32::MAX,
             false,
         );
+    }
+
+    #[test]
+    fn test_synthetic_sparse_page_fills_nulls() {
+        let primitive_type = SchemaType::primitive_type_builder("a", PhysicalType::INT32)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()
+            .expect("build() should be OK");
+
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(primitive_type),
+            1,
+            0,
+            ColumnPath::new(Vec::new()),
+        ));
+
+        let levels = 8;
+        let page_reader: Box<dyn PageReader> = Box::new(MissingPageReader::new(levels));
+
+        let mut reader = ColumnReaderImpl::<Int32Type>::new(desc, page_reader);
+
+        let mut values = Vec::new();
+        let mut def_levels = Vec::new();
+
+        let (records, non_null_values, levels_read) = reader
+            .read_records(levels, Some(&mut def_levels), None, &mut values)
+            .expect("reading synthetic page succeeds");
+
+        assert_eq!(records, levels);
+        assert_eq!(levels_read, levels);
+        assert_eq!(non_null_values, 0);
+        assert!(values.is_empty());
+        assert_eq!(def_levels, vec![0; levels]);
+
+        // Subsequent read should indicate no additional records
+        def_levels.clear();
+        let (records, non_null_values, levels_read) = reader
+            .read_records(levels, Some(&mut def_levels), None, &mut values)
+            .expect("no further pages");
+        assert_eq!(records, 0);
+        assert_eq!(levels_read, 0);
+        assert_eq!(non_null_values, 0);
+    }
+
+    #[test]
+    fn test_synthetic_sparse_page_preserves_parent_levels() {
+        let primitive_type = SchemaType::primitive_type_builder("leaf", PhysicalType::INT32)
+            .with_repetition(Repetition::OPTIONAL)
+            .build()
+            .expect("build() should be OK");
+
+        let desc = Arc::new(ColumnDescriptor::new(
+            Arc::new(primitive_type),
+            2,
+            0,
+            ColumnPath::new(vec!["struct".to_string(), "leaf".to_string()]),
+        ));
+
+        let levels = 6;
+        let page_reader: Box<dyn PageReader> = Box::new(MissingPageReader::new(levels));
+
+        let mut reader = ColumnReaderImpl::<Int32Type>::new(desc, page_reader);
+
+        let mut values = Vec::new();
+        let mut def_levels = Vec::new();
+
+        let (records, non_null_values, levels_read) = reader
+            .read_records(levels, Some(&mut def_levels), None, &mut values)
+            .expect("reading synthetic page succeeds");
+
+        assert_eq!(records, levels);
+        assert_eq!(levels_read, levels);
+        assert_eq!(non_null_values, 0);
+        assert!(values.is_empty());
+        assert_eq!(def_levels, vec![1; levels]);
+    }
+
+    struct MissingPageReader {
+        metadata: Option<PageMetadata>,
+        skipped: bool,
+    }
+
+    impl MissingPageReader {
+        fn new(levels: usize) -> Self {
+            Self {
+                metadata: Some(PageMetadata {
+                    num_rows: Some(levels),
+                    num_levels: Some(levels),
+                    is_dict: false,
+                }),
+                skipped: false,
+            }
+        }
+    }
+
+    impl Iterator for MissingPageReader {
+        type Item = Result<Page>;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            match self.get_next_page() {
+                Ok(Some(page)) => Some(Ok(page)),
+                Ok(None) => None,
+                Err(err) => Some(Err(err)),
+            }
+        }
+    }
+
+    impl PageReader for MissingPageReader {
+        fn get_next_page(&mut self) -> Result<Option<Page>> {
+            if self.skipped {
+                Ok(None)
+            } else {
+                Err(general_err!(
+                    "Invalid offset in sparse column chunk data: 0"
+                ))
+            }
+        }
+
+        fn peek_next_page(&mut self) -> Result<Option<PageMetadata>> {
+            Ok(self.metadata.clone())
+        }
+
+        fn skip_next_page(&mut self) -> Result<()> {
+            self.metadata = None;
+            self.skipped = true;
+            Ok(())
+        }
+
+        fn at_record_boundary(&mut self) -> Result<bool> {
+            Ok(true)
+        }
     }
 
     // ----------------------------------------------------------------------

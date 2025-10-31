@@ -185,6 +185,42 @@ impl DefinitionLevelDecoder for DefinitionLevelBufferDecoder {
             MaybePacked::Packed(decoder) => decoder.skip(num_levels),
         }
     }
+
+    fn append_null_def_levels(
+        &mut self,
+        writer: &mut Self::Buffer,
+        num_levels: usize,
+        null_def_level: i16,
+        max_level: i16,
+    ) -> Result<usize> {
+        // Mirror the layout the buffer was initialized with so downstream consumers
+        // do not need to special-case synthetic null batches.
+        match &mut writer.inner {
+            BufferInner::Full {
+                levels,
+                nulls,
+                max_level: buffer_max_level,
+            } => {
+                assert_eq!(*buffer_max_level, max_level);
+                levels.resize(levels.len() + num_levels, null_def_level);
+                nulls.append_n(num_levels, null_def_level == max_level);
+                Ok(if null_def_level == max_level {
+                    num_levels
+                } else {
+                    0
+                })
+            }
+            BufferInner::Mask { nulls } => {
+                assert_eq!(max_level, 1);
+                nulls.append_n(num_levels, null_def_level == max_level);
+                Ok(if null_def_level == max_level {
+                    num_levels
+                } else {
+                    0
+                })
+            }
+        }
+    }
 }
 
 /// An optimized decoder for decoding [RLE] and [BIT_PACKED] data with a bit width of 1
