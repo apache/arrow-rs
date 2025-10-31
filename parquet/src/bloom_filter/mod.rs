@@ -244,6 +244,33 @@ fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 }
 
 impl Sbbf {
+    /// Create a new [Sbbf] from raw bitset bytes.
+    pub fn new(bitset: &[u8]) -> Self {
+        let data = bitset
+            .chunks_exact(4 * 8)
+            .map(|chunk| {
+                let mut block = Block::ZERO;
+                for (i, word) in chunk.chunks_exact(4).enumerate() {
+                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
+                }
+                block
+            })
+            .collect::<Vec<Block>>();
+        Self(data)
+    }
+
+    /// Write the bloom filter data (header and then bitset) to the output. This doesn't
+    /// flush the writer in order to boost performance of bulk writing all blocks. Caller
+    /// must remember to flush the writer.
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+        let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
+        self.header().write_thrift(&mut protocol).map_err(|e| {
+            ParquetError::General(format!("Could not write bloom filter header: {e}"))
+        })?;
+        self.write_bitset(&mut writer)?;
+        Ok(())
+    }
+
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
     /// Will return an error if `fpp` is greater than or equal to 1.0 or less than 0.0.
     pub(crate) fn new_with_ndv_fpp(ndv: u64, fpp: f64) -> Result<Self, ParquetError> {
@@ -264,32 +291,6 @@ impl Sbbf {
         let num_blocks = num_bytes / size_of::<Block>();
         let bitset = vec![Block::ZERO; num_blocks];
         Self(bitset)
-    }
-
-    pub(crate) fn new(bitset: &[u8]) -> Self {
-        let data = bitset
-            .chunks_exact(4 * 8)
-            .map(|chunk| {
-                let mut block = Block::ZERO;
-                for (i, word) in chunk.chunks_exact(4).enumerate() {
-                    block[i] = u32::from_le_bytes(word.try_into().unwrap());
-                }
-                block
-            })
-            .collect::<Vec<Block>>();
-        Self(data)
-    }
-
-    /// Write the bloom filter data (header and then bitset) to the output. This doesn't
-    /// flush the writer in order to boost performance of bulk writing all blocks. Caller
-    /// must remember to flush the writer.
-    pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
-        let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
-        self.header().write_thrift(&mut protocol).map_err(|e| {
-            ParquetError::General(format!("Could not write bloom filter header: {e}"))
-        })?;
-        self.write_bitset(&mut writer)?;
-        Ok(())
     }
 
     /// Write the bitset in serialized form to the writer.
