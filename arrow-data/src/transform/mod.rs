@@ -403,20 +403,21 @@ impl<'a> MutableArrayData<'a> {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
 
-    /// Similar to [MutableArrayData::new], but lets users define the
-    /// preallocated capacities of the array with more granularity.
-    ///
-    /// See [MutableArrayData::new] for more information on the arguments.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if the given `capacities` don't match the data type
-    /// of `arrays`. Or when a [Capacities] variant is not yet supported.
-    pub fn with_capacities(
+    /// Similar to `new` but expose errors during pre-allocation step
+    /// such as `DictionaryOverflowError`
+    pub fn try_new(
+        arrays: Vec<&'a ArrayData>,
+        use_nulls: bool,
+        capacity: usize,
+    ) -> Result<Self, ArrowError> {
+        Self::try_with_capacities(arrays, use_nulls, Capacities::Array(capacity))
+    }
+
+    fn try_with_capacities(
         arrays: Vec<&'a ArrayData>,
         use_nulls: bool,
         capacities: Capacities,
-    ) -> Self {
+    ) -> Result<Self, ArrowError> {
         let data_type = arrays[0].data_type();
 
         for a in arrays.iter().skip(1) {
@@ -510,9 +511,9 @@ impl<'a> MutableArrayData<'a> {
                         Capacities::Array(array_capacity)
                     };
 
-                vec![MutableArrayData::with_capacities(
+                vec![MutableArrayData::try_with_capacities(
                     children, use_nulls, capacities,
-                )]
+                )?]
             }
             // the dictionary type just appends keys and clones the values.
             DataType::Dictionary(_, _) => vec![],
@@ -552,9 +553,9 @@ impl<'a> MutableArrayData<'a> {
                             .iter()
                             .map(|array| &array.child_data()[i])
                             .collect::<Vec<_>>();
-                        MutableArrayData::new(child_arrays, use_nulls, array_capacity)
+                        MutableArrayData::try_new(child_arrays, use_nulls, array_capacity)
                     })
-                    .collect::<Vec<_>>(),
+                    .collect::<Result<Vec<_>, ArrowError>>()?,
             },
             DataType::RunEndEncoded(_, _) => {
                 let run_ends_child = arrays
@@ -658,7 +659,7 @@ impl<'a> MutableArrayData<'a> {
         let extend_values = match &data_type {
             DataType::Dictionary(_, _) => {
                 let mut next_offset = 0;
-                let extend_values: Result<Vec<_>, _> = arrays
+                arrays
                     .iter()
                     .map(|array| {
                         let offset = next_offset;
@@ -668,12 +669,10 @@ impl<'a> MutableArrayData<'a> {
                             next_offset += dict_len;
                         }
 
-                        build_extend_dictionary(array, offset, offset + dict_len)
+                        build_extend_dictionary(array, offset, 0.max(offset + dict_len - 1))
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
-                    .collect();
-
-                extend_values.expect("MutableArrayData::new is infallible")
+                    .collect::<Result<Vec<_>, ArrowError>>()?
             }
             DataType::BinaryView | DataType::Utf8View => {
                 let mut next_offset = 0u32;
@@ -701,7 +700,8 @@ impl<'a> MutableArrayData<'a> {
             buffer2,
             child_data,
         };
-        Self {
+
+        Ok(Self {
             arrays,
             data,
             dictionary,
@@ -709,7 +709,25 @@ impl<'a> MutableArrayData<'a> {
             extend_values,
             extend_null_bits,
             extend_nulls,
-        }
+        })
+    }
+
+    /// Similar to [MutableArrayData::new], but lets users define the
+    /// preallocated capacities of the array with more granularity.
+    ///
+    /// See [MutableArrayData::new] for more information on the arguments.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the given `capacities` don't match the data type
+    /// of `arrays`. Or when a [Capacities] variant is not yet supported.
+    pub fn with_capacities(
+        arrays: Vec<&'a ArrayData>,
+        use_nulls: bool,
+        capacities: Capacities,
+    ) -> Self {
+        Self::try_with_capacities(arrays, use_nulls, capacities)
+            .expect("MutableArrayData::with_capacities is infallible")
     }
 
     /// Extends the in progress array with a region of the input arrays
