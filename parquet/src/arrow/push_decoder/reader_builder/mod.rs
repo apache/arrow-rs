@@ -608,6 +608,10 @@ impl RowGroupReaderBuilder {
     }
 
     fn compute_cache_projection_inner(&self, filter: &RowFilter) -> Option<ProjectionMask> {
+        // Do not compute the projection mask if the predicate cache is disabled
+        if self.max_predicate_cache_size == 0 {
+            return None;
+        }
         let mut cache_projection = filter.predicates.first()?.projection().clone();
         for predicate in filter.predicates.iter() {
             cache_projection.union(predicate.projection());

@@ -110,7 +110,7 @@ use std::sync::Arc;
 ///         }
 ///     }
 /// ```
-pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<u64>;
+pub type ParquetPushDecoderBuilder = ArrowReaderBuilder<u64>; // u64 is the file length, if known
 
 /// Methods for building a ParquetDecoder. See the base [`ArrowReaderBuilder`] for
 /// more options that can be configured.
@@ -268,7 +268,54 @@ impl ParquetPushDecoder {
     ///```
     pub fn try_decode(&mut self) -> Result<DecodeResult<RecordBatch>, ParquetError> {
         let current_state = std::mem::replace(&mut self.state, ParquetDecoderState::Finished);
-        let (new_state, decode_result) = current_state.try_transition()?;
+        let (new_state, decode_result) = current_state.try_next_batch()?;
+        self.state = new_state;
+        Ok(decode_result)
+    }
+
+    /// Return a [`ParquetRecordBatchReader`] that reads the next set of rows, or
+    /// return what data is needed to produce it.
+    ///
+    /// This API can be used to get a reader for decoding the next set of
+    /// RecordBatches while proceeding to begin fetching data for the set (e.g
+    /// row group)
+    ///
+    /// Example
+    /// ```no_run
+    /// # use parquet::arrow::push_decoder::ParquetPushDecoder;
+    /// use parquet::DecodeResult;
+    /// # fn get_decoder() -> ParquetPushDecoder { unimplemented!() }
+    /// # fn push_data(decoder: &mut ParquetPushDecoder, ranges: Vec<std::ops::Range<u64>>) { unimplemented!() }
+    /// let mut decoder = get_decoder();
+    /// loop {
+    ///    match decoder.try_next_reader().unwrap() {
+    ///       DecodeResult::NeedsData(ranges) => {
+    ///         // The decoder needs more data. Fetch the data for the given ranges
+    ///         // call decoder.push_ranges(ranges, data) and call again
+    ///         push_data(&mut decoder, ranges);
+    ///       }
+    ///       DecodeResult::Data(reader) => {
+    ///          // spawn a thread to read the batches in parallel
+    ///          // with fetching the next row group / data
+    ///          std::thread::spawn(move || {
+    ///            for batch in reader {
+    ///              let batch = batch.unwrap();
+    ///              println!("Got batch with {} rows", batch.num_rows());
+    ///            }
+    ///         });
+    ///       }
+    ///       DecodeResult::Finished => {
+    ///         // The decoder has finished decoding all data
+    ///         break;
+    ///       }
+    ///    }
+    /// }
+    ///```
+    pub fn try_next_reader(
+        &mut self,
+    ) -> Result<DecodeResult<ParquetRecordBatchReader>, ParquetError> {
+        let current_state = std::mem::replace(&mut self.state, ParquetDecoderState::Finished);
+        let (new_state, decode_result) = current_state.try_next_reader()?;
         self.state = new_state;
         Ok(decode_result)
     }
@@ -332,16 +379,106 @@ enum ParquetDecoderState {
 }
 
 impl ParquetDecoderState {
+    /// If actively reading a RowGroup, return the currently active
+    /// ParquetRecordBatchReader and advance to the next group.
+    fn try_next_reader(
+        self,
+    ) -> Result<(Self, DecodeResult<ParquetRecordBatchReader>), ParquetError> {
+        let mut current_state = self;
+        loop {
+            let (next_state, decode_result) = current_state.transition()?;
+            // if more data is needed to transition, can't proceed further without it
+            match decode_result {
+                DecodeResult::NeedsData(ranges) => {
+                    return Ok((next_state, DecodeResult::NeedsData(ranges)));
+                }
+                // act next based on state
+                DecodeResult::Data(()) | DecodeResult::Finished => {}
+            }
+            match next_state {
+                // not ready to read yet, continue transitioning
+                Self::ReadingRowGroup { .. } => current_state = next_state,
+                // have a reader ready, so return it and set ourself to ReadingRowGroup
+                Self::DecodingRowGroup {
+                    record_batch_reader,
+                    remaining_row_groups,
+                } => {
+                    let result = DecodeResult::Data(*record_batch_reader);
+                    let next_state = Self::ReadingRowGroup {
+                        remaining_row_groups,
+                    };
+                    return Ok((next_state, result));
+                }
+                Self::Finished => {
+                    return Ok((Self::Finished, DecodeResult::Finished));
+                }
+            }
+        }
+    }
+
     /// Current state --> next state + output
     ///
-    /// This function is called to check if the decoder has any RecordBatches
-    /// and [`Self::push_data`] is called when new data is available.
-    ///
-    /// # Notes
+    /// This function is called to get the next RecordBatch
     ///
     /// This structure is used to reduce the indentation level of the main loop
     /// in try_build
-    fn try_transition(self) -> Result<(Self, DecodeResult<RecordBatch>), ParquetError> {
+    fn try_next_batch(self) -> Result<(Self, DecodeResult<RecordBatch>), ParquetError> {
+        let mut current_state = self;
+        loop {
+            let (new_state, decode_result) = current_state.transition()?;
+            // if more data is needed to transition, can't proceed further without it
+            match decode_result {
+                DecodeResult::NeedsData(ranges) => {
+                    return Ok((new_state, DecodeResult::NeedsData(ranges)));
+                }
+                // act next based on state
+                DecodeResult::Data(()) | DecodeResult::Finished => {}
+            }
+            match new_state {
+                // not ready to read yet, continue transitioning
+                Self::ReadingRowGroup { .. } => current_state = new_state,
+                // have a reader ready, so decode the next batch
+                Self::DecodingRowGroup {
+                    mut record_batch_reader,
+                    remaining_row_groups,
+                } => {
+                    match record_batch_reader.next() {
+                        // Successfully decoded a batch, return it
+                        Some(Ok(batch)) => {
+                            let result = DecodeResult::Data(batch);
+                            let next_state = Self::DecodingRowGroup {
+                                record_batch_reader,
+                                remaining_row_groups,
+                            };
+                            return Ok((next_state, result));
+                        }
+                        // No more batches in this row group, move to the next row group
+                        None => {
+                            current_state = Self::ReadingRowGroup {
+                                remaining_row_groups,
+                            }
+                        }
+                        // some error occurred while decoding, so return that
+                        Some(Err(e)) => {
+                            // TODO: preserve ArrowError in ParquetError (rather than convert to a string)
+                            return Err(ParquetError::ArrowError(e.to_string()));
+                        }
+                    }
+                }
+                Self::Finished => {
+                    return Ok((Self::Finished, DecodeResult::Finished));
+                }
+            }
+        }
+    }
+
+    /// Transition to the next state with a reader (data can be produced), if not end of stream
+    ///
+    /// This function is called in a loop until the decoder is ready to return
+    /// data (has the required pages buffered) or is finished.
+    fn transition(self) -> Result<(Self, DecodeResult<()>), ParquetError> {
+        // result returned when there is data ready
+        let data_ready = DecodeResult::Data(());
         match self {
             Self::ReadingRowGroup {
                 mut remaining_row_groups,
@@ -350,13 +487,14 @@ impl ParquetDecoderState {
                     // If we have a next reader, we can transition to decoding it
                     DecodeResult::Data(record_batch_reader) => {
                         // Transition to decoding the row group
-                        Self::DecodingRowGroup {
-                            record_batch_reader: Box::new(record_batch_reader),
-                            remaining_row_groups,
-                        }
-                        .try_transition()
+                        Ok((
+                            Self::DecodingRowGroup {
+                                record_batch_reader: Box::new(record_batch_reader),
+                                remaining_row_groups,
+                            },
+                            data_ready,
+                        ))
                     }
-                    // If there are no more readers, we are finished
                     DecodeResult::NeedsData(ranges) => {
                         // If we need more data, we return the ranges needed and stay in Reading
                         // RowGroup state
@@ -367,40 +505,17 @@ impl ParquetDecoderState {
                             DecodeResult::NeedsData(ranges),
                         ))
                     }
+                    // If there are no more readers, we are finished
                     DecodeResult::Finished => {
                         // No more row groups to read, we are finished
                         Ok((Self::Finished, DecodeResult::Finished))
                     }
                 }
             }
-            Self::DecodingRowGroup {
-                mut record_batch_reader,
-                remaining_row_groups,
-            } => {
-                // Decide the next record batch
-                match record_batch_reader.next() {
-                    Some(Ok(batch)) => {
-                        // Successfully decoded a batch, return it
-                        Ok((
-                            Self::DecodingRowGroup {
-                                record_batch_reader,
-                                remaining_row_groups,
-                            },
-                            DecodeResult::Data(batch),
-                        ))
-                    }
-                    None => {
-                        // No more batches in this row group, move to the next row group
-                        // or finish if there are no more row groups
-                        Self::ReadingRowGroup {
-                            remaining_row_groups,
-                        }
-                        .try_transition()
-                    }
-                    Some(Err(e)) => Err(ParquetError::from(e)), // some error occurred while decoding
-                }
-            }
-            Self::Finished => Ok((Self::Finished, DecodeResult::Finished)),
+            // if we are already in DecodingRowGroup, just return data ready
+            Self::DecodingRowGroup { .. } => Ok((self, data_ready)),
+            // if finished, just return finished
+            Self::Finished => Ok((self, DecodeResult::Finished)),
         }
     }
 
