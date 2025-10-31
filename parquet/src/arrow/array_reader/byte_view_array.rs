@@ -236,7 +236,7 @@ impl ByteViewArrayDecoder {
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 ByteViewArrayDecoder::Dictionary(ByteViewArrayDecoderDictionary::new(
                     data, num_levels, num_values,
-                ))
+                )?)
             }
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
                 ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
@@ -426,10 +426,10 @@ pub struct ByteViewArrayDecoderDictionary {
 }
 
 impl ByteViewArrayDecoderDictionary {
-    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
-        Self {
-            decoder: DictIndexDecoder::new(data, num_levels, num_values),
-        }
+    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
+        Ok(Self {
+            decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
+        })
     }
 
     /// Reads the next indexes from self.decoder
