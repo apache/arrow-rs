@@ -34,3 +34,4 @@ pub mod take;
 pub mod union_extract;
 pub mod window;
 pub mod zip;
+mod merge;
