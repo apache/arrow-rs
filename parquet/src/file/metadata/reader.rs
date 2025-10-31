@@ -20,9 +20,14 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::decode_metadata;
-use crate::file::metadata::{FooterTail, ParquetMetaData, ParquetMetaDataPushDecoder};
+use crate::file::metadata::thrift::parquet_schema_from_bytes;
+use crate::file::metadata::{
+    FooterTail, MetadataOptions, ParquetMetaData, ParquetMetaDataPushDecoder,
+};
 use crate::file::reader::ChunkReader;
+use crate::schema::types::SchemaDescriptor;
 use bytes::Bytes;
+use std::sync::Arc;
 use std::{io::Read, ops::Range};
 
 use crate::DecodeResult;
@@ -795,7 +800,24 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        decode_metadata(buf)
+        decode_metadata(buf, None)
+    }
+
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Like [`Self::decode_metadata`] but this also accepts
+    /// metadata parsing options.
+    pub fn decode_metadata_with_options(
+        buf: &[u8],
+        options: Option<&MetadataOptions>,
+    ) -> Result<ParquetMetaData> {
+        decode_metadata(buf, options)
+    }
+
+    /// Decodes the schema from the Parquet footer in `buf`. Returned as
+    /// a [`SchemaDescriptor`].
+    pub fn decode_schema(buf: &[u8]) -> Result<Arc<SchemaDescriptor>> {
+        Ok(Arc::new(parquet_schema_from_bytes(buf)?))
     }
 }
 
