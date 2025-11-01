@@ -134,6 +134,9 @@
 //!
 
 use crate::StructMode;
+use crate::reader::binary_array::{
+    BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
+};
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -159,6 +162,7 @@ use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
+mod binary_array;
 mod boolean_array;
 mod decimal_array;
 mod list_array;
@@ -743,9 +747,10 @@ fn make_decoder(
         DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::Binary | DataType::LargeBinary | DataType::FixedSizeBinary(_) => {
-            Err(ArrowError::JsonError(format!("{data_type} is not supported by JSON")))
-        }
+        DataType::Binary => Ok(Box::new(BinaryArrayDecoder::<i32>::default())),
+        DataType::LargeBinary => Ok(Box::new(BinaryArrayDecoder::<i64>::default())),
+        DataType::FixedSizeBinary(len) => Ok(Box::new(FixedSizeBinaryArrayDecoder::new(len))),
+        DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
         DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }

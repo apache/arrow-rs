@@ -20,18 +20,28 @@
 //! See the module level documentation for the
 //! [`reader`] and [`writer`] for usage examples.
 //!
-//! # Binary Data
+//! # Binary Data uses `Base16` Encoding
 //!
-//! As per [RFC7159] JSON cannot encode arbitrary binary data. A common approach to workaround
-//! this is to use a [binary-to-text encoding] scheme, such as base64, to encode the
-//! input data and then decode it on output.
+//! As per [RFC7159] JSON cannot encode arbitrary binary data. This crate works around that
+//! limitation by encoding/decoding binary data as a [hexadecimal] string (i.e.
+//! [`Base16` encoding]).
+//!
+//! Note that `Base16` only has 50% space efficiency (i.e., the encoded data is twice as large
+//! as the original). If that is an issue, we recommend to convert binary data to/from a different
+//! encoding format such as `Base64` instead. See the following example for details.
+//!
+//! ## `Base64` Encoding Example
+//!
+//! [`Base64`] is a common [binary-to-text encoding] scheme with a space efficiency of 75%. The
+//! following example shows how to use the [`arrow_cast`] crate to encode binary data to `Base64`
+//! before converting it to JSON and how to decode it back.
 //!
 //! ```
 //! # use std::io::Cursor;
 //! # use std::sync::Arc;
 //! # use arrow_array::{BinaryArray, RecordBatch, StringArray};
 //! # use arrow_array::cast::AsArray;
-//! # use arrow_cast::base64::{b64_decode, b64_encode, BASE64_STANDARD};
+//! use arrow_cast::base64::{b64_decode, b64_encode, BASE64_STANDARD};
 //! # use arrow_json::{LineDelimitedWriter, ReaderBuilder};
 //! #
 //! // The data we want to write
@@ -61,7 +71,9 @@
 //!
 //! [RFC7159]: https://datatracker.ietf.org/doc/html/rfc7159#section-8.1
 //! [binary-to-text encoding]: https://en.wikipedia.org/wiki/Binary-to-text_encoding
-//!
+//! [hexadecimal]: https://en.wikipedia.org/wiki/Hexadecimal
+//! [`Base16` encoding]: https://en.wikipedia.org/wiki/Base16#Base16
+//! [`Base64`]: https://en.wikipedia.org/wiki/Base64
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -167,8 +179,18 @@ impl JsonSerializable for f64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::writer::JsonArray;
+
     use super::*;
 
+    use arrow_array::{
+        ArrayRef, OffsetSizeTrait, RecordBatch, RecordBatchWriter,
+        builder::{BinaryViewBuilder, FixedSizeBinaryBuilder, GenericByteBuilder},
+        types::{ByteArrayType, GenericBinaryType},
+    };
+    use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use serde_json::Value::{Bool, Number as VNumber, String as VString};
 
     #[test]
@@ -259,6 +281,137 @@ mod tests {
                 list_writer.write(&batch_res.unwrap()).unwrap();
             }
             assert_eq!(list_input, &list_output);
+        }
+    }
+
+    #[test]
+    fn test_json_roundtrip_binary() {
+        let values: [Option<&[u8]>; 3] = [
+            Some(b"Ned Flanders" as &[u8]),
+            None,
+            Some(b"Troy McClure" as &[u8]),
+        ];
+        // Binary:
+        {
+            let batch = build_array_binary::<i32>(&values);
+            assert_binary_json(&batch);
+        }
+        // LargeBinary:
+        {
+            let batch = build_array_binary::<i64>(&values);
+            assert_binary_json(&batch);
+        }
+        // FixedSizeBinary:
+        {
+            let batch = build_array_fixed_size_binary(12, &values);
+            assert_binary_json(&batch);
+        }
+        // BinaryView:
+        {
+            let batch = build_array_binary_view(&values);
+            assert_binary_json(&batch);
+        }
+    }
+
+    fn build_array_binary<O: OffsetSizeTrait>(values: &[Option<&[u8]>]) -> RecordBatch {
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "bytes",
+            GenericBinaryType::<O>::DATA_TYPE,
+            true,
+        )]));
+        let mut builder = GenericByteBuilder::<GenericBinaryType<O>>::new();
+        for value in values {
+            match value {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+        let array = Arc::new(builder.finish()) as ArrayRef;
+        RecordBatch::try_new(schema, vec![array]).unwrap()
+    }
+
+    fn build_array_binary_view(values: &[Option<&[u8]>]) -> RecordBatch {
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "bytes",
+            DataType::BinaryView,
+            true,
+        )]));
+        let mut builder = BinaryViewBuilder::new();
+        for value in values {
+            match value {
+                Some(v) => builder.append_value(v),
+                None => builder.append_null(),
+            }
+        }
+        let array = Arc::new(builder.finish()) as ArrayRef;
+        RecordBatch::try_new(schema, vec![array]).unwrap()
+    }
+
+    fn build_array_fixed_size_binary(byte_width: i32, values: &[Option<&[u8]>]) -> RecordBatch {
+        let schema = SchemaRef::new(Schema::new(vec![Field::new(
+            "bytes",
+            DataType::FixedSizeBinary(byte_width),
+            true,
+        )]));
+        let mut builder = FixedSizeBinaryBuilder::new(byte_width);
+        for value in values {
+            match value {
+                Some(v) => builder.append_value(v).unwrap(),
+                None => builder.append_null(),
+            }
+        }
+        let array = Arc::new(builder.finish()) as ArrayRef;
+        RecordBatch::try_new(schema, vec![array]).unwrap()
+    }
+
+    fn assert_binary_json(batch: &RecordBatch) {
+        // encode and check JSON with explicit nulls:
+        {
+            let mut buf = Vec::new();
+            let json_value: Value = {
+                let mut writer = WriterBuilder::new()
+                    .with_explicit_nulls(true)
+                    .build::<_, JsonArray>(&mut buf);
+                writer.write(batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
+
+            let json_array = json_value.as_array().unwrap();
+
+            let decoded = {
+                let mut decoder = ReaderBuilder::new(batch.schema().clone())
+                    .build_decoder()
+                    .unwrap();
+                decoder.serialize(json_array).unwrap();
+                decoder.flush().unwrap().unwrap()
+            };
+
+            assert_eq!(batch, &decoded);
+        }
+
+        // encode and check JSON with no explicit nulls:
+        {
+            let mut buf = Vec::new();
+            let json_value: Value = {
+                // explicit nulls are off by default, so we don't need
+                // to set that when creating the writer:
+                let mut writer = ArrayWriter::new(&mut buf);
+                writer.write(batch).unwrap();
+                writer.close().unwrap();
+                serde_json::from_slice(&buf).unwrap()
+            };
+            let json_array = json_value.as_array().unwrap();
+
+            let decoded = {
+                let mut decoder = ReaderBuilder::new(batch.schema().clone())
+                    .build_decoder()
+                    .unwrap();
+                decoder.serialize(json_array).unwrap();
+                decoder.flush().unwrap().unwrap()
+            };
+
+            assert_eq!(batch, &decoded);
         }
     }
 }
