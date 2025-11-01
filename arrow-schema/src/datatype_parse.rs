@@ -88,6 +88,7 @@ impl<'a> Parser<'a> {
             Token::LargeListView => self.parse_large_list_view(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
+            Token::Union => self.parse_union(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -448,6 +449,59 @@ impl<'a> Parser<'a> {
         Ok(DataType::Struct(Fields::from(fields)))
     }
 
+    /// Parses the next Union (called after `Union` has been consumed)
+    /// E.g: Union(Sparse, 0: ("a": Int32), 1: ("b": nullable Utf8))
+    fn parse_union(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let union_mode = self.parse_union_mode()?;
+        let mut type_ids = vec![];
+        let mut fields = vec![];
+        loop {
+            let (type_id, field) = match self.next_token()? {
+                Token::RParen => break,
+                Token::Comma => self.parse_union_field()?,
+                tok => {
+                    return Err(make_error(
+                        self.val,
+                        &format!("Expected a comma for a union field; got {tok:?}"),
+                    ));
+                }
+            };
+            type_ids.push(type_id);
+            fields.push(field);
+        }
+        Ok(DataType::Union(
+            UnionFields::new(type_ids, fields),
+            union_mode,
+        ))
+    }
+
+    /// Parses the next UnionMode
+    fn parse_union_mode(&mut self) -> ArrowResult<UnionMode> {
+        match self.next_token()? {
+            Token::UnionMode(union_mode) => Ok(union_mode),
+            tok => Err(make_error(
+                self.val,
+                &format!("finding UnionMode for Union, got {tok}"),
+            )),
+        }
+    }
+
+    /// Parses the next UnionField
+    /// 0: ("a": nullable Int32)
+    fn parse_union_field(&mut self) -> ArrowResult<(i8, Field)> {
+        let type_id = self.parse_i8("UnionField")?;
+        self.expect_token(Token::Colon)?;
+        self.expect_token(Token::LParen)?;
+        let field_name = self.parse_double_quoted_string("UnionField")?;
+        self.expect_token(Token::Colon)?;
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+        let field = Field::new(field_name, data_type, nullable);
+        self.expect_token(Token::RParen)?;
+        Ok((type_id, field))
+    }
+
     /// return and consume if the next token is `Token::Nullable`
     fn parse_opt_nullable(&mut self) -> bool {
         self.tokenizer
@@ -612,6 +666,10 @@ impl<'a> Tokenizer<'a> {
 
             "Struct" => Token::Struct,
 
+            "Union" => Token::Union,
+            "Sparse" => Token::UnionMode(UnionMode::Sparse),
+            "Dense" => Token::UnionMode(UnionMode::Dense),
+
             token => {
                 return Err(make_error(self.val, &format!("unknown token: {token}")));
             }
@@ -752,6 +810,8 @@ enum Token {
     LargeListView,
     FixedSizeList,
     Struct,
+    Union,
+    UnionMode(UnionMode),
     Nullable,
     Field,
     X,
@@ -789,6 +849,8 @@ impl Display for Token {
             Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
             Token::SingleQuotedString(s) => write!(f, "SingleQuotedString({s})"),
             Token::Struct => write!(f, "Struct"),
+            Token::Union => write!(f, "Union"),
+            Token::UnionMode(m) => write!(f, "{m:?}"),
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
             Token::X => write!(f, "x"),
