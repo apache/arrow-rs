@@ -96,6 +96,18 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// parses Field, this is the inversion of `format_field` in `datatype_display.rs`.
+    /// E.g: "a": nullable Int64
+    ///
+    /// TODO: support metadata: `"a": nullable Int64 metadata: {"foo": "value"}`
+    fn parse_field(&mut self) -> ArrowResult<Field> {
+        let name = self.parse_double_quoted_string("Field")?;
+        self.expect_token(Token::Colon)?;
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+        Ok(Field::new(name, data_type, nullable))
+    }
+
     /// Parses list field name. Returns default field name if not found.
     fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
         // field must be after a comma
@@ -414,25 +426,16 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let mut fields = Vec::new();
         loop {
-            // expects:   "field name": [nullable] #datatype
+            if self
+                .tokenizer
+                .next_if(|next| matches!(next, Ok(Token::RParen)))
+                .is_some()
+            {
+                break;
+            }
 
-            let field_name = match self.next_token()? {
-                Token::RParen => {
-                    break;
-                }
-                Token::DoubleQuotedString(field_name) => field_name,
-                tok => {
-                    return Err(make_error(
-                        self.val,
-                        &format!("Expected a double quoted string for a field name; got {tok:?}"),
-                    ));
-                }
-            };
-            self.expect_token(Token::Colon)?;
-
-            let nullable = self.parse_opt_nullable();
-            let field_type = self.parse_next_type()?;
-            fields.push(Arc::new(Field::new(field_name, field_type, nullable)));
+            let field = self.parse_field()?;
+            fields.push(Arc::new(field));
             match self.next_token()? {
                 Token::Comma => continue,
                 Token::RParen => break,
@@ -493,11 +496,7 @@ impl<'a> Parser<'a> {
         let type_id = self.parse_i8("UnionField")?;
         self.expect_token(Token::Colon)?;
         self.expect_token(Token::LParen)?;
-        let field_name = self.parse_double_quoted_string("UnionField")?;
-        self.expect_token(Token::Colon)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = Field::new(field_name, data_type, nullable);
+        let field = self.parse_field()?;
         self.expect_token(Token::RParen)?;
         Ok((type_id, field))
     }
