@@ -135,7 +135,7 @@ pub fn parquet_to_arrow_field_levels(
     match complex::convert_schema(schema, mask, hint)? {
         Some(field) => match &field.arrow_type {
             DataType::Struct(fields) => Ok(FieldLevels {
-                fields: fields.clone(),
+                fields: fields.to_owned(),
                 levels: Some(field),
             }),
             _ => unreachable!(),
@@ -309,7 +309,7 @@ impl<'a> ArrowSchemaConverter<'a> {
     ///
     /// Setting this option to `true` will result in Parquet files that can be
     /// read by more readers, but may lose precision for Arrow types such as
-    /// [`DataType::Date64`] which have no direct [corresponding Parquet type].
+    /// [`DataType::Date64`] which have no direct corresponding Parquet type.
     ///
     /// By default, this converter does not coerce to native Parquet types. Enabling type
     /// coercion allows for meaningful representations that do not require
@@ -739,12 +739,17 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         DataType::Union(_, _) => unimplemented!("See ARROW-8817."),
         DataType::Dictionary(_, value) => {
             // Dictionary encoding not handled at the schema level
-            let dict_field = field.clone().with_data_type(value.as_ref().clone());
+            let dict_field = field.to_owned().with_data_type(value.as_ref().clone());
             arrow_to_parquet_type(&dict_field, coerce_types)
         }
-        DataType::RunEndEncoded(_, _) => Err(arrow_err!(
-            "Converting RunEndEncodedType to parquet not supported",
-        )),
+        DataType::RunEndEncoded(_run_end_type, value_type) => {
+            // We want to write REE data as dictionary encoded data,
+            // which is not handled at the schema level.
+            let dict_field = field
+                .to_owned()
+                .with_data_type(value_type.data_type().to_owned());
+            arrow_to_parquet_type(&dict_field, coerce_types)
+        }
     }
 }
 
@@ -2248,5 +2253,23 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_run_end_encoded_conversion() {
+        use crate::basic::Type;
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int16, false));
+        let values_field = Arc::new(Field::new("values", DataType::Boolean, true));
+        let run_end_encoded_field = Field::new(
+            "run_end_encoded_16",
+            DataType::RunEndEncoded(run_ends_field, values_field),
+            false,
+        );
+
+        let result = arrow_to_parquet_type(&run_end_encoded_field, false).unwrap();
+        // Should convert to the underlying value type (Boolean in this case)
+        assert_eq!(result.get_physical_type(), Type::BOOLEAN);
+        assert_eq!(result.get_basic_info().repetition(), Repetition::REQUIRED); // field is not nullable
+        assert_eq!(result.name(), "run_end_encoded_16");
     }
 }
