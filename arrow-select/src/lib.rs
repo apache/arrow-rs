@@ -29,6 +29,7 @@ pub mod concat;
 pub mod dictionary;
 pub mod filter;
 pub mod interleave;
+pub mod merge;
 pub mod nullif;
 pub mod take;
 pub mod union_extract;
