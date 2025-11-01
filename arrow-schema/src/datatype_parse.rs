@@ -17,7 +17,7 @@
 
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
-use crate::{ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit};
+use crate::{ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode};
 
 /// Parses a DataType from a string representation
 ///
@@ -982,7 +982,45 @@ mod test {
                 )),
                 2,
             ),
-            // TODO support more structured types (Union, Map, RunEndEncoded, etc)
+            DataType::Union(
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("Int32", DataType::Int32, false),
+                        Field::new("Utf8", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Sparse,
+            ),
+            DataType::Union(
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("Int32", DataType::Int32, false),
+                        Field::new("Utf8", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Dense,
+            ),
+            DataType::Union(
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new_union(
+                            "nested_union",
+                            vec![0, 1],
+                            vec![
+                                Field::new("Int32", DataType::Int32, false),
+                                Field::new("Utf8", DataType::Utf8, true),
+                            ],
+                            UnionMode::Dense,
+                        ),
+                        Field::new("Utf8", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Sparse,
+            ),
+            // TODO support more structured types (Map, RunEndEncoded, etc)
         ]
     }
 
