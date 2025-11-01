@@ -387,8 +387,6 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
-    // TODO: page header could be huge because of statistics. We should set a
-    // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
@@ -398,6 +396,8 @@ pub(crate) fn decode_page(
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer[..offset]);
+            // decompressed size of zero corresponds to a page with only null values
+            // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
             if decompressed_size > 0 {
                 let compressed = &buffer[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
