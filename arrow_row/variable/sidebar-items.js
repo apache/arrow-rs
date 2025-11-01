@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["BLOCK_CONTINUATION","BLOCK_SIZE","EMPTY_SENTINEL","MINI_BLOCK_COUNT","MINI_BLOCK_SIZE","NON_EMPTY_SENTINEL"],"fn":["decode_binary","decode_binary_view","decode_binary_view_inner","decode_blocks","decode_string","decode_string_view","decoded_len","encode","encode_blocks","encode_empty","encode_null","encode_one","encoded_len","padded_length"]};

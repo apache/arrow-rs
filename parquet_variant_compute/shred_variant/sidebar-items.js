@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["VariantToShreddedVariantRowBuilder"],"fn":["make_variant_to_shredded_variant_arrow_row_builder","shred_variant"],"struct":["VariantToShreddedObjectVariantRowBuilder","VariantToShreddedPrimitiveVariantRowBuilder"]};

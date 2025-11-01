@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["StreamState"],"mod":["metadata","store"],"struct":["ParquetObjectReader","ParquetRecordBatchStream","ReaderFactory"],"trait":["AsyncFileReader","MetadataFetch","MetadataSuffixFetch"],"type":["ParquetRecordBatchStreamBuilder","ReadResult"]};
