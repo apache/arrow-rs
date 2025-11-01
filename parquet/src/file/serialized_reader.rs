@@ -397,9 +397,9 @@ pub(crate) fn decode_page(
             }
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
-            decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
+            decompressed.extend_from_slice(&buffer[..offset]);
             if decompressed_size > 0 {
-                let compressed = &buffer.as_ref()[offset..];
+                let compressed = &buffer[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
             }
 
@@ -897,6 +897,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining,
                     )?;
                     let data_len = header.compressed_page_size as usize;
+                    let data_start = *offset;
                     *offset += data_len as u64;
                     *remaining -= data_len as u64;
 
@@ -904,16 +905,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         continue;
                     }
 
-                    let mut buffer = Vec::with_capacity(data_len);
-                    let read = read.take(data_len as u64).read_to_end(&mut buffer)?;
-
-                    if read != data_len {
-                        return Err(eof_err!(
-                            "Expected to read {} bytes of page, read only {}",
-                            data_len,
-                            read
-                        ));
-                    }
+                    let buffer = self.reader.get_bytes(data_start, data_len)?;
 
                     let buffer =
                         self.context
@@ -921,7 +913,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let page = decode_page(
                         header,
-                        Bytes::from(buffer),
+                        buffer,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?;
