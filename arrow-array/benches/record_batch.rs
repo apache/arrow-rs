@@ -17,8 +17,9 @@
 
 use arrow_array::{ArrayRef, Int64Array, RecordBatch, RecordBatchOptions};
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
-use criterion::*;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use num_integer::Integer;
+use std::hint::black_box;
 use std::sync::Arc;
 
 fn make_record_batch(column_count: usize, row_count: usize) -> RecordBatch {

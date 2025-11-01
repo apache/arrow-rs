@@ -81,7 +81,7 @@ ring = { version = "0.17", default-features = false, features = ["std"], optiona
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
-criterion = { version = "0.5", default-features = false, features = ["async_futures"]  }
+criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
 insta = "1.43.1"
