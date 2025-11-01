@@ -284,10 +284,12 @@ impl Sbbf {
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
     pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
-        let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
-        self.header().write_thrift(&mut protocol).map_err(|e| {
-            ParquetError::General(format!("Could not write bloom filter header: {e}"))
-        })?;
+        {
+            let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
+            self.header().write_thrift(&mut protocol).map_err(|e| {
+                ParquetError::General(format!("Could not write bloom filter header: {e}"))
+            })?;
+        }
         self.write_bitset(&mut writer)?;
         Ok(())
     }
