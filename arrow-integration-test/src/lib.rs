@@ -15,11 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
+//! Partial support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
 //!
 //! These utilities define structs that read the integration JSON format for integration testing purposes.
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
+//!
+//! <div class="warning">
+//!
+//! This crate is **only intended for integration testing the
+//! [Arrow project](https://github.com/apache/arrow-rs)**. It is not [intended for usage outside of
+//! this context](https://github.com/apache/arrow-rs/issues/8684#issuecomment-3433193158).
+//!
+//! </div>
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
@@ -1043,6 +1051,16 @@ fn create_null_buf(json_col: &ArrowJsonColumn) -> Buffer {
 
 impl ArrowJsonBatch {
     /// Convert a [`RecordBatch`] to an [`ArrowJsonBatch`]
+    ///
+    /// <div class="warning">
+    ///
+    /// This function is **deliberately incomplete**! As noted in the crate-level documentation,
+    /// this crate is only intended for use within the Arrow project itself.
+    ///
+    /// Right now, this function only supports `DataType::Int8` columns. Other data types will lead
+    /// to an empty `ArrowJsonColumn`.
+    ///
+    /// </div>
     pub fn from_batch(batch: &RecordBatch) -> ArrowJsonBatch {
         let mut json_batch = ArrowJsonBatch {
             count: batch.num_rows(),
