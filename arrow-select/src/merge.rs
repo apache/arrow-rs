@@ -179,7 +179,7 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
 
 /// Merges two arrays in the order specified by a boolean mask.
 ///
-/// This algorithm is a variant of [zip](crate::zip::zip) that does not require the truthy and
+/// This algorithm is a variant of [zip] that does not require the truthy and
 /// falsy arrays to have the same length.
 ///
 /// When truthy of falsy are [Scalar](arrow_array::scalar::Scalar), the single
