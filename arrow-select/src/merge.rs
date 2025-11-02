@@ -182,7 +182,7 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
 /// This algorithm is a variant of [zip] that does not require the truthy and
 /// falsy arrays to have the same length.
 ///
-/// When truthy of falsy are [Scalar](arrow_array::scalar::Scalar), the single
+/// When truthy of falsy are [Scalar](arrow_array::Scalar), the single
 /// scalar value is repeated whenever the mask array contains true or false respectively.
 ///
 /// # Example
