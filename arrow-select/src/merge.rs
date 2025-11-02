@@ -17,11 +17,12 @@
 
 //! [`merge`] and [`merge_n`]: Combine values from two or more arrays
 
-use crate::filter::SlicesIterator;
+use crate::filter::{prep_null_mask_filter, SlicesIterator};
 use arrow_array::{Array, ArrayRef, BooleanArray, Datum, make_array, new_empty_array};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
+use crate::zip::zip;
 
 /// An index for the [merge] function.
 ///
@@ -181,6 +182,9 @@ pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<Arr
 /// This algorithm is a variant of [zip](crate::zip::zip) that does not require the truthy and
 /// falsy arrays to have the same length.
 ///
+/// When truthy of falsy are [Scalar](arrow_array::scalar::Scalar), the single
+/// scalar value is repeated whenever the mask array contains true or false respectively.
+///
 /// # Example
 ///
 /// ```text
@@ -202,28 +206,34 @@ pub fn merge(
     truthy: &dyn Datum,
     falsy: &dyn Datum,
 ) -> Result<ArrayRef, ArrowError> {
-    let (truthy, truthy_is_scalar) = truthy.get();
-    let (falsy, falsy_is_scalar) = falsy.get();
+    let (truthy_array, truthy_is_scalar) = truthy.get();
+    let (falsy_array, falsy_is_scalar) = falsy.get();
 
-    if truthy.data_type() != falsy.data_type() {
+    if truthy_is_scalar && falsy_is_scalar {
+        // When both truthy and falsy are scalars, we can use `zip` since the result is the same
+        // and zip has optimized code for scalars.
+        return zip(mask, truthy, falsy);
+    }
+
+    if truthy_array.data_type() != falsy_array.data_type() {
         return Err(ArrowError::InvalidArgumentError(
             "arguments need to have the same data type".into(),
         ));
     }
 
-    if truthy_is_scalar && truthy.len() != 1 {
+    if truthy_is_scalar && truthy_array.len() != 1 {
         return Err(ArrowError::InvalidArgumentError(
             "scalar arrays must have 1 element".into(),
         ));
     }
-    if falsy_is_scalar && falsy.len() != 1 {
+    if falsy_is_scalar && falsy_array.len() != 1 {
         return Err(ArrowError::InvalidArgumentError(
             "scalar arrays must have 1 element".into(),
         ));
     }
 
-    let falsy = falsy.to_data();
-    let truthy = truthy.to_data();
+    let falsy = falsy_array.to_data();
+    let truthy = truthy_array.to_data();
 
     let mut mutable = MutableArrayData::new(vec![&truthy, &falsy], false, truthy.len());
 
@@ -235,7 +245,13 @@ pub fn merge(
     let mut falsy_offset = 0;
     let mut truthy_offset = 0;
 
-    SlicesIterator::new(mask).for_each(|(start, end)| {
+    // Ensure nulls are treated as false
+    let mask_buffer = match mask.null_count() {
+        0 => mask.values().clone(),
+        _ => prep_null_mask_filter(mask).into_parts().0
+    };
+
+    SlicesIterator::from(&mask_buffer).for_each(|(start, end)| {
         // the gap needs to be filled with falsy values
         if start > filled {
             if falsy_is_scalar {
