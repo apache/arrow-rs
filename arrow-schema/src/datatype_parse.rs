@@ -1081,7 +1081,20 @@ mod test {
                 ),
                 UnionMode::Sparse,
             ),
-            // TODO support more structured types (Map, RunEndEncoded, etc)
+            DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), true),
+            DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), false),
+            DataType::Map(
+                Arc::new(Field::new_map(
+                    "nested_map",
+                    "entries",
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                    false,
+                    true,
+                )),
+                true,
+            ),
+            // TODO support more structured types (RunEndEncoded, etc)
         ]
     }
 
