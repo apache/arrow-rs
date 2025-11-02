@@ -90,6 +90,7 @@ impl<'a> Parser<'a> {
             Token::Struct => self.parse_struct(),
             Token::Union => self.parse_union(),
             Token::Map => self.parse_map(),
+            Token::RunEndEncoded => self.parse_run_end_encoded(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -524,6 +525,20 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed)
+    /// E.g: RunEndEncoded("run_ends": UInt32, "values": nullable Int32)
+    fn parse_run_end_encoded(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let run_ends = self.parse_field()?;
+        self.expect_token(Token::Comma)?;
+        let values = self.parse_field()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::RunEndEncoded(
+            Arc::new(run_ends),
+            Arc::new(values),
+        ))
+    }
+
     /// return and consume if the next token is `Token::Nullable`
     fn parse_opt_nullable(&mut self) -> bool {
         self.tokenizer
@@ -696,6 +711,8 @@ impl<'a> Tokenizer<'a> {
             "sorted" => Token::MapSorted(true),
             "unsorted" => Token::MapSorted(false),
 
+            "RunEndEncoded" => Token::RunEndEncoded,
+
             token => {
                 return Err(make_error(self.val, &format!("unknown token: {token}")));
             }
@@ -840,6 +857,7 @@ enum Token {
     UnionMode(UnionMode),
     Map,
     MapSorted(bool),
+    RunEndEncoded,
     Nullable,
     Field,
     X,
@@ -883,6 +901,7 @@ impl Display for Token {
             Token::MapSorted(sorted) => {
                 write!(f, "{}", if *sorted { "sorted" } else { "unsorted" })
             }
+            Token::RunEndEncoded => write!(f, "RunEndEncoded"),
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
             Token::X => write!(f, "x"),
@@ -1127,7 +1146,21 @@ mod test {
                 )),
                 true,
             ),
-            // TODO support more structured types (RunEndEncoded, etc)
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    "nested_run_end_encoded",
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                        Arc::new(Field::new("values", DataType::Int32, true)),
+                    ),
+                    true,
+                )),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
         ]
     }
 
