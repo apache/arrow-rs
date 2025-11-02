@@ -62,10 +62,10 @@ impl MergeIndex for Option<usize> {
 ///
 /// # Implementation notes
 ///
-/// This algorithm is similar in nature to both [zip](crate::zip::zip) and
+/// This algorithm is similar in nature to both [zip] and
 /// [interleave](crate::interleave::interleave), but there are some important differences.
 ///
-/// In contrast to [zip](crate::zip::zip), this function supports multiple input arrays. Instead of
+/// In contrast to [zip], this function supports multiple input arrays. Instead of
 /// a boolean selection vector, an index array is to take values from the input arrays, and a special
 /// marker values can be used to indicate null values.
 ///
