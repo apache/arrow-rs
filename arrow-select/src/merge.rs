@@ -17,12 +17,12 @@
 
 //! [`merge`] and [`merge_n`]: Combine values from two or more arrays
 
-use crate::filter::{prep_null_mask_filter, SlicesIterator};
+use crate::filter::{SlicesIterator, prep_null_mask_filter};
+use crate::zip::zip;
 use arrow_array::{Array, ArrayRef, BooleanArray, Datum, make_array, new_empty_array};
 use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
-use crate::zip::zip;
 
 /// An index for the [merge] function.
 ///
@@ -248,7 +248,7 @@ pub fn merge(
     // Ensure nulls are treated as false
     let mask_buffer = match mask.null_count() {
         0 => mask.values().clone(),
-        _ => prep_null_mask_filter(mask).into_parts().0
+        _ => prep_null_mask_filter(mask).into_parts().0,
     };
 
     SlicesIterator::from(&mask_buffer).for_each(|(start, end)| {
