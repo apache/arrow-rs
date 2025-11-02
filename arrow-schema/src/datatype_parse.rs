@@ -88,6 +88,7 @@ impl<'a> Parser<'a> {
             Token::LargeListView => self.parse_large_list_view(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
+            Token::Map => self.parse_map(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -448,6 +449,52 @@ impl<'a> Parser<'a> {
         Ok(DataType::Struct(Fields::from(fields)))
     }
 
+    /// Parses the next Map (called after `Map` has been consumed)
+    /// E.g: Map("entries": Struct("key": Utf8, "value": nullable Int32), sorted)
+    fn parse_map(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+
+        // Parse field name (double quoted string)
+        let field_name = match self.next_token()? {
+            Token::DoubleQuotedString(field_name) => field_name,
+            tok => {
+                return Err(make_error(
+                    self.val,
+                    &format!("Expected a double quoted string for Map field name; got {tok:?}"),
+                ));
+            }
+        };
+        self.expect_token(Token::Colon)?;
+
+        // Parse optional nullable
+        let nullable = self.parse_opt_nullable();
+
+        // Parse the data type (should be Struct for Map entries)
+        let data_type = self.parse_next_type()?;
+
+        // Parse comma before sorted/unsorted
+        self.expect_token(Token::Comma)?;
+
+        // Parse "sorted" or "unsorted"
+        let sorted = match self.next_token()? {
+            Token::Sorted => true,
+            Token::Unsorted => false,
+            tok => {
+                return Err(make_error(
+                    self.val,
+                    &format!(
+                        "Expected 'sorted' or 'unsorted' after comma in Map type, got '{tok}'"
+                    ),
+                ));
+            }
+        };
+
+        self.expect_token(Token::RParen)?;
+
+        let field = Arc::new(Field::new(field_name, data_type, nullable));
+        Ok(DataType::Map(field, sorted))
+    }
+
     /// return and consume if the next token is `Token::Nullable`
     fn parse_opt_nullable(&mut self) -> bool {
         self.tokenizer
@@ -611,6 +658,9 @@ impl<'a> Tokenizer<'a> {
             "x" => Token::X,
 
             "Struct" => Token::Struct,
+            "Map" => Token::Map,
+            "sorted" => Token::Sorted,
+            "unsorted" => Token::Unsorted,
 
             token => {
                 return Err(make_error(self.val, &format!("unknown token: {token}")));
@@ -752,9 +802,12 @@ enum Token {
     LargeListView,
     FixedSizeList,
     Struct,
+    Map,
     Nullable,
     Field,
     X,
+    Sorted,
+    Unsorted,
 }
 
 impl Display for Token {
@@ -792,6 +845,9 @@ impl Display for Token {
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
             Token::X => write!(f, "x"),
+            Token::Map => write!(f, "Map"),
+            Token::Sorted => write!(f, "sorted"),
+            Token::Unsorted => write!(f, "unsorted"),
         }
     }
 }
@@ -1186,6 +1242,48 @@ mod test {
                 ])),
             ),
             (r#"Struct()"#, Struct(Fields::empty())),
+            (
+                r#"Map("entries": Struct("key": Utf8, "value": nullable Int32), sorted)"#,
+                Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        Struct(Fields::from(vec![
+                            Field::new("key", Utf8, false),
+                            Field::new("value", Int32, true),
+                        ])),
+                        false,
+                    )),
+                    true,
+                ),
+            ),
+            (
+                r#"Map("entries": Struct("key": Utf8, "value": Int64), unsorted)"#,
+                Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        Struct(Fields::from(vec![
+                            Field::new("key", Utf8, false),
+                            Field::new("value", Int64, false),
+                        ])),
+                        false,
+                    )),
+                    false,
+                ),
+            ),
+            (
+                r#"Map("entries": nullable Struct("key": Int32, "value": nullable Float64), sorted)"#,
+                Map(
+                    Arc::new(Field::new(
+                        "entries",
+                        Struct(Fields::from(vec![
+                            Field::new("key", Int32, false),
+                            Field::new("value", Float64, true),
+                        ])),
+                        true,
+                    )),
+                    true,
+                ),
+            ),
         ];
 
         for (data_type_string, expected_data_type) in cases {
