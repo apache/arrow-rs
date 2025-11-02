@@ -1031,6 +1031,7 @@ mod test {
                     true,
                 ),
             ])),
+            DataType::Struct(Fields::from(vec![Field::new("f1", DataType::Int64, true)])),
             DataType::Struct(Fields::empty()),
             DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
@@ -1119,6 +1120,14 @@ mod test {
                         Field::new("Utf8", DataType::Utf8, true),
                     ],
                 ),
+                UnionMode::Sparse,
+            ),
+            DataType::Union(
+                UnionFields::new(vec![0], vec![Field::new("Int32", DataType::Int32, false)]),
+                UnionMode::Dense,
+            ),
+            DataType::Union(
+                UnionFields::new(Vec::<i8>::new(), Vec::<Field>::new()),
                 UnionMode::Sparse,
             ),
             DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), true),
