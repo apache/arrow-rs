@@ -110,73 +110,66 @@ impl<'a> Parser<'a> {
         Ok(Field::new(name, data_type, nullable))
     }
 
-    /// Parses list field name. Returns default field name if not found.
-    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
-        // field must be after a comma
-        if self
+    /// Parses field inside a list. Use `Field::LIST_FIELD_DEFAULT_NAME`
+    /// if no field name is specified.
+    /// E.g: `nullable Int64, field: 'foo'` or `nullable Int64`
+    ///
+    /// TODO: support metadata: `nullable Int64, metadata: {"foo2": "value"}`
+    fn parse_list_field(&mut self, context: &str) -> ArrowResult<Field> {
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+
+        // the field name (if exists) must be after a comma
+        let field_name = if self
             .tokenizer
             .next_if(|next| matches!(next, Ok(Token::Comma)))
             .is_none()
         {
-            return Ok(Field::LIST_FIELD_DEFAULT_NAME.into());
-        }
+            Field::LIST_FIELD_DEFAULT_NAME.into()
+        } else {
+            // expects: `field: 'field_name'`.
+            self.expect_token(Token::Field)?;
+            self.expect_token(Token::Colon)?;
+            self.parse_single_quoted_string(context)?
+        };
 
-        // expects: `field: 'field_name'`.
-        self.expect_token(Token::Field)?;
-        self.expect_token(Token::Colon)?;
-        self.parse_single_quoted_string(context)
+        Ok(Field::new(field_name, data_type, nullable))
     }
 
     /// Parses the List type (called after `List` has been consumed)
     /// E.g: List(nullable Int64, field: 'foo')
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("List")?;
+        let field = self.parse_list_field("List")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::List(Arc::new(field)))
     }
 
     /// Parses the ListView type (called after `ListView` has been consumed)
     /// E.g: ListView(nullable Int64, field: 'foo')
     fn parse_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("ListView")?;
+        let field = self.parse_list_field("ListView")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::ListView(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::ListView(Arc::new(field)))
     }
 
     /// Parses the LargeList type (called after `LargeList` has been consumed)
     /// E.g: LargeList(nullable Int64, field: 'foo')
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("LargeList")?;
+        let field = self.parse_list_field("LargeList")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::LargeList(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::LargeList(Arc::new(field)))
     }
 
     /// Parses the LargeListView type (called after `LargeListView` has been consumed)
     /// E.g: LargeListView(nullable Int64, field: 'foo')
     fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("LargeListView")?;
+        let field = self.parse_list_field("LargeListView")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::LargeListView(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::LargeListView(Arc::new(field)))
     }
 
     /// Parses the FixedSizeList type (called after `FixedSizeList` has been consumed)
@@ -185,14 +178,9 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let length = self.parse_i32("FixedSizeList")?;
         self.expect_token(Token::X)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("FixedSizeList")?;
+        let field = self.parse_list_field("FixedSizeList")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::FixedSizeList(
-            Arc::new(Field::new(field, data_type, nullable)),
-            length,
-        ))
+        Ok(DataType::FixedSizeList(Arc::new(field), length))
     }
 
     /// Parses the next timeunit
