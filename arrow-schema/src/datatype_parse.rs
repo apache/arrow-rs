@@ -89,6 +89,7 @@ impl<'a> Parser<'a> {
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
             Token::Union => self.parse_union(),
+            Token::Map => self.parse_map(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -501,6 +502,28 @@ impl<'a> Parser<'a> {
         Ok((type_id, field))
     }
 
+    /// Parses the next Map (called after `Map` has been consumed)
+    /// E.g: Map("entries": Struct("key": Utf8, "value": nullable Int32), sorted)
+    fn parse_map(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let field = self.parse_field()?;
+        self.expect_token(Token::Comma)?;
+        let sorted = self.parse_map_sorted()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::Map(Arc::new(field), sorted))
+    }
+
+    /// Parses map's sorted
+    fn parse_map_sorted(&mut self) -> ArrowResult<bool> {
+        match self.next_token()? {
+            Token::MapSorted(sorted) => Ok(sorted),
+            tok => Err(make_error(
+                self.val,
+                &format!("Expected sorted or unsorted for a map; got {tok:?}"),
+            )),
+        }
+    }
+
     /// return and consume if the next token is `Token::Nullable`
     fn parse_opt_nullable(&mut self) -> bool {
         self.tokenizer
@@ -538,7 +561,7 @@ enum QuoteType {
 }
 
 #[derive(Debug)]
-/// Splits a strings like Dictionary(Int32, Int64) into tokens sutable for parsing
+/// Splits a strings like Dictionary(Int32, Int64) into tokens suitable for parsing
 ///
 /// For example the string "Timestamp(ns)" would be parsed into:
 ///
@@ -668,6 +691,10 @@ impl<'a> Tokenizer<'a> {
             "Union" => Token::Union,
             "Sparse" => Token::UnionMode(UnionMode::Sparse),
             "Dense" => Token::UnionMode(UnionMode::Dense),
+
+            "Map" => Token::Map,
+            "sorted" => Token::MapSorted(true),
+            "unsorted" => Token::MapSorted(false),
 
             token => {
                 return Err(make_error(self.val, &format!("unknown token: {token}")));
@@ -811,6 +838,8 @@ enum Token {
     Struct,
     Union,
     UnionMode(UnionMode),
+    Map,
+    MapSorted(bool),
     Nullable,
     Field,
     X,
@@ -850,6 +879,10 @@ impl Display for Token {
             Token::Struct => write!(f, "Struct"),
             Token::Union => write!(f, "Union"),
             Token::UnionMode(m) => write!(f, "{m:?}"),
+            Token::Map => write!(f, "Map"),
+            Token::MapSorted(sorted) => {
+                write!(f, "{}", if *sorted { "sorted" } else { "unsorted" })
+            }
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
             Token::X => write!(f, "x"),
