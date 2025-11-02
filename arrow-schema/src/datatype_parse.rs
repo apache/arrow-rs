@@ -450,16 +450,15 @@ impl<'a> Parser<'a> {
         let mut type_ids = vec![];
         let mut fields = vec![];
         loop {
-            let (type_id, field) = match self.next_token()? {
-                Token::RParen => break,
-                Token::Comma => self.parse_union_field()?,
-                tok => {
-                    return Err(make_error(
-                        self.val,
-                        &format!("Expected a comma for a union field; got {tok:?}"),
-                    ));
-                }
-            };
+            if self
+                .tokenizer
+                .next_if(|next| matches!(next, Ok(Token::RParen)))
+                .is_some()
+            {
+                break;
+            }
+            self.expect_token(Token::Comma)?;
+            let (type_id, field) = self.parse_union_field()?;
             type_ids.push(type_id);
             fields.push(field);
         }
