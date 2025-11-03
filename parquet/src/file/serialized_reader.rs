@@ -2715,4 +2715,19 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("alltypes_plain.parquet");
+        let file_reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let schema = file_reader.metadata().file_metadata().schema_descr_ptr();
+        let expected = file_reader.metadata;
+
+        let options = ReadOptionsBuilder::new()
+            .with_metadata_options(MetadataOptions::new().with_schema(schema))
+            .build();
+        let file_reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
+    }
 }

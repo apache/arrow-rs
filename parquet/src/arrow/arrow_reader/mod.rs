@@ -1220,7 +1220,7 @@ mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::ParquetMetaData;
+    use crate::file::metadata::{MetadataOptions, ParquetMetaData};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -1237,6 +1237,23 @@ mod tests {
 
         // Verify that the schema was correctly parsed
         assert_eq!(original_schema.fields(), reader.schema().fields());
+    }
+
+    #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("parquet/alltypes-java.parquet");
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file.try_clone().unwrap()).unwrap();
+        let expected = builder.metadata;
+        let schema = expected.file_metadata().schema_descr_ptr();
+
+        let meta_options = MetadataOptions::new().with_schema(schema.clone());
+        let arrow_options = ArrowReaderOptions::new().with_metadata_options(meta_options);
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, arrow_options).unwrap();
+
+        // Verify that the metadata matches
+        assert_eq!(expected.as_ref(), builder.metadata.as_ref());
     }
 
     #[test]
