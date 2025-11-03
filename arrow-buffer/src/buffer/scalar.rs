@@ -34,6 +34,8 @@ use std::ops::Deref;
 /// See [`Buffer`] for more low-level memory management details.
 ///
 /// # Example: Convert to/from Vec (without copies)
+///
+/// (See [`Buffer::from_vec`] and [`Buffer::into_vec`] for a lower level API)
 /// ```
 /// # use arrow_buffer::ScalarBuffer;
 /// // Zero-copy conversion from Vec
@@ -42,6 +44,7 @@ use std::ops::Deref;
 /// // convert the buffer back to Vec without copy assuming:
 /// // 1. the inner buffer is not sliced
 /// // 2. the inner buffer uses standard allocation
+/// // 3. there are no other references to the inner buffer
 /// let vec: Vec<i32> = buffer.into();
 /// assert_eq!(&vec, &[1, 2, 3]);
 /// ```
