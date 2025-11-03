@@ -156,7 +156,7 @@ impl FromPyArrow for DataType {
             let capsule = capsule.cast::<PyCapsule>()?;
             validate_pycapsule(capsule, "arrow_schema")?;
 
-            let schema_ptr = capsule.pointer_checked(None)?.cast::<FFI_ArrowSchema>();
+            let schema_ptr = capsule.pointer_checked(Some(c"arrow_schema"))?.cast::<FFI_ArrowSchema>();
             unsafe {
                 let dtype = DataType::try_from(schema_ptr.as_ref()).map_err(to_py_err)?;
                 return Ok(dtype);
@@ -194,7 +194,7 @@ impl FromPyArrow for Field {
             let capsule = capsule.cast::<PyCapsule>()?;
             validate_pycapsule(capsule, "arrow_schema")?;
 
-            let schema_ptr = capsule.pointer_checked(None)?.cast::<FFI_ArrowSchema>();
+            let schema_ptr = capsule.pointer_checked(Some(c"arrow_schema"))?.cast::<FFI_ArrowSchema>();
             unsafe {
                 let field = Field::try_from(schema_ptr.as_ref()).map_err(to_py_err)?;
                 return Ok(field);
@@ -232,7 +232,7 @@ impl FromPyArrow for Schema {
             let capsule = capsule.cast::<PyCapsule>()?;
             validate_pycapsule(capsule, "arrow_schema")?;
 
-            let schema_ptr = capsule.pointer_checked(None)?.cast::<FFI_ArrowSchema>();
+            let schema_ptr = capsule.pointer_checked(Some(c"arrow_schema"))?.cast::<FFI_ArrowSchema>();
             unsafe {
                 let schema = Schema::try_from(schema_ptr.as_ref()).map_err(to_py_err)?;
                 return Ok(schema);
@@ -283,12 +283,12 @@ impl FromPyArrow for ArrayData {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = schema_capsule
-                .pointer_checked(None)?
+                .pointer_checked(Some(c"arrow_schema"))?
                 .cast::<FFI_ArrowSchema>();
             let array = unsafe {
                 FFI_ArrowArray::from_raw(
                     array_capsule
-                        .pointer_checked(None)?
+                        .pointer_checked(Some(c"arrow_array"))?
                         .cast::<FFI_ArrowArray>()
                         .as_ptr(),
                 )
