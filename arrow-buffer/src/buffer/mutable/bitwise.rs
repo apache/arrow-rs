@@ -1123,4 +1123,32 @@ mod tests {
         );
         assert_eq!(buffer.as_slice(), &[0b10101010u8, 0b01010101u8]);
     }
+
+    #[test]
+    #[should_panic(expected = "the len is 2 but the index is 12")]
+    fn test_bitwise_unary_op_offset_out_of_bounds() {
+        let input = vec![0b10101010u8, 0b01010101u8];
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&input); // only 2 bytes
+        buffer.bitwise_unary_op(
+            100, // exceeds buffer length, becomes a noop
+            8,
+            |a| !a,
+        );
+        assert_eq!(buffer.as_slice(), &input);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: last_offset <= mutable_buffer.len()")]
+    fn test_bitwise_unary_op_length_out_of_bounds2() {
+        let input = vec![0b10101010u8, 0b01010101u8];
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&input); // only 2 bytes
+        buffer.bitwise_unary_op(
+            3,   // start at bit 3, to exercise different path
+            100, // exceeds buffer length
+            |a| !a,
+        );
+        assert_eq!(buffer.as_slice(), &input);
+    }
 }
