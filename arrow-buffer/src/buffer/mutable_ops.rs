@@ -701,7 +701,8 @@ mod tests {
         F: FnMut(u64, u64) -> u64,
         G: FnMut(bool, bool) -> bool,
     {
-        let mut left_buffer = BooleanBufferBuilder::from(left_data);
+        let mut left_buffer = BooleanBufferBuilder::new(len_in_bits);
+        left_buffer.append_slice(left_data);
         let right_buffer = BooleanBuffer::from(right_data);
 
         let expected: Vec<bool> = left_data
@@ -742,7 +743,8 @@ mod tests {
         F: FnMut(u64) -> u64,
         G: FnMut(bool) -> bool,
     {
-        let mut buffer = BooleanBufferBuilder::from(data);
+        let mut buffer = BooleanBufferBuilder::new(len_in_bits);
+        buffer.append_slice(data);
 
         let expected: Vec<bool> = data
             .iter()

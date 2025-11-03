@@ -244,6 +244,17 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice_mut()
     }
 
+    /// Return a mutable reference to the internal buffer
+    ///
+    /// # Safety
+    /// The caller must ensure that any modifications to the buffer maintain the invariant
+    /// `self.len < buffer.len() / 8` (that is that the buffer has enough capacity to hold `self.len` bits).
+    #[inline]
+    #[cfg(test)]
+    pub (crate) unsafe fn mutable_buffer(&mut self) -> &mut MutableBuffer {
+        &mut self.buffer
+    }
+
     /// Creates a [`BooleanBuffer`]
     #[inline]
     pub fn finish(&mut self) -> BooleanBuffer {
