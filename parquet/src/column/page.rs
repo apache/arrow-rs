@@ -21,17 +21,17 @@ use bytes::Bytes;
 
 use crate::basic::{Encoding, PageType};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::thrift_gen::{
+use crate::file::metadata::thrift::{
     DataPageHeader, DataPageHeaderV2, DictionaryPageHeader, PageHeader,
 };
-use crate::file::statistics::{page_stats_to_thrift, Statistics};
+use crate::file::statistics::{Statistics, page_stats_to_thrift};
 
 /// Parquet Page definition.
 ///
 /// List of supported pages.
 /// These are 1-to-1 mapped from the equivalent Thrift definitions, except `buf` which
 /// used to store uncompressed bytes of the page.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Page {
     /// Data page Parquet format v1.
     DataPage {
@@ -105,9 +105,9 @@ impl Page {
     /// Returns internal byte buffer reference for this page.
     pub fn buffer(&self) -> &Bytes {
         match self {
-            Page::DataPage { ref buf, .. } => buf,
-            Page::DataPageV2 { ref buf, .. } => buf,
-            Page::DictionaryPage { ref buf, .. } => buf,
+            Page::DataPage { buf, .. } => buf,
+            Page::DataPageV2 { buf, .. } => buf,
+            Page::DictionaryPage { buf, .. } => buf,
         }
     }
 
@@ -132,8 +132,8 @@ impl Page {
     /// Returns optional [`Statistics`].
     pub fn statistics(&self) -> Option<&Statistics> {
         match self {
-            Page::DataPage { ref statistics, .. } => statistics.as_ref(),
-            Page::DataPageV2 { ref statistics, .. } => statistics.as_ref(),
+            Page::DataPage { statistics, .. } => statistics.as_ref(),
+            Page::DataPageV2 { statistics, .. } => statistics.as_ref(),
             Page::DictionaryPage { .. } => None,
         }
     }
@@ -345,11 +345,11 @@ pub struct PageMetadata {
     pub is_dict: bool,
 }
 
-impl TryFrom<&crate::file::metadata::thrift_gen::PageHeader> for PageMetadata {
+impl TryFrom<&crate::file::metadata::thrift::PageHeader> for PageMetadata {
     type Error = ParquetError;
 
     fn try_from(
-        value: &crate::file::metadata::thrift_gen::PageHeader,
+        value: &crate::file::metadata::thrift::PageHeader,
     ) -> std::result::Result<Self, Self::Error> {
         match value.r#type {
             PageType::DATA_PAGE => {

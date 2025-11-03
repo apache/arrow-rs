@@ -447,7 +447,6 @@ impl RowSelection {
     /// Expands the selection to align with batch boundaries.
     /// This is needed when using cached array readers to ensure that
     /// the cached data covers full batches.
-    #[cfg(feature = "async")]
     pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
         if batch_size == 0 {
             return self.clone();
@@ -695,7 +694,7 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_from_filters() {
@@ -1431,5 +1430,34 @@ mod tests {
 
         assert_eq!(selection.row_count(), 0);
         assert_eq!(selection.skipped_row_count(), 0);
+    }
+
+    #[test]
+    fn test_trim() {
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(34),
+            RowSelector::select(12),
+            RowSelector::skip(3),
+            RowSelector::select(35),
+        ]);
+
+        let expected = vec![
+            RowSelector::skip(34),
+            RowSelector::select(12),
+            RowSelector::skip(3),
+            RowSelector::select(35),
+        ];
+
+        assert_eq!(selection.trim().selectors, expected);
+
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(34),
+            RowSelector::select(12),
+            RowSelector::skip(3),
+        ]);
+
+        let expected = vec![RowSelector::skip(34), RowSelector::select(12)];
+
+        assert_eq!(selection.trim().selectors, expected);
     }
 }

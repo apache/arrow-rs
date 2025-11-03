@@ -18,16 +18,16 @@
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
+use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::{FooterTail, ParquetMetaData, ParquetMetaDataPushDecoder};
 use crate::file::reader::ChunkReader;
-use crate::file::FOOTER_SIZE;
 use bytes::Bytes;
 use std::{io::Read, ops::Range};
 
+use crate::DecodeResult;
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
-use crate::DecodeResult;
 
 /// Reads [`ParquetMetaData`] from a byte stream, with either synchronous or
 /// asynchronous I/O.
@@ -180,9 +180,9 @@ impl ParquetMetaDataReader {
     #[cfg(feature = "encryption")]
     pub fn with_decryption_properties(
         mut self,
-        properties: Option<&FileDecryptionProperties>,
+        properties: Option<std::sync::Arc<FileDecryptionProperties>>,
     ) -> Self {
-        self.file_decryption_properties = properties.cloned().map(std::sync::Arc::new);
+        self.file_decryption_properties = properties;
         self
     }
 
@@ -390,7 +390,7 @@ impl ParquetMetaDataReader {
             let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
             if range.end > metadata_range.start {
                 return Err(eof_err!(
-                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}" ,
+                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}",
                 ));
             }
         }
@@ -542,9 +542,9 @@ impl ParquetMetaDataReader {
             return Err(ParquetError::NeedMoreData(FOOTER_SIZE));
         }
 
-        let mut footer = [0_u8; 8];
+        let mut footer = [0_u8; FOOTER_SIZE];
         chunk_reader
-            .get_read(file_size - 8)?
+            .get_read(file_size - FOOTER_SIZE as u64)?
             .read_exact(&mut footer)?;
 
         let footer = FooterTail::try_new(&footer)?;
@@ -559,6 +559,12 @@ impl ParquetMetaDataReader {
         let start = file_size - footer_metadata_len as u64;
         let bytes = chunk_reader.get_bytes(start, metadata_len)?;
         self.decode_footer_metadata(bytes, file_size, footer)
+    }
+
+    /// Size of the serialized thrift metadata plus the 8 byte footer. Only set if
+    /// `self.parse_metadata` is called.
+    pub fn metadata_size(&self) -> Option<usize> {
+        self.metadata_size
     }
 
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
@@ -844,7 +850,7 @@ mod tests {
         let err = ParquetMetaDataReader::new()
             .parse_metadata(&test_file)
             .unwrap_err();
-        assert!(matches!(err, ParquetError::NeedMoreData(8)));
+        assert!(matches!(err, ParquetError::NeedMoreData(FOOTER_SIZE)));
     }
 
     #[test]
@@ -990,14 +996,14 @@ mod async_tests {
     use arrow_array::RecordBatch;
     use arrow_schema::{Field, Schema};
     use bytes::Bytes;
-    use futures::future::BoxFuture;
     use futures::FutureExt;
+    use futures::future::BoxFuture;
     use std::fs::File;
     use std::future::Future;
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::NamedTempFile;
 
     use crate::arrow::ArrowWriter;
@@ -1245,7 +1251,7 @@ mod async_tests {
 
         // just make sure the metadata is properly decrypted and read
         let expected = ParquetMetaDataReader::new()
-            .with_decryption_properties(Some(&decryption_properties))
+            .with_decryption_properties(Some(decryption_properties))
             .load_via_suffix_and_finish(input)
             .await
             .unwrap();

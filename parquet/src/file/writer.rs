@@ -18,7 +18,7 @@
 //! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
-use crate::file::metadata::thrift_gen::PageHeader;
+use crate::file::metadata::thrift::PageHeader;
 use crate::file::page_index::column_index::ColumnIndexMetaData;
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
@@ -27,22 +27,22 @@ use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
 
 use crate::column::page_encryption::PageEncryptor;
-use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
+use crate::column::writer::{ColumnCloseResult, ColumnWriterImpl, get_typed_column_writer_mut};
 use crate::column::{
     page::{CompressedPage, PageWriteSpec, PageWriter},
-    writer::{get_column_writer, ColumnWriter},
+    writer::{ColumnWriter, get_column_writer},
 };
 use crate::data_type::DataType;
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::{
-    get_column_crypto_metadata, FileEncryptionProperties, FileEncryptor,
+    FileEncryptionProperties, FileEncryptor, get_column_crypto_metadata,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
-use crate::file::reader::ChunkReader;
 #[cfg(feature = "encryption")]
 use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
-use crate::file::{metadata::*, PARQUET_MAGIC};
+use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
+use crate::file::reader::ChunkReader;
+use crate::file::{PARQUET_MAGIC, metadata::*};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -213,12 +213,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         properties: &WriterPropertiesPtr,
         schema_descriptor: &SchemaDescriptor,
     ) -> Result<Option<Arc<FileEncryptor>>> {
-        if let Some(file_encryption_properties) = &properties.file_encryption_properties {
+        if let Some(file_encryption_properties) = properties.file_encryption_properties() {
             file_encryption_properties.validate_encrypted_column_names(schema_descriptor)?;
 
-            Ok(Some(Arc::new(FileEncryptor::new(
-                file_encryption_properties.clone(),
-            )?)))
+            Ok(Some(Arc::new(FileEncryptor::new(Arc::clone(
+                file_encryption_properties,
+            ))?)))
         } else {
             Ok(None)
         }
@@ -392,6 +392,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         &self.descr
     }
 
+    /// Returns a reference to schema descriptor Arc.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn schema_descr_ptr(&self) -> &SchemaDescPtr {
+        &self.descr
+    }
+
     /// Returns a reference to the writer properties
     pub fn properties(&self) -> &WriterPropertiesPtr {
         &self.props
@@ -412,6 +418,11 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// because it will ensure that the buffering and byte‐counting layers are used.
     pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
         self.buf.write_all(buf)
+    }
+
+    /// Flushes underlying writer
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.buf.flush()
     }
 
     /// Returns a mutable reference to the underlying writer.
@@ -706,7 +717,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
             .set_compression(metadata.compression())
-            .set_encodings(metadata.encodings().clone())
+            .set_encodings_mask(*metadata.encodings_mask())
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())
@@ -722,6 +733,9 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         }
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
+        }
+        if let Some(geo_statistics) = metadata.geo_statistics() {
+            builder = builder.set_geo_statistics(Box::new(geo_statistics.clone()))
         }
         if let Some(page_encoding_stats) = metadata.page_encoding_stats() {
             builder = builder.set_page_encoding_stats(page_encoding_stats.clone())
@@ -1006,7 +1020,7 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
 /// as a Parquet file.
 #[cfg(feature = "encryption")]
 pub(crate) fn get_file_magic(
-    file_encryption_properties: Option<&FileEncryptionProperties>,
+    file_encryption_properties: Option<&Arc<FileEncryptionProperties>>,
 ) -> &'static [u8; 4] {
     match file_encryption_properties.as_ref() {
         Some(encryption_properties) if encryption_properties.encrypt_footer() => {
@@ -1031,15 +1045,15 @@ mod tests {
     use std::fs::File;
 
     #[cfg(feature = "arrow")]
-    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    #[cfg(feature = "arrow")]
     use crate::arrow::ArrowWriter;
+    #[cfg(feature = "arrow")]
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
     };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
-    use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
+    use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type};
     use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
@@ -1407,7 +1421,7 @@ mod tests {
 
     #[test]
     fn test_page_writer_data_pages() {
-        let pages = vec![
+        let pages = [
             Page::DataPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
@@ -1435,7 +1449,7 @@ mod tests {
 
     #[test]
     fn test_page_writer_dict_pages() {
-        let pages = vec![
+        let pages = [
             Page::DictionaryPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5]),
                 num_values: 5,
@@ -2382,11 +2396,14 @@ mod tests {
 
         // Make sure byte_stream_split encoding was used
         let check_encoding = |x: usize, filemeta: &ParquetMetaData| {
-            assert!(filemeta
-                .row_group(0)
-                .column(x)
-                .encodings()
-                .contains(&Encoding::BYTE_STREAM_SPLIT));
+            assert!(
+                filemeta
+                    .row_group(0)
+                    .column(x)
+                    .encodings()
+                    .collect::<Vec<_>>()
+                    .contains(&Encoding::BYTE_STREAM_SPLIT)
+            );
         };
 
         check_encoding(1, filemeta);

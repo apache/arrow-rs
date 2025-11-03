@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::bit_util::sign_extend_be;
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
@@ -274,7 +274,7 @@ impl ByteArrayDecoder {
                 validate_utf8,
             )),
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => ByteArrayDecoder::Dictionary(
-                ByteArrayDecoderDictionary::new(data, num_levels, num_values),
+                ByteArrayDecoderDictionary::new(data, num_levels, num_values)?,
             ),
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteArrayDecoder::DeltaLength(
                 ByteArrayDecoderDeltaLength::new(data, validate_utf8)?,
@@ -286,7 +286,7 @@ impl ByteArrayDecoder {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
                     encoding
-                ))
+                ));
             }
         };
 
@@ -563,10 +563,10 @@ pub struct ByteArrayDecoderDictionary {
 }
 
 impl ByteArrayDecoderDictionary {
-    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
-        Self {
-            decoder: DictIndexDecoder::new(data, num_levels, num_values),
-        }
+    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
+        Ok(Self {
+            decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
+        })
     }
 
     fn read<I: OffsetSizeTrait>(

@@ -80,20 +80,16 @@ fn test_invalid_files() {
 #[test]
 fn test_parquet_1481() {
     let err = read_file("PARQUET-1481.parquet").unwrap_err();
-    #[cfg(feature = "encryption")]
-    assert_eq!(
-        err.to_string(),
-        "Parquet error: Could not parse metadata: Parquet error: Unexpected Type -7"
-    );
-    #[cfg(not(feature = "encryption"))]
     assert_eq!(err.to_string(), "Parquet error: Unexpected Type -7");
 }
 
 #[test]
-#[should_panic(expected = "assertion failed: self.current_value.is_some()")]
 fn test_arrow_gh_41321() {
     let err = read_file("ARROW-GH-41321.parquet").unwrap_err();
-    assert_eq!(err.to_string(), "TBD (currently panics)");
+    assert_eq!(
+        err.to_string(),
+        "External: Parquet argument error: Parquet error: Invalid or corrupted RLE bit width 254. Max allowed is 32"
+    );
 }
 
 #[test]
