@@ -60,7 +60,7 @@ mod tests {
         file::metadata::{MetadataOptions, ParquetMetaDataPushDecoder},
         util::test_common::file_util::get_test_file,
     };
-    use std::io::Read;
+    use std::{io::Read, sync::Arc};
 
     #[test]
     fn test_provide_schema() {
@@ -80,8 +80,9 @@ mod tests {
             _ => panic!("could not parse metadata"),
         };
 
-        let options =
-            MetadataOptions::new().with_schema(expected.file_metadata().schema_descr_ptr());
+        let options = Arc::new(
+            MetadataOptions::new().with_schema(expected.file_metadata().schema_descr_ptr()),
+        );
         let mut decoder = ParquetMetaDataPushDecoder::try_new(footer.len() as u64)
             .unwrap()
             .with_metadata_options(Some(options));

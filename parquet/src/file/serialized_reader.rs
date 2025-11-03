@@ -110,6 +110,7 @@ pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: Option<ReaderProperties>,
+    metadata_options: Option<Arc<MetadataOptions>>,
 }
 
 impl ReadOptionsBuilder {
@@ -152,6 +153,12 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Set the [`MetadataOptions`].
+    pub fn with_metadata_options(mut self, options: Option<Arc<MetadataOptions>>) -> Self {
+        self.metadata_options = options;
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -161,18 +168,21 @@ impl ReadOptionsBuilder {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
             props,
+            metadata_options: self.metadata_options,
         }
     }
 }
 
 /// A collection of options for reading a Parquet file.
 ///
+/// FIXME(ets): the following line is no longer true. expand scope of this documentation
 /// Currently, only predicates on row group metadata are supported.
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: ReaderProperties,
+    metadata_options: Option<Arc<MetadataOptions>>,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -193,6 +203,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
+            .with_metadata_options(options.metadata_options.clone())
             .parse_and_finish(&chunk_reader)?
             .into_builder();
         let mut predicates = options.predicates;

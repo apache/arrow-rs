@@ -54,7 +54,7 @@ mod inner {
         // the credentials and keys needed to decrypt metadata
         file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
         // metadata parsing options
-        metadata_options: Option<MetadataOptions>,
+        metadata_options: Option<Arc<MetadataOptions>>,
     }
 
     impl MetadataParser {
@@ -70,7 +70,7 @@ mod inner {
             self
         }
 
-        pub(crate) fn with_metadata_options(self, options: Option<MetadataOptions>) -> Self {
+        pub(crate) fn with_metadata_options(self, options: Option<Arc<MetadataOptions>>) -> Self {
             Self {
                 metadata_options: options,
                 ..self
@@ -87,10 +87,10 @@ mod inner {
                     self.file_decryption_properties.as_ref(),
                     encrypted_footer,
                     buf,
-                    self.metadata_options.as_ref(),
+                    self.metadata_options.as_deref(),
                 )
             } else {
-                decode_metadata(buf, self.metadata_options.as_ref())
+                decode_metadata(buf, self.metadata_options.as_deref())
             }
         }
     }
@@ -156,13 +156,14 @@ mod inner {
 mod inner {
     use super::*;
     use crate::errors::Result;
+    use std::sync::Arc;
     /// parallel implementation when encryption feature is not enabled
     ///
     /// This has the same API as the encryption-enabled version
     #[derive(Debug, Default)]
     pub(crate) struct MetadataParser {
         // metadata parsing options
-        metadata_options: Option<MetadataOptions>,
+        metadata_options: Option<Arc<MetadataOptions>>,
     }
 
     impl MetadataParser {
@@ -170,7 +171,7 @@ mod inner {
             MetadataParser::default()
         }
 
-        pub(crate) fn with_metadata_options(self, options: Option<MetadataOptions>) -> Self {
+        pub(crate) fn with_metadata_options(self, options: Option<Arc<MetadataOptions>>) -> Self {
             Self {
                 metadata_options: options,
             }
@@ -186,7 +187,7 @@ mod inner {
                     "Parquet file has an encrypted footer but the encryption feature is disabled"
                 ))
             } else {
-                decode_metadata(buf, self.metadata_options.as_ref())
+                decode_metadata(buf, self.metadata_options.as_deref())
             }
         }
     }

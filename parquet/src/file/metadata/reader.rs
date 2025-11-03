@@ -73,7 +73,7 @@ pub struct ParquetMetaDataReader {
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
     prefetch_hint: Option<usize>,
-    metadata_options: Option<MetadataOptions>,
+    metadata_options: Option<Arc<MetadataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
@@ -165,7 +165,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Sets the [`MetadataOptions`] to use when decoding
-    pub fn with_metadata_options(mut self, options: Option<MetadataOptions>) -> Self {
+    pub fn with_metadata_options(mut self, options: Option<Arc<MetadataOptions>>) -> Self {
         self.metadata_options = options;
         self
     }
