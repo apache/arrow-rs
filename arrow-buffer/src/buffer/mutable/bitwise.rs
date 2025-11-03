@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Bitwise operations for [`MutableBuffer`]
+
 use crate::MutableBuffer;
 use crate::bit_chunk_iterator::BitChunks;
 use crate::util::bit_util;
@@ -33,6 +35,29 @@ impl MutableBuffer {
     /// * `right_offset_in_bits` - Starting bit offset in the right buffer
     /// * `len_in_bits` - Number of bits to process
     /// * `op` - Binary operation to apply (e.g., `|a, b| a & b`). Applied a word at a time
+    ///
+    /// # Example: Modify entire buffer
+    /// ```
+    /// # use arrow_buffer::MutableBuffer;
+    /// let mut left = MutableBuffer::new(2);
+    /// left.extend_from_slice(&[0b11110000u8, 0b00110011u8]);
+    /// let right = &[0b10101010u8, 0b10101010u8];
+    /// // apply bitwise AND between left and right buffers, updating left in place
+    /// left.bitwise_binary_op(0, right, 0, 16, |a, b| a & b);
+    /// assert_eq!(left.as_slice(), &[0b10100000u8, 0b00100010u8]);
+    /// ```
+    ///
+    /// # Example: Modify buffer with offsets
+    /// ```
+    /// # use arrow_buffer::MutableBuffer;
+    /// let mut left = MutableBuffer::new(2);
+    /// left.extend_from_slice(&[0b00000000u8, 0b00000000u8]);
+    /// let right = &[0b10110011u8, 0b11111110u8];
+    /// // apply bitwise OR between left and right buffers,
+    /// // Apply only 8 bits starting from bit offset 3 in left and bit offset 2 in right
+    /// left.bitwise_binary_op(3, right, 2, 8, |a, b| a | b);
+    /// assert_eq!(left.as_slice(), &[0b01100000, 0b00000101u8]);
+    /// ```
     pub fn bitwise_binary_op<F>(
         &mut self,
         offset_in_bits: usize,
@@ -146,6 +171,25 @@ impl MutableBuffer {
     /// * `len_in_bits` - Number of bits to process
     /// * `op` - Unary operation to apply (e.g., `|a| !a`). Applied a word at a time
     ///
+    /// # Example: Modify entire buffer
+    /// ```
+    /// # use arrow_buffer::MutableBuffer;
+    /// let mut buffer = MutableBuffer::new(2);
+    /// buffer.extend_from_slice(&[0b11110000u8, 0b00110011u8]);
+    /// // apply bitwise NOT to the buffer in place
+    /// buffer.bitwise_unary_op(0, 16, |a| !a);
+    /// assert_eq!(buffer.as_slice(), &[0b00001111u8, 0b11001100u8]);
+    /// ```
+    ///
+    /// # Example: Modify buffer with offsets
+    /// ```
+    /// # use arrow_buffer::MutableBuffer;
+    /// let mut buffer = MutableBuffer::new(2);
+    /// buffer.extend_from_slice(&[0b00000000u8, 0b00000000u8]);
+    /// // apply bitwise NOT to 8 bits starting from bit offset 3
+    /// buffer.bitwise_unary_op(3, 8, |a| !a);
+    /// assert_eq!(buffer.as_slice(), &[0b11111000u8, 0b00000111u8]);
+    /// ```
     pub fn bitwise_unary_op<F>(&mut self, offset_in_bits: usize, len_in_bits: usize, mut op: F)
     where
         F: FnMut(u64) -> u64,
