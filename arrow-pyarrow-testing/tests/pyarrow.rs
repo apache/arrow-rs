@@ -58,11 +58,9 @@ fn test_to_pyarrow() {
 
     let res = Python::attach(|py| {
         let py_input = input.to_pyarrow(py)?;
-        println!("input: {py_input:?}");
         let records = RecordBatch::from_pyarrow_bound(&py_input)?;
-        println!("input: {records:#?}");
+        println!("records: {records:#?}");
         let py_records = records.to_pyarrow(py)?;
-        println!("input: {py_records:#?}");
         RecordBatch::from_pyarrow_bound(&py_records)
     })
     .unwrap();
