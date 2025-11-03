@@ -521,7 +521,7 @@ pub use crate::types::ArrowPrimitiveType;
 /// // split into its parts
 /// let (datatype, buffer, nulls) = arr.into_parts();
 /// // Convert the buffer to a Vec<i32> (zero copy)
-/// // (not this requires that there are no other references)
+/// // (note this requires that there are no other references)
 /// let mut vec: Vec<i32> = buffer.into();
 /// vec[2] = 300;
 /// // put the parts back together
