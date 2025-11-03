@@ -509,9 +509,9 @@ impl ArrowReaderOptions {
     }
 
     /// Set the [`MetadataOptions`] used to control Parquet metadata decoding.
-    pub fn with_metadata_options(self, options: Option<Arc<MetadataOptions>>) -> Self {
+    pub fn with_metadata_options(self, options: MetadataOptions) -> Self {
         Self {
-            metadata_options: options,
+            metadata_options: Some(Arc::new(options)),
             ..self
         }
     }

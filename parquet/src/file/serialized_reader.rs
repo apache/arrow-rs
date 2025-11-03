@@ -154,8 +154,8 @@ impl ReadOptionsBuilder {
     }
 
     /// Set the [`MetadataOptions`].
-    pub fn with_metadata_options(mut self, options: Option<Arc<MetadataOptions>>) -> Self {
-        self.metadata_options = options;
+    pub fn with_metadata_options(mut self, options: MetadataOptions) -> Self {
+        self.metadata_options = Some(Arc::new(options));
         self
     }
 
