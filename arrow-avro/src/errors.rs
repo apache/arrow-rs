@@ -21,7 +21,7 @@ use arrow_schema::ArrowError;
 use core::num::TryFromIntError;
 use std::error::Error;
 use std::string::FromUtf8Error;
-use std::{cell, io, result, str};
+use std::{io, result, str};
 
 /// Avro error enumeration
 
@@ -40,7 +40,7 @@ pub enum AvroError {
     EOF(String),
     /// Arrow error.
     /// Returned when reading into arrow or writing from arrow.
-    ArrowError(String),
+    ArrowError(Box<ArrowError>),
     /// Error when the requested index is more than the
     /// number of items expected
     IndexOutOfBound(usize, usize),
@@ -90,6 +90,7 @@ impl Error for AvroError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             AvroError::External(e) => Some(e.as_ref()),
+            AvroError::ArrowError(e) => Some(e.as_ref()),
             _ => None,
         }
     }
@@ -107,12 +108,6 @@ impl From<io::Error> for AvroError {
     }
 }
 
-impl From<cell::BorrowMutError> for AvroError {
-    fn from(e: cell::BorrowMutError) -> AvroError {
-        AvroError::External(Box::new(e))
-    }
-}
-
 impl From<str::Utf8Error> for AvroError {
     fn from(e: str::Utf8Error) -> AvroError {
         AvroError::External(Box::new(e))
@@ -126,16 +121,13 @@ impl From<FromUtf8Error> for AvroError {
 }
 
 impl From<ArrowError> for AvroError {
-    fn from(e: ArrowError) -> AvroError {
-        AvroError::External(Box::new(e))
+    fn from(e: ArrowError) -> Self {
+        AvroError::ArrowError(Box::new(e))
     }
 }
 
 /// A specialized `Result` for Avro errors.
 pub type Result<T, E = AvroError> = result::Result<T, E>;
-
-// ----------------------------------------------------------------------
-// Conversion from `AvroError` to other types of `Error`s
 
 impl From<AvroError> for io::Error {
     fn from(e: AvroError) -> Self {
@@ -143,11 +135,12 @@ impl From<AvroError> for io::Error {
     }
 }
 
-// ----------------------------------------------------------------------
-// Convert avro error into other errors
-
 impl From<AvroError> for ArrowError {
-    fn from(p: AvroError) -> Self {
-        Self::AvroError(format!("{p}"))
+    fn from(e: AvroError) -> Self {
+        match e {
+            AvroError::External(inner) => ArrowError::from_external_error(inner),
+            AvroError::ArrowError(inner) => ArrowError::from_external_error(inner),
+            other => ArrowError::AvroError(other.to_string()),
+        }
     }
 }

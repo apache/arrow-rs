@@ -155,8 +155,9 @@ fn write_sign_extended<W: Write + ?Sized>(out: &mut W, src_be: &[u8], n: usize) 
                 "Decimal value with {len} bytes cannot be represented in {n} bytes without overflow",
             )));
         }
-        out.write_all(&src_be[extra..])?;
-        return Ok(());
+        return out
+            .write_all(&src_be[extra..])
+            .map_err(|e| AvroError::General(format!("write decimal fixed: {e}")));
     }
     // len < n: prepend sign bytes (sign extension) then the payload
     let pad_len = n - len;
@@ -172,14 +173,17 @@ fn write_sign_extended<W: Write + ?Sized>(out: &mut W, src_be: &[u8], n: usize) 
     // then write the original bytes.
     let mut rem = pad_len;
     while rem >= pad.len() {
-        out.write_all(pad)?;
+        out.write_all(pad)
+            .map_err(|e| AvroError::General(format!("write decimal fixed: {e}")))?;
         rem -= pad.len();
     }
     if rem > 0 {
-        out.write_all(&pad[..rem])?;
+        out.write_all(&pad[..rem])
+            .map_err(|e| AvroError::General(format!("write decimal fixed: {e}")))?;
     }
-    out.write_all(src_be)?;
-    Ok(())
+    out.write_all(src_be)
+        .map_err(|e| AvroError::General(format!("write decimal fixed: {e}")))
+
 }
 
 /// Write the union branch index for an optional field.
