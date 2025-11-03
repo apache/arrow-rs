@@ -58,6 +58,10 @@ impl MutableBuffer {
     /// left.bitwise_binary_op(3, right, 2, 8, |a, b| a | b);
     /// assert_eq!(left.as_slice(), &[0b01100000, 0b00000101u8]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// If the offset or lengths exceed the buffer or slice size.
     pub fn bitwise_binary_op<F>(
         &mut self,
         offset_in_bits: usize,
@@ -190,6 +194,10 @@ impl MutableBuffer {
     /// buffer.bitwise_unary_op(3, 8, |a| !a);
     /// assert_eq!(buffer.as_slice(), &[0b11111000u8, 0b00000111u8]);
     /// ```
+    ///
+    /// # Panics
+    ///
+    /// If the offset and length exceed the buffer size.
     pub fn bitwise_unary_op<F>(&mut self, offset_in_bits: usize, len_in_bits: usize, mut op: F)
     where
         F: FnMut(u64) -> u64,
