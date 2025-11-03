@@ -1576,11 +1576,9 @@ mod tests {
 
     #[test]
     fn concat_dictionary_list_array_simple() {
-        let scalars = vec![
+        let scalars = [create_single_row_list_of_dict(vec![Some("a")]),
             create_single_row_list_of_dict(vec![Some("a")]),
-            create_single_row_list_of_dict(vec![Some("a")]),
-            create_single_row_list_of_dict(vec![Some("b")]),
-        ];
+            create_single_row_list_of_dict(vec![Some("b")])];
 
         let arrays = scalars.iter().map(|a| a as &dyn Array).collect::<Vec<_>>();
         let concat_res = concat(arrays.as_slice()).unwrap();
