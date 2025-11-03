@@ -22,6 +22,8 @@ use crate::util::bit_util;
 impl MutableBuffer {
     /// Apply a binary bitwise operation on self (mutate) with respect to another buffer (right).
     ///
+    /// Note: applies the operation a 64-bits (u64) at a time.
+    ///
     /// # Arguments
     ///
     /// * `self` - The mutable buffer to be modified in-place
@@ -29,7 +31,7 @@ impl MutableBuffer {
     /// * `right` - slice of bit-packed bytes in LSB order
     /// * `right_offset_in_bits` - Starting bit offset in the right buffer
     /// * `len_in_bits` - Number of bits to process
-    /// * `op` - Binary operation to apply (e.g., `|a, b| a & b`)
+    /// * `op` - Binary operation to apply (e.g., `|a, b| a & b`). Applied a word at a time
     ///
     pub fn bitwise_binary_op<F>(
         &mut self,
