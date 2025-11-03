@@ -282,8 +282,17 @@ impl FromPyArrow for ArrayData {
             validate_pycapsule(schema_capsule, "arrow_schema")?;
             validate_pycapsule(array_capsule, "arrow_array")?;
 
-            let schema_ptr = schema_capsule.pointer_checked(None)?.cast::<FFI_ArrowSchema>();
-            let array = unsafe { FFI_ArrowArray::from_raw(array_capsule.pointer_checked(None)?.cast::<FFI_ArrowArray>().as_ptr()) };
+            let schema_ptr = schema_capsule
+                .pointer_checked(None)?
+                .cast::<FFI_ArrowSchema>();
+            let array = unsafe {
+                FFI_ArrowArray::from_raw(
+                    array_capsule
+                        .pointer_checked(None)?
+                        .cast::<FFI_ArrowArray>()
+                        .as_ptr(),
+                )
+            };
             return unsafe { ffi::from_ffi(array, schema_ptr.as_ref()) }.map_err(to_py_err);
         }
 
@@ -367,11 +376,13 @@ impl FromPyArrow for RecordBatch {
             validate_pycapsule(array_capsule, "arrow_array")?;
 
             let schema_ptr = schema_capsule
-                .pointer_checked(None)?
+                .pointer_checked(Some(c"arrow_schema"))?
                 .cast::<FFI_ArrowSchema>();
-            let ffi_array = unsafe {
-                FFI_ArrowArray::from_raw(array_capsule.pointer_checked(None)?.cast().as_ptr())
-            };
+            let array_ptr = array_capsule
+                .pointer_checked(Some(c"arrow_array"))?
+                .cast::<FFI_ArrowArray>();
+            println!("array_ptr: {array_ptr:?} schema_ptr: {schema_ptr:?}");
+            let ffi_array = unsafe { FFI_ArrowArray::from_raw(array_ptr.as_ptr()) };
             let mut array_data =
                 unsafe { ffi::from_ffi(ffi_array, schema_ptr.as_ref()) }.map_err(to_py_err)?;
             if !matches!(array_data.data_type(), DataType::Struct(_)) {
@@ -444,7 +455,14 @@ impl FromPyArrow for ArrowArrayStreamReader {
             let capsule = capsule.cast::<PyCapsule>()?;
             validate_pycapsule(capsule, "arrow_array_stream")?;
 
-            let stream = unsafe { FFI_ArrowArrayStream::from_raw(capsule.pointer_checked(None)?.cast::<FFI_ArrowArrayStream>().as_ptr()) };
+            let stream = unsafe {
+                FFI_ArrowArrayStream::from_raw(
+                    capsule
+                        .pointer_checked(Some(c"arrow_array_stream"))?
+                        .cast::<FFI_ArrowArrayStream>()
+                        .as_ptr(),
+                )
+            };
 
             let stream_reader = ArrowArrayStreamReader::try_new(stream)
                 .map_err(|err| PyValueError::new_err(err.to_string()))?;
