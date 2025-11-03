@@ -506,8 +506,10 @@ pub use crate::types::ArrowPrimitiveType;
 ///
 /// # Example: To a `Vec<T>`
 ///
-/// *Note*: Converting a `PrimitiveArray` to a `Vec` does not copy the data.
-/// The new `Vec` uses the same underlying allocation from the `PrimitiveArray`.
+/// *Note*: In some cases, converting `PrimitiveArray` to a `Vec` is zero-copy
+/// and does not copy the data (see [`Buffer::into_vec`] for conditions). In
+/// such cases, the `Vec` will use the same underlying memory allocation from
+/// the `PrimitiveArray`.
 ///
 /// The Rust compiler generates highly optimized code for operations on
 /// Vec, so using a Vec can often be faster than using a PrimitiveArray directly.
@@ -515,14 +517,18 @@ pub use crate::types::ArrowPrimitiveType;
 /// ```
 /// # use arrow_array::{Array, PrimitiveArray, types::Int32Type};
 /// let arr = PrimitiveArray::<Int32Type>::from(vec![1, 2, 3, 4]);
+/// let starting_ptr = arr.values().as_ptr();
 /// // split into its parts
 /// let (datatype, buffer, nulls) = arr.into_parts();
 /// // Convert the buffer to a Vec<i32> (zero copy)
+/// // (not this requires that there are no other references)
 /// let mut vec: Vec<i32> = buffer.into();
 /// vec[2] = 300;
 /// // put the parts back together
 /// let arr = PrimitiveArray::<Int32Type>::try_new(vec.into(), nulls).unwrap();
-/// assert_eq!(arr.values(), &[1, 2, 300, 4])
+/// assert_eq!(arr.values(), &[1, 2, 300, 4]);
+/// // The same allocation was used
+/// assert_eq!(starting_ptr, arr.values().as_ptr());
 /// ```
 ///
 /// # Example: From an optional Vec

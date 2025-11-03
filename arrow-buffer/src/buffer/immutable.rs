@@ -388,8 +388,8 @@ impl Buffer {
     /// # Errors
     ///
     /// Returns `Err(self)` if
-    /// 1. this buffer does not have the same [`Layout`] as the destination Vec
-    /// 2. contains a non-zero offset
+    /// 1. The buffer does not have the same [`Layout`] as the destination Vec
+    /// 2. The buffer contains a non-zero offset
     /// 3. The buffer is shared
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
