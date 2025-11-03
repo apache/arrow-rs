@@ -1094,7 +1094,7 @@ mod tests {
         buffer.extend_from_slice(&input); // only 2 bytes
         buffer.bitwise_binary_op(
             100, // exceeds buffer length, becomes a noop
-            &[0b11110000u8, 0b00001111u8],
+            [0b11110000u8, 0b00001111u8],
             0,
             0,
             |a, b| a & b,
@@ -1109,7 +1109,7 @@ mod tests {
         buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
         buffer.bitwise_binary_op(
             0, // exceeds buffer length
-            &[0b11110000u8, 0b00001111u8],
+            [0b11110000u8, 0b00001111u8],
             0,
             100,
             |a, b| a & b,
@@ -1124,7 +1124,7 @@ mod tests {
         buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
         buffer.bitwise_binary_op(
             0, // exceeds buffer length
-            &[0b11110000u8, 0b00001111u8],
+            [0b11110000u8, 0b00001111u8],
             1000,
             16,
             |a, b| a & b,
