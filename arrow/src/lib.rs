@@ -255,7 +255,9 @@
 //! * CSV: [`Reader`](csv::reader::Reader) and [`Writer`](csv::writer::Writer)
 //! * IPC: [`Reader`](ipc::reader::StreamReader) and [`Writer`](ipc::writer::FileWriter)
 //!
-//! Parquet is published as a [separate crate](https://crates.io/crates/parquet)
+//! Support for [Apache Parquet] is published as a [separate parquet crate](https://crates.io/crates/parquet)
+//!
+//! Support for [Apache Avro] is published as a [separate arrow-avro crate](https://crates.io/crates/arrow-avro)
 //!
 //! # Serde Compatibility
 //!
@@ -330,7 +332,8 @@
 //! Some functionality is also distributed independently of this crate:
 //!
 //! * [`arrow-flight`] - support for [Arrow Flight RPC]
-//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
+//! * [`parquet`](https://docs.rs/parquet) - support for [Apache Parquet]
+//! * [`arrow-avro`](https://docs.rs/arrow-avro) - support for [Apache Avro]
 //!
 //! # Safety and Security
 //!
@@ -361,6 +364,7 @@
 //! [Arrow Flight RPC]: https://arrow.apache.org/docs/format/Flight.html
 //! [Arrow JSON Test Format]: https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format
 //! [Apache Parquet]: https://parquet.apache.org/
+//! [Apache Avro]: https://avro.apache.org/
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
 
