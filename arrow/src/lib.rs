@@ -330,7 +330,6 @@
 //! Some functionality is also distributed independently of this crate:
 //!
 //! * [`arrow-flight`] - support for [Arrow Flight RPC]
-//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
 //! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
 //!
 //! # Safety and Security
@@ -358,7 +357,6 @@
 //! [`Buffer`]: buffer::Buffer
 //! [`RecordBatch`]: record_batch::RecordBatch
 //! [`arrow-flight`]: https://docs.rs/arrow-flight/latest/arrow_flight/
-//! [`arrow-integration-test`]: https://docs.rs/arrow-integration-test/latest/arrow_integration_test/
 //! [`parquet`]: https://docs.rs/parquet/latest/parquet/
 //! [Arrow Flight RPC]: https://arrow.apache.org/docs/format/Flight.html
 //! [Arrow JSON Test Format]: https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format

@@ -83,7 +83,9 @@ impl<'a> Parser<'a> {
             Token::Decimal256 => self.parse_decimal_256(),
             Token::Dictionary => self.parse_dictionary(),
             Token::List => self.parse_list(),
+            Token::ListView => self.parse_list_view(),
             Token::LargeList => self.parse_large_list(),
+            Token::LargeListView => self.parse_large_list_view(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
             tok => Err(make_error(
@@ -93,35 +95,87 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses the List type
+    /// Parses list field name. Returns default field name if not found.
+    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
+        // field must be after a comma
+        if self
+            .tokenizer
+            .next_if(|next| matches!(next, Ok(Token::Comma)))
+            .is_none()
+        {
+            return Ok(Field::LIST_FIELD_DEFAULT_NAME.into());
+        }
+
+        // expects: `field: 'field_name'`.
+        self.expect_token(Token::Field)?;
+        self.expect_token(Token::Colon)?;
+        self.parse_single_quoted_string(context)
+    }
+
+    /// Parses the List type (called after `List` has been consumed)
+    /// E.g: List(nullable Int64, field: 'foo')
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("List")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::List(Arc::new(Field::new_list_field(
-            data_type, true,
+        Ok(DataType::List(Arc::new(Field::new(
+            field, data_type, nullable,
         ))))
     }
 
-    /// Parses the LargeList type
+    /// Parses the ListView type (called after `ListView` has been consumed)
+    /// E.g: ListView(nullable Int64, field: 'foo')
+    fn parse_list_view(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("ListView")?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::ListView(Arc::new(Field::new(
+            field, data_type, nullable,
+        ))))
+    }
+
+    /// Parses the LargeList type (called after `LargeList` has been consumed)
+    /// E.g: LargeList(nullable Int64, field: 'foo')
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("LargeList")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::LargeList(Arc::new(Field::new_list_field(
-            data_type, true,
+        Ok(DataType::LargeList(Arc::new(Field::new(
+            field, data_type, nullable,
         ))))
     }
 
-    /// Parses the FixedSizeList type
+    /// Parses the LargeListView type (called after `LargeListView` has been consumed)
+    /// E.g: LargeListView(nullable Int64, field: 'foo')
+    fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("LargeListView")?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::LargeListView(Arc::new(Field::new(
+            field, data_type, nullable,
+        ))))
+    }
+
+    /// Parses the FixedSizeList type (called after `FixedSizeList` has been consumed)
+    /// E.g: FixedSizeList(5 x nullable Int64, field: 'foo')
     fn parse_fixed_size_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let length = self.parse_i32("FixedSizeList")?;
-        self.expect_token(Token::Comma)?;
+        self.expect_token(Token::X)?;
+        let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
+        let field = self.parse_list_field_name("FixedSizeList")?;
         self.expect_token(Token::RParen)?;
         Ok(DataType::FixedSizeList(
-            Arc::new(Field::new_list_field(data_type, true)),
+            Arc::new(Field::new(field, data_type, nullable)),
             length,
         ))
     }
@@ -146,6 +200,19 @@ impl<'a> Parser<'a> {
             Err(make_error(
                 self.val,
                 &format!("expected double quoted string for {context}, got '{token}'"),
+            ))
+        }
+    }
+
+    /// Parses the next single quoted string
+    fn parse_single_quoted_string(&mut self, context: &str) -> ArrowResult<String> {
+        let token = self.next_token()?;
+        if let Token::SingleQuotedString(string) = token {
+            Ok(string)
+        } else {
+            Err(make_error(
+                self.val,
+                &format!("expected single quoted string for {context}, got '{token}'"),
             ))
         }
     }
@@ -340,6 +407,8 @@ impl<'a> Parser<'a> {
             Box::new(value_type),
         ))
     }
+
+    /// Parses the next Struct (called after `Struct` has been consumed)
     fn parse_struct(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let mut fields = Vec::new();
@@ -354,16 +423,13 @@ impl<'a> Parser<'a> {
                 tok => {
                     return Err(make_error(
                         self.val,
-                        &format!("Expected a quoted string for a field name; got {tok:?}"),
+                        &format!("Expected a double quoted string for a field name; got {tok:?}"),
                     ));
                 }
             };
             self.expect_token(Token::Colon)?;
 
-            let nullable = self
-                .tokenizer
-                .next_if(|next| matches!(next, Ok(Token::Nullable)))
-                .is_some();
+            let nullable = self.parse_opt_nullable();
             let field_type = self.parse_next_type()?;
             fields.push(Arc::new(Field::new(field_name, field_type, nullable)));
             match self.next_token()? {
@@ -380,6 +446,13 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(DataType::Struct(Fields::from(fields)))
+    }
+
+    /// return and consume if the next token is `Token::Nullable`
+    fn parse_opt_nullable(&mut self) -> bool {
+        self.tokenizer
+            .next_if(|next| matches!(next, Ok(Token::Nullable)))
+            .is_some()
     }
 
     /// return the next token, or an error if there are none left
@@ -404,6 +477,11 @@ impl<'a> Parser<'a> {
 /// returns true if this character is a separator
 fn is_separator(c: char) -> bool {
     c == '(' || c == ')' || c == ',' || c == ':' || c == ' '
+}
+
+enum QuoteType {
+    Double,
+    Single,
 }
 
 #[derive(Debug)]
@@ -497,7 +575,9 @@ impl<'a> Tokenizer<'a> {
             "Date64" => Token::SimpleType(DataType::Date64),
 
             "List" => Token::List,
+            "ListView" => Token::ListView,
             "LargeList" => Token::LargeList,
+            "LargeListView" => Token::LargeListView,
             "FixedSizeList" => Token::FixedSizeList,
 
             "s" | "Second" => Token::TimeUnit(TimeUnit::Second),
@@ -527,6 +607,8 @@ impl<'a> Tokenizer<'a> {
             "None" => Token::None,
 
             "nullable" => Token::Nullable,
+            "field" => Token::Field,
+            "x" => Token::X,
 
             "Struct" => Token::Struct,
 
@@ -537,9 +619,14 @@ impl<'a> Tokenizer<'a> {
         Ok(token)
     }
 
-    /// Parses e.g. `"foo bar"`
-    fn parse_quoted_string(&mut self) -> ArrowResult<Token> {
-        if self.next_char() != Some('\"') {
+    /// Parses e.g. `"foo bar"`, `'foo bar'`
+    fn parse_quoted_string(&mut self, quote_type: QuoteType) -> ArrowResult<Token> {
+        let quote = match quote_type {
+            QuoteType::Double => '\"',
+            QuoteType::Single => '\'',
+        };
+
+        if self.next_char() != Some(quote) {
             return Err(make_error(self.val, "Expected \""));
         }
 
@@ -561,7 +648,7 @@ impl<'a> Tokenizer<'a> {
                         is_escaped = true;
                         self.word.push(c);
                     }
-                    '"' => {
+                    c if c == quote => {
                         if is_escaped {
                             self.word.push(c);
                             is_escaped = false;
@@ -585,7 +672,10 @@ impl<'a> Tokenizer<'a> {
             return Err(make_error(self.val, "empty strings aren't allowed"));
         }
 
-        Ok(Token::DoubleQuotedString(val))
+        match quote_type {
+            QuoteType::Double => Ok(Token::DoubleQuotedString(val)),
+            QuoteType::Single => Ok(Token::SingleQuotedString(val)),
+        }
     }
 }
 
@@ -601,7 +691,10 @@ impl Iterator for Tokenizer<'_> {
                     continue;
                 }
                 '"' => {
-                    return Some(self.parse_quoted_string());
+                    return Some(self.parse_quoted_string(QuoteType::Double));
+                }
+                '\'' => {
+                    return Some(self.parse_quoted_string(QuoteType::Single));
                 }
                 '(' => {
                     self.next_char();
@@ -652,11 +745,16 @@ enum Token {
     None,
     Integer(i64),
     DoubleQuotedString(String),
+    SingleQuotedString(String),
     List,
+    ListView,
     LargeList,
+    LargeListView,
     FixedSizeList,
     Struct,
     Nullable,
+    Field,
+    X,
 }
 
 impl Display for Token {
@@ -664,7 +762,9 @@ impl Display for Token {
         match self {
             Token::SimpleType(t) => write!(f, "{t}"),
             Token::List => write!(f, "List"),
+            Token::ListView => write!(f, "ListView"),
             Token::LargeList => write!(f, "LargeList"),
+            Token::LargeListView => write!(f, "LargeListView"),
             Token::FixedSizeList => write!(f, "FixedSizeList"),
             Token::Timestamp => write!(f, "Timestamp"),
             Token::Time32 => write!(f, "Time32"),
@@ -687,8 +787,11 @@ impl Display for Token {
             Token::Dictionary => write!(f, "Dictionary"),
             Token::Integer(v) => write!(f, "Integer({v})"),
             Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
+            Token::SingleQuotedString(s) => write!(f, "SingleQuotedString({s})"),
             Token::Struct => write!(f, "Struct"),
             Token::Nullable => write!(f, "nullable"),
+            Token::Field => write!(f, "field"),
+            Token::X => write!(f, "x"),
         }
     }
 }
@@ -828,7 +931,58 @@ mod test {
                 ),
             ])),
             DataType::Struct(Fields::empty()),
-            // TODO support more structured types (List, LargeList, Union, Map, RunEndEncoded, etc)
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::List(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::List(Arc::new(Field::new(
+                "nested_list",
+                DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::ListView(Arc::new(Field::new(
+                "nested_list_view",
+                DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::LargeList(Arc::new(Field::new(
+                "nested_large_list",
+                DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
+            DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
+            DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::LargeListView(Arc::new(Field::new(
+                "nested_large_list_view",
+                DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
+                true,
+            ))),
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, true)), 2),
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int64, false)), 2),
+            DataType::FixedSizeList(Arc::new(Field::new("Int64", DataType::Int64, true)), 2),
+            DataType::FixedSizeList(Arc::new(Field::new("Int64", DataType::Int64, false)), 2),
+            DataType::FixedSizeList(
+                Arc::new(Field::new(
+                    "nested_fixed_size_list",
+                    DataType::FixedSizeList(
+                        Arc::new(Field::new("Int64", DataType::Int64, true)),
+                        2,
+                    ),
+                    true,
+                )),
+                2,
+            ),
+            // TODO support more structured types (Union, Map, RunEndEncoded, etc)
         ]
     }
 

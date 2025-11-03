@@ -331,22 +331,11 @@ mod tests {
     use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
     use std::sync::Arc;
 
-    fn create_test_variant_array(values: Vec<Option<Variant<'_, '_>>>) -> VariantArray {
-        let mut builder = VariantArrayBuilder::new(values.len());
-        for value in values {
-            match value {
-                Some(v) => builder.append_variant(v),
-                None => builder.append_null(),
-            }
-        }
-        builder.build()
-    }
-
     #[test]
     fn test_already_shredded_input_error() {
         // Create a VariantArray that already has typed_value_field
         // First create a valid VariantArray, then extract its parts to construct a shredded one
-        let temp_array = create_test_variant_array(vec![Some(Variant::from("test"))]);
+        let temp_array = VariantArray::from_iter(vec![Some(Variant::from("test"))]);
         let metadata = temp_array.metadata_field().clone();
         let value = temp_array.value_field().unwrap().clone();
         let typed_value = Arc::new(Int64Array::from(vec![42])) as ArrayRef;
@@ -375,7 +364,7 @@ mod tests {
 
     #[test]
     fn test_unsupported_list_schema() {
-        let input = create_test_variant_array(vec![Some(Variant::from(42))]);
+        let input = VariantArray::from_iter([Variant::from(42)]);
         let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         shred_variant(&input, &list_schema).expect_err("unsupported");
     }
@@ -383,7 +372,7 @@ mod tests {
     #[test]
     fn test_primitive_shredding_comprehensive() {
         // Test mixed scenarios in a single array
-        let input = create_test_variant_array(vec![
+        let input = VariantArray::from_iter(vec![
             Some(Variant::from(42i64)),   // successful shred
             Some(Variant::from("hello")), // failed shred (string)
             Some(Variant::from(100i64)),  // successful shred
@@ -448,10 +437,10 @@ mod tests {
 
     #[test]
     fn test_primitive_different_target_types() {
-        let input = create_test_variant_array(vec![
-            Some(Variant::from(42i32)),
-            Some(Variant::from(3.15f64)),
-            Some(Variant::from("not_a_number")),
+        let input = VariantArray::from_iter(vec![
+            Variant::from(42i32),
+            Variant::from(3.15f64),
+            Variant::from("not_a_number"),
         ]);
 
         // Test Int32 target
@@ -882,10 +871,7 @@ mod tests {
 
     #[test]
     fn test_spec_compliance() {
-        let input = create_test_variant_array(vec![
-            Some(Variant::from(42i64)),
-            Some(Variant::from("hello")),
-        ]);
+        let input = VariantArray::from_iter(vec![Variant::from(42i64), Variant::from("hello")]);
 
         let result = shred_variant(&input, &DataType::Int64).unwrap();
 
