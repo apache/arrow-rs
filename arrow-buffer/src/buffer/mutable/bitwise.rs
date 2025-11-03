@@ -732,7 +732,7 @@ fn handle_mutable_buffer_remainder_unary<F>(
 #[cfg(test)]
 mod tests {
     use crate::bit_iterator::BitIterator;
-    use crate::{BooleanBuffer, BooleanBufferBuilder};
+    use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
     use rand::Rng;
 
     fn test_mutable_buffer_bin_op_helper<F, G>(
@@ -1077,5 +1077,50 @@ mod tests {
             right_offset_in_bits,
             len_in_bits,
         );
+    }
+
+    #[test]
+    fn test_bitwise_binary_op_offset_out_of_bounds() {
+        let input = vec![0b10101010u8, 0b01010101u8];
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&input); // only 2 bytes
+        buffer.bitwise_binary_op(
+            100, // exceeds buffer length, becomes a noop
+            &[0b11110000u8, 0b00001111u8],
+            0,
+            0,
+            |a, b| a & b,
+        );
+        assert_eq!(buffer.as_slice(), &input);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: last_offset <= mutable_buffer.len()")]
+    fn test_bitwise_binary_op_length_out_of_bounds() {
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
+        buffer.bitwise_binary_op(
+            0, // exceeds buffer length
+            &[0b11110000u8, 0b00001111u8],
+            0,
+            100,
+            |a, b| a & b,
+        );
+        assert_eq!(buffer.as_slice(), &[0b10101010u8, 0b01010101u8]);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_bitwise_binary_op_right_len_out_of_bounds() {
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
+        buffer.bitwise_binary_op(
+            0, // exceeds buffer length
+            &[0b11110000u8, 0b00001111u8],
+            1000,
+            16,
+            |a, b| a & b,
+        );
+        assert_eq!(buffer.as_slice(), &[0b10101010u8, 0b01010101u8]);
     }
 }
