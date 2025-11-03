@@ -688,4 +688,28 @@ mod tests {
         assert_eq!(arr.value(0), "world");
         assert_eq!(arr.value(1), "world");
     }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", (usize::MAX / "hello".len()) + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX / "hello".len());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", ((i32::MAX as usize) / "hello".len()) + 1);
+    }
 }
