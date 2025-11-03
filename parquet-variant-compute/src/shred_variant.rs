@@ -309,7 +309,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
             let array =
                 ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
-            builder = builder.with_column(field_name, ArrayRef::from(array), false);
+            builder = builder.with_column_name(field_name, ArrayRef::from(array), false);
         }
         if let Some(nulls) = self.typed_value_nulls.finish() {
             builder = builder.with_nulls(nulls);

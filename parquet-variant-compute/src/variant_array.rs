@@ -288,10 +288,13 @@ impl VariantArray {
         typed_value: Option<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Self {
-        let mut builder =
-            StructArrayBuilder::new().with_column("metadata", Arc::new(metadata.clone()), false);
+        let mut builder = StructArrayBuilder::new().with_column_name(
+            "metadata",
+            Arc::new(metadata.clone()),
+            false,
+        );
         if let Some(value) = value.clone() {
-            builder = builder.with_column("value", Arc::new(value), true);
+            builder = builder.with_column_name("value", Arc::new(value), true);
         }
 
         let typed_value = if let Some(typed_value_array) = typed_value.clone() {
@@ -300,7 +303,7 @@ impl VariantArray {
                 typed_value_array.data_type().clone(),
                 true,
             ));
-            builder = builder.with_field(field_ref.clone(), typed_value_array.clone());
+            builder = builder.with_field_ref(field_ref.clone(), typed_value_array.clone());
 
             Some((field_ref, typed_value_array))
         } else {
@@ -654,7 +657,7 @@ impl ShreddedVariantFieldArray {
     ) -> Self {
         let mut builder = StructArrayBuilder::new();
         if let Some(value) = value.clone() {
-            builder = builder.with_column("value", Arc::new(value), true);
+            builder = builder.with_column_name("value", Arc::new(value), true);
         }
 
         let typed_value = if let Some(typed_value_array) = typed_value.clone() {
@@ -663,7 +666,7 @@ impl ShreddedVariantFieldArray {
                 typed_value_array.data_type().clone(),
                 true,
             ));
-            builder = builder.with_field(field_ref.clone(), typed_value_array.clone());
+            builder = builder.with_field_ref(field_ref.clone(), typed_value_array.clone());
 
             Some((field_ref, typed_value_array))
         } else {
@@ -937,14 +940,14 @@ impl StructArrayBuilder {
     }
 
     /// Add an array to this struct array as a field with the specified name.
-    pub fn with_column(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
+    pub fn with_column_name(mut self, field_name: &str, array: ArrayRef, nullable: bool) -> Self {
         let field = Field::new(field_name, array.data_type().clone(), nullable);
         self.fields.push(Arc::new(field));
         self.arrays.push(array);
         self
     }
 
-    pub fn with_field(mut self, field: FieldRef, array: ArrayRef) -> Self {
+    pub fn with_field_ref(mut self, field: FieldRef, array: ArrayRef) -> Self {
         self.fields.push(field);
         self.arrays.push(array);
         self

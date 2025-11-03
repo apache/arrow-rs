@@ -1285,7 +1285,7 @@ mod test {
             BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 3));
 
         let struct_array = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata), false)
+            .with_column_name("metadata", Arc::new(metadata), false)
             .with_nulls(nulls)
             .build();
 
@@ -1375,7 +1375,7 @@ mod test {
 
         // For perfect shredding of the x field, no "value" column, only typed_value
         let x_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(x_field_typed_value), true)
+            .with_column_name("typed_value", Arc::new(x_field_typed_value), true)
             .build();
 
         // Wrap the x field struct in a ShreddedVariantFieldArray
@@ -1397,9 +1397,9 @@ mod test {
 
         // Create the main VariantArray
         let main_struct = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata_array), false)
-            .with_column("value", Arc::new(value_array), true)
-            .with_column("typed_value", Arc::new(typed_value_struct), true)
+            .with_column_name("metadata", Arc::new(metadata_array), false)
+            .with_column_name("value", Arc::new(value_array), true)
+            .with_column_name("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(main_struct)
@@ -1755,7 +1755,7 @@ mod test {
 
         // For the x field, only typed_value (perfect shredding when possible)
         let x_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(x_field_typed_value), true)
+            .with_column_name("typed_value", Arc::new(x_field_typed_value), true)
             .build();
 
         let x_field_shredded = ShreddedVariantFieldArray::try_new(&x_field_struct)
@@ -1776,9 +1776,9 @@ mod test {
 
         // Build final VariantArray
         let struct_array = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata_array), false)
-            .with_column("value", Arc::new(value_array), true)
-            .with_column("typed_value", Arc::new(typed_value_struct), true)
+            .with_column_name("metadata", Arc::new(metadata_array), false)
+            .with_column_name("value", Arc::new(value_array), true)
+            .with_column_name("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(struct_array)
@@ -1837,7 +1837,7 @@ mod test {
         // Level 2: x field (the deepest level)
         let x_typed_value = Int32Array::from(vec![Some(55), None]);
         let x_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(x_typed_value), true)
+            .with_column_name("typed_value", Arc::new(x_typed_value), true)
             .build();
         let x_field_shredded = ShreddedVariantFieldArray::try_new(&x_field_struct)
             .expect("should create ShreddedVariantFieldArray for x");
@@ -1864,7 +1864,7 @@ mod test {
             true,
         )]);
         let a_inner_struct = StructArrayBuilder::new()
-            .with_column(
+            .with_column_name(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(
@@ -1876,7 +1876,7 @@ mod test {
                 ),
                 true,
             )
-            .with_column("value", Arc::new(a_value_array), true)
+            .with_column_name("value", Arc::new(a_value_array), true)
             .build();
         let a_field_shredded = ShreddedVariantFieldArray::try_new(&a_inner_struct)
             .expect("should create ShreddedVariantFieldArray for a");
@@ -1896,9 +1896,9 @@ mod test {
 
         // Build final VariantArray
         let struct_array = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata_array), false)
-            .with_column("value", Arc::new(value_array), true)
-            .with_column("typed_value", Arc::new(typed_value_struct), true)
+            .with_column_name("metadata", Arc::new(metadata_array), false)
+            .with_column_name("value", Arc::new(value_array), true)
+            .with_column_name("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(struct_array)
@@ -1950,7 +1950,7 @@ mod test {
         // Level 3: x field (deepest level)
         let x_typed_value = Int32Array::from(vec![Some(100), None, None]);
         let x_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(x_typed_value), true)
+            .with_column_name("typed_value", Arc::new(x_typed_value), true)
             .build();
         let x_field_shredded = ShreddedVariantFieldArray::try_new(&x_field_struct)
             .expect("should create ShreddedVariantFieldArray for x");
@@ -1975,7 +1975,7 @@ mod test {
             true,
         )]);
         let b_inner_struct = StructArrayBuilder::new()
-            .with_column(
+            .with_column_name(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(
@@ -1987,7 +1987,7 @@ mod test {
                 ),
                 true,
             )
-            .with_column("value", Arc::new(b_value_array), true)
+            .with_column_name("value", Arc::new(b_value_array), true)
             .build();
         let b_field_shredded = ShreddedVariantFieldArray::try_new(&b_inner_struct)
             .expect("should create ShreddedVariantFieldArray for b");
@@ -2012,7 +2012,7 @@ mod test {
             true,
         )]);
         let a_inner_struct = StructArrayBuilder::new()
-            .with_column(
+            .with_column_name(
                 "typed_value",
                 Arc::new(
                     StructArray::try_new(
@@ -2024,7 +2024,7 @@ mod test {
                 ),
                 true,
             )
-            .with_column("value", Arc::new(a_value_array), true)
+            .with_column_name("value", Arc::new(a_value_array), true)
             .build();
         let a_field_shredded = ShreddedVariantFieldArray::try_new(&a_inner_struct)
             .expect("should create ShreddedVariantFieldArray for a");
@@ -2044,9 +2044,9 @@ mod test {
 
         // Build final VariantArray
         let struct_array = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata_array), false)
-            .with_column("value", Arc::new(value_array), true)
-            .with_column("typed_value", Arc::new(typed_value_struct), true)
+            .with_column_name("metadata", Arc::new(metadata_array), false)
+            .with_column_name("value", Arc::new(value_array), true)
+            .with_column_name("typed_value", Arc::new(typed_value_struct), true)
             .build();
 
         Arc::new(struct_array)
@@ -2736,7 +2736,7 @@ mod test {
         // Field "a": present in rows 0,3 (missing in rows 1,2,4)
         let a_field_typed_value = Int32Array::from(vec![Some(1), None, None, Some(1), None]);
         let a_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(a_field_typed_value), true)
+            .with_column_name("typed_value", Arc::new(a_field_typed_value), true)
             .build();
         let a_field_shredded = ShreddedVariantFieldArray::try_new(&a_field_struct)
             .expect("should create ShreddedVariantFieldArray for a");
@@ -2744,7 +2744,7 @@ mod test {
         // Field "b": present in rows 0,2 (missing in rows 1,3,4)
         let b_field_typed_value = Int32Array::from(vec![Some(2), None, Some(2), None, None]);
         let b_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(b_field_typed_value), true)
+            .with_column_name("typed_value", Arc::new(b_field_typed_value), true)
             .build();
         let b_field_shredded = ShreddedVariantFieldArray::try_new(&b_field_struct)
             .expect("should create ShreddedVariantFieldArray for b");
@@ -2752,7 +2752,7 @@ mod test {
         // Field "c": present in row 0 only (missing in all other rows)
         let c_field_typed_value = Int32Array::from(vec![Some(3), None, None, None, None]);
         let c_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(c_field_typed_value), true)
+            .with_column_name("typed_value", Arc::new(c_field_typed_value), true)
             .build();
         let c_field_shredded = ShreddedVariantFieldArray::try_new(&c_field_struct)
             .expect("should create ShreddedVariantFieldArray for c");
@@ -2776,8 +2776,8 @@ mod test {
 
         // Build final VariantArray with top-level nulls
         let struct_array = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata_array), false)
-            .with_column("typed_value", Arc::new(typed_value_struct), true)
+            .with_column_name("metadata", Arc::new(metadata_array), false)
+            .with_column_name("typed_value", Arc::new(typed_value_struct), true)
             .with_nulls(nulls)
             .build();
 
@@ -2793,7 +2793,7 @@ mod test {
         // Row 0: has value 42, Row 1: inner null, Row 2: outer null, Row 3: top-level null
         let inner_typed_value = Int32Array::from(vec![Some(42), None, None, None]); // dummy value for row 2
         let inner = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(inner_typed_value), true)
+            .with_column_name("typed_value", Arc::new(inner_typed_value), true)
             .build();
         let inner = ShreddedVariantFieldArray::try_new(&inner).unwrap();
 
@@ -2804,12 +2804,12 @@ mod test {
             false, // row 3: top-level NULL
         ]);
         let outer_typed_value = StructArrayBuilder::new()
-            .with_column("inner", ArrayRef::from(inner), false)
+            .with_column_name("inner", ArrayRef::from(inner), false)
             .with_nulls(outer_typed_value_nulls)
             .build();
 
         let outer = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(outer_typed_value), true)
+            .with_column_name("typed_value", Arc::new(outer_typed_value), true)
             .build();
         let outer = ShreddedVariantFieldArray::try_new(&outer).unwrap();
 
@@ -2820,7 +2820,7 @@ mod test {
             false, // row 3: top-level NULL
         ]);
         let typed_value = StructArrayBuilder::new()
-            .with_column("outer", ArrayRef::from(outer), false)
+            .with_column_name("outer", ArrayRef::from(outer), false)
             .with_nulls(typed_value_nulls)
             .build();
 
@@ -2834,8 +2834,8 @@ mod test {
             false, // row 3: top-level NULL
         ]);
         let struct_array = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata_array), false)
-            .with_column("typed_value", Arc::new(typed_value), true)
+            .with_column_name("metadata", Arc::new(metadata_array), false)
+            .with_column_name("typed_value", Arc::new(typed_value), true)
             .with_nulls(nulls)
             .build();
 
@@ -2890,23 +2890,23 @@ mod test {
         // For top-level null row, the field still needs valid content (not null)
         let x_field_typed_value = Int32Array::from(vec![Some(1), Some(2), Some(3), Some(0)]);
         let x_field_struct = StructArrayBuilder::new()
-            .with_column("typed_value", Arc::new(x_field_typed_value), true)
+            .with_column_name("typed_value", Arc::new(x_field_typed_value), true)
             .build();
         let x_field_shredded = ShreddedVariantFieldArray::try_new(&x_field_struct)
             .expect("should create ShreddedVariantFieldArray for x");
 
         // Create main typed_value struct (only contains shredded fields)
         let typed_value_struct = StructArrayBuilder::new()
-            .with_column("x", ArrayRef::from(x_field_shredded), false)
+            .with_column_name("x", ArrayRef::from(x_field_shredded), false)
             .build();
 
         // Build VariantArray with both value and typed_value (PartiallyShredded)
         // Top-level null is encoded in the main StructArray's null mask
         let variant_nulls = NullBuffer::from(vec![true, true, true, false]); // Row 3 is top-level null
         let struct_array = StructArrayBuilder::new()
-            .with_column("metadata", Arc::new(metadata_array), false)
-            .with_column("value", Arc::new(value_array), true)
-            .with_column("typed_value", Arc::new(typed_value_struct), true)
+            .with_column_name("metadata", Arc::new(metadata_array), false)
+            .with_column_name("value", Arc::new(value_array), true)
+            .with_column_name("typed_value", Arc::new(typed_value_struct), true)
             .with_nulls(variant_nulls)
             .build();
 
