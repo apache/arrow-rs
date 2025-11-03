@@ -771,8 +771,7 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 }
 
 /// Controls how dictionaries are handled in Arrow IPC messages
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DictionaryHandling {
     /// Send the entire dictionary every time it is encountered (default)
     #[default]
@@ -784,7 +783,6 @@ pub enum DictionaryHandling {
     /// are transmitted with the `isDelta` flag set to true.
     Delta,
 }
-
 
 /// Describes what kind of update took place after a call to [`DictionaryTracker::insert`].
 #[derive(Debug, Clone)]

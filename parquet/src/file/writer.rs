@@ -1421,7 +1421,8 @@ mod tests {
 
     #[test]
     fn test_page_writer_data_pages() {
-        let pages = [Page::DataPage {
+        let pages = [
+            Page::DataPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
                 encoding: Encoding::DELTA_BINARY_PACKED,
@@ -1439,7 +1440,8 @@ mod tests {
                 rep_levels_byte_len: 32,
                 is_compressed: false,
                 statistics: Some(Statistics::int32(Some(1), Some(3), None, Some(7), true)),
-            }];
+            },
+        ];
 
         test_page_roundtrip(&pages[..], Compression::SNAPPY, Type::INT32);
         test_page_roundtrip(&pages[..], Compression::UNCOMPRESSED, Type::INT32);
@@ -1447,7 +1449,8 @@ mod tests {
 
     #[test]
     fn test_page_writer_dict_pages() {
-        let pages = [Page::DictionaryPage {
+        let pages = [
+            Page::DictionaryPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5]),
                 num_values: 5,
                 encoding: Encoding::RLE_DICTIONARY,
@@ -1471,7 +1474,8 @@ mod tests {
                 rep_levels_byte_len: 32,
                 is_compressed: false,
                 statistics: None,
-            }];
+            },
+        ];
 
         test_page_roundtrip(&pages[..], Compression::SNAPPY, Type::INT32);
         test_page_roundtrip(&pages[..], Compression::UNCOMPRESSED, Type::INT32);

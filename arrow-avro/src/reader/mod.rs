@@ -5543,8 +5543,10 @@ mod test {
                 Arc::new(f1_f1_3) as Arc<dyn Array>,
             ),
         ]);
-        let f2_fields = [Field::new("f2_1", DataType::Boolean, false),
-            Field::new("f2_2", DataType::Float32, false)];
+        let f2_fields = [
+            Field::new("f2_1", DataType::Boolean, false),
+            Field::new("f2_2", DataType::Float32, false),
+        ];
         let f2_struct_builder = StructBuilder::new(
             f2_fields
                 .iter()

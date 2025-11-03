@@ -1048,7 +1048,6 @@ impl WriteThrift for EdgeInterpolationAlgorithm {
 
 write_thrift_field!(EdgeInterpolationAlgorithm, FieldType::I32);
 
-
 // ----------------------------------------------------------------------
 // Mirrors thrift union `BloomFilterAlgorithm`
 
