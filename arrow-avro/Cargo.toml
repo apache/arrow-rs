@@ -74,7 +74,7 @@ rand = { version = "0.9.1", default-features = false, features = [
     "std_rng",
     "thread_rng",
 ] }
-criterion = { version = "0.7.0", default-features = false }
+criterion = { workspace = true, default-features = false }
 tempfile = "3.3"
 arrow = { workspace = true }
 futures = "0.3.31"
