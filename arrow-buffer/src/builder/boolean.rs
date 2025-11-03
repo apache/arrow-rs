@@ -251,7 +251,7 @@ impl BooleanBufferBuilder {
     /// `self.len < buffer.len() / 8` (that is that the buffer has enough capacity to hold `self.len` bits).
     #[inline]
     #[cfg(test)]
-    pub (crate) unsafe fn mutable_buffer(&mut self) -> &mut MutableBuffer {
+    pub(crate) unsafe fn mutable_buffer(&mut self) -> &mut MutableBuffer {
         &mut self.buffer
     }
 

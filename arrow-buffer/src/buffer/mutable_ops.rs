@@ -20,9 +20,10 @@ use crate::bit_chunk_iterator::BitChunks;
 use crate::util::bit_util;
 
 impl MutableBuffer {
-    /// Apply a binary bitwise operation on self (mutate) with respect to another buffer (right).
+    /// Applies a bitwise operation relative to another bit-packed byte slice
+    /// (right) and updates the mutable buffer in place.
     ///
-    /// Note: applies the operation a 64-bits (u64) at a time.
+    /// Note: applies the operation 64-bits (u64) at a time.
     ///
     /// # Arguments
     ///
@@ -32,7 +33,6 @@ impl MutableBuffer {
     /// * `right_offset_in_bits` - Starting bit offset in the right buffer
     /// * `len_in_bits` - Number of bits to process
     /// * `op` - Binary operation to apply (e.g., `|a, b| a & b`). Applied a word at a time
-    ///
     pub fn bitwise_binary_op<F>(
         &mut self,
         offset_in_bits: usize,
@@ -136,13 +136,15 @@ impl MutableBuffer {
         );
     }
 
-    /// Apply a bitwise operation to a mutable buffer and update it in-place.
+    /// Apply a bitwise operation to a mutable buffer and updates it in place.
+    ///
+    /// Note: applies the operation 64-bits (u64) at a time.
     ///
     /// # Arguments
     ///
     /// * `offset_in_bits` - Starting bit offset for the current buffer
     /// * `len_in_bits` - Number of bits to process
-    /// * `op` - Unary operation to apply (e.g., `|a| !a`)
+    /// * `op` - Unary operation to apply (e.g., `|a| !a`). Applied a word at a time
     ///
     pub fn bitwise_unary_op<F>(&mut self, offset_in_bits: usize, len_in_bits: usize, mut op: F)
     where
