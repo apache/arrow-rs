@@ -183,7 +183,6 @@ fn write_sign_extended<W: Write + ?Sized>(out: &mut W, src_be: &[u8], n: usize) 
     }
     out.write_all(src_be)
         .map_err(|e| AvroError::General(format!("write decimal fixed: {e}")))
-
 }
 
 /// Write the union branch index for an optional field.
