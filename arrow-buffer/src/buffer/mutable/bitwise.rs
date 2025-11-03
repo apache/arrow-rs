@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use super::MutableBuffer;
+use crate::MutableBuffer;
 use crate::bit_chunk_iterator::BitChunks;
 use crate::util::bit_util;
 
