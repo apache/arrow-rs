@@ -769,19 +769,22 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
     assert_eq!(row_group.columns().len(), 2);
 
     // Statistics should be available from decrypted data
-    assert!(&row_group.columns()[0].statistics().is_some());
-    assert!(&row_group.columns()[1].statistics().is_some());
-    let column_stats = &row_group.columns()[0].statistics().unwrap();
-    assert_eq!(
-        column_stats.min_bytes_opt(),
-        Some(3i32.to_le_bytes().as_slice())
-    );
-    assert_eq!(
-        column_stats.max_bytes_opt(),
-        Some(19i32.to_le_bytes().as_slice())
-    );
+    assert!(&row_group.column(0).statistics().is_some());
+    assert!(&row_group.column(1).statistics().is_some());
+    for column in row_group.columns() {
+        assert!(column.statistics().is_some());
+        let column_stats = column.statistics().unwrap();
+        assert_eq!(
+            column_stats.min_bytes_opt(),
+            Some(3i32.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            column_stats.max_bytes_opt(),
+            Some(19i32.to_le_bytes().as_slice())
+        );
+    }
 
-    // Check column statistics are not read given plaintext footer and not available decryption properties
+    // Check column statistics are not read given plaintext footer and decryption properties are not available
     let options = ArrowReaderOptions::default();
     let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
     let metadata = reader_metadata.metadata();
@@ -790,8 +793,8 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
 
     let row_group = &metadata.row_groups()[0];
     assert_eq!(row_group.columns().len(), 2);
-    assert!(&row_group.columns()[0].statistics().is_none());
-    assert!(&row_group.columns()[1].statistics().is_some());
+    assert!(&row_group.column(0).statistics().is_none());
+    assert!(&row_group.column(1).statistics().is_some());
 
     let column_stats = &row_group.columns()[1].statistics().unwrap();
     assert_eq!(

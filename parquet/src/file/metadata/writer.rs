@@ -836,13 +836,13 @@ impl MetadataObjectWriter {
                     column_index,
                     None,
                 )?;
-                let statistics = column_chunk.statistics.clone();
-                if file_encryptor.properties().encrypt_footer() {
-                    column_chunk = ColumnChunkMetaData {
-                        statistics: None,
-                        ..column_chunk
-                    };
-                }
+
+                let encrypt_footer = file_encryptor.properties().encrypt_footer();
+                let statistics = if encrypt_footer {
+                    std::mem::take(&mut column_chunk.statistics)
+                } else {
+                    None
+                };
                 // create temp ColumnMetaData that we can encrypt
                 let mut buffer: Vec<u8> = vec![];
                 {
@@ -850,11 +850,8 @@ impl MetadataObjectWriter {
                     serialize_column_meta_data(&column_chunk, &mut prot)?;
                 }
                 let ciphertext = column_encryptor.encrypt(&buffer, &aad)?;
-                if file_encryptor.properties().encrypt_footer() {
-                    column_chunk = ColumnChunkMetaData {
-                        statistics,
-                        ..column_chunk
-                    };
+                if encrypt_footer {
+                    column_chunk.statistics = statistics;
                 }
                 column_chunk.encrypted_column_metadata = Some(ciphertext);
             }
