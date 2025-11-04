@@ -705,12 +705,15 @@ impl BasicTypeInfo {
     }
 
     /// Returns [`LogicalType`] value for the type.
+    ///
+    /// Note that this function will clone the `LogicalType`. If performance is a concern,
+    /// use [`Self::logical_type_ref`] instead.
     pub fn logical_type(&self) -> Option<LogicalType> {
         // Unlike ConvertedType, LogicalType cannot implement Copy, thus we clone it
         self.logical_type.clone()
     }
 
-    /// Return a reference to the [`LogicalType`].
+    /// Return a reference to the [`LogicalType`] value for the type.
     pub fn logical_type_ref(&self) -> Option<&LogicalType> {
         self.logical_type.as_ref()
     }
@@ -911,6 +914,9 @@ impl ColumnDescriptor {
     }
 
     /// Returns [`LogicalType`] for this column.
+    ///
+    /// Note that this function will clone the `LogicalType`. If performance is a concern,
+    /// use [`Self::logical_type_ref`] instead.
     pub fn logical_type(&self) -> Option<LogicalType> {
         self.primitive_type.get_basic_info().logical_type()
     }
