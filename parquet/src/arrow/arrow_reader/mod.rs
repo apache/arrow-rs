@@ -5019,4 +5019,17 @@ mod tests {
         assert!(sbbf.check(&"Hello"));
         assert!(!sbbf.check(&"Hello_Not_Exists"));
     }
+
+    #[test]
+    fn test_read_unknown_logical_type() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/unknown-logical-type.parquet");
+        let test_file = File::open(path).unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file).unwrap();
+        let mut reader = builder.build().unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 3);
+        assert_eq!(out.num_columns(), 2);
+    }
 }

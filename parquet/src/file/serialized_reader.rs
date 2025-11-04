@@ -2696,4 +2696,23 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn test_read_unknown_logical_type() {
+        let file = get_test_file("unknown-logical-type.parquet");
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut start = 0;
+        let end = reader.metadata().file_metadata().num_rows();
+        while start < end {
+            match iter.next() {
+                Some(_) => {}
+                None => break,
+            };
+            start += 1;
+        }
+    }
 }
