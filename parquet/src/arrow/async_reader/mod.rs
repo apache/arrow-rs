@@ -653,6 +653,8 @@ where
     /// - `Ok(Some(reader))` which holds all the data for the row group.
     pub async fn next_row_group(&mut self) -> Result<Option<ParquetRecordBatchReader>> {
         loop {
+            // Take ownership of request state to process, leaving self in a
+            // valid state
             let request_state = std::mem::replace(&mut self.request_state, RequestState::Done);
             match request_state {
                 // No outstanding requests, proceed to setup next row group
