@@ -34,7 +34,7 @@ use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
@@ -757,74 +757,43 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
     }
     let metadata = writer.close().unwrap();
 
-    // Check column statistics that are produced on write are complete
-    assert_eq!(metadata.num_row_groups(), 1);
-    let row_group = &metadata.row_group(0);
-    assert_eq!(row_group.columns().len(), 2);
+    let expected_min = 3i32.to_le_bytes();
+    let expected_max = 19i32.to_le_bytes();
 
-    for column in row_group.columns() {
-        assert!(column.page_encoding_stats().is_some());
-        assert!(column.statistics().is_some());
-        let column_stats = column.statistics().unwrap();
-        assert_eq!(
-            column_stats.min_bytes_opt(),
-            Some(3i32.to_le_bytes().as_slice())
-        );
-        assert_eq!(
-            column_stats.max_bytes_opt(),
-            Some(19i32.to_le_bytes().as_slice())
-        );
-    }
+    let check_column_stats = |column: &ColumnChunkMetaData, has_stats: bool| {
+        if has_stats {
+            assert!(column.page_encoding_stats().is_some());
+            assert!(column.statistics().is_some());
+            let column_stats = column.statistics().unwrap();
+            assert_eq!(column_stats.min_bytes_opt(), Some(expected_min.as_slice()));
+            assert_eq!(column_stats.max_bytes_opt(), Some(expected_max.as_slice()));
+        } else {
+            assert!(column.page_encoding_stats().is_none());
+            assert!(column.statistics().is_none());
+        }
+    };
+
+    // Check column statistics that are produced on write are complete
+    let row_group = metadata.row_group(0);
+    check_column_stats(row_group.column(0), true);
+    check_column_stats(row_group.column(1), true);
 
     // Check column statistics are read given plaintext footer and available decryption properties
     let options =
         ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
     let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
     let metadata = reader_metadata.metadata();
-
-    assert_eq!(metadata.num_row_groups(), 1);
-
-    let row_group = &metadata.row_group(0);
-    assert_eq!(row_group.columns().len(), 2);
-
-    // Statistics should be available from decrypted data
-    for column in row_group.columns() {
-        assert!(column.page_encoding_stats().is_some());
-        assert!(column.statistics().is_some());
-        let column_stats = column.statistics().unwrap();
-        assert_eq!(
-            column_stats.min_bytes_opt(),
-            Some(3i32.to_le_bytes().as_slice())
-        );
-        assert_eq!(
-            column_stats.max_bytes_opt(),
-            Some(19i32.to_le_bytes().as_slice())
-        );
-    }
+    let row_group = metadata.row_group(0);
+    check_column_stats(row_group.column(0), true);
+    check_column_stats(row_group.column(1), true);
 
     // Check column statistics are not read given plaintext footer and decryption properties are not available
     let options = ArrowReaderOptions::default();
     let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
     let metadata = reader_metadata.metadata();
-
-    assert_eq!(metadata.num_row_groups(), 1);
-
-    let row_group = &metadata.row_group(0);
-    assert_eq!(row_group.columns().len(), 2);
-    assert!(&row_group.column(0).statistics().is_none());
-    assert!(&row_group.column(1).statistics().is_some());
-    assert!(&row_group.column(0).page_encoding_stats().is_none());
-    assert!(&row_group.column(1).page_encoding_stats().is_some());
-
-    let column_stats = &row_group.column(1).statistics().unwrap();
-    assert_eq!(
-        column_stats.min_bytes_opt(),
-        Some(3i32.to_le_bytes().as_slice())
-    );
-    assert_eq!(
-        column_stats.max_bytes_opt(),
-        Some(19i32.to_le_bytes().as_slice())
-    );
+    let row_group = metadata.row_group(0);
+    check_column_stats(row_group.column(0), false);
+    check_column_stats(row_group.column(1), true);
 }
 
 #[test]
