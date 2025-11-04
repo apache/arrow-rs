@@ -418,6 +418,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         self.name
                     ));
                 }
+                // unknown logical type means just use physical type
+                (LogicalType::_Unknown{ .. }, _) => {}
                 (a, b) => {
                     return Err(general_err!(
                         "Cannot annotate {:?} from {} for field '{}'",
