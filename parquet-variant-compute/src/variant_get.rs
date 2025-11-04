@@ -311,7 +311,8 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
         Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, NullBuilder, LargeStringArray, StringArray, StringViewArray, StructArray, Time64MicrosecondArray
+        Int16Array, Int32Array, Int64Array, LargeStringArray, NullBuilder, StringArray,
+        StringViewArray, StructArray, Time64MicrosecondArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
