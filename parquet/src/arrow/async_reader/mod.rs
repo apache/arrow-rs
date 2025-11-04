@@ -54,7 +54,7 @@ pub use metadata::*;
 mod store;
 
 use crate::DecodeResult;
-use crate::arrow::push_decoder::{ParquetPushDecoder, ParquetPushDecoderBuilder};
+use crate::arrow::push_decoder::{NoInput, ParquetPushDecoder, ParquetPushDecoderBuilder};
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -500,9 +500,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         let decoder = ParquetPushDecoderBuilder {
-            // Async reader doesn't know the overall size of the input, but it
-            // is not required for decoding as we will already have the metadata
-            input: 0,
+            input: NoInput,
             metadata,
             schema,
             fields,
