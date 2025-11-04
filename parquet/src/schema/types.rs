@@ -959,7 +959,7 @@ impl ColumnDescriptor {
     /// Returns the sort order for this column
     pub fn sort_order(&self) -> SortOrder {
         ColumnOrder::get_sort_order(
-            self.logical_type_ref(),
+            self.logical_type(),
             self.converted_type(),
             self.physical_type(),
         )

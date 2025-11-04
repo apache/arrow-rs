@@ -785,7 +785,7 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
         for (i, column) in schema_descr.columns().iter().enumerate() {
             if let ColumnOrder::TYPE_DEFINED_ORDER(_) = cos[i] {
                 let sort_order = ColumnOrder::get_sort_order(
-                    column.logical_type_ref(),
+                    column.logical_type(),
                     column.converted_type(),
                     column.physical_type(),
                 );

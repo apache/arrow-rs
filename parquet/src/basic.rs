@@ -1133,7 +1133,7 @@ pub enum ColumnOrder {
 impl ColumnOrder {
     /// Returns sort order for a physical/logical type.
     pub fn get_sort_order(
-        logical_type: Option<&LogicalType>,
+        logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
     ) -> SortOrder {
@@ -2143,7 +2143,7 @@ mod tests {
         fn check_sort_order(types: Vec<LogicalType>, expected_order: SortOrder) {
             for tpe in types {
                 assert_eq!(
-                    ColumnOrder::get_sort_order(Some(&tpe), ConvertedType::NONE, Type::BYTE_ARRAY),
+                    ColumnOrder::get_sort_order(Some(tpe), ConvertedType::NONE, Type::BYTE_ARRAY),
                     expected_order
                 );
             }
