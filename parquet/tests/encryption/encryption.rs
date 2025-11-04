@@ -755,7 +755,26 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
     for batch in record_batches.clone() {
         writer.write(&batch).unwrap();
     }
-    let _file_metadata = writer.close().unwrap();
+    let metadata = writer.close().unwrap();
+
+    // Check column statistics that are produced on write are complete
+    assert_eq!(metadata.num_row_groups(), 1);
+    let row_group = &metadata.row_group(0);
+    assert_eq!(row_group.columns().len(), 2);
+
+    for column in row_group.columns() {
+        assert!(column.page_encoding_stats().is_some());
+        assert!(column.statistics().is_some());
+        let column_stats = column.statistics().unwrap();
+        assert_eq!(
+            column_stats.min_bytes_opt(),
+            Some(3i32.to_le_bytes().as_slice())
+        );
+        assert_eq!(
+            column_stats.max_bytes_opt(),
+            Some(19i32.to_le_bytes().as_slice())
+        );
+    }
 
     // Check column statistics are read given plaintext footer and available decryption properties
     let options =
@@ -765,13 +784,12 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
 
     assert_eq!(metadata.num_row_groups(), 1);
 
-    let row_group = &metadata.row_groups()[0];
+    let row_group = &metadata.row_group(0);
     assert_eq!(row_group.columns().len(), 2);
 
     // Statistics should be available from decrypted data
-    assert!(&row_group.column(0).statistics().is_some());
-    assert!(&row_group.column(1).statistics().is_some());
     for column in row_group.columns() {
+        assert!(column.page_encoding_stats().is_some());
         assert!(column.statistics().is_some());
         let column_stats = column.statistics().unwrap();
         assert_eq!(
@@ -791,12 +809,14 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
 
     assert_eq!(metadata.num_row_groups(), 1);
 
-    let row_group = &metadata.row_groups()[0];
+    let row_group = &metadata.row_group(0);
     assert_eq!(row_group.columns().len(), 2);
     assert!(&row_group.column(0).statistics().is_none());
     assert!(&row_group.column(1).statistics().is_some());
+    assert!(&row_group.column(0).page_encoding_stats().is_none());
+    assert!(&row_group.column(1).page_encoding_stats().is_some());
 
-    let column_stats = &row_group.columns()[1].statistics().unwrap();
+    let column_stats = &row_group.column(1).statistics().unwrap();
     assert_eq!(
         column_stats.min_bytes_opt(),
         Some(3i32.to_le_bytes().as_slice())
