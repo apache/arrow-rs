@@ -16,8 +16,9 @@
 // under the License.
 
 use arrow::array::{
-    ArrayRef, BinaryViewArray, BooleanBuilder, FixedSizeBinaryBuilder, NullArray,
-    NullBufferBuilder, PrimitiveBuilder,
+    ArrayRef, BinaryViewArray, BooleanBuilder, FixedSizeBinaryBuilder, LargeStringBuilder,
+    NullArray, NullBufferBuilder, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder,
+    StringViewBuilder,
 };
 use arrow::compute::{CastOptions, DecimalCast};
 use arrow::datatypes::{self, DataType, DecimalType};
@@ -62,6 +63,9 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Time(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Time64MicrosecondType>),
     Date(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date32Type>),
     Uuid(VariantToUuidArrowRowBuilder<'a>),
+    String(VariantToStringArrowBuilder<'a, StringBuilder>),
+    LargeString(VariantToStringArrowBuilder<'a, LargeStringBuilder>),
+    StringView(VariantToStringArrowBuilder<'a, StringViewBuilder>),
 }
 
 /// Builder for converting variant values into strongly typed Arrow arrays.
@@ -104,6 +108,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Time(b) => b.append_null(),
             Date(b) => b.append_null(),
             Uuid(b) => b.append_null(),
+            String(b) => b.append_null(),
+            LargeString(b) => b.append_null(),
+            StringView(b) => b.append_null(),
         }
     }
 
@@ -134,6 +141,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Time(b) => b.append_value(value),
             Date(b) => b.append_value(value),
             Uuid(b) => b.append_value(value),
+            String(b) => b.append_value(value),
+            LargeString(b) => b.append_value(value),
+            StringView(b) => b.append_value(value),
         }
     }
 
@@ -164,6 +174,9 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Time(b) => b.finish(),
             Date(b) => b.finish(),
             Uuid(b) => b.finish(),
+            String(b) => b.finish(),
+            LargeString(b) => b.finish(),
+            StringView(b) => b.finish(),
         }
     }
 }
@@ -304,6 +317,11 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
                 "FixedSizeBinary({size}) is not a valid variant shredding type. Only FixedSizeBinary(16) for UUID is supported."
             )));
         }
+        DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
+        DataType::LargeUtf8 => {
+            LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
+        }
+        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(cast_options, capacity)),
         _ if data_type.is_primitive() => {
             return Err(ArrowError::NotYetImplemented(format!(
                 "Primitive data_type {data_type:?} not yet implemented"
@@ -450,6 +468,13 @@ macro_rules! define_variant_to_primitive_builder {
         }
     }
 }
+
+define_variant_to_primitive_builder!(
+    struct VariantToStringArrowBuilder<'a, B: StringLikeArrayBuilder>
+    |capacity| -> B { B::with_capacity(capacity) },
+    |value| value.as_string(),
+    type_name: B::type_name()
+);
 
 define_variant_to_primitive_builder!(
     struct VariantToBooleanArrowRowBuilder<'a>
