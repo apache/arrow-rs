@@ -836,6 +836,13 @@ impl MetadataObjectWriter {
                     column_index,
                     None,
                 )?;
+                let statistics = column_chunk.statistics.clone();
+                if file_encryptor.properties().encrypt_footer() {
+                    column_chunk = ColumnChunkMetaData {
+                        statistics: None,
+                        ..column_chunk
+                    };
+                }
                 // create temp ColumnMetaData that we can encrypt
                 let mut buffer: Vec<u8> = vec![];
                 {
@@ -843,7 +850,12 @@ impl MetadataObjectWriter {
                     serialize_column_meta_data(&column_chunk, &mut prot)?;
                 }
                 let ciphertext = column_encryptor.encrypt(&buffer, &aad)?;
-
+                if file_encryptor.properties().encrypt_footer() {
+                    column_chunk = ColumnChunkMetaData {
+                        statistics,
+                        ..column_chunk
+                    };
+                }
                 column_chunk.encrypted_column_metadata = Some(ciphertext);
             }
         }

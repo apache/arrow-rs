@@ -770,6 +770,7 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
 
     // Statistics should be available from decrypted data
     assert!(&row_group.columns()[0].statistics().is_some());
+    assert!(&row_group.columns()[1].statistics().is_some());
     let column_stats = &row_group.columns()[0].statistics().unwrap();
     assert_eq!(
         column_stats.min_bytes_opt(),
