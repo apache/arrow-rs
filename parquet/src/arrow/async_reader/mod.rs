@@ -196,7 +196,7 @@ impl ArrowReaderMetadata {
 #[doc(hidden)]
 /// Newtype (wrapper) used within [`ArrowReaderBuilder`] to distinguish sync readers from async
 ///
-/// Allows sharing the same builder different readers while keeping the same
+/// Allows sharing the same builder for different readers while keeping the same
 /// ParquetRecordBatchStreamBuilder API
 pub struct AsyncReader<T>(T);
 
@@ -542,7 +542,7 @@ enum RequestState<T> {
         ranges: Vec<Range<u64>>,
         /// Future that will resolve (input, requested_ranges)
         ///
-        /// Note the future owns the reader while the request it outstanding
+        /// Note the future owns the reader while the request is outstanding
         /// and returns it upon completion
         future: BoxFuture<'static, Result<(T, Vec<Bytes>)>>,
     },
@@ -553,7 +553,7 @@ impl<T> RequestState<T>
 where
     T: AsyncFileReader + Unpin + Send + 'static,
 {
-    // Issue a request to fetch a single range, returining the Outstanding state
+    // Issue a request to fetch a single range, returning the Outstanding state
     fn begin_request(mut input: T, ranges: Vec<Range<u64>>) -> Self {
         let ranges_captured = ranges.clone();
 
