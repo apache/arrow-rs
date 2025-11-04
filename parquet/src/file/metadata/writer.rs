@@ -837,8 +837,8 @@ impl MetadataObjectWriter {
                     None,
                 )?;
 
-                let encrypt_footer = file_encryptor.properties().encrypt_footer();
-                let (statistics, encoding_stats) = if encrypt_footer {
+                let plaintext_footer = !file_encryptor.properties().encrypt_footer();
+                let (statistics, encoding_stats) = if plaintext_footer {
                     let s = std::mem::take(&mut column_chunk.statistics);
                     let e = std::mem::take(&mut column_chunk.encoding_stats);
                     (s, e)
@@ -852,7 +852,7 @@ impl MetadataObjectWriter {
                     serialize_column_meta_data(&column_chunk, &mut prot)?;
                 }
                 let ciphertext = column_encryptor.encrypt(&buffer, &aad)?;
-                if encrypt_footer {
+                if plaintext_footer {
                     column_chunk.statistics = statistics;
                     column_chunk.encoding_stats = encoding_stats;
                 }
