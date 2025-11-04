@@ -101,10 +101,11 @@ pub mod statistics;
 pub struct ArrowReaderBuilder<T> {
     /// The "input" to read parquet data from.
     ///
-    /// Note in the case of the [`ParquetPushDecoderBuilder`], this is not a reader
-    /// but instead a u64. If this is non zero it is a file length.
+    /// Note in the case of the [`ParquetPushDecoderBuilder`], there
+    /// is no underlying input, which is indicated by a type parameter of [`NoInput`]
     ///
     /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`NoInput`]: crate::arrow::push_decoder::NoInput
     pub(crate) input: T,
 
     pub(crate) metadata: Arc<ParquetMetaData>,
