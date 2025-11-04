@@ -994,8 +994,10 @@ enum BoundaryOrder {
 /// Edge interpolation algorithm for [`LogicalType::Geography`]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(i32)]
+#[derive(Default)]
 pub enum EdgeInterpolationAlgorithm {
     /// Edges are interpolated as geodesics on a sphere.
+    #[default]
     SPHERICAL = 0,
     /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
     VINCENTY = 1,
@@ -1045,12 +1047,6 @@ impl WriteThrift for EdgeInterpolationAlgorithm {
 }
 
 write_thrift_field!(EdgeInterpolationAlgorithm, FieldType::I32);
-
-impl Default for EdgeInterpolationAlgorithm {
-    fn default() -> Self {
-        Self::SPHERICAL
-    }
-}
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `BloomFilterAlgorithm`
