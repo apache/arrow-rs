@@ -710,6 +710,11 @@ impl BasicTypeInfo {
         self.logical_type.clone()
     }
 
+    /// Return a reference to the [`LogicalType`].
+    pub fn logical_type_ref(&self) -> Option<&LogicalType> {
+        self.logical_type.as_ref()
+    }
+
     /// Returns `true` if id is set, `false` otherwise.
     pub fn has_id(&self) -> bool {
         self.id.is_some()
@@ -910,6 +915,11 @@ impl ColumnDescriptor {
         self.primitive_type.get_basic_info().logical_type()
     }
 
+    /// Returns a reference to the [`LogicalType`] for this column.
+    pub fn logical_type_ref(&self) -> Option<&LogicalType> {
+        self.primitive_type.get_basic_info().logical_type_ref()
+    }
+
     /// Returns physical type for this column.
     /// Note that it will panic if called on a non-primitive type.
     pub fn physical_type(&self) -> PhysicalType {
@@ -949,7 +959,7 @@ impl ColumnDescriptor {
     /// Returns the sort order for this column
     pub fn sort_order(&self) -> SortOrder {
         ColumnOrder::get_sort_order(
-            self.logical_type(),
+            self.logical_type_ref(),
             self.converted_type(),
             self.physical_type(),
         )
