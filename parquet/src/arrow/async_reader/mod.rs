@@ -553,7 +553,7 @@ impl<T> RequestState<T>
 where
     T: AsyncFileReader + Unpin + Send + 'static,
 {
-    // Issue a request to fetch a single range, returning the Outstanding state
+    /// Issue a request to fetch `ranges`, returning the Outstanding state
     fn begin_request(mut input: T, ranges: Vec<Range<u64>>) -> Self {
         let ranges_captured = ranges.clone();
 
