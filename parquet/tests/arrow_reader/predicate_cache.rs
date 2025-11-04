@@ -23,7 +23,8 @@ use arrow::compute::and;
 use arrow::compute::kernels::cmp::{gt, lt};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{RecordBatch, StringViewArray};
+use arrow_array::{RecordBatch, StringArray, StringViewArray, StructArray};
+use arrow_schema::{DataType, Field};
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
@@ -80,6 +81,19 @@ async fn test_cache_disabled_with_filters() {
     test.run_async(async_builder).await;
 }
 
+#[tokio::test]
+async fn test_cache_projection_excludes_nested_columns() {
+    let test = ParquetPredicateCacheTest::new_nested().with_expected_records_read_from_cache(0);
+
+    let sync_builder = test.sync_builder();
+    let sync_builder = test.add_nested_filter(sync_builder);
+    test.run_sync(sync_builder);
+
+    let async_builder = test.async_builder().await;
+    let async_builder = test.add_nested_filter(async_builder);
+    test.run_async(async_builder).await;
+}
+
 // --  Begin test infrastructure --
 
 /// A test parquet file
@@ -100,6 +114,18 @@ impl ParquetPredicateCacheTest {
     fn new() -> Self {
         Self {
             bytes: TEST_FILE_DATA.clone(),
+            expected_records_read_from_cache: 0,
+        }
+    }
+
+    /// Create a new `TestParquetFile` with
+    /// 2 columns:
+    ///
+    /// * string column `a`
+    /// * nested struct column `b { aa, bb }`
+    fn new_nested() -> Self {
+        Self {
+            bytes: NESTED_TEST_FILE_DATA.clone(),
             expected_records_read_from_cache: 0,
         }
     }
@@ -152,6 +178,27 @@ impl ParquetPredicateCacheTest {
         builder
             .with_projection(ProjectionMask::columns(&schema_descr, ["a", "b"]))
             .with_row_filter(RowFilter::new(vec![Box::new(row_filter)]))
+    }
+
+    /// Add a filter on the nested leaf nodes
+    fn add_nested_filter<T>(&self, builder: ArrowReaderBuilder<T>) -> ArrowReaderBuilder<T> {
+        let schema_descr = builder.metadata().file_metadata().schema_descr_ptr();
+
+        // Build a RowFilter whose predicate projects a leaf under the nested root `b`
+        // Leaf indices are depth-first; with schema [a, b.aa, b.bb] we pick index 1 (b.aa)
+        let nested_leaf_mask = ProjectionMask::leaves(&schema_descr, vec![1]);
+
+        let always_true = ArrowPredicateFn::new(nested_leaf_mask.clone(), |batch: RecordBatch| {
+            Ok(arrow_array::BooleanArray::from(vec![
+                true;
+                batch.num_rows()
+            ]))
+        });
+        let row_filter = RowFilter::new(vec![Box::new(always_true)]);
+
+        builder
+            .with_projection(nested_leaf_mask)
+            .with_row_filter(row_filter)
     }
 
     /// Build the reader from the specified builder, reading all batches from it,
@@ -235,6 +282,42 @@ static TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
         writer.write(&chunk).unwrap();
         row_remain -= chunk_size;
     }
+    writer.close().unwrap();
+    Bytes::from(output)
+});
+
+/// Build a ParquetFile with a
+///
+/// * string column `a`
+/// * nested struct column `b { aa, bb }`
+static NESTED_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
+    const NUM_ROWS: usize = 100;
+    let a: StringArray = (0..NUM_ROWS).map(|i| Some(format!("r{i}"))).collect();
+
+    let aa: StringArray = (0..NUM_ROWS).map(|i| Some(format!("v{i}"))).collect();
+    let bb: StringArray = (0..NUM_ROWS).map(|i| Some(format!("w{i}"))).collect();
+    let b = StructArray::from(vec![
+        (
+            Arc::new(Field::new("aa", DataType::Utf8, true)),
+            Arc::new(aa) as ArrayRef,
+        ),
+        (
+            Arc::new(Field::new("bb", DataType::Utf8, true)),
+            Arc::new(bb) as ArrayRef,
+        ),
+    ]);
+
+    let input_batch = RecordBatch::try_from_iter([
+        ("a", Arc::new(a) as ArrayRef),
+        ("b", Arc::new(b) as ArrayRef),
+    ])
+    .unwrap();
+
+    let mut output = Vec::new();
+    let writer_options = None;
+    let mut writer =
+        ArrowWriter::try_new(&mut output, input_batch.schema(), writer_options).unwrap();
+    writer.write(&input_batch).unwrap();
     writer.close().unwrap();
     Bytes::from(output)
 });

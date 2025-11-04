@@ -56,8 +56,20 @@ use parquet::format::PageHeader;
 use parquet::thrift::TSerializable;
 
 #[derive(Serialize, Debug)]
+struct Index {
+    offset: i64,
+    length: Option<i32>,
+}
+
+#[derive(Serialize, Debug)]
+struct Footer {
+    metadata_size: Option<usize>,
+}
+
+#[derive(Serialize, Debug)]
 struct ParquetFile {
     row_groups: Vec<RowGroup>,
+    footer: Footer,
 }
 
 #[derive(Serialize, Debug)]
@@ -72,6 +84,9 @@ struct ColumnChunk {
     has_offset_index: bool,
     has_column_index: bool,
     has_bloom_filter: bool,
+    offset_index: Option<Index>,
+    column_index: Option<Index>,
+    bloom_filter: Option<Index>,
     pages: Vec<Page>,
 }
 
@@ -89,7 +104,10 @@ struct Page {
 
 #[allow(deprecated)]
 fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
-    let metadata = ParquetMetaDataReader::new().parse_and_finish(reader)?;
+    let mut metadata_reader = ParquetMetaDataReader::new();
+    metadata_reader.try_parse(reader)?;
+    let metadata_size = metadata_reader.metadata_size();
+    let metadata = metadata_reader.finish()?;
     let schema = metadata.file_metadata().schema_descr();
 
     let row_groups = (0..metadata.num_row_groups())
@@ -155,6 +173,18 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
                         has_offset_index: column.offset_index_offset().is_some(),
                         has_column_index: column.column_index_offset().is_some(),
                         has_bloom_filter: column.bloom_filter_offset().is_some(),
+                        offset_index: column.offset_index_offset().map(|offset| Index {
+                            offset,
+                            length: column.offset_index_length(),
+                        }),
+                        column_index: column.column_index_offset().map(|offset| Index {
+                            offset,
+                            length: column.column_index_length(),
+                        }),
+                        bloom_filter: column.bloom_filter_offset().map(|offset| Index {
+                            offset,
+                            length: column.bloom_filter_length(),
+                        }),
                         pages,
                     })
                 })
@@ -167,7 +197,10 @@ fn do_layout<C: ChunkReader>(reader: &C) -> Result<ParquetFile> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(ParquetFile { row_groups })
+    Ok(ParquetFile {
+        row_groups,
+        footer: Footer { metadata_size },
+    })
 }
 
 /// Reads the page header at `offset` from `reader`, returning

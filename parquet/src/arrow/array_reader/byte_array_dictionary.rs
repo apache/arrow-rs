@@ -293,7 +293,7 @@ where
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 let bit_width = data[0];
                 let mut decoder = RleDecoder::new(bit_width);
-                decoder.set_data(data.slice(1..));
+                decoder.set_data(data.slice(1..))?;
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),
