@@ -69,7 +69,7 @@ pub struct MutableBuffer {
 }
 
 impl MutableBuffer {
-    /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
+    /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity` bytes
     ///
     /// See [`MutableBuffer::with_capacity`].
     #[inline]
@@ -77,7 +77,7 @@ impl MutableBuffer {
         Self::with_capacity(capacity)
     }
 
-    /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity`.
+    /// Allocate a new [MutableBuffer] with initial capacity to be at least `capacity` bytes
     ///
     /// # Panics
     ///

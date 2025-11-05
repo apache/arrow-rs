@@ -16,6 +16,7 @@
 // under the License.
 
 use super::{Buffer, MutableBuffer};
+use crate::bit_util::bitwise_binary_op;
 use crate::util::bit_util::ceil;
 
 /// Apply a bitwise operation `op` to four inputs and return the result as a Buffer.
@@ -66,33 +67,31 @@ pub fn bitwise_bin_op_helper<F>(
     right: &Buffer,
     right_offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
     F: FnMut(u64, u64) -> u64,
 {
-    let left_chunks = left.bit_chunks(left_offset_in_bits, len_in_bits);
-    let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
+    let len_bytes = ceil(len_in_bits + left_offset_in_bits, 8);
+    let mut result = left[0..len_bytes].to_vec();
+    bitwise_binary_op(
+        &mut result,
+        left_offset_in_bits,
+        right,
+        right_offset_in_bits,
+        len_in_bits,
+        op,
+    );
 
-    let chunks = left_chunks
-        .iter()
-        .zip(right_chunks.iter())
-        .map(|(left, right)| op(left, right));
-    // Soundness: `BitChunks` is a `BitChunks` iterator which
-    // correctly reports its upper bound
-    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    buffer.extend_from_slice(rem);
-
-    buffer.into()
+    result.into()
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
+///
+/// The output is guaranteed to have
+/// 1. all bits outside the specified range set to zero
+/// 2. start at offset zero
 pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
@@ -102,26 +101,14 @@ pub fn bitwise_unary_op_helper<F>(
 where
     F: FnMut(u64) -> u64,
 {
-    // reserve capacity and set length so we can get a typed view of u64 chunks
-    let mut result =
-        MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
-
-    let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
-
-    let result_chunks = result.typed_data_mut::<u64>().iter_mut();
-
-    result_chunks
-        .zip(left_chunks.iter())
-        .for_each(|(res, left)| {
-            *res = op(left);
-        });
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    result.extend_from_slice(rem);
-
+    if len_in_bits == 0 {
+        return Buffer::default();
+    }
+    let len_in_bytes = ceil(len_in_bits, 8);
+    let mut result = vec![0u8; len_in_bytes];
+    bitwise_binary_op(&mut result, 0, left, offset_in_bits, len_in_bits, |_, b| {
+        op(b)
+    });
     result.into()
 }
 
