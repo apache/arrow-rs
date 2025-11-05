@@ -39,7 +39,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    MetadataOptions, PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
@@ -390,7 +390,7 @@ pub struct ArrowReaderOptions {
     /// Policy for reading offset and column indexes.
     pub(crate) page_index_policy: PageIndexPolicy,
     /// Options to control reading of Parquet metadata
-    metadata_options: MetadataOptions,
+    metadata_options: ParquetMetaDataOptions,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -537,7 +537,7 @@ impl ArrowReaderOptions {
     }
 
     /// Retrieve the currently set metadata decoding options.
-    pub fn metadata_options(&self) -> &MetadataOptions {
+    pub fn metadata_options(&self) -> &ParquetMetaDataOptions {
         &self.metadata_options
     }
 

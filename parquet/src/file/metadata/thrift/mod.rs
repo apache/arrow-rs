@@ -43,7 +43,7 @@ use crate::{
     file::{
         metadata::{
             ColumnChunkMetaData, ColumnChunkMetaDataBuilder, KeyValue, LevelHistogram,
-            MetadataOptions, PageEncodingStats, ParquetMetaData, RowGroupMetaData,
+            PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
             RowGroupMetaDataBuilder, SortingColumn,
         },
         statistics::ValueStatistics,
@@ -698,7 +698,7 @@ pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> 
 /// the Parquet footer. Page indexes will need to be added later.
 pub(crate) fn parquet_metadata_from_bytes(
     buf: &[u8],
-    options: Option<&MetadataOptions>,
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
     let mut prot = ThriftSliceInputProtocol::new(buf);
 

@@ -22,7 +22,7 @@ use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::decode_metadata;
 use crate::file::metadata::thrift::parquet_schema_from_bytes;
 use crate::file::metadata::{
-    FooterTail, MetadataOptions, ParquetMetaData, ParquetMetaDataPushDecoder,
+    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
 };
 use crate::file::reader::ChunkReader;
 use crate::schema::types::SchemaDescriptor;
@@ -73,7 +73,7 @@ pub struct ParquetMetaDataReader {
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
     prefetch_hint: Option<usize>,
-    metadata_options: Option<Arc<MetadataOptions>>,
+    metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
@@ -165,7 +165,7 @@ impl ParquetMetaDataReader {
     }
 
     /// Sets the [`MetadataOptions`] to use when decoding
-    pub fn with_metadata_options(mut self, options: Option<MetadataOptions>) -> Self {
+    pub fn with_metadata_options(mut self, options: Option<ParquetMetaDataOptions>) -> Self {
         self.metadata_options = options.map(Arc::new);
         self
     }
@@ -819,7 +819,7 @@ impl ParquetMetaDataReader {
     /// metadata parsing options.
     pub fn decode_metadata_with_options(
         buf: &[u8],
-        options: Option<&MetadataOptions>,
+        options: Option<&ParquetMetaDataOptions>,
     ) -> Result<ParquetMetaData> {
         decode_metadata(buf, options)
     }

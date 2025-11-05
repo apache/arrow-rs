@@ -23,7 +23,7 @@
 use crate::errors::ParquetError;
 use crate::file::metadata::thrift::parquet_metadata_from_bytes;
 use crate::file::metadata::{
-    ColumnChunkMetaData, MetadataOptions, PageIndexPolicy, ParquetMetaData,
+    ColumnChunkMetaData, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions,
 };
 
 use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -54,7 +54,7 @@ mod inner {
         // the credentials and keys needed to decrypt metadata
         file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
         // metadata parsing options
-        metadata_options: Option<Arc<MetadataOptions>>,
+        metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     }
 
     impl MetadataParser {
@@ -70,7 +70,10 @@ mod inner {
             self
         }
 
-        pub(crate) fn with_metadata_options(self, options: Option<Arc<MetadataOptions>>) -> Self {
+        pub(crate) fn with_metadata_options(
+            self,
+            options: Option<Arc<ParquetMetaDataOptions>>,
+        ) -> Self {
             Self {
                 metadata_options: options,
                 ..self
@@ -163,7 +166,7 @@ mod inner {
     #[derive(Debug, Default)]
     pub(crate) struct MetadataParser {
         // metadata parsing options
-        metadata_options: Option<Arc<MetadataOptions>>,
+        metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     }
 
     impl MetadataParser {
@@ -171,7 +174,10 @@ mod inner {
             MetadataParser::default()
         }
 
-        pub(crate) fn with_metadata_options(self, options: Option<Arc<MetadataOptions>>) -> Self {
+        pub(crate) fn with_metadata_options(
+            self,
+            options: Option<Arc<ParquetMetaDataOptions>>,
+        ) -> Self {
             Self {
                 metadata_options: options,
             }
@@ -222,7 +228,7 @@ mod inner {
 /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
 pub(crate) fn decode_metadata(
     buf: &[u8],
-    options: Option<&MetadataOptions>,
+    options: Option<&ParquetMetaDataOptions>,
 ) -> crate::errors::Result<ParquetMetaData> {
     parquet_metadata_from_bytes(buf, options)
 }

@@ -27,11 +27,11 @@ use crate::schema::types::SchemaDescPtr;
 /// [`ParquetMetaDataReader`]: crate::file::metadata::ParquetMetaDataReader
 /// [`ParquetMetaDataPushDecoder`]: crate::file::metadata::ParquetMetaDataPushDecoder
 #[derive(Default, Debug, Clone)]
-pub struct MetadataOptions {
+pub struct ParquetMetaDataOptions {
     schema_descr: Option<SchemaDescPtr>,
 }
 
-impl MetadataOptions {
+impl ParquetMetaDataOptions {
     /// Return a new default [`MetadataOptions`].
     pub fn new() -> Self {
         Default::default()
@@ -55,7 +55,7 @@ mod tests {
 
     use crate::{
         DecodeResult,
-        file::metadata::{MetadataOptions, ParquetMetaDataPushDecoder},
+        file::metadata::{ParquetMetaDataOptions, ParquetMetaDataPushDecoder},
         util::test_common::file_util::get_test_file,
     };
     use std::{io::Read, sync::Arc};
@@ -78,7 +78,7 @@ mod tests {
             _ => panic!("could not parse metadata"),
         };
 
-        let mut options = MetadataOptions::new();
+        let mut options = ParquetMetaDataOptions::new();
         options.set_schema(expected.file_metadata().schema_descr_ptr());
         let options = Arc::new(options);
 

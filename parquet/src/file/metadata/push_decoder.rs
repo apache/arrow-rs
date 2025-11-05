@@ -21,7 +21,7 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::{MetadataParser, parse_column_index, parse_offset_index};
-use crate::file::metadata::{FooterTail, MetadataOptions, PageIndexPolicy, ParquetMetaData};
+use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions};
 use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
 use bytes::Bytes;
@@ -301,7 +301,7 @@ impl ParquetMetaDataPushDecoder {
     }
 
     /// Set the options to use when decoding the Parquet metadata.
-    pub fn with_metadata_options(mut self, options: Option<Arc<MetadataOptions>>) -> Self {
+    pub fn with_metadata_options(mut self, options: Option<Arc<ParquetMetaDataOptions>>) -> Self {
         self.metadata_parser = self.metadata_parser.with_metadata_options(options);
         self
     }

@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
 use parquet::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, MetadataOptions, PageEncodingStats, ParquetMetaData,
+    ColumnChunkMetaData, FileMetaData, PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions,
     ParquetMetaDataReader, ParquetMetaDataWriter, RowGroupMetaData,
 };
 use parquet::file::statistics::Statistics;
@@ -165,7 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let schema = ParquetMetaDataReader::decode_schema(&meta_data).unwrap();
-    let mut options = MetadataOptions::new();
+    let mut options = ParquetMetaDataOptions::new();
     options.set_schema(schema);
     c.bench_function("decode metadata with schema", |b| {
         b.iter(|| {
@@ -182,7 +182,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let schema = ParquetMetaDataReader::decode_schema(&buf).unwrap();
-    let mut options = MetadataOptions::new();
+    let mut options = ParquetMetaDataOptions::new();
     options.set_schema(schema);
     c.bench_function("decode metadata (wide) with schema", |b| {
         b.iter(|| {
