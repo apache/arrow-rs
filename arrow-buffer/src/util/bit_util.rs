@@ -491,7 +491,7 @@ struct U64UnalignedSlice<'a> {
 }
 
 impl<'a> U64UnalignedSlice<'a> {
-    /// Create a new [`U64UnalignedSlice`] from a [`MutableBuffer`]
+    /// Create a new [`U64UnalignedSlice`] from a `&mut [u8]` buffer
     ///
     /// return the [`U64UnalignedSlice`] and slice of bytes that are not part of the u64 chunks (guaranteed to be less than 8 bytes)
     ///
