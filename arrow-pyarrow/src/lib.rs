@@ -532,10 +532,10 @@ impl IntoPyArrow for ArrowArrayStreamReader {
 #[derive(Debug)]
 pub struct PyArrowType<T>(pub T);
 
-impl<'source, T: FromPyArrow> FromPyObject<'source, 'source> for PyArrowType<T> {
+impl<T: FromPyArrow> FromPyObject<'_, '_> for PyArrowType<T> {
     type Error = PyErr;
 
-    fn extract(value: Borrowed<'source, 'source, PyAny>) -> PyResult<Self> {
+    fn extract(value: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
         Ok(Self(T::from_pyarrow_bound(&*value)?))
     }
 }
