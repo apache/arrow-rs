@@ -38,7 +38,7 @@ impl ParquetMetaDataOptions {
     }
 
     /// Returns an optional [`SchemaDescPtr`] to use when decoding. If this is not `None` then
-    /// the schema in the footer will be skipped
+    /// the schema in the footer will be skipped.
     pub fn schema(&self) -> Option<&SchemaDescPtr> {
         self.schema_descr.as_ref()
     }
@@ -46,6 +46,12 @@ impl ParquetMetaDataOptions {
     /// Provide a schema to use when decoding the metadata.
     pub fn set_schema(&mut self, val: SchemaDescPtr) {
         self.schema_descr = Some(val);
+    }
+
+    /// Provide a schema to use when decoding the metadata. Returns `Self` for chaining.
+    pub fn with_schema(mut self, val: SchemaDescPtr) -> Self {
+        self.schema_descr = Some(val);
+        self
     }
 }
 

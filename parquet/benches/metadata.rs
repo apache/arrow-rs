@@ -165,8 +165,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let schema = ParquetMetaDataReader::decode_schema(&meta_data).unwrap();
-    let mut options = ParquetMetaDataOptions::new();
-    options.set_schema(schema);
+    let options = ParquetMetaDataOptions::new().with_schema(schema);
     c.bench_function("decode metadata with schema", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
@@ -182,8 +181,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let schema = ParquetMetaDataReader::decode_schema(&buf).unwrap();
-    let mut options = ParquetMetaDataOptions::new();
-    options.set_schema(schema);
+    let options = ParquetMetaDataOptions::new().with_schema(schema);
     c.bench_function("decode metadata (wide) with schema", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
