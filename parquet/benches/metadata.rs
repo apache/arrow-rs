@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::hint::black_box;
 use std::sync::Arc;
 
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
@@ -32,7 +33,7 @@ use rand::Rng;
 
 use arrow::util::test_util::seedable_rng;
 use bytes::Bytes;
-use criterion::*;
+use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::file::reader::SerializedFileReader;
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 
