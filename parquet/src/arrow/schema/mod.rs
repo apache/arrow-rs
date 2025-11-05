@@ -1840,7 +1840,7 @@ mod tests {
                 // This is because the Arrow conversion always sets logical type,
                 // even if there wasn't originally one.
                 // This is not an issue, but is an inconvenience for this test.
-                match a.logical_type() {
+                match a.logical_type_ref() {
                     Some(_) => {
                         assert_eq!(a, b)
                     }
@@ -2216,8 +2216,8 @@ mod tests {
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
 
         assert_eq!(
-            parquet_schema.column(0).logical_type(),
-            Some(LogicalType::Uuid)
+            parquet_schema.column(0).logical_type_ref(),
+            Some(&LogicalType::Uuid)
         );
 
         let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;
@@ -2237,8 +2237,8 @@ mod tests {
         let parquet_schema = ArrowSchemaConverter::new().convert(&arrow_schema)?;
 
         assert_eq!(
-            parquet_schema.column(0).logical_type(),
-            Some(LogicalType::Json)
+            parquet_schema.column(0).logical_type_ref(),
+            Some(&LogicalType::Json)
         );
 
         let arrow_schema = parquet_to_arrow_schema(&parquet_schema, None)?;

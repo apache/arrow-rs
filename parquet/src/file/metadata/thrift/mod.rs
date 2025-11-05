@@ -784,8 +784,8 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
     let column_orders = column_orders.map(|mut cos| {
         for (i, column) in schema_descr.columns().iter().enumerate() {
             if let ColumnOrder::TYPE_DEFINED_ORDER(_) = cos[i] {
-                let sort_order = ColumnOrder::get_sort_order(
-                    column.logical_type(),
+                let sort_order = ColumnOrder::sort_order_for_type(
+                    column.logical_type_ref(),
                     column.converted_type(),
                     column.physical_type(),
                 );
@@ -1357,7 +1357,7 @@ fn write_schema_helper<W: Write>(
                 } else {
                     None
                 },
-                logical_type: basic_info.logical_type(),
+                logical_type: basic_info.logical_type_ref().cloned(),
             };
             element.write_thrift(writer)
         }
@@ -1385,7 +1385,7 @@ fn write_schema_helper<W: Write>(
                 } else {
                     None
                 },
-                logical_type: basic_info.logical_type(),
+                logical_type: basic_info.logical_type_ref().cloned(),
             };
 
             element.write_thrift(writer)?;

@@ -5030,10 +5030,13 @@ mod tests {
             .expect("Error creating reader builder");
 
         let schema = builder.metadata().file_metadata().schema_descr();
-        assert_eq!(schema.column(0).logical_type(), Some(LogicalType::String));
         assert_eq!(
-            schema.column(1).logical_type(),
-            Some(LogicalType::_Unknown { field_id: 2555 })
+            schema.column(0).logical_type_ref(),
+            Some(&LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type_ref(),
+            Some(&LogicalType::_Unknown { field_id: 2555 })
         );
         assert_eq!(schema.column(1).physical_type(), PhysicalType::BYTE_ARRAY);
 
