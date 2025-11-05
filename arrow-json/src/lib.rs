@@ -285,30 +285,35 @@ mod tests {
     }
 
     #[test]
+    #[allow(invalid_from_utf8)]
     fn test_json_roundtrip_binary() {
-        let values: [Option<&[u8]>; 3] = [
+        let not_utf8: &[u8] = b"Not UTF8 \xa0\xa1!";
+        assert!(str::from_utf8(not_utf8).is_err());
+
+        let values: &[Option<&[u8]>] = &[
             Some(b"Ned Flanders" as &[u8]),
             None,
             Some(b"Troy McClure" as &[u8]),
+            Some(not_utf8),
         ];
         // Binary:
         {
-            let batch = build_array_binary::<i32>(&values);
+            let batch = build_array_binary::<i32>(values);
             assert_binary_json(&batch);
         }
         // LargeBinary:
         {
-            let batch = build_array_binary::<i64>(&values);
+            let batch = build_array_binary::<i64>(values);
             assert_binary_json(&batch);
         }
         // FixedSizeBinary:
         {
-            let batch = build_array_fixed_size_binary(12, &values);
+            let batch = build_array_fixed_size_binary(12, values);
             assert_binary_json(&batch);
         }
         // BinaryView:
         {
-            let batch = build_array_binary_view(&values);
+            let batch = build_array_binary_view(values);
             assert_binary_json(&batch);
         }
     }
