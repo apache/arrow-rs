@@ -364,7 +364,7 @@ mod tests {
             CompactMergeIndex { index: 1 },
         ];
 
-        let arrays = vec![a1, a2, a3];
+        let arrays = [a1, a2, a3];
         let array_refs = arrays.iter().map(|a| a as &dyn Array).collect::<Vec<_>>();
         let merged = merge_n(&array_refs, &indices).unwrap();
         let merged = merged.as_string::<i32>();
