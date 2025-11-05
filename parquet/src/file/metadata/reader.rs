@@ -78,7 +78,7 @@ pub struct ParquetMetaDataReader {
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
     #[cfg(feature = "encryption")]
-    file_decryption_properties: Option<std::sync::Arc<FileDecryptionProperties>>,
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 /// Describes the policy for reading page indexes
@@ -165,8 +165,8 @@ impl ParquetMetaDataReader {
     }
 
     /// Sets the [`MetadataOptions`] to use when decoding
-    pub fn with_metadata_options(mut self, options: Option<Arc<MetadataOptions>>) -> Self {
-        self.metadata_options = options;
+    pub fn with_metadata_options(mut self, options: Option<MetadataOptions>) -> Self {
+        self.metadata_options = options.map(|o| Arc::new(o));
         self
     }
 

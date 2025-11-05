@@ -172,7 +172,7 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         async move {
             let metadata_opts = if let Some(options) = options.as_ref() {
-                options.metadata_options().cloned()
+                Some(options.metadata_options().clone())
             } else {
                 None
             };

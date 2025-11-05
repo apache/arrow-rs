@@ -390,7 +390,7 @@ pub struct ArrowReaderOptions {
     /// Policy for reading offset and column indexes.
     pub(crate) page_index_policy: PageIndexPolicy,
     /// Options to control reading of Parquet metadata
-    metadata_options: Option<Arc<MetadataOptions>>,
+    metadata_options: MetadataOptions,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -508,12 +508,11 @@ impl ArrowReaderOptions {
         }
     }
 
-    /// Set the [`MetadataOptions`] used to control Parquet metadata decoding.
-    pub fn with_metadata_options(self, options: MetadataOptions) -> Self {
-        Self {
-            metadata_options: Some(Arc::new(options)),
-            ..self
-        }
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    pub fn with_parquet_schema(mut self, schema: Arc<SchemaDescriptor>) -> Self {
+        self.metadata_options.set_schema(schema);
+        self
     }
 
     /// Provide the file decryption properties to use when reading encrypted parquet files.
@@ -538,8 +537,8 @@ impl ArrowReaderOptions {
     }
 
     /// Retrive the currently set metadata decoding options.
-    pub fn metadata_options(&self) -> Option<&Arc<MetadataOptions>> {
-        self.metadata_options.as_ref()
+    pub fn metadata_options(&self) -> &MetadataOptions {
+        &self.metadata_options
     }
 
     /// Retrieve the currently set file decryption properties.
@@ -590,7 +589,7 @@ impl ArrowReaderMetadata {
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
         let metadata = ParquetMetaDataReader::new()
             .with_page_index_policy(options.page_index_policy)
-            .with_metadata_options(options.metadata_options.clone());
+            .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
             options.file_decryption_properties.as_ref().map(Arc::clone),
@@ -1220,7 +1219,7 @@ mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::{MetadataOptions, ParquetMetaData};
+    use crate::file::metadata::ParquetMetaData;
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -1247,8 +1246,7 @@ mod tests {
         let expected = builder.metadata;
         let schema = expected.file_metadata().schema_descr_ptr();
 
-        let meta_options = MetadataOptions::new().with_schema(schema.clone());
-        let arrow_options = ArrowReaderOptions::new().with_metadata_options(meta_options);
+        let arrow_options = ArrowReaderOptions::new().with_parquet_schema(schema.clone());
         let builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, arrow_options).unwrap();
 

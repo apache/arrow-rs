@@ -38,7 +38,7 @@ use crate::parquet_thrift::ThriftSliceInputProtocol;
 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use crate::record::Row;
 use crate::record::reader::RowIter;
-use crate::schema::types::Type as SchemaType;
+use crate::schema::types::{SchemaDescPtr, Type as SchemaType};
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
@@ -110,7 +110,7 @@ pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: Option<ReaderProperties>,
-    metadata_options: Option<Arc<MetadataOptions>>,
+    metadata_options: MetadataOptions,
 }
 
 impl ReadOptionsBuilder {
@@ -153,9 +153,10 @@ impl ReadOptionsBuilder {
         self
     }
 
-    /// Set the [`MetadataOptions`].
-    pub fn with_metadata_options(mut self, options: MetadataOptions) -> Self {
-        self.metadata_options = Some(Arc::new(options));
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    pub fn with_parquet_schema(mut self, schema: SchemaDescPtr) -> Self {
+        self.metadata_options.set_schema(schema);
         self
     }
 
@@ -182,7 +183,7 @@ pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: ReaderProperties,
-    metadata_options: Option<Arc<MetadataOptions>>,
+    metadata_options: MetadataOptions,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -203,7 +204,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
-            .with_metadata_options(options.metadata_options.clone())
+            .with_metadata_options(Some(options.metadata_options.clone()))
             .parse_and_finish(&chunk_reader)?
             .into_builder();
         let mut predicates = options.predicates;
@@ -2716,7 +2717,7 @@ mod tests {
         let expected = file_reader.metadata;
 
         let options = ReadOptionsBuilder::new()
-            .with_metadata_options(MetadataOptions::new().with_schema(schema))
+            .with_parquet_schema(schema)
             .build();
         let file_reader = SerializedFileReader::new_with_options(file, options).unwrap();
 

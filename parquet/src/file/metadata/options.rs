@@ -44,10 +44,8 @@ impl MetadataOptions {
     }
 
     /// Provide a schema to use when decoding the metadata.
-    pub fn with_schema(self, val: SchemaDescPtr) -> Self {
-        Self {
-            schema_descr: Some(val),
-        }
+    pub fn set_schema(&mut self, val: SchemaDescPtr) {
+        self.schema_descr = Some(val);
     }
 }
 
@@ -80,9 +78,10 @@ mod tests {
             _ => panic!("could not parse metadata"),
         };
 
-        let options = Arc::new(
-            MetadataOptions::new().with_schema(expected.file_metadata().schema_descr_ptr()),
-        );
+        let mut options = MetadataOptions::new();
+        options.set_schema(expected.file_metadata().schema_descr_ptr());
+        let options = Arc::new(options);
+
         let mut decoder = ParquetMetaDataPushDecoder::try_new(footer.len() as u64)
             .unwrap()
             .with_metadata_options(Some(options));
