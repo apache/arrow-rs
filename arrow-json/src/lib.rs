@@ -365,53 +365,30 @@ mod tests {
     }
 
     fn assert_binary_json(batch: &RecordBatch) {
-        // encode and check JSON with explicit nulls:
-        {
-            let mut buf = Vec::new();
-            let json_value: Value = {
-                let mut writer = WriterBuilder::new()
-                    .with_explicit_nulls(true)
-                    .build::<_, JsonArray>(&mut buf);
-                writer.write(batch).unwrap();
-                writer.close().unwrap();
-                serde_json::from_slice(&buf).unwrap()
-            };
+        // encode and check JSON with and without explicit nulls
+        assert_binary_json_with_writer(batch, WriterBuilder::new().with_explicit_nulls(true));
+        assert_binary_json_with_writer(batch, WriterBuilder::new().with_explicit_nulls(false));
+    }
 
-            let json_array = json_value.as_array().unwrap();
+    fn assert_binary_json_with_writer(batch: &RecordBatch, builder: WriterBuilder) {
+        let mut buf = Vec::new();
+        let json_value: Value = {
+            let mut writer = builder.build::<_, JsonArray>(&mut buf);
+            writer.write(batch).unwrap();
+            writer.close().unwrap();
+            serde_json::from_slice(&buf).unwrap()
+        };
 
-            let decoded = {
-                let mut decoder = ReaderBuilder::new(batch.schema().clone())
-                    .build_decoder()
-                    .unwrap();
-                decoder.serialize(json_array).unwrap();
-                decoder.flush().unwrap().unwrap()
-            };
+        let json_array = json_value.as_array().unwrap();
 
-            assert_eq!(batch, &decoded);
-        }
+        let decoded = {
+            let mut decoder = ReaderBuilder::new(batch.schema().clone())
+                .build_decoder()
+                .unwrap();
+            decoder.serialize(json_array).unwrap();
+            decoder.flush().unwrap().unwrap()
+        };
 
-        // encode and check JSON with no explicit nulls:
-        {
-            let mut buf = Vec::new();
-            let json_value: Value = {
-                // explicit nulls are off by default, so we don't need
-                // to set that when creating the writer:
-                let mut writer = ArrayWriter::new(&mut buf);
-                writer.write(batch).unwrap();
-                writer.close().unwrap();
-                serde_json::from_slice(&buf).unwrap()
-            };
-            let json_array = json_value.as_array().unwrap();
-
-            let decoded = {
-                let mut decoder = ReaderBuilder::new(batch.schema().clone())
-                    .build_decoder()
-                    .unwrap();
-                decoder.serialize(json_array).unwrap();
-                decoder.flush().unwrap().unwrap()
-            };
-
-            assert_eq!(batch, &decoded);
-        }
+        assert_eq!(batch, &decoded);
     }
 }
