@@ -418,6 +418,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         self.name
                     ));
                 }
+                // unknown logical type means just use physical type
+                (LogicalType::_Unknown { .. }, _) => {}
                 (a, b) => {
                     return Err(general_err!(
                         "Cannot annotate {:?} from {} for field '{}'",
@@ -1714,6 +1716,12 @@ mod tests {
                 "Parquet error: UUID cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
+
+        // test unknown logical types are ok
+        result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::_Unknown { field_id: 100 }))
+            .build();
+        assert!(result.is_ok());
     }
 
     #[test]

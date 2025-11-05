@@ -135,8 +135,9 @@ impl fmt::Display for DataType {
                 Ok(())
             }
             Self::Union(union_fields, union_mode) => {
-                write!(f, "Union({union_mode:?}, ")?;
+                write!(f, "Union({union_mode:?}")?;
                 if !union_fields.is_empty() {
+                    write!(f, ", ")?;
                     let fields_str = union_fields
                         .iter()
                         .map(|v| {
