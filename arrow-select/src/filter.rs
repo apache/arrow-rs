@@ -183,7 +183,10 @@ pub fn filter_record_batch(
     let mut filter_builder = FilterBuilder::new(predicate);
     let num_cols = record_batch.num_columns();
     if num_cols > 1
-        || (num_cols > 0 && FilterBuilder::is_optimize_beneficial(record_batch.schema_ref().field(0).data_type()))
+        || (num_cols > 0
+            && FilterBuilder::is_optimize_beneficial(
+                record_batch.schema_ref().field(0).data_type(),
+            ))
     {
         // Only optimize if filtering more than one column or if the column contains multiple internal arrays
         // Otherwise, the overhead of optimization can be more than the benefit
@@ -240,12 +243,14 @@ impl FilterBuilder {
         self
     }
 
-    /// Determines if calling [optimize] is beneficial for the given type even when filtering
-    /// just a single array.
+    /// Determines if calling [FilterBuilder::optimize] is beneficial for the given type even when
+    /// filtering just a single array.
     pub fn is_optimize_beneficial(data_type: &DataType) -> bool {
         match data_type {
             DataType::Struct(fields) => {
-                fields.len() > 1 || fields.len() == 1 && FilterBuilder::is_optimize_beneficial(fields[0].data_type())
+                fields.len() > 1
+                    || fields.len() == 1
+                        && FilterBuilder::is_optimize_beneficial(fields[0].data_type())
             }
             DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
             _ => false,
