@@ -2724,6 +2724,7 @@ mod tests {
         assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
     }
 
+    #[test]
     fn test_read_unknown_logical_type() {
         let file = get_test_file("unknown-logical-type.parquet");
         let reader = SerializedFileReader::new(file).expect("Error opening file");
