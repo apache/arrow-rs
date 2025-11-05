@@ -312,11 +312,6 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
         DataType::FixedSizeBinary(16) => {
             Uuid(VariantToUuidArrowRowBuilder::new(cast_options, capacity))
         }
-        DataType::FixedSizeBinary(size) => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinary({size}) is not a valid variant shredding type. Only FixedSizeBinary(16) for UUID is supported."
-            )));
-        }
         DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
         DataType::LargeUtf8 => {
             LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
