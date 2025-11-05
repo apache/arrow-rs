@@ -162,23 +162,25 @@ pub(crate) fn read_up_to_byte_from_offset(
 /// # Example: Modify entire buffer
 /// ```
 /// # use arrow_buffer::MutableBuffer;
+/// # use arrow_buffer::bit_util::bitwise_binary_op;
 /// let mut left = MutableBuffer::new(2);
 /// left.extend_from_slice(&[0b11110000u8, 0b00110011u8]);
 /// let right = &[0b10101010u8, 0b10101010u8];
 /// // apply bitwise AND between left and right buffers, updating left in place
-/// left.bitwise_binary_op(0, right, 0, 16, |a, b| a & b);
+/// bitwise_binary_op(left.as_slice_mut(), 0, right, 0, 16, |a, b| a & b);
 /// assert_eq!(left.as_slice(), &[0b10100000u8, 0b00100010u8]);
 /// ```
 ///
 /// # Example: Modify buffer with offsets
 /// ```
 /// # use arrow_buffer::MutableBuffer;
+/// # use arrow_buffer::bit_util::bitwise_binary_op;
 /// let mut left = MutableBuffer::new(2);
 /// left.extend_from_slice(&[0b00000000u8, 0b00000000u8]);
 /// let right = &[0b10110011u8, 0b11111110u8];
 /// // apply bitwise OR between left and right buffers,
 /// // Apply only 8 bits starting from bit offset 3 in left and bit offset 2 in right
-/// left.bitwise_binary_op(3, right, 2, 8, |a, b| a | b);
+/// bitwise_binary_op(left.as_slice_mut(), 3, right, 2, 8, |a, b| a | b);
 /// assert_eq!(left.as_slice(), &[0b01100000, 0b00000101u8]);
 /// ```
 ///
@@ -272,20 +274,22 @@ pub fn bitwise_binary_op<F>(
 /// # Example: Modify entire buffer
 /// ```
 /// # use arrow_buffer::MutableBuffer;
+/// # use arrow_buffer::bit_util::bitwise_unary_op;
 /// let mut buffer = MutableBuffer::new(2);
 /// buffer.extend_from_slice(&[0b11110000u8, 0b00110011u8]);
 /// // apply bitwise NOT to the buffer in place
-/// buffer.bitwise_unary_op(0, 16, |a| !a);
+/// bitwise_unary_op(buffer.as_slice_mut(), 0, 16, |a| !a);
 /// assert_eq!(buffer.as_slice(), &[0b00001111u8, 0b11001100u8]);
 /// ```
 ///
 /// # Example: Modify buffer with offsets
 /// ```
 /// # use arrow_buffer::MutableBuffer;
+/// # use arrow_buffer::bit_util::bitwise_unary_op;
 /// let mut buffer = MutableBuffer::new(2);
 /// buffer.extend_from_slice(&[0b00000000u8, 0b00000000u8]);
 /// // apply bitwise NOT to 8 bits starting from bit offset 3
-/// buffer.bitwise_unary_op(3, 8, |a| !a);
+/// bitwise_unary_op(buffer.as_slice_mut(), 3, 8, |a| !a);
 /// assert_eq!(buffer.as_slice(), &[0b11111000u8, 0b00000111u8]);
 /// ```
 ///
