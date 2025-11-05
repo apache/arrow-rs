@@ -39,6 +39,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -50,6 +51,61 @@ pub mod metrics;
 mod read_plan;
 mod selection;
 pub mod statistics;
+
+/// Returns true when `selection` keeps some rows for `projection` but prunes whole
+/// data pages (determined via `OffsetIndex`). Masks can't handle this because the
+/// page data is never fetched, so the caller should fall back to RowSelectors.
+pub(crate) fn selection_skips_any_page(
+    selection: &RowSelection,
+    projection: &ProjectionMask,
+    columns: &[OffsetIndexMetaData],
+) -> bool {
+    columns.iter().enumerate().any(|(leaf_idx, column)| {
+        if !projection.leaf_included(leaf_idx) {
+            return false;
+        }
+
+        let locations = column.page_locations();
+        if locations.is_empty() {
+            return false;
+        }
+
+        let ranges = selection.scan_ranges(locations);
+        !ranges.is_empty() && ranges.len() < locations.len()
+    })
+}
+
+fn selection_requires_selectors_for_row_groups(
+    selection: Option<&RowSelection>,
+    projection: &ProjectionMask,
+    metadata: &ParquetMetaData,
+    row_groups: &[usize],
+) -> bool {
+    let mut remaining = match selection {
+        Some(selection) => selection.clone(),
+        None => return false,
+    };
+
+    let offset_index = match metadata.offset_index() {
+        Some(index) => index,
+        None => return false,
+    };
+
+    for &rg_idx in row_groups {
+        let columns = match offset_index.get(rg_idx) {
+            Some(columns) if !columns.is_empty() => columns,
+            _ => continue,
+        };
+
+        let row_count = metadata.row_group(rg_idx).num_rows() as usize;
+        let rg_selection = remaining.split_off(row_count);
+        if selection_skips_any_page(&rg_selection, projection, columns) {
+            return true;
+        }
+    }
+
+    false
+}
 
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
@@ -918,18 +974,43 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
+
+                // Once a predicate has refined the selection, re-check if any requested
+                // column now skips entire pages. In that case the boolean-mask strategy
+                // would try to filter data we never fetched; selectors are safe.
+                if selection_requires_selectors_for_row_groups(
+                    plan_builder.selection(),
+                    predicate.projection(),
+                    reader.metadata.as_ref(),
+                    &reader.row_groups,
+                ) {
+                    plan_builder =
+                        plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
+                }
             }
         }
 
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
             .build_array_reader(fields.as_deref(), &projection)?;
 
-        let read_plan = plan_builder
+        let mut plan_builder = plan_builder
             .limited(reader.num_rows())
             .with_offset(offset)
             .with_limit(limit)
-            .build_limited()
-            .build();
+            .build_limited();
+
+        // Offset/limit can also trim per-row-group selections. Ensure the final
+        // plan doesn't leave mask-backed cursors pointing at pruned pages.
+        if selection_requires_selectors_for_row_groups(
+            plan_builder.selection(),
+            &projection,
+            reader.metadata.as_ref(),
+            &reader.row_groups,
+        ) {
+            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
+        }
+
+        let read_plan = plan_builder.build();
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
@@ -1257,6 +1338,28 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use crate::arrow::arrow_reader::{
+        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionStrategy,
+        RowSelector,
+    };
+    use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
+    use crate::arrow::{ArrowWriter, ProjectionMask};
+    use crate::basic::{Compression, ConvertedType, Encoding, Repetition, Type as PhysicalType};
+    use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
+    use crate::data_type::{
+        BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
+        FloatType, Int32Type, Int64Type, Int96, Int96Type,
+    };
+    use crate::errors::Result;
+    use crate::file::metadata::ParquetMetaData;
+    use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
+    use crate::file::writer::SerializedFileWriter;
+    use crate::schema::parser::parse_message_type;
+    use crate::schema::types::{Type, TypePtr};
+    use crate::util::test_common::rand_gen::RandGen;
+    use arrow::compute::kernels::cmp::eq;
+    use arrow::compute::or;
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::{
@@ -1276,26 +1379,6 @@ mod tests {
     use num_traits::PrimInt;
     use rand::{Rng, RngCore, rng};
     use tempfile::tempfile;
-
-    use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
-    };
-    use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
-    use crate::arrow::{ArrowWriter, ProjectionMask};
-    use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
-    use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
-    use crate::data_type::{
-        BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
-        FloatType, Int32Type, Int64Type, Int96, Int96Type,
-    };
-    use crate::errors::Result;
-    use crate::file::metadata::ParquetMetaData;
-    use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
-    use crate::file::writer::SerializedFileWriter;
-    use crate::schema::parser::parse_message_type;
-    use crate::schema::types::{Type, TypePtr};
-    use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
     fn test_arrow_reader_all_columns() {
@@ -5143,6 +5226,82 @@ mod tests {
         let c1 = out.column(2).as_list::<i32>();
         assert_eq!(c0.len(), c1.len());
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
+    }
+
+    const SECOND_MATCH_INDEX: usize = 4096;
+    const SECOND_MATCH_VALUE: i64 = 12345;
+
+    fn build_mask_pruning_parquet() -> Bytes {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", ArrowDataType::Int64, false),
+            Field::new("value", ArrowDataType::Float64, false),
+        ]));
+
+        let num_rows = 8192usize;
+        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
+        int_values[0] = 9999;
+        int_values[SECOND_MATCH_INDEX] = SECOND_MATCH_VALUE;
+        let keys = Int64Array::from(int_values);
+        let values = Float64Array::from_iter_values((0..num_rows).map(|v| v as f64 * 1.5));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .set_data_page_size_limit(1024)
+            .set_data_page_row_count_limit(32)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        Bytes::from(buffer)
+    }
+
+    #[test]
+    fn test_mask_strategy_full_page_skip_triggers_error() {
+        let data = build_mask_pruning_parquet();
+
+        let filter_mask;
+        let output_mask;
+        {
+            let options = ArrowReaderOptions::new().with_page_index(true);
+            let builder =
+                ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
+                    .unwrap();
+            let schema = builder.parquet_schema().clone();
+            filter_mask = ProjectionMask::leaves(&schema, [0]);
+            output_mask = ProjectionMask::leaves(&schema, [1]);
+        }
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let predicate = ArrowPredicateFn::new(filter_mask, move |batch: RecordBatch| {
+            let column = batch.column(0);
+            let match_first = eq(column, &Int64Array::new_scalar(9999))?;
+            let match_second = eq(column, &Int64Array::new_scalar(SECOND_MATCH_VALUE))?;
+            or(&match_first, &match_second)
+        });
+
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)
+            .unwrap()
+            .with_projection(output_mask)
+            .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+            .with_batch_size(256)
+            .with_row_selection_strategy(RowSelectionStrategy::Mask)
+            .build()
+            .unwrap();
+
+        // The mask strategy used to panic once predicate pruning removed whole pages.
+        // Collecting into batches validates the plan now downgrades to selectors instead.
+        let schema = reader.schema().clone();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let result = concat_batches(&schema, &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
     }
 
     #[test]

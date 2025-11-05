@@ -40,7 +40,7 @@ use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-    RowFilter, RowSelection, RowSelectionStrategy,
+    RowFilter, RowSelection, RowSelectionStrategy, selection_skips_any_page,
 };
 
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
@@ -49,6 +49,7 @@ use crate::bloom_filter::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 mod metadata;
 pub use metadata::*;
@@ -637,6 +638,17 @@ where
                     return Ok((self, None)); // ruled out entire row group
                 }
 
+                // Predicate evaluation can zero out some pages; switch to selectors
+                // before the mask-backed cursor tries to touch data we won't fetch.
+                if selection_requires_selector(
+                    plan_builder.selection(),
+                    predicate.projection(),
+                    offset_index,
+                ) {
+                    plan_builder =
+                        plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
+                }
+
                 // (pre) Fetch only the columns that are selected by the predicate
                 let selection = plan_builder.selection();
                 // Fetch predicate columns; expand selection only for cached predicate columns
@@ -669,11 +681,16 @@ where
         }
 
         // Apply any limit and offset
-        let plan_builder = plan_builder
+        let mut plan_builder = plan_builder
             .limited(row_group.row_count)
             .with_offset(self.offset)
             .with_limit(self.limit)
             .build_limited();
+
+        // Offset/limit may further trim pages, so re-evaluate the strategy here too.
+        if selection_requires_selector(plan_builder.selection(), &projection, offset_index) {
+            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
+        }
 
         let rows_after = plan_builder
             .num_rows_selected()
@@ -763,6 +780,24 @@ where
             Some(ProjectionMask::leaves(schema, included_leaves))
         }
     }
+}
+
+fn selection_requires_selector(
+    selection: Option<&RowSelection>,
+    projection: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+) -> bool {
+    let selection = match selection {
+        Some(selection) => selection,
+        None => return false,
+    };
+
+    let offset_index = match offset_index {
+        Some(index) => index,
+        None => return false,
+    };
+
+    selection_skips_any_page(selection, projection, offset_index)
 }
 
 enum StreamState<T> {
