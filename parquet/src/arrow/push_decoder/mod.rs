@@ -168,6 +168,7 @@ impl ParquetPushDecoderBuilder {
             projection,
             filter,
             selection,
+            selection_strategy: _,
             limit,
             offset,
             metrics,

@@ -40,7 +40,7 @@ use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-    RowFilter, RowSelection,
+    RowFilter, RowSelection, RowSelectionStrategy,
 };
 
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
@@ -508,6 +508,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             filter: self.filter,
             metadata: self.metadata.clone(),
             fields: self.fields,
+            selection_strategy: self.selection_strategy,
             limit: self.limit,
             offset: self.offset,
             metrics: self.metrics,
@@ -557,7 +558,10 @@ struct ReaderFactory<T> {
     /// Optional filter
     filter: Option<RowFilter>,
 
-    /// Limit to apply to remaining row groups.  
+    /// Strategy used to materialise row selections for this reader
+    selection_strategy: RowSelectionStrategy,
+
+    /// Limit to apply to remaining row groups.
     limit: Option<usize>,
 
     /// Offset to apply to the next
@@ -620,7 +624,9 @@ where
         let cache_options_builder = CacheOptionsBuilder::new(&cache_projection, &row_group_cache);
 
         let filter = self.filter.as_mut();
-        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
+        let mut plan_builder = ReadPlanBuilder::new(batch_size)
+            .with_selection(selection)
+            .with_selection_strategy(self.selection_strategy);
 
         // Update selection based on any filters
         if let Some(filter) = filter {
@@ -1774,6 +1780,7 @@ mod tests {
             fields: fields.map(Arc::new),
             input: async_reader,
             filter: None,
+            selection_strategy: RowSelectionStrategy::Auto,
             limit: None,
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
@@ -2179,6 +2186,78 @@ mod tests {
         // * Second request fetches data for evaluating the second predicate
         // * Third request fetches data for evaluating the projection
         assert_eq!(requests.lock().unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_cache_projection_excludes_nested_columns() {
+        use arrow_array::{ArrayRef, StringArray};
+
+        // Build a simple RecordBatch with a primitive column `a` and a nested struct column `b { aa, bb }`
+        let a = StringArray::from_iter_values(["r1", "r2"]);
+        let b = StructArray::from(vec![
+            (
+                Arc::new(Field::new("aa", DataType::Utf8, true)),
+                Arc::new(StringArray::from_iter_values(["v1", "v2"])) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("bb", DataType::Utf8, true)),
+                Arc::new(StringArray::from_iter_values(["w1", "w2"])) as ArrayRef,
+            ),
+        ]);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", b.data_type().clone(), true),
+        ]));
+
+        let mut buf = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
+        let batch = RecordBatch::try_from_iter([
+            ("a", Arc::new(a) as ArrayRef),
+            ("b", Arc::new(b) as ArrayRef),
+        ])
+        .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Load Parquet metadata
+        let data: Bytes = buf.into();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&data)
+            .unwrap();
+        let metadata = Arc::new(metadata);
+
+        // Build a RowFilter whose predicate projects a leaf under the nested root `b`
+        // Leaf indices are depth-first; with schema [a, b.aa, b.bb] we pick index 1 (b.aa)
+        let parquet_schema = metadata.file_metadata().schema_descr();
+        let nested_leaf_mask = ProjectionMask::leaves(parquet_schema, vec![1]);
+
+        let always_true = ArrowPredicateFn::new(nested_leaf_mask.clone(), |batch: RecordBatch| {
+            Ok(arrow_array::BooleanArray::from(vec![
+                true;
+                batch.num_rows()
+            ]))
+        });
+        let filter = RowFilter::new(vec![Box::new(always_true)]);
+
+        // Construct a ReaderFactory and compute cache projection
+        let reader_factory = ReaderFactory {
+            metadata: Arc::clone(&metadata),
+            fields: None,
+            input: TestReader::new(data),
+            filter: Some(filter),
+            selection_strategy: RowSelectionStrategy::Auto,
+            limit: None,
+            offset: None,
+            metrics: ArrowReaderMetrics::disabled(),
+            max_predicate_cache_size: 0,
+        };
+
+        // Provide an output projection that also selects the same nested leaf
+        let cache_projection = reader_factory.compute_cache_projection(&nested_leaf_mask);
+
+        // Expect None since nested columns should be excluded from cache projection
+        assert!(cache_projection.is_none());
     }
 
     #[tokio::test]
