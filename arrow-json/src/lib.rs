@@ -186,11 +186,10 @@ mod tests {
     use super::*;
 
     use arrow_array::{
-        ArrayRef, OffsetSizeTrait, RecordBatch, RecordBatchWriter,
-        builder::{BinaryViewBuilder, FixedSizeBinaryBuilder, GenericByteBuilder},
-        types::{ByteArrayType, GenericBinaryType},
+        ArrayRef, GenericBinaryArray, GenericByteViewArray, RecordBatch, RecordBatchWriter,
+        builder::{BinaryViewBuilder, FixedSizeBinaryBuilder},
+        types::BinaryViewType,
     };
-    use arrow_schema::{DataType, Field, Schema, SchemaRef};
     use serde_json::Value::{Bool, Number as VNumber, String as VString};
 
     #[test]
@@ -297,67 +296,21 @@ mod tests {
             Some(not_utf8),
         ];
         // Binary:
-        {
-            let batch = build_array_binary::<i32>(values);
-            assert_binary_json(&batch);
-        }
+        assert_binary_json(Arc::new(GenericBinaryArray::<i32>::from_iter(values)));
+
         // LargeBinary:
-        {
-            let batch = build_array_binary::<i64>(values);
-            assert_binary_json(&batch);
-        }
+        assert_binary_json(Arc::new(GenericBinaryArray::<i64>::from_iter(values)));
+
         // FixedSizeBinary:
-        {
-            let batch = build_array_fixed_size_binary(12, values);
-            assert_binary_json(&batch);
-        }
+        assert_binary_json(build_array_fixed_size_binary(12, values));
+
         // BinaryView:
-        {
-            let batch = build_array_binary_view(values);
-            assert_binary_json(&batch);
-        }
+        assert_binary_json(Arc::new(GenericByteViewArray::<BinaryViewType>::from_iter(
+            values,
+        )));
     }
 
-    fn build_array_binary<O: OffsetSizeTrait>(values: &[Option<&[u8]>]) -> RecordBatch {
-        let schema = SchemaRef::new(Schema::new(vec![Field::new(
-            "bytes",
-            GenericBinaryType::<O>::DATA_TYPE,
-            true,
-        )]));
-        let mut builder = GenericByteBuilder::<GenericBinaryType<O>>::new();
-        for value in values {
-            match value {
-                Some(v) => builder.append_value(v),
-                None => builder.append_null(),
-            }
-        }
-        let array = Arc::new(builder.finish()) as ArrayRef;
-        RecordBatch::try_new(schema, vec![array]).unwrap()
-    }
-
-    fn build_array_binary_view(values: &[Option<&[u8]>]) -> RecordBatch {
-        let schema = SchemaRef::new(Schema::new(vec![Field::new(
-            "bytes",
-            DataType::BinaryView,
-            true,
-        )]));
-        let mut builder = BinaryViewBuilder::new();
-        for value in values {
-            match value {
-                Some(v) => builder.append_value(v),
-                None => builder.append_null(),
-            }
-        }
-        let array = Arc::new(builder.finish()) as ArrayRef;
-        RecordBatch::try_new(schema, vec![array]).unwrap()
-    }
-
-    fn build_array_fixed_size_binary(byte_width: i32, values: &[Option<&[u8]>]) -> RecordBatch {
-        let schema = SchemaRef::new(Schema::new(vec![Field::new(
-            "bytes",
-            DataType::FixedSizeBinary(byte_width),
-            true,
-        )]));
+    fn build_array_fixed_size_binary(byte_width: i32, values: &[Option<&[u8]>]) -> ArrayRef {
         let mut builder = FixedSizeBinaryBuilder::new(byte_width);
         for value in values {
             match value {
@@ -365,21 +318,25 @@ mod tests {
                 None => builder.append_null(),
             }
         }
-        let array = Arc::new(builder.finish()) as ArrayRef;
-        RecordBatch::try_new(schema, vec![array]).unwrap()
+        Arc::new(builder.finish())
     }
 
-    fn assert_binary_json(batch: &RecordBatch) {
+    fn assert_binary_json(array: ArrayRef) {
         // encode and check JSON with and without explicit nulls
-        assert_binary_json_with_writer(batch, WriterBuilder::new().with_explicit_nulls(true));
-        assert_binary_json_with_writer(batch, WriterBuilder::new().with_explicit_nulls(false));
+        assert_binary_json_with_writer(
+            array.clone(),
+            WriterBuilder::new().with_explicit_nulls(true),
+        );
+        assert_binary_json_with_writer(array, WriterBuilder::new().with_explicit_nulls(false));
     }
 
-    fn assert_binary_json_with_writer(batch: &RecordBatch, builder: WriterBuilder) {
+    fn assert_binary_json_with_writer(array: ArrayRef, builder: WriterBuilder) {
+        let batch = RecordBatch::try_from_iter([("bytes", array)]).unwrap();
+
         let mut buf = Vec::new();
         let json_value: Value = {
             let mut writer = builder.build::<_, JsonArray>(&mut buf);
-            writer.write(batch).unwrap();
+            writer.write(&batch).unwrap();
             writer.close().unwrap();
             serde_json::from_slice(&buf).unwrap()
         };
@@ -394,6 +351,6 @@ mod tests {
             decoder.flush().unwrap().unwrap()
         };
 
-        assert_eq!(batch, &decoded);
+        assert_eq!(batch, decoded);
     }
 }
