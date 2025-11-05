@@ -2723,4 +2723,30 @@ mod tests {
 
         assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
     }
+
+    fn test_read_unknown_logical_type() {
+        let file = get_test_file("unknown-logical-type.parquet");
+        let reader = SerializedFileReader::new(file).expect("Error opening file");
+
+        let schema = reader.metadata().file_metadata().schema_descr();
+        assert_eq!(
+            schema.column(0).logical_type(),
+            Some(basic::LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type(),
+            Some(basic::LogicalType::_Unknown { field_id: 2555 })
+        );
+        assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
+
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut num_rows = 0;
+        while iter.next().is_some() {
+            num_rows += 1;
+        }
+        assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
+    }
 }
