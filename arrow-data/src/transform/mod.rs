@@ -842,29 +842,23 @@ fn merge_dictionaries<'a>(
     value_data_type: &DataType,
     dicts: &[&'a ArrayData],
 ) -> Result<(Vec<Extend<'a>>, ArrayData), ArrowError> {
-    let (new_keys_iter, shared_dict_data) =
-        merge_dictionaries_casted::<u8>(value_data_type, dicts)?;
-    Ok((
-        new_keys_iter
-            .into_iter()
-            .map(|keys| {
-                Box::new(
-                    move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
-                        mutable
-                            .buffer1
-                            .extend_from_slice::<u8>(&keys[start..start + len]);
-                    },
-                ) as Extend
-            })
-            .collect::<Vec<Extend>>(),
-        shared_dict_data,
-    ))
+    match key_data_type {
+        DataType::UInt8 => merge_dictionaries_casted::<u8>(value_data_type, dicts),
+        DataType::UInt16 => merge_dictionaries_casted::<u16>(value_data_type, dicts),
+        DataType::UInt32 => merge_dictionaries_casted::<u32>(value_data_type, dicts),
+        DataType::UInt64 => merge_dictionaries_casted::<u64>(value_data_type, dicts),
+        DataType::Int8 => merge_dictionaries_casted::<i8>(value_data_type, dicts),
+        DataType::Int16 => merge_dictionaries_casted::<i16>(value_data_type, dicts),
+        DataType::Int32 => merge_dictionaries_casted::<i32>(value_data_type, dicts),
+        DataType::Int64 => merge_dictionaries_casted::<i64>(value_data_type, dicts),
+        _ => unreachable!(),
+    }
 }
 
 fn merge_dictionaries_casted<'a, K: ArrowNativeType>(
     data_type: &DataType,
     dicts: &[&'a ArrayData],
-) -> Result<(Vec<Vec<K>>, ArrayData), ArrowError> {
+) -> Result<(Vec<Extend<'a>>, ArrayData), ArrowError> {
     let mut dedup = HashMap::new();
     let mut indices = vec![];
     let mut data_refs = vec![];
@@ -909,7 +903,21 @@ fn merge_dictionaries_casted<'a, K: ArrowNativeType>(
     let new_values_data = MutableArrayData::new(data_refs, false, indices.len());
     let shared_value_data = interleave(new_values_data, indices);
 
-    Ok((new_dict_keys, shared_value_data))
+    Ok((
+        new_dict_keys
+            .into_iter()
+            .map(|keys| {
+                Box::new(
+                    move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+                        mutable
+                            .buffer1
+                            .extend_from_slice::<K>(&keys[start..start + len]);
+                    },
+                ) as Extend
+            })
+            .collect::<Vec<Extend>>(),
+        shared_value_data,
+    ))
 }
 
 fn interleave(mut array_data: MutableArrayData, indices: Vec<(usize, usize)>) -> ArrayData {

@@ -17,7 +17,6 @@
 
 //! Dictionary utilities for Arrow arrays
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::filter::filter;
@@ -283,85 +282,6 @@ pub(crate) fn merge_dictionary_values<K: ArrowDictionaryKeyType>(
     })
 }
 
-/// similar to `merge_dictionary_values` but enforce strict deduplication
-/// and thus has higher overhead
-pub(crate) fn merge_dictionary_values_unique<K: ArrowDictionaryKeyType>(
-    dictionaries: &[&DictionaryArray<K>],
-    masks: Option<&[BooleanBuffer]>,
-) -> Result<MergedDictionaries<K>, ArrowError> {
-    let mut num_values = 0;
-
-    let mut values_arrays = Vec::with_capacity(dictionaries.len());
-    let mut value_slices = Vec::with_capacity(dictionaries.len());
-
-    for (idx, dictionary) in dictionaries.iter().enumerate() {
-        let mask = masks.and_then(|m| m.get(idx));
-        let key_mask_owned;
-        let key_mask = match (dictionary.nulls(), mask) {
-            (Some(n), None) => Some(n.inner()),
-            (None, Some(n)) => Some(n),
-            (Some(n), Some(m)) => {
-                key_mask_owned = n.inner() & m;
-                Some(&key_mask_owned)
-            }
-            (None, None) => None,
-        };
-        let keys = dictionary.keys().values();
-        let values = dictionary.values().as_ref();
-        let values_mask = compute_values_mask(keys, key_mask, values.len());
-
-        let masked_values = get_masked_values(values, &values_mask);
-        num_values += masked_values.len();
-        value_slices.push(masked_values);
-        values_arrays.push(values)
-    }
-
-    // Map from value to new index
-    // Interleave indices for new values array
-    let mut indices = Vec::with_capacity(num_values);
-    let mut dedup = HashMap::new();
-
-    // Compute the mapping for each dictionary
-    let key_mappings = dictionaries
-        .iter()
-        .enumerate()
-        .zip(value_slices)
-        .map(|((dictionary_idx, dictionary), values)| {
-            let zero = K::Native::from_usize(0).unwrap();
-            let mut mapping = vec![zero; dictionary.values().len()];
-
-            for (value_idx, value) in values {
-                match K::Native::from_usize(dedup.len()) {
-                    Some(idx) => {
-                        let index_for_value = dedup.entry(value).or_insert(idx);
-                        // track this index to build new dictionary value array
-                        if *index_for_value == idx {
-                            indices.push((dictionary_idx, value_idx));
-                        }
-                        mapping[value_idx] = *index_for_value;
-                    }
-                    None => {
-                        // this happen when dictoinary is already full, and the current loop
-                        // has to continue, but observe all dedup values
-                        if let Some(previous_idx) = dedup.get(&value) {
-                            mapping[value_idx] = *previous_idx
-                        } else {
-                            // observe new value and key space is not sufficient
-                            return Err(ArrowError::DictionaryKeyOverflowError);
-                        }
-                    }
-                }
-            }
-            Ok(mapping)
-        })
-        .collect::<Result<Vec<_>, ArrowError>>()?;
-
-    Ok(MergedDictionaries {
-        key_mappings,
-        values: interleave(&values_arrays, &indices)?,
-    })
-}
-
 /// Return a mask identifying the values that are referenced by keys in `dictionary`
 /// at the positions indicated by `selection`
 fn compute_values_mask<K: ArrowNativeType>(
@@ -444,7 +364,6 @@ fn masked_bytes<'a, T: ByteArrayType>(
 mod tests {
     use super::*;
 
-    use arrow_array::UInt8Array;
     use arrow_array::cast::as_string_array;
     use arrow_array::types::Int8Type;
     use arrow_array::types::Int32Type;
@@ -596,31 +515,5 @@ mod tests {
         let merged = merge_dictionary_values(&[&a], None).unwrap();
         let expected = StringArray::from(vec!["b"]);
         assert_eq!(merged.values.as_ref(), &expected);
-    }
-
-    #[test]
-    fn test_merge_dictionary_values_unique() {
-        let values1 = StringArray::from_iter_values((0u8..=255).map(|i| i.to_string()));
-        let keys1 = UInt8Array::from_iter(0u8..=255);
-        let a1 = DictionaryArray::new(keys1, Arc::new(values1.clone()));
-
-        let values2 = StringArray::from_iter_values((0u8..=255).rev().map(|i| i.to_string()));
-        let keys2 = UInt8Array::from_iter(0u8..=255);
-        let a2 = DictionaryArray::new(keys2, Arc::new(values2));
-
-        let fast_merge = merge_dictionary_values(&[&a1, &a2], None);
-        assert!(matches!(
-            fast_merge,
-            Err(ArrowError::DictionaryKeyOverflowError)
-        ));
-
-        let unique_merge = merge_dictionary_values_unique(&[&a1, &a2], None).unwrap();
-        let expected_mapping_arr1: Vec<u8> = (0u8..=255).collect();
-        assert_eq!(unique_merge.key_mappings[0], expected_mapping_arr1);
-
-        let expected_mapping_arr2: Vec<u8> = (0u8..=255).rev().collect();
-        assert_eq!(unique_merge.key_mappings[1], expected_mapping_arr2);
-        let merged_values = unique_merge.values.as_string();
-        assert!(values1.eq(merged_values))
     }
 }
