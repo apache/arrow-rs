@@ -199,11 +199,7 @@ impl AsyncFileReader for ParquetObjectReader {
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         Box::pin(async move {
-            let metadata_opts = if let Some(options) = options.as_ref() {
-                options.metadata_options().cloned()
-            } else {
-                None
-            };
+            let metadata_opts = options.map(|o| o.metadata_options().clone());
             let mut metadata = ParquetMetaDataReader::new()
                 .with_metadata_options(metadata_opts)
                 .with_column_index_policy(PageIndexPolicy::from(self.preload_column_index))

@@ -166,7 +166,7 @@ impl ParquetMetaDataReader {
 
     /// Sets the [`MetadataOptions`] to use when decoding
     pub fn with_metadata_options(mut self, options: Option<MetadataOptions>) -> Self {
-        self.metadata_options = options.map(|o| Arc::new(o));
+        self.metadata_options = options.map(Arc::new);
         self
     }
 
