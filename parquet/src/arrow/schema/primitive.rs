@@ -183,7 +183,9 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             (32, false) => Ok(DataType::UInt32),
             _ => Err(arrow_err!("Cannot create INT32 physical type from {:?}", t)),
         },
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(*scale, *precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => {
+            decimal_128_type(*scale, *precision)
+        }
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
             ParquetTimeUnit::MILLIS => Ok(DataType::Time32(TimeUnit::Millisecond)),
@@ -260,7 +262,9 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             TimeUnit::Microsecond,
             Some("UTC".into()),
         )),
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(*scale, *precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => {
+            decimal_128_type(*scale, *precision)
+        }
         (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT64 logical type {:?} or converted type {}",
