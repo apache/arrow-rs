@@ -176,8 +176,7 @@ impl ReadOptionsBuilder {
 
 /// A collection of options for reading a Parquet file.
 ///
-/// FIXME(ets): the following line is no longer true. expand scope of this documentation
-/// Currently, only predicates on row group metadata are supported.
+/// Predicates are currently only supported on row group metadata.
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
