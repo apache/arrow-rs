@@ -22,11 +22,13 @@
 
 use super::{ArrayData, ArrayDataBuilder, ByteView, data::new_buffers};
 use crate::bit_mask::set_bits;
+use crate::transform::utils::iter_in_bytes;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util, i256};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
 use half::f16;
 use num_integer::Integer;
+use std::collections::HashMap;
 use std::mem;
 
 mod boolean;
@@ -403,21 +405,20 @@ impl<'a> MutableArrayData<'a> {
         Self::with_capacities(arrays, use_nulls, Capacities::Array(capacity))
     }
 
-    /// Similar to `new` but expose errors during pre-allocation step
-    /// such as `DictionaryOverflowError`
-    pub fn try_new(
-        arrays: Vec<&'a ArrayData>,
-        use_nulls: bool,
-        capacity: usize,
-    ) -> Result<Self, ArrowError> {
-        Self::try_with_capacities(arrays, use_nulls, Capacities::Array(capacity))
-    }
-
-    fn try_with_capacities(
+    /// Similar to [MutableArrayData::new], but lets users define the
+    /// preallocated capacities of the array with more granularity.
+    ///
+    /// See [MutableArrayData::new] for more information on the arguments.
+    ///
+    /// # Panics
+    ///
+    /// This function panics if the given `capacities` don't match the data type
+    /// of `arrays`. Or when a [Capacities] variant is not yet supported.
+    pub fn with_capacities(
         arrays: Vec<&'a ArrayData>,
         use_nulls: bool,
         capacities: Capacities,
-    ) -> Result<Self, ArrowError> {
+    ) -> Self {
         let data_type = arrays[0].data_type();
 
         for a in arrays.iter().skip(1) {
@@ -511,9 +512,9 @@ impl<'a> MutableArrayData<'a> {
                         Capacities::Array(array_capacity)
                     };
 
-                vec![MutableArrayData::try_with_capacities(
+                vec![MutableArrayData::with_capacities(
                     children, use_nulls, capacities,
-                )?]
+                )]
             }
             // the dictionary type just appends keys and clones the values.
             DataType::Dictionary(_, _) => vec![],
@@ -553,9 +554,9 @@ impl<'a> MutableArrayData<'a> {
                             .iter()
                             .map(|array| &array.child_data()[i])
                             .collect::<Vec<_>>();
-                        MutableArrayData::try_new(child_arrays, use_nulls, array_capacity)
+                        MutableArrayData::new(child_arrays, use_nulls, array_capacity)
                     })
-                    .collect::<Result<Vec<_>, ArrowError>>()?,
+                    .collect::<Vec<_>>(),
             },
             DataType::RunEndEncoded(_, _) => {
                 let run_ends_child = arrays
@@ -601,7 +602,7 @@ impl<'a> MutableArrayData<'a> {
         };
 
         // Get the dictionary if any, and if it is a concatenation of multiple
-        let (dictionary, dict_concat) = match &data_type {
+        let (mut dictionary, dict_concat) = match &data_type {
             DataType::Dictionary(_, _) => {
                 // If more than one dictionary, concatenate dictionaries together
                 let dict_concat = !arrays
@@ -657,9 +658,9 @@ impl<'a> MutableArrayData<'a> {
         });
 
         let extend_values = match &data_type {
-            DataType::Dictionary(_, _) => {
+            DataType::Dictionary(key_data_type, value_data_type) => {
                 let mut next_offset = 0;
-                arrays
+                let result = arrays
                     .iter()
                     .map(|array| {
                         let offset = next_offset;
@@ -668,11 +669,23 @@ impl<'a> MutableArrayData<'a> {
                         if dict_concat {
                             next_offset += dict_len;
                         }
-
                         build_extend_dictionary(array, offset, 0.max(offset + dict_len - 1))
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
-                    .collect::<Result<Vec<_>, ArrowError>>()?
+                    .collect::<Result<Vec<_>, ArrowError>>();
+                match result {
+                    Err(_) => {
+                        let (extends, merged_dictionary_values) = merge_dictionaries(
+                            key_data_type.as_ref(),
+                            value_data_type.as_ref(),
+                            &arrays,
+                        )
+                        .expect("fail merging dictionary");
+                        dictionary = Some(merged_dictionary_values);
+                        extends
+                    }
+                    Ok(extends) => extends,
+                }
             }
             DataType::BinaryView | DataType::Utf8View => {
                 let mut next_offset = 0u32;
@@ -701,7 +714,7 @@ impl<'a> MutableArrayData<'a> {
             child_data,
         };
 
-        Ok(Self {
+        Self {
             arrays,
             data,
             dictionary,
@@ -709,25 +722,7 @@ impl<'a> MutableArrayData<'a> {
             extend_values,
             extend_null_bits,
             extend_nulls,
-        })
-    }
-
-    /// Similar to [MutableArrayData::new], but lets users define the
-    /// preallocated capacities of the array with more granularity.
-    ///
-    /// See [MutableArrayData::new] for more information on the arguments.
-    ///
-    /// # Panics
-    ///
-    /// This function panics if the given `capacities` don't match the data type
-    /// of `arrays`. Or when a [Capacities] variant is not yet supported.
-    pub fn with_capacities(
-        arrays: Vec<&'a ArrayData>,
-        use_nulls: bool,
-        capacities: Capacities,
-    ) -> Self {
-        Self::try_with_capacities(arrays, use_nulls, capacities)
-            .expect("MutableArrayData::with_capacities is infallible")
+        }
     }
 
     /// Extends the in progress array with a region of the input arrays
@@ -840,6 +835,108 @@ impl<'a> MutableArrayData<'a> {
             .buffers(buffers)
             .child_data(child_data)
     }
+}
+
+fn merge_dictionaries<'a>(
+    key_data_type: &DataType,
+    value_data_type: &DataType,
+    dicts: &[&'a ArrayData],
+) -> Result<(Vec<Extend<'a>>, ArrayData), ArrowError> {
+    let (new_keys_iter, shared_dict_data) =
+        merge_dictionaries_casted::<u8>(value_data_type, dicts)?;
+    Ok((
+        new_keys_iter
+            .into_iter()
+            .map(|keys| {
+                Box::new(
+                    move |mutable: &mut _MutableArrayData, _, start: usize, len: usize| {
+                        mutable
+                            .buffer1
+                            .extend_from_slice::<u8>(&keys[start..start + len]);
+                    },
+                ) as Extend
+            })
+            .collect::<Vec<Extend>>(),
+        shared_dict_data,
+    ))
+}
+
+fn merge_dictionaries_casted<'a, K: ArrowNativeType>(
+    data_type: &DataType,
+    dicts: &[&'a ArrayData],
+) -> Result<(Vec<Vec<K>>, ArrayData), ArrowError> {
+    let mut dedup = HashMap::new();
+    let mut indices = vec![];
+    let mut data_refs = vec![];
+    let new_dict_keys = dicts
+        .iter()
+        .enumerate()
+        .map(|(dict_idx, dict)| {
+            let value_data = dict.child_data().get(0).unwrap();
+            let old_keys = dict.buffer::<K>(0);
+            data_refs.push(value_data);
+            let mut new_keys = vec![K::usize_as(0); old_keys.len()];
+            let values = iter_in_bytes(data_type, value_data);
+            for (key_index, old_key) in old_keys.iter().enumerate() {
+                if dict.is_valid(key_index) {
+                    let value = values[old_key.as_usize()];
+                    match K::from_usize(dedup.len()) {
+                        Some(idx) => {
+                            let idx_for_value = dedup.entry(value).or_insert(idx);
+                            // a new entry
+                            if *idx_for_value == idx {
+                                indices.push((dict_idx, old_key.as_usize()));
+                            }
+
+                            new_keys[key_index] = *idx_for_value;
+                        }
+                        // the built dictionary has reach the cap of the key type
+                        None => match dedup.get(value) {
+                            // as long as this value has already been indexed
+                            // the merge dictionary is still valid
+                            Some(previous_key) => {
+                                new_keys[key_index] = *previous_key;
+                            }
+                            None => return Err(ArrowError::DictionaryKeyOverflowError),
+                        },
+                    };
+                }
+            }
+
+            Ok(new_keys)
+        })
+        .collect::<Result<Vec<Vec<K>>, ArrowError>>()?;
+    let new_values_data = MutableArrayData::new(data_refs, false, indices.len());
+    let shared_value_data = interleave(new_values_data, indices);
+
+    Ok((new_dict_keys, shared_value_data))
+}
+
+fn interleave(mut array_data: MutableArrayData, indices: Vec<(usize, usize)>) -> ArrayData {
+    let mut cur_array = indices[0].0;
+
+    let mut start_row_idx = indices[0].1;
+    let mut end_row_idx = start_row_idx + 1;
+
+    for (array, row) in indices.iter().skip(1).copied() {
+        if array == cur_array && row == end_row_idx {
+            // subsequent row in same batch
+            end_row_idx += 1;
+            continue;
+        }
+
+        // emit current batch of rows for current buffer
+        array_data.extend(cur_array, start_row_idx, end_row_idx);
+
+        // start new batch of rows
+        cur_array = array;
+        start_row_idx = row;
+        end_row_idx = start_row_idx + 1;
+    }
+
+    // emit final batch of rows
+    array_data.extend(cur_array, start_row_idx, end_row_idx);
+    array_data.freeze()
 }
 
 // See arrow/tests/array_transform.rs for tests of transform functionality
