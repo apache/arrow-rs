@@ -613,6 +613,80 @@ def test_table_pycapsule():
     assert len(table.to_batches()) == len(new_table.to_batches())
 
 
+def test_table_empty():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    table = pa.Table.from_batches([], schema=schema)
+    new_table = rust.build_table([], schema=schema)
+
+    assert table.schema == new_table.schema
+    assert table == new_table
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_roundtrip():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    table = pa.Table.from_batches(batches)
+    new_table = rust.round_trip_table(table)
+
+    assert table.schema == new_table.schema
+    assert table == new_table
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+@pytest.mark.parametrize("set_schema", (True, False))
+def test_table_from_batches(set_schema: bool):
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    table = pa.Table.from_batches(batches)
+    new_table = rust.build_table(batches, schema=schema if set_schema else None)
+
+    assert table.schema == new_table.schema
+    assert table == new_table
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_error_inconsistent_schema():
+    """
+    Python -> Rust -> Python
+    """
+    schema_1 = pa.schema([('ints', pa.list_(pa.int32()))])
+    schema_2 = pa.schema([('floats', pa.list_(pa.float32()))])
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema_1),
+        pa.record_batch([[None, [], [5.6, 6.4]]], schema_2),
+    ]
+    with pytest.raises(pa.ArrowException, match="Schema error: All record batches must have the same schema."):
+        rust.build_table(batches)
+
+
+def test_table_error_no_schema():
+    """
+    Python -> Rust -> Python
+    """
+    batches = []
+    with pytest.raises(
+        pa.ArrowException,
+        match="Schema error: If no schema is supplied explicitly, there must be at least one RecordBatch!"
+    ):
+        rust.build_table(batches)
+
+
 def test_reject_other_classes():
     # Arbitrary type that is not a PyArrow type
     not_pyarrow = ["hello"]

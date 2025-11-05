@@ -32,7 +32,7 @@ use arrow::compute::kernels;
 use arrow::datatypes::{DataType, Field, Schema};
 use arrow::error::ArrowError;
 use arrow::ffi_stream::ArrowArrayStreamReader;
-use arrow::pyarrow::{FromPyArrow, PyArrowException, PyArrowType, ToPyArrow};
+use arrow::pyarrow::{FromPyArrow, PyArrowException, PyArrowType, Table, ToPyArrow};
 use arrow::record_batch::RecordBatch;
 
 fn to_py_err(err: ArrowError) -> PyErr {
@@ -141,6 +141,28 @@ fn round_trip_record_batch_reader(
 }
 
 #[pyfunction]
+fn round_trip_table(obj: PyArrowType<Table>) -> PyResult<PyArrowType<Table>> {
+    Ok(obj)
+}
+
+/// Function for testing whether a `Vec<RecordBatch>` is exportable as `pyarrow.Table`, with or
+/// without explicitly providing a schema
+#[pyfunction]
+#[pyo3(signature = (record_batches, *, schema=None))]
+pub fn build_table(
+    record_batches: Vec<PyArrowType<RecordBatch>>,
+    schema: Option<PyArrowType<Schema>>,
+) -> PyResult<PyArrowType<Table>> {
+    Ok(PyArrowType(
+        Table::try_new(
+            record_batches.into_iter().map(|rb| rb.0).collect(),
+            schema.map(|s| Arc::new(s.0)),
+        )
+        .map_err(to_py_err)?,
+    ))
+}
+
+#[pyfunction]
 fn reader_return_errors(obj: PyArrowType<ArrowArrayStreamReader>) -> PyResult<()> {
     // This makes sure we can correctly consume a RBR and return the error,
     // ensuring the error can live beyond the lifetime of the RBR.
@@ -178,6 +200,8 @@ fn arrow_pyarrow_integration_testing(_py: Python, m: &Bound<PyModule>) -> PyResu
     m.add_wrapped(wrap_pyfunction!(round_trip_array))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch))?;
     m.add_wrapped(wrap_pyfunction!(round_trip_record_batch_reader))?;
+    m.add_wrapped(wrap_pyfunction!(round_trip_table))?;
+    m.add_wrapped(wrap_pyfunction!(build_table))?;
     m.add_wrapped(wrap_pyfunction!(reader_return_errors))?;
     m.add_wrapped(wrap_pyfunction!(boxed_reader_roundtrip))?;
     Ok(())
