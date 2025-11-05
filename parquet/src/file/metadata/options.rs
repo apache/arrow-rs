@@ -32,7 +32,7 @@ pub struct ParquetMetaDataOptions {
 }
 
 impl ParquetMetaDataOptions {
-    /// Return a new default [`MetadataOptions`].
+    /// Return a new default [`ParquetMetaDataOptions`].
     pub fn new() -> Self {
         Default::default()
     }
