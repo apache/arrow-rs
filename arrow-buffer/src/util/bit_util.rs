@@ -806,6 +806,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+    use crate::bit_iterator::BitIterator;
+    use crate::{BooleanBuffer, BooleanBufferBuilder, MutableBuffer};
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
 
@@ -1058,5 +1060,428 @@ mod tests {
                 "failed at bit_offset {bit_offset}. result, expected:\n{result:08b}\n{expected:08b}"
             );
         }
+    }
+
+    /// Verifies that a unary operation applied to a buffer using u64 chunks
+    /// is the same as applying the operation bit by bit.
+    fn test_mutable_buffer_bin_op_helper<F, G>(
+        left_data: &[bool],
+        right_data: &[bool],
+        left_offset_in_bits: usize,
+        right_offset_in_bits: usize,
+        len_in_bits: usize,
+        op: F,
+        mut expected_op: G,
+    ) where
+        F: FnMut(u64, u64) -> u64,
+        G: FnMut(bool, bool) -> bool,
+    {
+        let mut left_buffer = BooleanBufferBuilder::new(len_in_bits);
+        left_buffer.append_slice(left_data);
+        let right_buffer = BooleanBuffer::from(right_data);
+
+        let expected: Vec<bool> = left_data
+            .iter()
+            .skip(left_offset_in_bits)
+            .zip(right_data.iter().skip(right_offset_in_bits))
+            .take(len_in_bits)
+            .map(|(l, r)| expected_op(*l, *r))
+            .collect();
+
+        bitwise_binary_op(
+            left_buffer.as_slice_mut(),
+            left_offset_in_bits,
+            right_buffer.inner(),
+            right_offset_in_bits,
+            len_in_bits,
+            op,
+        );
+
+        let result: Vec<bool> =
+            BitIterator::new(left_buffer.as_slice(), left_offset_in_bits, len_in_bits).collect();
+
+        assert_eq!(
+            result, expected,
+            "Failed with left_offset={}, right_offset={}, len={}",
+            left_offset_in_bits, right_offset_in_bits, len_in_bits
+        );
+    }
+
+    /// Verifies that a unary operation applied to a buffer using u64 chunks
+    /// is the same as applying the operation bit by bit.
+    fn test_mutable_buffer_unary_op_helper<F, G>(
+        data: &[bool],
+        offset_in_bits: usize,
+        len_in_bits: usize,
+        op: F,
+        mut expected_op: G,
+    ) where
+        F: FnMut(u64) -> u64,
+        G: FnMut(bool) -> bool,
+    {
+        let mut buffer = BooleanBufferBuilder::new(len_in_bits);
+        buffer.append_slice(data);
+
+        let expected: Vec<bool> = data
+            .iter()
+            .skip(offset_in_bits)
+            .take(len_in_bits)
+            .map(|b| expected_op(*b))
+            .collect();
+
+        bitwise_unary_op(buffer.as_slice_mut(), offset_in_bits, len_in_bits, op);
+
+        let result: Vec<bool> =
+            BitIterator::new(buffer.as_slice(), offset_in_bits, len_in_bits).collect();
+
+        assert_eq!(
+            result, expected,
+            "Failed with offset={}, len={}",
+            offset_in_bits, len_in_bits
+        );
+    }
+
+    // Helper to create test data of specific length
+    fn create_test_data(len: usize) -> (Vec<bool>, Vec<bool>) {
+        let mut rng = rand::rng();
+        let left: Vec<bool> = (0..len).map(|_| rng.random_bool(0.5)).collect();
+        let right: Vec<bool> = (0..len).map(|_| rng.random_bool(0.5)).collect();
+        (left, right)
+    }
+
+    /// Test all binary operations (AND, OR, XOR) with the given parameters
+    fn test_all_binary_ops(
+        left_data: &[bool],
+        right_data: &[bool],
+        left_offset_in_bits: usize,
+        right_offset_in_bits: usize,
+        len_in_bits: usize,
+    ) {
+        // Test AND
+        test_mutable_buffer_bin_op_helper(
+            left_data,
+            right_data,
+            left_offset_in_bits,
+            right_offset_in_bits,
+            len_in_bits,
+            |a, b| a & b,
+            |a, b| a & b,
+        );
+
+        // Test OR
+        test_mutable_buffer_bin_op_helper(
+            left_data,
+            right_data,
+            left_offset_in_bits,
+            right_offset_in_bits,
+            len_in_bits,
+            |a, b| a | b,
+            |a, b| a | b,
+        );
+
+        // Test XOR
+        test_mutable_buffer_bin_op_helper(
+            left_data,
+            right_data,
+            left_offset_in_bits,
+            right_offset_in_bits,
+            len_in_bits,
+            |a, b| a ^ b,
+            |a, b| a ^ b,
+        );
+    }
+
+    // ===== Combined Binary Operation Tests =====
+
+    #[test]
+    fn test_binary_ops_less_than_byte() {
+        let (left, right) = create_test_data(4);
+        test_all_binary_ops(&left, &right, 0, 0, 4);
+    }
+
+    #[test]
+    fn test_binary_ops_less_than_byte_across_boundary() {
+        let (left, right) = create_test_data(16);
+        test_all_binary_ops(&left, &right, 6, 6, 4);
+    }
+
+    #[test]
+    fn test_binary_ops_exactly_byte() {
+        let (left, right) = create_test_data(16);
+        test_all_binary_ops(&left, &right, 0, 0, 8);
+    }
+
+    #[test]
+    fn test_binary_ops_more_than_byte_less_than_u64() {
+        let (left, right) = create_test_data(64);
+        test_all_binary_ops(&left, &right, 0, 0, 32);
+    }
+
+    #[test]
+    fn test_binary_ops_exactly_u64() {
+        let (left, right) = create_test_data(180);
+        test_all_binary_ops(&left, &right, 0, 0, 64);
+        test_all_binary_ops(&left, &right, 64, 9, 64);
+        test_all_binary_ops(&left, &right, 8, 100, 64);
+        test_all_binary_ops(&left, &right, 1, 15, 64);
+        test_all_binary_ops(&left, &right, 12, 10, 64);
+        test_all_binary_ops(&left, &right, 180 - 64, 2, 64);
+    }
+
+    #[test]
+    fn test_binary_ops_more_than_u64_not_multiple() {
+        let (left, right) = create_test_data(200);
+        test_all_binary_ops(&left, &right, 0, 0, 100);
+    }
+
+    #[test]
+    fn test_binary_ops_exactly_multiple_u64() {
+        let (left, right) = create_test_data(256);
+        test_all_binary_ops(&left, &right, 0, 0, 128);
+    }
+
+    #[test]
+    fn test_binary_ops_more_than_multiple_u64() {
+        let (left, right) = create_test_data(300);
+        test_all_binary_ops(&left, &right, 0, 0, 200);
+    }
+
+    #[test]
+    fn test_binary_ops_byte_aligned_no_remainder() {
+        let (left, right) = create_test_data(200);
+        test_all_binary_ops(&left, &right, 0, 0, 128);
+    }
+
+    #[test]
+    fn test_binary_ops_byte_aligned_with_remainder() {
+        let (left, right) = create_test_data(200);
+        test_all_binary_ops(&left, &right, 0, 0, 100);
+    }
+
+    #[test]
+    fn test_binary_ops_not_byte_aligned_no_remainder() {
+        let (left, right) = create_test_data(200);
+        test_all_binary_ops(&left, &right, 3, 3, 128);
+    }
+
+    #[test]
+    fn test_binary_ops_not_byte_aligned_with_remainder() {
+        let (left, right) = create_test_data(200);
+        test_all_binary_ops(&left, &right, 5, 5, 100);
+    }
+
+    #[test]
+    fn test_binary_ops_different_offsets() {
+        let (left, right) = create_test_data(200);
+        test_all_binary_ops(&left, &right, 3, 7, 50);
+    }
+
+    #[test]
+    fn test_binary_ops_offsets_greater_than_8_less_than_64() {
+        let (left, right) = create_test_data(200);
+        test_all_binary_ops(&left, &right, 13, 27, 100);
+    }
+
+    // ===== NOT (Unary) Operation Tests =====
+
+    #[test]
+    fn test_not_less_than_byte() {
+        let data = vec![true, false, true, false];
+        test_mutable_buffer_unary_op_helper(&data, 0, 4, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_less_than_byte_across_boundary() {
+        let data: Vec<bool> = (0..16).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 6, 4, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_exactly_byte() {
+        let data: Vec<bool> = (0..16).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 8, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_more_than_byte_less_than_u64() {
+        let data: Vec<bool> = (0..64).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 32, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_exactly_u64() {
+        let data: Vec<bool> = (0..128).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 64, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_more_than_u64_not_multiple() {
+        let data: Vec<bool> = (0..200).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 100, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_exactly_multiple_u64() {
+        let data: Vec<bool> = (0..256).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 128, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_more_than_multiple_u64() {
+        let data: Vec<bool> = (0..300).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 200, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_byte_aligned_no_remainder() {
+        let data: Vec<bool> = (0..200).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 128, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_byte_aligned_with_remainder() {
+        let data: Vec<bool> = (0..200).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 0, 100, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_not_byte_aligned_no_remainder() {
+        let data: Vec<bool> = (0..200).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 3, 128, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_not_byte_aligned_with_remainder() {
+        let data: Vec<bool> = (0..200).map(|i| i % 2 == 0).collect();
+        test_mutable_buffer_unary_op_helper(&data, 5, 100, |a| !a, |a| !a);
+    }
+
+    // ===== Edge Cases =====
+
+    #[test]
+    fn test_empty_length() {
+        let (left, right) = create_test_data(16);
+        test_all_binary_ops(&left, &right, 0, 0, 0);
+    }
+
+    #[test]
+    fn test_single_bit() {
+        let (left, right) = create_test_data(16);
+        test_all_binary_ops(&left, &right, 0, 0, 1);
+    }
+
+    #[test]
+    fn test_single_bit_at_offset() {
+        let (left, right) = create_test_data(16);
+        test_all_binary_ops(&left, &right, 7, 7, 1);
+    }
+
+    #[test]
+    fn test_not_single_bit() {
+        let data = vec![true, false, true, false];
+        test_mutable_buffer_unary_op_helper(&data, 0, 1, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_not_empty_length() {
+        let data = vec![true, false, true, false];
+        test_mutable_buffer_unary_op_helper(&data, 0, 0, |a| !a, |a| !a);
+    }
+
+    #[test]
+    fn test_less_than_byte_unaligned_and_not_enough_bits() {
+        let left_offset_in_bits = 2;
+        let right_offset_in_bits = 4;
+        let len_in_bits = 1;
+
+        // Single byte
+        let right = (0..8).map(|i| (i / 2) % 2 == 0).collect::<Vec<_>>();
+        // less than a byte
+        let left = (0..3).map(|i| i % 2 == 0).collect::<Vec<_>>();
+        test_all_binary_ops(
+            &left,
+            &right,
+            left_offset_in_bits,
+            right_offset_in_bits,
+            len_in_bits,
+        );
+    }
+
+    #[test]
+    fn test_bitwise_binary_op_offset_out_of_bounds() {
+        let input = vec![0b10101010u8, 0b01010101u8];
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&input); // only 2 bytes
+        bitwise_binary_op(
+            buffer.as_slice_mut(),
+            100, // exceeds buffer length, becomes a noop
+            [0b11110000u8, 0b00001111u8],
+            0,
+            0,
+            |a, b| a & b,
+        );
+        assert_eq!(buffer.as_slice(), &input);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: last_offset <= buffer.len()")]
+    fn test_bitwise_binary_op_length_out_of_bounds() {
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
+        bitwise_binary_op(
+            buffer.as_slice_mut(),
+            0, // exceeds buffer length
+            [0b11110000u8, 0b00001111u8],
+            0,
+            100,
+            |a, b| a & b,
+        );
+        assert_eq!(buffer.as_slice(), &[0b10101010u8, 0b01010101u8]);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset + len out of bounds")]
+    fn test_bitwise_binary_op_right_len_out_of_bounds() {
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
+        bitwise_binary_op(
+            buffer.as_slice_mut(),
+            0, // exceeds buffer length
+            [0b11110000u8, 0b00001111u8],
+            1000,
+            16,
+            |a, b| a & b,
+        );
+        assert_eq!(buffer.as_slice(), &[0b10101010u8, 0b01010101u8]);
+    }
+
+    #[test]
+    #[should_panic(expected = "the len is 2 but the index is 12")]
+    fn test_bitwise_unary_op_offset_out_of_bounds() {
+        let input = vec![0b10101010u8, 0b01010101u8];
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&input); // only 2 bytes
+        bitwise_unary_op(
+            buffer.as_slice_mut(),
+            100, // exceeds buffer length, becomes a noop
+            8,
+            |a| !a,
+        );
+        assert_eq!(buffer.as_slice(), &input);
+    }
+
+    #[test]
+    #[should_panic(expected = "assertion failed: last_offset <= buffer.len()")]
+    fn test_bitwise_unary_op_length_out_of_bounds2() {
+        let input = vec![0b10101010u8, 0b01010101u8];
+        let mut buffer = MutableBuffer::new(2); // space for 16 bits
+        buffer.extend_from_slice(&input); // only 2 bytes
+        bitwise_unary_op(
+            buffer.as_slice_mut(),
+            3,   // start at bit 3, to exercise different path
+            100, // exceeds buffer length
+            |a| !a,
+        );
+        assert_eq!(buffer.as_slice(), &input);
     }
 }

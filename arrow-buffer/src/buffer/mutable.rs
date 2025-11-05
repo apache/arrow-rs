@@ -33,8 +33,6 @@ use std::sync::Mutex;
 
 use super::Buffer;
 
-mod bitwise;
-
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
 ///
 /// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to have its pointer aligned
