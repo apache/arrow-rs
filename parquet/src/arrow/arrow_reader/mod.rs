@@ -536,7 +536,7 @@ impl ArrowReaderOptions {
         self.page_index_policy != PageIndexPolicy::Skip
     }
 
-    /// Retrive the currently set metadata decoding options.
+    /// Retrieve the currently set metadata decoding options.
     pub fn metadata_options(&self) -> &MetadataOptions {
         &self.metadata_options
     }
