@@ -16,7 +16,7 @@
 // under the License.
 
 use super::{Buffer, MutableBuffer};
-use crate::bit_util::bitwise_binary_op;
+use crate::bit_util::{bitwise_binary_op, bitwise_unary_op};
 use crate::util::bit_util::ceil;
 
 /// Apply a bitwise operation `op` to four inputs and return the result as a Buffer.
@@ -61,6 +61,10 @@ where
 
 /// Apply a bitwise operation `op` to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// The output is guaranteed to have
+/// 1. all bits outside the specified range set to zero
+/// 2. start at offset zero
 pub fn bitwise_bin_op_helper<F>(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -72,18 +76,47 @@ pub fn bitwise_bin_op_helper<F>(
 where
     F: FnMut(u64, u64) -> u64,
 {
-    let len_bytes = ceil(len_in_bits + left_offset_in_bits, 8);
-    let mut result = left[0..len_bytes].to_vec();
+    if len_in_bits == 0 {
+        return Buffer::default();
+    }
+
+    // figure out the starting byte for left buffer
+    let start_byte = left_offset_in_bits / 8;
+    let starting_bit_in_byte = left_offset_in_bits % 8;
+
+    let len_bytes = ceil(starting_bit_in_byte + len_in_bits, 8);
+    let mut result = left[start_byte..len_bytes].to_vec();
     bitwise_binary_op(
         &mut result,
-        left_offset_in_bits,
+        starting_bit_in_byte,
         right,
         right_offset_in_bits,
         len_in_bits,
         op,
     );
 
+    // shift result to the left so that that it starts at offset zero (TODO do this a word at a time)
+    shift_left_by(&mut result, starting_bit_in_byte);
     result.into()
+}
+
+/// Shift the bits in the buffer to the left by `shift` bits.
+/// `shift` must be less than 8.
+fn shift_left_by(buffer: &mut [u8], starting_bit_in_byte: usize) {
+    if starting_bit_in_byte == 0 {
+        return;
+    }
+    assert!(starting_bit_in_byte < 8);
+    let shift = 8 - starting_bit_in_byte;
+    let carry_mask = ((1u8 << starting_bit_in_byte) - 1) << shift;
+
+    let mut carry = 0;
+    // shift from right to left
+    for b in buffer.iter_mut().rev() {
+        let new_carry = (*b & carry_mask) >> shift;
+        *b = (*b << starting_bit_in_byte) | carry;
+        carry = new_carry;
+    }
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
@@ -104,11 +137,19 @@ where
     if len_in_bits == 0 {
         return Buffer::default();
     }
+    // already byte aligned, copy over directly
     let len_in_bytes = ceil(len_in_bits, 8);
-    let mut result = vec![0u8; len_in_bytes];
-    bitwise_binary_op(&mut result, 0, left, offset_in_bits, len_in_bits, |_, b| {
-        op(b)
-    });
+    let mut result;
+    if offset_in_bits == 0 {
+        result = left.as_slice()[0..len_in_bytes].to_vec();
+        bitwise_unary_op(&mut result, 0, len_in_bits, op);
+    } else {
+        // need to align bits
+        result = vec![0u8; len_in_bytes];
+        bitwise_binary_op(&mut result, 0, left, offset_in_bits, len_in_bits, |_, b| {
+            op(b)
+        });
+    }
     result.into()
 }
 
@@ -192,4 +233,40 @@ pub fn buffer_bin_and_not(
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
 pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {
     bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
+}
+
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_shift_left_by() {
+        let input = vec![0b10110011, 0b00011100, 0b11111111];
+        do_shift_left_by(&input, 0, &input);
+        do_shift_left_by(&input, 1, &[0b01100110, 0b00111001, 0b11111110]);
+        do_shift_left_by(&input, 2, &[0b11001100, 0b01110011, 0b11111100]);
+        do_shift_left_by(&input, 3, &[0b10011000, 0b11100111, 0b11111000]);
+        do_shift_left_by(&input, 4, &[0b00110001, 0b11001111, 0b11110000]);
+        do_shift_left_by(&input, 5, &[0b01100011, 0b10011111, 0b11100000]);
+        do_shift_left_by(&input, 6, &[0b11000111, 0b00111111, 0b11000000]);
+        do_shift_left_by(&input, 7, &[0b10001110, 0b01111111, 0b10000000]);
+
+    }
+    fn do_shift_left_by(input: &[u8], shift: usize, expected: &[u8])  {
+        let mut buffer = input.to_vec();
+        super::shift_left_by(&mut buffer, shift);
+        assert_eq!(buffer, expected,
+                   "\nshift_left_by({}, {})\nactual:   {}\nexpected: {}",
+                   buffer_string(input), shift,
+                   buffer_string(&buffer),
+                   buffer_string(expected)
+        );
+    }
+    fn buffer_string(buffer: &[u8]) -> String {
+        use std::fmt::Write;
+        let mut s = String::new();
+        for b in buffer {
+            write!(&mut s, "{:08b} ", b).unwrap();
+        }
+        s
+    }
 }
