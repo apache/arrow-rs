@@ -676,12 +676,14 @@ where
 
                 // Predicate evaluation can zero out some pages; switch to selectors
                 // before the mask-backed cursor tries to touch data we won't fetch.
-                let has_skipped_page = selection_has_skipped_page(
+                if selection_has_skipped_page(
                     plan_builder.selection(),
                     predicate.projection(),
                     offset_index,
-                );
-                plan_builder = plan_builder.force_selectors_on_skip(has_skipped_page);
+                ) {
+                    plan_builder =
+                        plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
+                }
 
                 // (pre) Fetch only the columns that are selected by the predicate
                 let selection = plan_builder.selection();
@@ -722,9 +724,9 @@ where
             .build_limited();
 
         // Offset/limit may further trim pages, so re-evaluate the strategy here too.
-        let has_skipped_page =
-            selection_has_skipped_page(plan_builder.selection(), &projection, offset_index);
-        plan_builder = plan_builder.force_selectors_on_skip(has_skipped_page);
+        if selection_has_skipped_page(plan_builder.selection(), &projection, offset_index) {
+            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
+        }
 
         let rows_after = plan_builder
             .num_rows_selected()
