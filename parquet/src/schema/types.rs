@@ -924,7 +924,7 @@ impl ColumnDescriptor {
     /// Note that this function will clone the `LogicalType`. If performance is a concern,
     /// use [`Self::logical_type_ref`] instead.
     #[deprecated(
-        since = "57.0.0",
+        since = "57.1.0",
         note = "use `ColumnDescriptor::logical_type_ref` instead (LogicalType cloning is non trivial)"
     )]
     pub fn logical_type(&self) -> Option<LogicalType> {
