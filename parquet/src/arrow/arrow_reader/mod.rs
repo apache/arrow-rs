@@ -52,61 +52,6 @@ mod read_plan;
 mod selection;
 pub mod statistics;
 
-/// Returns true when `selection` keeps some rows for `projection` but prunes whole
-/// data pages (determined via `OffsetIndex`). Masks can't handle this because the
-/// page data is never fetched, so the caller should fall back to RowSelectors.
-pub(crate) fn selection_skips_any_page(
-    selection: &RowSelection,
-    projection: &ProjectionMask,
-    columns: &[OffsetIndexMetaData],
-) -> bool {
-    columns.iter().enumerate().any(|(leaf_idx, column)| {
-        if !projection.leaf_included(leaf_idx) {
-            return false;
-        }
-
-        let locations = column.page_locations();
-        if locations.is_empty() {
-            return false;
-        }
-
-        let ranges = selection.scan_ranges(locations);
-        !ranges.is_empty() && ranges.len() < locations.len()
-    })
-}
-
-fn selection_requires_selectors_for_row_groups(
-    selection: Option<&RowSelection>,
-    projection: &ProjectionMask,
-    metadata: &ParquetMetaData,
-    row_groups: &[usize],
-) -> bool {
-    let mut remaining = match selection {
-        Some(selection) => selection.clone(),
-        None => return false,
-    };
-
-    let offset_index = match metadata.offset_index() {
-        Some(index) => index,
-        None => return false,
-    };
-
-    for &rg_idx in row_groups {
-        let columns = match offset_index.get(rg_idx) {
-            Some(columns) if !columns.is_empty() => columns,
-            _ => continue,
-        };
-
-        let row_count = metadata.row_group(rg_idx).num_rows() as usize;
-        let rg_selection = remaining.split_off(row_count);
-        if selection_skips_any_page(&rg_selection, projection, columns) {
-            return true;
-        }
-    }
-
-    false
-}
-
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
 ///
@@ -974,43 +919,18 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
-
-                // Once a predicate has refined the selection, re-check if any requested
-                // column now skips entire pages. In that case the boolean-mask strategy
-                // would try to filter data we never fetched; selectors are safe.
-                if selection_requires_selectors_for_row_groups(
-                    plan_builder.selection(),
-                    predicate.projection(),
-                    reader.metadata.as_ref(),
-                    &reader.row_groups,
-                ) {
-                    plan_builder =
-                        plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
-                }
             }
         }
 
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
             .build_array_reader(fields.as_deref(), &projection)?;
 
-        let mut plan_builder = plan_builder
+        let read_plan = plan_builder
             .limited(reader.num_rows())
             .with_offset(offset)
             .with_limit(limit)
-            .build_limited();
-
-        // Offset/limit can also trim per-row-group selections. Ensure the final
-        // plan doesn't leave mask-backed cursors pointing at pruned pages.
-        if selection_requires_selectors_for_row_groups(
-            plan_builder.selection(),
-            &projection,
-            reader.metadata.as_ref(),
-            &reader.row_groups,
-        ) {
-            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
-        }
-
-        let read_plan = plan_builder.build();
+            .build_limited()
+            .build();
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }

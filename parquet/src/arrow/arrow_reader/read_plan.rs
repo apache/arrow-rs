@@ -49,6 +49,8 @@ pub struct ReadPlanBuilder {
     selection: Option<RowSelection>,
     /// Strategy to use when materialising the row selection
     selection_strategy: RowSelectionStrategy,
+    /// Tracks whether selectors were required due to skipped pages
+    force_selectors: bool,
 }
 
 impl ReadPlanBuilder {
@@ -58,6 +60,7 @@ impl ReadPlanBuilder {
             batch_size,
             selection: None,
             selection_strategy: RowSelectionStrategy::Auto,
+            force_selectors: false,
         }
     }
 
@@ -70,6 +73,12 @@ impl ReadPlanBuilder {
     /// Force a specific strategy when materialising the [`RowSelection`]
     pub fn with_selection_strategy(mut self, strategy: RowSelectionStrategy) -> Self {
         self.selection_strategy = strategy;
+        self
+    }
+
+    /// Remember that selectors are required whenever we detect skipped pages.
+    pub fn force_selectors_on_skip(mut self, has_skipped_page: bool) -> Self {
+        self.force_selectors |= has_skipped_page;
         self
     }
 
@@ -149,10 +158,18 @@ impl ReadPlanBuilder {
         if !self.selects_any() {
             self.selection = Some(RowSelection::from(vec![]));
         }
+        let selection_strategy = if self.force_selectors
+            || matches!(self.selection_strategy, RowSelectionStrategy::Selectors)
+        {
+            RowSelectionStrategy::Selectors
+        } else {
+            self.selection_strategy
+        };
         let Self {
             batch_size,
             selection,
-            selection_strategy,
+            selection_strategy: _,
+            force_selectors: _,
         } = self;
 
         let selection = selection.map(|s| {

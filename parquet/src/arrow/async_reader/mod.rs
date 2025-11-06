@@ -40,7 +40,7 @@ use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-    RowFilter, RowSelection, RowSelectionStrategy, selection_skips_any_page,
+    RowFilter, RowSelection, RowSelectionStrategy,
 };
 
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
@@ -65,6 +65,42 @@ use crate::arrow::in_memory_row_group::{FetchRanges, InMemoryRowGroup};
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
+
+/// Returns true when `selection` keeps some rows for `projection` but prunes whole
+/// data pages (determined via `OffsetIndex`). Masks can't handle this because the
+/// page data is never fetched, so the caller should fall back to RowSelectors.
+pub(crate) fn selection_skips_any_page(
+    selection: &RowSelection,
+    projection: &ProjectionMask,
+    columns: &[OffsetIndexMetaData],
+) -> bool {
+    columns.iter().enumerate().any(|(leaf_idx, column)| {
+        if !projection.leaf_included(leaf_idx) {
+            return false;
+        }
+
+        let locations = column.page_locations();
+        if locations.is_empty() {
+            return false;
+        }
+
+        let ranges = selection.scan_ranges(locations);
+        !ranges.is_empty() && ranges.len() < locations.len()
+    })
+}
+
+fn selection_has_skipped_page(
+    selection: Option<&RowSelection>,
+    projection: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+) -> bool {
+    match (selection, offset_index) {
+        (Some(selection), Some(offset_index)) => {
+            selection_skips_any_page(selection, projection, offset_index)
+        }
+        _ => false,
+    }
+}
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
 ///
@@ -640,14 +676,12 @@ where
 
                 // Predicate evaluation can zero out some pages; switch to selectors
                 // before the mask-backed cursor tries to touch data we won't fetch.
-                if selection_requires_selector(
+                let has_skipped_page = selection_has_skipped_page(
                     plan_builder.selection(),
                     predicate.projection(),
                     offset_index,
-                ) {
-                    plan_builder =
-                        plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
-                }
+                );
+                plan_builder = plan_builder.force_selectors_on_skip(has_skipped_page);
 
                 // (pre) Fetch only the columns that are selected by the predicate
                 let selection = plan_builder.selection();
@@ -688,9 +722,9 @@ where
             .build_limited();
 
         // Offset/limit may further trim pages, so re-evaluate the strategy here too.
-        if selection_requires_selector(plan_builder.selection(), &projection, offset_index) {
-            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
-        }
+        let has_skipped_page =
+            selection_has_skipped_page(plan_builder.selection(), &projection, offset_index);
+        plan_builder = plan_builder.force_selectors_on_skip(has_skipped_page);
 
         let rows_after = plan_builder
             .num_rows_selected()
@@ -780,24 +814,6 @@ where
             Some(ProjectionMask::leaves(schema, included_leaves))
         }
     }
-}
-
-fn selection_requires_selector(
-    selection: Option<&RowSelection>,
-    projection: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
-) -> bool {
-    let selection = match selection {
-        Some(selection) => selection,
-        None => return false,
-    };
-
-    let offset_index = match offset_index {
-        Some(index) => index,
-        None => return false,
-    };
-
-    selection_skips_any_page(selection, projection, offset_index)
 }
 
 enum StreamState<T> {
