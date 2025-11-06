@@ -39,6 +39,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -117,8 +118,6 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) selection: Option<RowSelection>,
 
-    pub(crate) selection_strategy: RowSelectionStrategy,
-
     pub(crate) limit: Option<usize>,
 
     pub(crate) offset: Option<usize>,
@@ -140,11 +139,43 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("projection", &self.projection)
             .field("filter", &self.filter)
             .field("selection", &self.selection)
-            .field("selection_strategy", &self.selection_strategy)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
             .finish()
+    }
+}
+
+fn selection_skips_any_page(
+    selection: &RowSelection,
+    projection: &ProjectionMask,
+    columns: &[OffsetIndexMetaData],
+) -> bool {
+    columns.iter().enumerate().any(|(leaf_idx, column)| {
+        if !projection.leaf_included(leaf_idx) {
+            return false;
+        }
+
+        let locations = column.page_locations();
+        if locations.is_empty() {
+            return false;
+        }
+
+        let ranges = selection.scan_ranges(locations);
+        !ranges.is_empty() && ranges.len() < locations.len()
+    })
+}
+
+pub(crate) fn should_force_selectors(
+    selection: Option<&RowSelection>,
+    projection: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+) -> bool {
+    match (selection, offset_index) {
+        (Some(selection), Some(columns)) => {
+            selection_skips_any_page(selection, projection, columns)
+        }
+        _ => false,
     }
 }
 
@@ -160,7 +191,6 @@ impl<T> ArrowReaderBuilder<T> {
             projection: ProjectionMask::all(),
             filter: None,
             selection: None,
-            selection_strategy: RowSelectionStrategy::Auto,
             limit: None,
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
@@ -271,14 +301,6 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_row_selection(self, selection: RowSelection) -> Self {
         Self {
             selection: Some(selection),
-            ..self
-        }
-    }
-
-    /// Override the strategy used to execute the configured [`RowSelection`]
-    pub fn with_row_selection_strategy(self, strategy: RowSelectionStrategy) -> Self {
-        Self {
-            selection_strategy: strategy,
             ..self
         }
     }
@@ -878,7 +900,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             projection,
             mut filter,
             selection,
-            selection_strategy,
             limit,
             offset,
             metrics,
@@ -899,9 +920,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             row_groups,
         };
 
-        let mut plan_builder = ReadPlanBuilder::new(batch_size)
-            .with_selection(selection)
-            .with_selection_strategy(selection_strategy);
+        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {
@@ -924,12 +943,41 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
             .build_array_reader(fields.as_deref(), &projection)?;
 
-        let read_plan = plan_builder
+        let mut plan_builder = plan_builder
             .limited(reader.num_rows())
             .with_offset(offset)
             .with_limit(limit)
-            .build_limited()
-            .build();
+            .build_limited();
+
+        let mask_preferred = plan_builder.mask_preferred();
+        if mask_preferred {
+            let mut force_selectors = false;
+            // if let (Some(offset_index), Some(mut selection)) = (
+            //     reader
+            //         .metadata
+            //         .offset_index()
+            //         .filter(|index| !index.is_empty()),
+            //     plan_builder.selection().cloned(),
+            // ) {
+            //     for &row_group_idx in &reader.row_groups {
+            //         let row_count = reader.metadata.row_group(row_group_idx).num_rows() as usize;
+            //         let row_group_selection = selection.split_off(row_count);
+            //         let columns = offset_index
+            //             .get(row_group_idx)
+            //             .map(|columns| columns.as_slice());
+            //         if should_force_selectors(Some(&row_group_selection), &projection, columns) {
+            //             force_selectors = true;
+            //             break;
+            //         }
+            //     }
+            // }
+
+            if !force_selectors {
+                plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
+            }
+        }
+
+        let read_plan = plan_builder.build();
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
@@ -5183,7 +5231,7 @@ mod tests {
     }
 
     #[test]
-    fn test_mask_strategy_full_page_skip_triggers_error() {
+    fn test_row_filter_full_page_skip_is_handled() {
         let data = build_mask_pruning_parquet();
 
         let filter_mask;
@@ -5206,16 +5254,15 @@ mod tests {
             or(&match_first, &match_second)
         });
 
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)
             .unwrap()
             .with_projection(output_mask)
             .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
             .with_batch_size(256)
-            .with_row_selection_strategy(RowSelectionStrategy::Mask)
             .build()
             .unwrap();
 
-        // The mask strategy used to panic once predicate pruning removed whole pages.
+        // Predicate pruning used to panic once mask-backed plans removed whole pages.
         // Collecting into batches validates the plan now downgrades to selectors instead.
         let schema = reader.schema().clone();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();

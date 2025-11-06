@@ -38,6 +38,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
+use crate::arrow::arrow_reader::should_force_selectors;
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection, RowSelectionStrategy,
@@ -49,7 +50,6 @@ use crate::bloom_filter::{
 };
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
 mod metadata;
 pub use metadata::*;
@@ -65,42 +65,6 @@ use crate::arrow::in_memory_row_group::{FetchRanges, InMemoryRowGroup};
 use crate::arrow::schema::ParquetField;
 #[cfg(feature = "object_store")]
 pub use store::*;
-
-/// Returns true when `selection` keeps some rows for `projection` but prunes whole
-/// data pages (determined via `OffsetIndex`). Masks can't handle this because the
-/// page data is never fetched, so the caller should fall back to RowSelectors.
-pub(crate) fn selection_skips_any_page(
-    selection: &RowSelection,
-    projection: &ProjectionMask,
-    columns: &[OffsetIndexMetaData],
-) -> bool {
-    columns.iter().enumerate().any(|(leaf_idx, column)| {
-        if !projection.leaf_included(leaf_idx) {
-            return false;
-        }
-
-        let locations = column.page_locations();
-        if locations.is_empty() {
-            return false;
-        }
-
-        let ranges = selection.scan_ranges(locations);
-        !ranges.is_empty() && ranges.len() < locations.len()
-    })
-}
-
-fn selection_has_skipped_page(
-    selection: Option<&RowSelection>,
-    projection: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
-) -> bool {
-    match (selection, offset_index) {
-        (Some(selection), Some(offset_index)) => {
-            selection_skips_any_page(selection, projection, offset_index)
-        }
-        _ => false,
-    }
-}
 
 /// The asynchronous interface used by [`ParquetRecordBatchStream`] to read parquet files
 ///
@@ -545,7 +509,6 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             filter: self.filter,
             metadata: self.metadata.clone(),
             fields: self.fields,
-            selection_strategy: self.selection_strategy,
             limit: self.limit,
             offset: self.offset,
             metrics: self.metrics,
@@ -594,9 +557,6 @@ struct ReaderFactory<T> {
 
     /// Optional filter
     filter: Option<RowFilter>,
-
-    /// Strategy used to materialise row selections for this reader
-    selection_strategy: RowSelectionStrategy,
 
     /// Limit to apply to remaining row groups.
     limit: Option<usize>,
@@ -661,9 +621,7 @@ where
         let cache_options_builder = CacheOptionsBuilder::new(&cache_projection, &row_group_cache);
 
         let filter = self.filter.as_mut();
-        let mut plan_builder = ReadPlanBuilder::new(batch_size)
-            .with_selection(selection)
-            .with_selection_strategy(self.selection_strategy);
+        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
 
         // Update selection based on any filters
         if let Some(filter) = filter {
@@ -672,17 +630,6 @@ where
             for predicate in filter.predicates.iter_mut() {
                 if !plan_builder.selects_any() {
                     return Ok((self, None)); // ruled out entire row group
-                }
-
-                // Predicate evaluation can zero out some pages; switch to selectors
-                // before the mask-backed cursor tries to touch data we won't fetch.
-                if selection_has_skipped_page(
-                    plan_builder.selection(),
-                    predicate.projection(),
-                    offset_index,
-                ) {
-                    plan_builder =
-                        plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
                 }
 
                 // (pre) Fetch only the columns that are selected by the predicate
@@ -723,11 +670,6 @@ where
             .with_limit(self.limit)
             .build_limited();
 
-        // Offset/limit may further trim pages, so re-evaluate the strategy here too.
-        if selection_has_skipped_page(plan_builder.selection(), &projection, offset_index) {
-            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Selectors);
-        }
-
         let rows_after = plan_builder
             .num_rows_selected()
             .unwrap_or(row_group.row_count);
@@ -757,6 +699,12 @@ where
                 None,
             )
             .await?;
+
+        if plan_builder.mask_preferred()
+            && !should_force_selectors(plan_builder.selection(), &projection, offset_index)
+        {
+            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
+        }
 
         let plan = plan_builder.build();
 
@@ -1833,7 +1781,6 @@ mod tests {
             fields: fields.map(Arc::new),
             input: async_reader,
             filter: None,
-            selection_strategy: RowSelectionStrategy::Auto,
             limit: None,
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),
@@ -2299,7 +2246,6 @@ mod tests {
             fields: None,
             input: TestReader::new(data),
             filter: Some(filter),
-            selection_strategy: RowSelectionStrategy::Auto,
             limit: None,
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),

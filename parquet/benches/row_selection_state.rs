@@ -24,19 +24,14 @@ use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::{
-    ParquetRecordBatchReaderBuilder, RowSelection, RowSelectionStrategy, RowSelector,
-};
+use parquet::arrow::arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection, RowSelector};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
-const READ_STRATEGIES: &[(&str, RowSelectionStrategy)] = &[
-    ("read_mask", RowSelectionStrategy::Mask),
-    ("read_selectors", RowSelectionStrategy::Selectors),
-];
+const BENCH_LABEL: &str = "read_auto";
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
 
@@ -227,18 +222,16 @@ fn bench_over_lengths(
             selection,
         };
 
-        for (label, strategy) in READ_STRATEGIES.iter().copied() {
-            c.bench_with_input(
-                BenchmarkId::new(label, &suffix),
-                &bench_input,
-                |b, input| {
-                    b.iter(|| {
-                        let total = run_read(&input.parquet_data, &input.selection, strategy);
-                        hint::black_box(total);
-                    });
-                },
-            );
-        }
+        c.bench_with_input(
+            BenchmarkId::new(BENCH_LABEL, &suffix),
+            &bench_input,
+            |b, input| {
+                b.iter(|| {
+                    let total = run_read(&input.parquet_data, &input.selection);
+                    hint::black_box(total);
+                });
+            },
+        );
     }
 }
 
@@ -250,16 +243,11 @@ struct BenchInput {
     selection: RowSelection,
 }
 
-fn run_read(
-    parquet_data: &Bytes,
-    selection: &RowSelection,
-    strategy: RowSelectionStrategy,
-) -> usize {
+fn run_read(parquet_data: &Bytes, selection: &RowSelection) -> usize {
     let reader = ParquetRecordBatchReaderBuilder::try_new(parquet_data.clone())
         .unwrap()
         .with_batch_size(BATCH_SIZE)
         .with_row_selection(selection.clone())
-        .with_row_selection_strategy(strategy)
         .build()
         .unwrap();
 
