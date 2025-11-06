@@ -278,6 +278,7 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
         (Some(LogicalType::Enum), _) => Ok(DataType::Binary),
         (Some(LogicalType::Geometry { .. }), _) => Ok(DataType::Binary),
         (Some(LogicalType::Geography { .. }), _) => Ok(DataType::Binary),
+        (Some(LogicalType::_Unknown { .. }), _) => Ok(DataType::Binary),
         (None, ConvertedType::NONE) => Ok(DataType::Binary),
         (None, ConvertedType::JSON) => Ok(DataType::Utf8),
         (None, ConvertedType::BSON) => Ok(DataType::Binary),

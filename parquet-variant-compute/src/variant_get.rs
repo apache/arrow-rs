@@ -311,8 +311,8 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
         Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, NullBuilder, StringArray, StructArray,
-        Time64MicrosecondArray,
+        Int16Array, Int32Array, Int64Array, LargeStringArray, NullBuilder, StringArray,
+        StringViewArray, StructArray, Time64MicrosecondArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
@@ -778,6 +778,27 @@ mod test {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_large_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_large_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_view_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_view_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
     macro_rules! perfectly_shredded_variant_array_fn {
         ($func:ident, $typed_value_gen:expr) => {
             fn $func() -> ArrayRef {
@@ -800,6 +821,18 @@ mod test {
             }
         };
     }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_variant_array, || {
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_large_utf8_variant_array, || {
+        LargeStringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_view_variant_array, || {
+        StringViewArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
