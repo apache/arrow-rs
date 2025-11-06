@@ -396,7 +396,7 @@ pub(crate) fn decode_page(
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer[..offset]);
-            // decompressed size of zero corresponds to a page with only null values
+            // decompressed size of zero corresponds to a page with no non-null values
             // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
             if decompressed_size > 0 {
                 let compressed = &buffer[offset..];
