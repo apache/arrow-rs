@@ -22,12 +22,12 @@ use crate::variant_to_arrow::{
     PrimitiveVariantToArrowRowBuilder, make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
-use arrow::buffer::NullBuffer;
+use arrow::array::{ArrayRef, BinaryViewArray, ListArray, ListViewArray, NullBufferBuilder};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, Fields};
+use arrow::datatypes::{DataType, FieldRef, Fields};
 use arrow::error::{ArrowError, Result};
-use parquet_variant::{Variant, VariantBuilderExt};
+use parquet_variant::{Variant, VariantBuilderExt, VariantList};
 
 use indexmap::IndexMap;
 use std::sync::Arc;
@@ -114,13 +114,22 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
-        DataType::List(_)
-        | DataType::LargeList(_)
-        | DataType::ListView(_)
-        | DataType::LargeListView(_)
-        | DataType::FixedSizeList(..) => {
+        DataType::List(_) | DataType::ListView(_) => {
+            let typed_value_builder = VariantToShreddedArrayVariantRowBuilder::try_new(
+                data_type,
+                cast_options,
+                capacity,
+            )?;
+            VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
+        }
+        DataType::LargeList(_) | DataType::LargeListView(_) => {
             return Err(ArrowError::NotYetImplemented(
                 "Shredding variant array values as arrow lists".to_string(),
+            ));
+        }
+        DataType::FixedSizeList(..) => {
+            return Err(ArrowError::NotYetImplemented(
+                "Shredding variant array values as fixed-size lists".to_string(),
             ));
         }
         _ => {
@@ -136,13 +145,16 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
 
 pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
     Primitive(VariantToShreddedPrimitiveVariantRowBuilder<'a>),
+    Array(VariantToShreddedArrayVariantRowBuilder<'a>),
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
+
 impl<'a> VariantToShreddedVariantRowBuilder<'a> {
     pub fn append_null(&mut self) -> Result<()> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
             Primitive(b) => b.append_null(),
+            Array(b) => b.append_null(),
             Object(b) => b.append_null(),
         }
     }
@@ -151,6 +163,7 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
             Primitive(b) => b.append_value(value),
+            Array(b) => b.append_value(value),
             Object(b) => b.append_value(value),
         }
     }
@@ -159,6 +172,7 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
             Primitive(b) => b.finish(),
+            Array(b) => b.finish(),
             Object(b) => b.finish(),
         }
     }
@@ -185,6 +199,7 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
             top_level,
         }
     }
+
     fn append_null(&mut self) -> Result<()> {
         // Only the top-level struct that represents the variant can be nullable; object fields and
         // array elements are non-nullable.
@@ -192,6 +207,7 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
         self.value_builder.append_null();
         self.typed_value_builder.append_null()
     }
+
     fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
         self.nulls.append_non_null();
         if self.typed_value_builder.append_value(&value)? {
@@ -201,12 +217,273 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
         }
         Ok(true)
     }
+
     fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
         Ok((
             self.value_builder.build()?,
             self.typed_value_builder.finish()?,
             self.nulls.finish(),
         ))
+    }
+}
+
+pub(crate) struct VariantToShreddedArrayVariantRowBuilder<'a> {
+    value_builder: VariantValueArrayBuilder,
+    typed_value_builder: ArrayVariantToArrowRowBuilder<'a>,
+}
+
+impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
+    fn try_new(
+        data_type: &'a DataType,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+    ) -> Result<Self> {
+        Ok(Self {
+            value_builder: VariantValueArrayBuilder::new(capacity),
+            typed_value_builder: ArrayVariantToArrowRowBuilder::try_new(
+                data_type,
+                cast_options,
+                capacity,
+            )?,
+        })
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.value_builder.append_value(Variant::Null);
+        self.typed_value_builder.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        match value {
+            Variant::List(list) => {
+                self.value_builder.append_null();
+                self.typed_value_builder.append_value(list)?;
+                Ok(true)
+            }
+            other => {
+                self.value_builder.append_value(other);
+                self.typed_value_builder.append_null();
+                Ok(false)
+            }
+        }
+    }
+
+    fn finish(self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
+        Ok((
+            self.value_builder.build()?,
+            self.typed_value_builder.finish()?,
+            // All elements of an array must be present (not missing) because
+            // the array Variant encoding does not allow missing elements
+            None,
+        ))
+    }
+}
+
+enum ArrayVariantToArrowRowBuilder<'a> {
+    List(VariantToListArrowRowBuilder<'a>),
+    ListView(VariantToListViewArrowRowBuilder<'a>),
+}
+
+impl<'a> ArrayVariantToArrowRowBuilder<'a> {
+    fn try_new(
+        data_type: &'a DataType,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+    ) -> Result<Self> {
+        use ArrayVariantToArrowRowBuilder::*;
+
+        let builder = match data_type {
+            DataType::List(field) => List(VariantToListArrowRowBuilder::try_new(
+                field.clone(),
+                field.data_type(),
+                cast_options,
+                capacity,
+            )?),
+            DataType::ListView(field) => ListView(VariantToListViewArrowRowBuilder::try_new(
+                field.clone(),
+                field.data_type(),
+                cast_options,
+                capacity,
+            )?),
+            other => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Casting to {other:?} is not applicable for array Variant types"
+                )));
+            }
+        };
+        Ok(builder)
+    }
+
+    fn append_null(&mut self) {
+        match self {
+            Self::List(builder) => builder.append_null(),
+            Self::ListView(builder) => builder.append_null(),
+        }
+    }
+
+    fn append_value(&mut self, list: VariantList<'_, '_>) -> Result<()> {
+        match self {
+            Self::List(builder) => builder.append_value(list),
+            Self::ListView(builder) => builder.append_value(list),
+        }
+    }
+
+    fn finish(self) -> Result<ArrayRef> {
+        match self {
+            Self::List(builder) => builder.finish(),
+            Self::ListView(builder) => builder.finish(),
+        }
+    }
+}
+
+struct VariantToListArrowRowBuilder<'a> {
+    field: FieldRef,
+    offsets: Vec<i32>,
+    element_builder: Box<VariantToShreddedVariantRowBuilder<'a>>,
+    nulls: NullBufferBuilder,
+    current_offset: i32,
+}
+
+impl<'a> VariantToListArrowRowBuilder<'a> {
+    fn try_new(
+        field: FieldRef,
+        element_data_type: &'a DataType,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+    ) -> Result<Self> {
+        let mut offsets = Vec::with_capacity(capacity.checked_add(1).ok_or_else(|| {
+            ArrowError::ComputeError(
+                "Capacity exceeded usize::MAX when reserving offsets".to_string(),
+            )
+        })?);
+        offsets.push(0);
+        let element_builder = make_variant_to_shredded_variant_arrow_row_builder(
+            element_data_type,
+            cast_options,
+            capacity,
+            false,
+        )?;
+        Ok(Self {
+            field,
+            offsets,
+            element_builder: Box::new(element_builder),
+            nulls: NullBufferBuilder::new(capacity),
+            current_offset: 0,
+        })
+    }
+
+    fn append_null(&mut self) {
+        self.offsets.push(self.current_offset);
+        self.nulls.append_null();
+    }
+
+    fn append_value(&mut self, list: VariantList<'_, '_>) -> Result<()> {
+        for element in list.iter() {
+            self.element_builder.append_value(element)?;
+            self.current_offset = self.current_offset.checked_add(1).ok_or_else(|| {
+                ArrowError::ComputeError(
+                    "List offsets exceeded i32::MAX during shredding".to_string(),
+                )
+            })?;
+        }
+        self.offsets.push(self.current_offset);
+        self.nulls.append_non_null();
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        let (value, typed_value, nulls) = self.element_builder.finish()?;
+        let element_array =
+            ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
+        let field = Arc::new(
+            self.field
+                .as_ref()
+                .clone()
+                .with_data_type(element_array.data_type().clone()),
+        );
+        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::from(self.offsets));
+        Ok(Arc::new(ListArray::new(
+            field,
+            offsets,
+            ArrayRef::from(element_array),
+            self.nulls.finish(),
+        )))
+    }
+}
+
+struct VariantToListViewArrowRowBuilder<'a> {
+    field: FieldRef,
+    offsets: Vec<i32>,
+    sizes: Vec<i32>,
+    element_builder: Box<VariantToShreddedVariantRowBuilder<'a>>,
+    nulls: NullBufferBuilder,
+    current_offset: i32,
+}
+
+impl<'a> VariantToListViewArrowRowBuilder<'a> {
+    fn try_new(
+        field: FieldRef,
+        element_data_type: &'a DataType,
+        cast_options: &'a CastOptions,
+        capacity: usize,
+    ) -> Result<Self> {
+        let element_builder = make_variant_to_shredded_variant_arrow_row_builder(
+            element_data_type,
+            cast_options,
+            capacity,
+            false,
+        )?;
+        Ok(Self {
+            field,
+            offsets: Vec::with_capacity(capacity),
+            sizes: Vec::with_capacity(capacity),
+            element_builder: Box::new(element_builder),
+            nulls: NullBufferBuilder::new(capacity),
+            current_offset: 0,
+        })
+    }
+
+    fn append_null(&mut self) {
+        self.offsets.push(self.current_offset);
+        self.sizes.push(0);
+        self.nulls.append_null();
+    }
+
+    fn append_value(&mut self, list: VariantList<'_, '_>) -> Result<()> {
+        let start_offset = self.current_offset;
+        for element in list.iter() {
+            self.element_builder.append_value(element)?;
+            self.current_offset = self.current_offset.checked_add(1).ok_or_else(|| {
+                ArrowError::ComputeError(
+                    "List offsets exceeded i32::MAX during shredding".to_string(),
+                )
+            })?;
+        }
+        self.offsets.push(start_offset);
+        self.sizes.push(self.current_offset - start_offset);
+        self.nulls.append_non_null();
+        Ok(())
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        let (value, typed_value, nulls) = self.element_builder.finish()?;
+        let element_array = ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
+        let field = Arc::new(
+            self.field
+                .as_ref()
+                .clone()
+                .with_data_type(element_array.data_type().clone()),
+        );
+        let offsets = ScalarBuffer::from(self.offsets);
+        let sizes = ScalarBuffer::from(self.sizes);
+        Ok(Arc::new(ListViewArray::new(
+            field,
+            offsets,
+            sizes,
+            ArrayRef::from(element_array),
+            self.nulls.finish(),
+        )))
     }
 }
 
@@ -254,6 +531,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         }
         Ok(())
     }
+
     fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
         let Variant::Object(ref obj) = value else {
             // Not an object => fall back
@@ -303,6 +581,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         self.nulls.append_non_null();
         Ok(true)
     }
+
     fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
         let mut builder = StructArrayBuilder::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
@@ -326,9 +605,15 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use arrow::array::{Array, FixedSizeBinaryArray, Float64Array, Int64Array};
+    use arrow::array::{
+        Array, FixedSizeBinaryArray, Float64Array, Int64Array, ListArray, ListViewArray,
+        StringArray,
+    };
     use arrow::datatypes::{DataType, Field, Fields};
-    use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
+    use parquet_variant::{
+        EMPTY_VARIANT_METADATA_BYTES, ObjectBuilder, ReadOnlyMetadataBuilder, Variant,
+        VariantBuilder,
+    };
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -364,9 +649,9 @@ mod tests {
     }
 
     #[test]
-    fn test_unsupported_list_schema() {
+    fn test_unsupported_large_list_schema() {
         let input = VariantArray::from_iter([Variant::from(42)]);
-        let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+        let list_schema = DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true)));
         shred_variant(&input, &list_schema).expect_err("unsupported");
     }
 
@@ -534,6 +819,503 @@ mod tests {
         assert_eq!(typed_value_float64.value(0), 42.0); // int converts to float
         assert_eq!(typed_value_float64.value(1), 3.15);
         assert!(typed_value_float64.is_null(2)); // string doesn't convert
+    }
+
+    #[test]
+    fn test_array_shredding_as_list() {
+        let mut builder = VariantArrayBuilder::new(5);
+        // Row 0: List of ints should shred entirely into typed_value
+        builder
+            .new_list()
+            .with_value(Variant::from(1i64))
+            .with_value(Variant::from(2i64))
+            .with_value(Variant::from(3i64))
+            .finish();
+        // Row 1: Contains incompatible types so values fall back
+        builder
+            .new_list()
+            .with_value(Variant::from(1i64))
+            .with_value(Variant::from("two"))
+            .with_value(Variant::Null)
+            .finish();
+        // Row 2: Not a list -> entire row falls back
+        builder.append_variant(Variant::from("not a list"));
+        // Row 3: Array-level null propagates
+        builder.append_null();
+        // Row 4: Empty list exercises zero-length offsets
+        builder.new_list().finish();
+
+        // Target schema is List<Int64>
+        let input = builder.build();
+        let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+        let result = shred_variant(&input, &list_schema).unwrap();
+        assert_eq!(result.len(), 5);
+
+        // Validate the top level value_field and typed_value_field
+        let metadata_field = result.metadata_field();
+        let value_field = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+
+        assert_eq!(typed_value.value_offsets(), &[0, 3, 6, 6, 6, 6]);
+
+        // Row 0: [1, 2, 3]
+        assert!(value_field.is_null(0));
+        assert!(typed_value.is_valid(0));
+        assert_eq!(typed_value.value_length(0), 3);
+
+        // Row 1: [1, "two", Variant::Null]
+        assert!(value_field.is_null(1));
+        assert!(typed_value.is_valid(1));
+        assert_eq!(typed_value.value_length(1), 3);
+
+        // Row 2: "not a list"
+        assert!(value_field.is_valid(2));
+        assert!(typed_value.is_null(2));
+        assert_eq!(
+            Variant::new(metadata_field.value(2), value_field.value(2)),
+            Variant::from("not a list")
+        );
+
+        // Row 3: Variant::Null
+        assert!(result.is_valid(3));
+        assert!(value_field.is_valid(3));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(3)),
+            Variant::Null
+        );
+        assert!(typed_value.is_null(3));
+
+        // Row 4: [] empty list
+        assert!(value_field.is_null(4));
+        assert!(typed_value.is_valid(4));
+        assert_eq!(typed_value.value_length(4), 0);
+
+        // Inspect the element-level shredded array
+        let element_array =
+            ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
+        let element_values = element_array
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        // [1, 2, 3, 1, null, null]
+        assert_eq!(element_values.len(), 6);
+        assert_eq!(element_values.value(0), 1);
+        assert_eq!(element_values.value(1), 2);
+        assert_eq!(element_values.value(2), 3);
+        assert_eq!(element_values.value(3), 1);
+        assert!(element_values.is_null(4));
+        assert!(element_values.is_null(5));
+
+        // [null, null, null, null, "two", Variant::Null]
+        let element_fallbacks = element_array.value_field().unwrap();
+        assert!(element_fallbacks.is_null(0));
+        assert!(element_fallbacks.is_null(1));
+        assert!(element_fallbacks.is_null(2));
+        assert!(element_fallbacks.is_null(3));
+        assert!(element_fallbacks.is_valid(4));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(4)),
+            Variant::from("two")
+        );
+        assert!(element_fallbacks.is_valid(5));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(5)),
+            Variant::Null
+        );
+    }
+
+    #[test]
+    fn test_array_shredding_as_list_view() {
+        let mut builder = VariantArrayBuilder::new(4);
+        // Row 0: Standard list
+        builder
+            .new_list()
+            .with_value(Variant::from(1i64))
+            .with_value(Variant::from(2i64))
+            .with_value(Variant::from(3i64))
+            .finish();
+        // Row 1: List with incompatible types -> element fallback
+        builder
+            .new_list()
+            .with_value(Variant::from(1i64))
+            .with_value(Variant::from("two"))
+            .with_value(Variant::Null)
+            .finish();
+        // Row 2: Not a list -> top-level fallback
+        builder.append_variant(Variant::from("not a list"));
+        // Row 3: Top-level Null
+        builder.append_null();
+        // Row 4: Empty list
+        builder.new_list().finish();
+
+        let input = builder.build();
+        let list_schema = DataType::ListView(Arc::new(Field::new("item", DataType::Int64, true)));
+
+        let result = shred_variant(&input, &list_schema).unwrap();
+        assert_eq!(result.len(), 5);
+
+        let metadata_field = result.metadata_field();
+        let value_field = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListViewArray>()
+            .unwrap();
+
+        assert_eq!(typed_value.value_offsets(), &[0, 3, 6, 6, 6]);
+        assert_eq!(typed_value.value_sizes(), &[3, 3, 0, 0, 0]);
+
+        // Row 0: [1, 2, 3]
+        assert!(value_field.is_null(0));
+        assert!(typed_value.is_valid(0));
+        assert_eq!(typed_value.value_size(0), 3);
+
+        // Row 1: [1, "two", Variant::Null]
+        assert!(value_field.is_null(1));
+        assert!(typed_value.is_valid(1));
+        assert_eq!(typed_value.value_size(1), 3);
+
+        // Row 2: "not a list"
+        assert!(value_field.is_valid(2));
+        assert!(typed_value.is_null(2));
+        assert_eq!(
+            Variant::new(metadata_field.value(2), value_field.value(2)),
+            Variant::from("not a list")
+        );
+
+        // Row 3: Variant::Null
+        assert!(result.is_valid(3));
+        assert!(value_field.is_valid(3));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(3)),
+            Variant::Null
+        );
+        assert!(typed_value.is_null(3));
+
+        // Row 4: [] empty list
+        assert!(value_field.is_null(4));
+        assert!(typed_value.is_valid(4));
+        assert_eq!(typed_value.value_size(4), 0);
+
+        let element_array =
+            ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
+        let element_values = element_array
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        // [1, 2, 3, 1, null, null]
+        assert_eq!(element_values.len(), 6);
+        assert_eq!(element_values.value(0), 1);
+        assert_eq!(element_values.value(1), 2);
+        assert_eq!(element_values.value(2), 3);
+        assert_eq!(element_values.value(3), 1);
+        assert!(element_values.is_null(4));
+        assert!(element_values.is_null(5));
+
+        let element_fallbacks = element_array.value_field().unwrap();
+        // [null, null, null, null, "two", Variant::Null]
+        assert_eq!(element_fallbacks.len(), 6);
+        assert!(element_fallbacks.is_null(0));
+        assert!(element_fallbacks.is_null(1));
+        assert!(element_fallbacks.is_null(2));
+        assert!(element_fallbacks.is_null(3));
+        assert!(element_fallbacks.is_valid(4));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(4)),
+            Variant::from("two")
+        );
+        assert!(element_fallbacks.is_valid(5));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(5)),
+            Variant::Null
+        );
+    }
+
+    #[test]
+    fn test_array_shredding_with_array_elements() {
+        let mut builder = VariantArrayBuilder::new(4);
+        // Row 0: list of lists that converts cleanly [[1, 2], [3, 4], []]
+        let mut outer = builder.new_list();
+        outer
+            .new_list()
+            .with_value(Variant::from(1i64))
+            .with_value(Variant::from(2i64))
+            .finish();
+        outer
+            .new_list()
+            .with_value(Variant::from(3i64))
+            .with_value(Variant::from(4i64))
+            .finish();
+        outer.new_list().finish();
+        outer.finish();
+        // Row 1: inner list contains an incompatible element -> element fallback [[5, "bad", null], "not a list inner", null]
+        let mut outer = builder.new_list();
+        outer
+            .new_list()
+            .with_value(Variant::from(5i64))
+            .with_value(Variant::from("bad"))
+            .with_value(Variant::Null)
+            .finish();
+        outer.append_value("not a list inner");
+        outer.append_null();
+        outer.finish();
+        // Row 2: not a list at all
+        builder.append_variant(Variant::from("not a list"));
+        // Row 3: null row
+        builder.append_null();
+
+        let input = builder.build();
+        let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let list_schema = DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::List(inner_field),
+            true,
+        )));
+        let result = shred_variant(&input, &list_schema).unwrap();
+        assert_eq!(result.len(), 4);
+
+        let metadata_field = result.metadata_field();
+        let value_field = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+
+        assert!(value_field.is_null(0));
+        assert!(typed_value.is_valid(0));
+        assert_eq!(typed_value.value_length(0), 3);
+
+        assert!(value_field.is_null(1));
+        assert!(typed_value.is_valid(1));
+        assert_eq!(typed_value.value_length(1), 3);
+
+        assert!(value_field.is_valid(2));
+        assert!(typed_value.is_null(2));
+        assert_eq!(
+            Variant::new(metadata_field.value(2), value_field.value(2)),
+            Variant::from("not a list")
+        );
+
+        assert!(result.is_valid(3));
+        assert!(value_field.is_valid(3));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(3)),
+            Variant::Null
+        );
+        assert!(typed_value.is_null(3));
+
+        let outer_elements =
+            ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
+        assert_eq!(outer_elements.len(), 6);
+        // [[1, 2], [3, 4], [], [5, "bad", Variant::Null], "not a list inner", Variant::Null]
+        let outer_values = outer_elements
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+        assert_eq!(outer_values.value_offsets(), &[0, 2, 4, 4, 7, 7, 7]);
+        let outer_fallbacks = outer_elements.value_field().unwrap();
+
+        // Outer element 1: [1, 2]
+        assert!(outer_values.is_valid(0));
+        assert_eq!(outer_values.value(0).len(), 2);
+        assert!(outer_fallbacks.is_null(0));
+
+        // Outer element 2: [3, 4]
+        assert!(outer_values.is_valid(1));
+        assert_eq!(outer_values.value(1).len(), 2);
+        assert!(outer_fallbacks.is_null(1));
+
+        // Outer element 3: []
+        assert!(outer_values.is_valid(2));
+        assert_eq!(outer_values.value(2).len(), 0);
+        assert!(outer_fallbacks.is_null(2));
+
+        // Outer element 4: [5, "bad", null]]
+        assert!(outer_values.is_valid(3));
+        assert_eq!(outer_values.value(3).len(), 3);
+        assert!(outer_fallbacks.is_null(3));
+
+        // Outer element 5: "not a list inner"
+        assert!(outer_values.is_null(4));
+        assert!(outer_fallbacks.is_valid(4));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, outer_fallbacks.value(4)),
+            Variant::from("not a list inner")
+        );
+
+        // Outer element 5: Variant::Null
+        assert!(outer_values.is_null(5));
+        assert!(outer_fallbacks.is_valid(5));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, outer_fallbacks.value(5)),
+            Variant::Null
+        );
+
+        // [1, 2, 3, 4, 5, "bad", Variant::Null]
+        let inner_elements =
+            ShreddedVariantFieldArray::try_new(outer_values.values().as_ref()).unwrap();
+        assert_eq!(inner_elements.len(), 7);
+        let inner_values = inner_elements
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        let inner_fallbacks = inner_elements.value_field().unwrap();
+
+        assert_eq!(inner_values.value(0), 1);
+        assert_eq!(inner_values.value(1), 2);
+        assert_eq!(inner_values.value(2), 3);
+        assert_eq!(inner_values.value(3), 4);
+        assert_eq!(inner_values.value(4), 5);
+        assert!(inner_values.is_null(5));
+        assert!(inner_values.is_null(6));
+
+        for i in 0..5 {
+            assert!(inner_fallbacks.is_null(i));
+        }
+        assert!(inner_fallbacks.is_valid(5));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, inner_fallbacks.value(5)),
+            Variant::from("bad")
+        );
+        assert!(inner_fallbacks.is_valid(6));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, inner_fallbacks.value(6)),
+            Variant::Null
+        );
+    }
+
+    #[test]
+    fn test_array_shredding_with_object_elements() {
+        let mut builder = VariantArrayBuilder::new(3);
+        // Row 0: List of objects with optional fields
+        let mut list_builder = builder.new_list();
+        list_builder
+            .new_object()
+            .with_field("id", 1i64)
+            .with_field("name", "Alice")
+            .finish();
+        list_builder
+            .new_object()
+            .with_field("id", Variant::Null)
+            .finish();
+        list_builder.finish();
+        // Row 1: Wrong top-level type -> fallback
+        builder.append_variant(Variant::from("not a list"));
+        // Row 2: Null row
+        builder.append_null();
+
+        // Target schema is List<Struct<id:int64,name:utf8>>
+        let object_fields = Fields::from(vec![
+            Field::new("id", DataType::Int64, true),
+            Field::new("name", DataType::Utf8, true),
+        ]);
+        let list_schema = DataType::List(Arc::new(Field::new(
+            "item",
+            DataType::Struct(object_fields),
+            true,
+        )));
+        let input = builder.build();
+        let result = shred_variant(&input, &list_schema).unwrap();
+        assert_eq!(result.len(), 3);
+
+        // Validate the top level value_field and typed_value_field
+        let metadata_field = result.metadata_field();
+        let value_field = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+
+        assert_eq!(typed_value.value_offsets(), &[0, 2, 2, 2]);
+
+        // Row 0: [{"id": 1i64, "name": "Alice"}, {"id": null}]
+        assert!(value_field.is_null(0));
+        assert!(typed_value.is_valid(0));
+        assert_eq!(typed_value.value_length(0), 2);
+
+        // Row 1: "not a list"
+        assert!(value_field.is_valid(1));
+        assert!(typed_value.is_null(1));
+        assert_eq!(
+            Variant::new(metadata_field.value(1), value_field.value(1)),
+            Variant::from("not a list")
+        );
+
+        // Row 2: null
+        assert!(result.is_valid(2));
+        assert!(value_field.is_valid(2));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(2)),
+            Variant::Null
+        );
+        assert!(typed_value.is_null(2));
+
+        // Validate nested struct fields for each element
+        let element_array =
+            ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
+        assert_eq!(element_array.len(), 2);
+        let element_objects = element_array
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::StructArray>()
+            .unwrap();
+
+        // Id field [1, Variant::Null]
+        let id_field =
+            ShreddedVariantFieldArray::try_new(element_objects.column_by_name("id").unwrap())
+                .unwrap();
+        let id_values = id_field.value_field().unwrap();
+        let id_typed_values = id_field
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert!(id_values.is_null(0));
+        assert_eq!(id_typed_values.value(0), 1);
+        // null is stored as Variant::Null in values
+        assert!(id_values.is_valid(1));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, id_values.value(1)),
+            Variant::Null
+        );
+        assert!(id_typed_values.is_null(1));
+
+        // Name field ["Alice", null]
+        let name_field =
+            ShreddedVariantFieldArray::try_new(element_objects.column_by_name("name").unwrap())
+                .unwrap();
+        let name_values = name_field.value_field().unwrap();
+        let name_typed_values = name_field
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        assert!(name_values.is_null(0));
+        assert_eq!(name_typed_values.value(0), "Alice");
+        // No value provided, both value and typed_value are null
+        assert!(name_values.is_null(1));
+        assert!(name_typed_values.is_null(1));
     }
 
     #[test]
@@ -896,6 +1678,124 @@ mod tests {
                     },
                 }),
             }),
+        );
+    }
+
+    #[test]
+    fn test_object_shredding_with_array_field() {
+        let mut builder = VariantArrayBuilder::new(4);
+
+        // Row 0: Object with well-typed scores list
+        let mut object = builder.new_object();
+        object
+            .new_list("scores")
+            .with_value(Variant::from(10i64))
+            .with_value(Variant::from(20i64))
+            .finish();
+        object.finish();
+
+        // Row 1: Object whose scores list contains incompatible type
+        let mut object = builder.new_object();
+        object
+            .new_list("scores")
+            .with_value(Variant::from("oops"))
+            .with_value(Variant::Null)
+            .finish();
+        object.finish();
+
+        // Row 2: Object missing the scores field entirely
+        builder.new_object().finish();
+
+        // Row 3: Non-object fallback
+        builder.append_variant(Variant::from("not an object"));
+
+        // Row 4: Top-level Null
+        builder.append_null();
+
+        let input = builder.build();
+        let list_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let schema = DataType::Struct(Fields::from(vec![Field::new(
+            "scores",
+            DataType::List(list_field),
+            true,
+        )]));
+
+        let result = shred_variant(&input, &schema).unwrap();
+        assert_eq!(result.len(), 5);
+
+        // Access base value/typed_value columns
+        let value_field = result.value_field().unwrap();
+        let typed_struct = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::StructArray>()
+            .unwrap();
+
+        // Validate base value fallbacks for non-object rows
+        assert!(value_field.is_null(0));
+        assert!(value_field.is_null(1));
+        assert!(value_field.is_null(2));
+        assert!(value_field.is_valid(3));
+        assert_eq!(
+            Variant::new(result.metadata_field().value(3), value_field.value(3)),
+            Variant::from("not an object")
+        );
+        assert!(value_field.is_null(4));
+
+        // Typed struct should only be null for the fallback row
+        assert!(typed_struct.is_valid(0));
+        assert!(typed_struct.is_valid(1));
+        assert!(typed_struct.is_valid(2));
+        assert!(typed_struct.is_null(3));
+        assert!(typed_struct.is_null(4));
+
+        // Drill into the scores field on the typed struct
+        let scores_field =
+            ShreddedVariantFieldArray::try_new(typed_struct.column_by_name("scores").unwrap())
+                .unwrap();
+        let scores_lists = scores_field
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<ListArray>()
+            .unwrap();
+
+        assert!(scores_lists.is_valid(0));
+        assert_eq!(scores_lists.value_length(0), 2);
+        assert!(scores_lists.is_valid(1));
+        assert_eq!(scores_lists.value_length(1), 2);
+        assert!(scores_lists.is_null(2));
+        assert!(scores_lists.is_null(3));
+
+        // Inspect the flattened list elements for both shredded rows
+        let element_array =
+            ShreddedVariantFieldArray::try_new(scores_lists.values().as_ref()).unwrap();
+        let element_values = element_array
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(element_values.len(), 4);
+        assert_eq!(element_values.value(0), 10);
+        assert_eq!(element_values.value(1), 20);
+        assert!(element_values.is_null(2));
+        assert!(element_values.is_null(3));
+
+        let element_fallbacks = element_array.value_field().unwrap();
+        assert_eq!(element_fallbacks.len(), 4);
+        assert!(element_fallbacks.is_null(0));
+        assert!(element_fallbacks.is_null(1));
+        assert!(element_fallbacks.is_valid(2));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(2)),
+            Variant::from("oops")
+        );
+        assert!(element_fallbacks.is_valid(3));
+        assert_eq!(
+            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(3)),
+            Variant::Null
         );
     }
 
