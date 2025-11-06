@@ -187,8 +187,7 @@ mod tests {
 
     use arrow_array::{
         ArrayRef, GenericBinaryArray, GenericByteViewArray, RecordBatch, RecordBatchWriter,
-        builder::{BinaryViewBuilder, FixedSizeBinaryBuilder},
-        types::BinaryViewType,
+        builder::FixedSizeBinaryBuilder, types::BinaryViewType,
     };
     use serde_json::Value::{Bool, Number as VNumber, String as VString};
 
