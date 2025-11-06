@@ -418,6 +418,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         self.name
                     ));
                 }
+                // unknown logical type means just use physical type
+                (LogicalType::_Unknown { .. }, _) => {}
                 (a, b) => {
                     return Err(general_err!(
                         "Cannot annotate {:?} from {} for field '{}'",
@@ -705,9 +707,17 @@ impl BasicTypeInfo {
     }
 
     /// Returns [`LogicalType`] value for the type.
+    ///
+    /// Note that this function will clone the `LogicalType`. If performance is a concern,
+    /// use [`Self::logical_type_ref`] instead.
     pub fn logical_type(&self) -> Option<LogicalType> {
         // Unlike ConvertedType, LogicalType cannot implement Copy, thus we clone it
         self.logical_type.clone()
+    }
+
+    /// Return a reference to the [`LogicalType`] value for the type.
+    pub fn logical_type_ref(&self) -> Option<&LogicalType> {
+        self.logical_type.as_ref()
     }
 
     /// Returns `true` if id is set, `false` otherwise.
@@ -906,8 +916,16 @@ impl ColumnDescriptor {
     }
 
     /// Returns [`LogicalType`] for this column.
+    ///
+    /// Note that this function will clone the `LogicalType`. If performance is a concern,
+    /// use [`Self::logical_type_ref`] instead.
     pub fn logical_type(&self) -> Option<LogicalType> {
         self.primitive_type.get_basic_info().logical_type()
+    }
+
+    /// Returns a reference to the [`LogicalType`] for this column.
+    pub fn logical_type_ref(&self) -> Option<&LogicalType> {
+        self.primitive_type.get_basic_info().logical_type_ref()
     }
 
     /// Returns physical type for this column.
@@ -1714,6 +1732,12 @@ mod tests {
                 "Parquet error: UUID cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
+
+        // test unknown logical types are ok
+        result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::_Unknown { field_id: 100 }))
+            .build();
+        assert!(result.is_ok());
     }
 
     #[test]

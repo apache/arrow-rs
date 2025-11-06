@@ -190,8 +190,14 @@ pub mod async_reader;
 #[cfg(feature = "async")]
 pub mod async_writer;
 
+pub mod push_decoder;
+
+mod in_memory_row_group;
 mod record_reader;
+
 experimental!(mod schema);
+
+use std::fmt::Debug;
 
 pub use self::arrow_writer::ArrowWriter;
 #[cfg(feature = "async")]

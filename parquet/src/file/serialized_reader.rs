@@ -397,9 +397,9 @@ pub(crate) fn decode_page(
             }
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
-            decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
+            decompressed.extend_from_slice(&buffer[..offset]);
             if decompressed_size > 0 {
-                let compressed = &buffer.as_ref()[offset..];
+                let compressed = &buffer[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
             }
 
@@ -897,6 +897,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining,
                     )?;
                     let data_len = header.compressed_page_size as usize;
+                    let data_start = *offset;
                     *offset += data_len as u64;
                     *remaining -= data_len as u64;
 
@@ -904,16 +905,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         continue;
                     }
 
-                    let mut buffer = Vec::with_capacity(data_len);
-                    let read = read.take(data_len as u64).read_to_end(&mut buffer)?;
-
-                    if read != data_len {
-                        return Err(eof_err!(
-                            "Expected to read {} bytes of page, read only {}",
-                            data_len,
-                            read
-                        ));
-                    }
+                    let buffer = self.reader.get_bytes(data_start, data_len)?;
 
                     let buffer =
                         self.context
@@ -921,7 +913,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let page = decode_page(
                         header,
-                        Bytes::from(buffer),
+                        buffer,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?;
@@ -2703,5 +2695,32 @@ mod tests {
                 metadata.row_group(i).column(0).data_page_offset()
             );
         }
+    }
+
+    #[test]
+    fn test_read_unknown_logical_type() {
+        let file = get_test_file("unknown-logical-type.parquet");
+        let reader = SerializedFileReader::new(file).expect("Error opening file");
+
+        let schema = reader.metadata().file_metadata().schema_descr();
+        assert_eq!(
+            schema.column(0).logical_type(),
+            Some(basic::LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type(),
+            Some(basic::LogicalType::_Unknown { field_id: 2555 })
+        );
+        assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
+
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut num_rows = 0;
+        while iter.next().is_some() {
+            num_rows += 1;
+        }
+        assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
     }
 }

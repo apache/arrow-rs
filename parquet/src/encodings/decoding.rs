@@ -393,7 +393,7 @@ impl<T: DataType> Decoder<T> for DictDecoder<T> {
             ));
         }
         let mut rle_decoder = RleDecoder::new(bit_width);
-        rle_decoder.set_data(data.slice(1..));
+        rle_decoder.set_data(data.slice(1..))?;
         self.num_values = num_values;
         self.rle_decoder = Some(rle_decoder);
         Ok(())
@@ -473,7 +473,7 @@ impl<T: DataType> Decoder<T> for RleValueDecoder<T> {
 
         self.decoder = RleDecoder::new(1);
         self.decoder
-            .set_data(data.slice(I32_SIZE..I32_SIZE + data_size));
+            .set_data(data.slice(I32_SIZE..I32_SIZE + data_size))?;
         self.values_left = num_values;
         Ok(())
     }
