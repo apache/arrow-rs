@@ -243,11 +243,14 @@ impl<'a> Visitor<'a> {
             }
         }
 
-        // TODO @vustef: Are all parquet schemas going to start with a struct? I.e. is this the only place where
-        // we need to handle virtual columns?
         if rep_level == 0 && def_level == 0 {
-            // TODO @vustef: assert is_virtual_column ? Or use types to our advantage somehow.
             for virtual_column in self.virtual_columns {
+                // Ensure this is actually a virtual column
+                assert!(
+                    super::virtual_type::is_virtual_column(virtual_column),
+                    "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                    virtual_column.name()
+                );
                 child_fields.push(virtual_column.clone());
                 let child = convert_virtual_field(virtual_column, rep_level, def_level)?;
                 children.push(child);
