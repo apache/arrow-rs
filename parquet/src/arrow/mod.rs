@@ -204,7 +204,7 @@ use arrow_schema::{FieldRef, Schema};
 
 pub use self::schema::{
     ArrowSchemaConverter, FieldLevels, add_encoded_arrow_schema_to_metadata, encode_arrow_schema,
-    parquet_to_arrow_field_levels, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
+    parquet_to_arrow_field_levels, parquet_to_arrow_field_levels_with_virtual, parquet_to_arrow_schema, parquet_to_arrow_schema_by_columns,
     virtual_type::*,
 };
 

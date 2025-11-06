@@ -29,7 +29,7 @@ use std::sync::Arc;
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
 use crate::arrow::schema::{ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column};
-use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels};
+use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels_with_virtual};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
@@ -642,7 +642,7 @@ impl ArrowReaderMetadata {
         virtual_columns: &[Field],
     ) -> Result<Self> {
         let parquet_schema = metadata.file_metadata().schema_descr();
-        let field_levels = parquet_to_arrow_field_levels(
+        let field_levels = parquet_to_arrow_field_levels_with_virtual(
             parquet_schema,
             ProjectionMask::all(),
             Some(supplied_schema.fields()),

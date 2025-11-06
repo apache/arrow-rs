@@ -91,7 +91,7 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     }
 
     let hint = maybe_schema.as_ref().map(|s| s.fields());
-    let field_levels = parquet_to_arrow_field_levels(parquet_schema, mask, hint, virtual_columns)?;
+    let field_levels = parquet_to_arrow_field_levels_with_virtual(parquet_schema, mask, hint, virtual_columns)?;
     let schema = Schema::new_with_metadata(field_levels.fields, metadata);
     Ok((schema, field_levels.levels))
 }
@@ -133,8 +133,55 @@ pub fn parquet_to_arrow_field_levels(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     hint: Option<&Fields>,
-    virtual_columns: &[Field], // TODO @vustef: This is a public method, maybe preserve its signature. Or maybe it's good to change it, to be able to construct readers from pub API.
 ) -> Result<FieldLevels> {
+    parquet_to_arrow_field_levels_with_virtual(schema, mask, hint, &[])
+}
+
+/// Convert a parquet [`SchemaDescriptor`] to [`FieldLevels`] with support for virtual columns
+///
+/// Columns not included within [`ProjectionMask`] will be ignored.
+///
+/// The optional `hint` parameter is the desired Arrow schema. See the
+/// [`arrow`] module documentation for more information.
+///
+/// [`arrow`]: crate::arrow
+///
+/// # Arguments
+/// * `schema` - The Parquet schema descriptor
+/// * `mask` - Projection mask to select which columns to include
+/// * `hint` - Optional hint for Arrow field types to use instead of defaults
+/// * `virtual_columns` - Virtual columns to append to the schema (e.g., row numbers)
+///
+/// # Notes:
+/// Where a field type in `hint` is compatible with the corresponding parquet type in `schema`, it
+/// will be used, otherwise the default arrow type for the given parquet column type will be used.
+///
+/// Virtual columns are columns that don't exist in the Parquet file but are generated during reading.
+/// They must have extension type names starting with "arrow.virtual.".
+///
+/// This is to accommodate arrow types that cannot be round-tripped through parquet natively.
+/// Depending on the parquet writer, this can lead to a mismatch between a file's parquet schema
+/// and its embedded arrow schema. The parquet `schema` must be treated as authoritative in such
+/// an event. See [#1663](https://github.com/apache/arrow-rs/issues/1663) for more information
+///
+/// Note: this is a low-level API, most users will want to make use of the higher-level
+/// [`parquet_to_arrow_schema`] for decoding metadata from a parquet file.
+pub fn parquet_to_arrow_field_levels_with_virtual(
+    schema: &SchemaDescriptor,
+    mask: ProjectionMask,
+    hint: Option<&Fields>,
+    virtual_columns: &[Field],
+) -> Result<FieldLevels> {
+    // Validate that all fields are virtual columns
+    for field in virtual_columns {
+        if !virtual_type::is_virtual_column(field) {
+            return Err(ParquetError::General(format!(
+                "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                field.name()
+            )));
+        }
+    }
+
     match complex::convert_schema(schema, mask, hint, virtual_columns)? {
         Some(field) => match &field.arrow_type {
             DataType::Struct(fields) => Ok(FieldLevels {
@@ -2251,5 +2298,28 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn test_parquet_to_arrow_field_levels_with_virtual_rejects_non_virtual() {
+        let message_type = "
+        message test_schema {
+            REQUIRED INT32 id;
+        }
+        ";
+        let parquet_schema = Arc::new(parse_message_type(message_type).unwrap());
+        let descriptor = SchemaDescriptor::new(parquet_schema);
+
+        // Try to pass a regular field (not a virtual column)
+        let regular_field = Field::new("regular_column", DataType::Int64, false);
+        let result = parquet_to_arrow_field_levels_with_virtual(
+            &descriptor,
+            ProjectionMask::all(),
+            None,
+            &[regular_field],
+        );
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("is not a virtual column"));
     }
 }
