@@ -20,17 +20,35 @@
 
 use arrow_schema::{ArrowError, DataType, Field, extension::ExtensionType};
 
-/// The extension type for `8-bit Boolean`.
+/// Prefix for virtual column extension type names.
+const VIRTUAL_PREFIX: &str = "arrow.virtual.";
+
+/// Macro to concatenate VIRTUAL_PREFIX with a suffix.
+macro_rules! virtual_name {
+    ($suffix:literal) => {
+        concat!("arrow.virtual.", $suffix)
+    };
+}
+
+/// Constants for virtual column type identifiers.
+mod virtual_column_type {
+    /// Row number virtual column.
+    pub(super) const ROW_NUMBER: u8 = 0;
+}
+
+/// Generic virtual column extension type.
 ///
-/// Extension name: `arrow.row_number`.
+/// This struct provides a common implementation for all virtual column types.
 ///
 /// The storage type of the extension is `Int64`.
-///
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct RowNumber;
+pub struct VirtualColumn<const TYPE: u8>;
 
-impl ExtensionType for RowNumber {
-    const NAME: &'static str = "arrow.virtual.row_number"; // TODO @vustef: What should it be named?
+impl<const TYPE: u8> ExtensionType for VirtualColumn<TYPE> {
+    const NAME: &'static str = match TYPE {
+        virtual_column_type::ROW_NUMBER => virtual_name!("row_number"),
+        _ => panic!("Unknown virtual column type"),
+    };
 
     type Metadata = &'static str;
 
@@ -47,7 +65,7 @@ impl ExtensionType for RowNumber {
             Ok("")
         } else {
             Err(ArrowError::InvalidArgumentError(
-                "RowNumber extension type expects an empty string as metadata".to_owned(),
+                "Virtual column extension type expects an empty string as metadata".to_owned(),
             ))
         }
     }
@@ -56,7 +74,7 @@ impl ExtensionType for RowNumber {
         match data_type {
             DataType::Int64 => Ok(()),
             data_type => Err(ArrowError::InvalidArgumentError(format!(
-                "RowNumber data type mismatch, expected Int64, found {data_type}"
+                "Virtual column data type mismatch, expected Int64, found {data_type}"
             ))),
         }
     }
@@ -65,6 +83,11 @@ impl ExtensionType for RowNumber {
         Self.supports_data_type(data_type).map(|_| Self)
     }
 }
+
+/// The extension type for row numbers.
+///
+/// Extension name: `arrow.virtual.row_number`.
+pub type RowNumber = VirtualColumn<{ virtual_column_type::ROW_NUMBER }>;
 
 #[cfg(test)]
 mod tests {
@@ -78,7 +101,7 @@ mod tests {
     #[test]
     fn valid() -> Result<(), ArrowError> {
         let mut field = Field::new("", DataType::Int64, false);
-        field.try_with_extension_type(RowNumber)?;
+        field.try_with_extension_type(RowNumber::default())?;
         field.try_extension_type::<RowNumber>()?;
 
         Ok(())
@@ -98,11 +121,11 @@ mod tests {
     #[test]
     #[should_panic(expected = "expected Int64, found Int32")]
     fn invalid_type() {
-        Field::new("", DataType::Int32, false).with_extension_type(RowNumber);
+        Field::new("", DataType::Int32, false).with_extension_type(RowNumber::default());
     }
 
     #[test]
-    #[should_panic(expected = "RowNumber extension type expects an empty string as metadata")]
+    #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
     fn missing_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [(EXTENSION_TYPE_NAME_KEY.to_owned(), RowNumber::NAME.to_owned())]
@@ -113,7 +136,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "RowNumber extension type expects an empty string as metadata")]
+    #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
     fn invalid_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [
@@ -134,8 +157,7 @@ mod tests {
 ///
 /// Virtual columns have extension type names starting with `arrow.virtual.`.
 pub fn is_virtual_column(field: &Field) -> bool {
-    // TODO @vustef: Make this more typed through another approach that doesn't rely on a naming convention.
     field.extension_type_name()
-        .map(|name| name.starts_with("arrow.virtual."))
+        .map(|name| name.starts_with(VIRTUAL_PREFIX))
         .unwrap_or(false)
 }

@@ -2728,7 +2728,7 @@ mod tests {
                     .expect("Could not create runtime");
                 runtime.block_on(async move {
                     let file = tokio::fs::File::open(path).await.unwrap();
-                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber);
+                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber::default());
                     let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                     let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
                         .await
@@ -2754,7 +2754,7 @@ mod tests {
                     .expect("Could not create runtime");
                 runtime.block_on(async move {
                     let file = tokio::fs::File::open(path).await.unwrap();
-                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber);
+                    let row_number_field = Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber::default());
                     let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                     let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
                         .await

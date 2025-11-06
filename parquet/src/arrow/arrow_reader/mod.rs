@@ -28,7 +28,7 @@ use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
-use crate::arrow::schema::{ParquetField, parquet_to_arrow_schema_and_fields};
+use crate::arrow::schema::{ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column};
 use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
@@ -524,10 +524,18 @@ impl ArrowReaderOptions {
     ///
     /// # Example
     /// ```
-    /// let virtual_columns = vec![Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber)];
+    /// let virtual_columns = vec![Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default())];
     /// let options = ArrowReaderOptions::new().with_virtual_columns(virtual_columns);
     pub fn with_virtual_columns(self, virtual_columns: Vec<Field>) -> Self {
-        // TODO @vustef: Make sure the passed fields are virtual columns.
+        // Validate that all fields are virtual columns
+        for field in &virtual_columns {
+            if !is_virtual_column(field) {
+                panic!(
+                    "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                    field.name()
+                );
+            }
+        }
         Self {
             virtual_columns,
             ..self
@@ -5046,7 +5054,7 @@ pub(crate) mod tests {
             Field::new("value", ArrowDataType::Int64, false),
         ]);
 
-        let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber);
+        let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default());
 
         let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
         let options = options.with_virtual_columns(vec![row_number_field.clone()]);
@@ -5091,7 +5099,7 @@ pub(crate) mod tests {
             "value",
             Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
         )]);
-        let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber);
+        let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default());
         let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()]);
         let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
         let num_columns = metadata.metadata.file_metadata().schema_descr().num_columns();
@@ -5120,12 +5128,20 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "is not a virtual column")]
+    fn test_with_virtual_columns_rejects_non_virtual_fields() {
+        // Try to pass a regular field (not a virtual column) to with_virtual_columns
+        let regular_field = Field::new("regular_column", ArrowDataType::Int64, false);
+        let _options = ArrowReaderOptions::new().with_virtual_columns(vec![regular_field]);
+    }
+
+    #[test]
     fn test_row_numbers_with_multiple_row_groups() {
         test_row_numbers_with_multiple_row_groups_helper(
             false,
             |path, selection, _row_filter, batch_size| {
                 let file = File::open(path).unwrap();
-                let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber);
+                let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default());
                 let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()
@@ -5146,7 +5162,7 @@ pub(crate) mod tests {
             true,
             |path, selection, row_filter, batch_size| {
                 let file = File::open(path).unwrap();
-                let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber);
+                let row_number_field = Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default());
                 let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()
