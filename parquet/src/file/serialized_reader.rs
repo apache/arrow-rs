@@ -2721,6 +2721,11 @@ mod tests {
         let file_reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
+        // Should have used the same schema instance
+        assert!(Arc::ptr_eq(
+            &expected.file_metadata().schema_descr_ptr(),
+            &file_reader.metadata.file_metadata().schema_descr_ptr()
+        ));
     }
 
     #[test]

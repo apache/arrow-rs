@@ -73,30 +73,36 @@ mod tests {
             .read_to_end(&mut buf)
             .unwrap();
 
-        let footer = Bytes::from(buf);
-        let mut decoder = ParquetMetaDataPushDecoder::try_new(footer.len() as u64).unwrap();
+        let data = Bytes::from(buf);
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(data.len() as u64).unwrap();
         decoder
-            .push_range(0..footer.len() as u64, footer.clone())
+            .push_range(0..data.len() as u64, data.clone())
             .unwrap();
 
         let expected = match decoder.try_decode().unwrap() {
             DecodeResult::Data(m) => m,
             _ => panic!("could not parse metadata"),
         };
+        let expected_schema = expected.file_metadata().schema_descr_ptr();
 
         let mut options = ParquetMetaDataOptions::new();
-        options.set_schema(expected.file_metadata().schema_descr_ptr());
+        options.set_schema(expected_schema);
         let options = Arc::new(options);
 
-        let mut decoder = ParquetMetaDataPushDecoder::try_new(footer.len() as u64)
+        let mut decoder = ParquetMetaDataPushDecoder::try_new(data.len() as u64)
             .unwrap()
             .with_metadata_options(Some(options));
-        decoder.push_range(0..footer.len() as u64, footer).unwrap();
+        decoder.push_range(0..data.len() as u64, data).unwrap();
         let metadata = match decoder.try_decode().unwrap() {
             DecodeResult::Data(m) => m,
             _ => panic!("could not parse metadata"),
         };
 
         assert_eq!(expected, metadata);
+        // the schema pointers should be the same
+        assert!(Arc::ptr_eq(
+            &expected.file_metadata().schema_descr_ptr(),
+            &metadata.file_metadata().schema_descr_ptr()
+        ));
     }
 }
