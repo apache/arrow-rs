@@ -28,5 +28,11 @@
 //! [Geometry issue]: https://github.com/apache/arrow-rs/issues/8373
 
 pub mod bounding;
+pub mod crs;
 pub mod interval;
 pub mod testing;
+
+mod types;
+
+pub use types::Geography as GeographyType;
+pub use types::Geometry as GeometryType;

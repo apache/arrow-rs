@@ -39,8 +39,9 @@ mod primitive;
 use super::PARQUET_FIELD_ID_META_KEY;
 use crate::arrow::ProjectionMask;
 use crate::arrow::schema::extension::{
-    has_extension_type, logical_type_for_fixed_size_binary, logical_type_for_string,
-    logical_type_for_struct, try_add_extension_type,
+    has_extension_type, logical_type_for_binary, logical_type_for_binary_view,
+    logical_type_for_fixed_size_binary, logical_type_for_string, logical_type_for_struct,
+    try_add_extension_type,
 };
 pub(crate) use complex::{ParquetField, ParquetFieldType};
 
@@ -76,16 +77,18 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<(Schema, Option<ParquetField>)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
-    let maybe_schema = metadata
+    let mut maybe_schema = metadata
         .remove(super::ARROW_SCHEMA_META_KEY)
         .map(|value| get_arrow_schema_from_metadata(&value))
         .transpose()?;
 
     // Add the Arrow metadata to the Parquet metadata skipping keys that collide
-    if let Some(arrow_schema) = &maybe_schema {
+    if let Some(arrow_schema) = maybe_schema.as_mut() {
         arrow_schema.metadata().iter().for_each(|(k, v)| {
             metadata.entry(k.clone()).or_insert_with(|| v.clone());
         });
+        #[cfg(feature = "geospatial")]
+        parquet_geospatial::crs::parquet_to_arrow(arrow_schema, &metadata)
     }
 
     let hint = maybe_schema.as_ref().map(|s| s.fields());
@@ -604,6 +607,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_id(id)
+                .with_logical_type(logical_type_for_binary(field))
                 .build()
         }
         DataType::FixedSizeBinary(length) => {
@@ -617,6 +621,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
             .with_repetition(repetition)
             .with_id(id)
+            .with_logical_type(logical_type_for_binary_view(field))
             .build(),
         DataType::Decimal32(precision, scale)
         | DataType::Decimal64(precision, scale)

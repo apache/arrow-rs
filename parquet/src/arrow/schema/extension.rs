@@ -55,6 +55,15 @@ pub(crate) fn try_add_extension_type(
         LogicalType::Json => {
             arrow_field.try_with_extension_type(arrow_schema::extension::Json::default())?;
         }
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geometry { crs } => {
+            let geom = parquet_geospatial::GeometryType::with_parse_crs(&crs.unwrap());
+            arrow_field.try_with_extension_type(geom)?;
+        }
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geography { .. } => {
+            arrow_field.try_with_extension_type(parquet_geospatial::GeographyType)?;
+        }
         _ => {}
     };
     Ok(arrow_field)
@@ -75,6 +84,10 @@ pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
         LogicalType::Uuid => true,
         #[cfg(feature = "arrow_canonical_extension_types")]
         LogicalType::Json => true,
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geometry { .. } => true,
+        #[cfg(feature = "geospatial")]
+        LogicalType::Geography { .. } => true,
         _ => false,
     }
 }
@@ -132,4 +145,42 @@ pub(crate) fn logical_type_for_string(field: &Field) -> Option<LogicalType> {
 #[cfg(not(feature = "arrow_canonical_extension_types"))]
 pub(crate) fn logical_type_for_string(_field: &Field) -> Option<LogicalType> {
     Some(LogicalType::String)
+}
+
+#[cfg(feature = "geospatial")]
+pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+    use parquet_geospatial::{GeographyType, GeometryType};
+
+    match field.extension_type_name() {
+        Some(n) if n == GeometryType::NAME => match field.try_extension_type::<GeometryType>() {
+            Ok(GeometryType) => Some(LogicalType::Geometry { crs: todo!() }),
+            Err(_e) => None,
+        },
+        Some(n) if n == GeographyType::NAME => match field.try_extension_type::<GeographyType>() {
+            Ok(GeographyType) => Some(LogicalType::Geography {
+                crs: todo!(),
+                algorithm: todo!(),
+            }),
+            Err(_e) => None,
+        },
+        _ => return None,
+    };
+
+    None
+}
+
+#[cfg(not(feature = "geospatial"))]
+pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+    None
+}
+
+#[cfg(feature = "geospatial")]
+pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+    // TODO: make this better-er
+    logical_type_for_binary(field)
+}
+
+#[cfg(not(feature = "geospatial"))]
+pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+    None
 }
