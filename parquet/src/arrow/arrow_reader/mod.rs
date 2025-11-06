@@ -970,6 +970,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 cache_projection.intersect(&projection);
 
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                    .with_parquet_metadata(&reader.metadata)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
@@ -977,6 +978,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         }
 
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+            .with_parquet_metadata(&reader.metadata)
             .build_array_reader(fields.as_deref(), &projection)?;
 
         let read_plan = plan_builder

@@ -649,6 +649,7 @@ where
                     .await?;
 
                 let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+                    .with_parquet_metadata(row_group.metadata)
                     .with_cache_options(Some(&cache_options))
                     .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
@@ -706,6 +707,7 @@ where
 
         let cache_options = cache_options_builder.consumer();
         let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
+            .with_parquet_metadata(row_group.metadata)
             .with_cache_options(Some(&cache_options))
             .build_array_reader(self.fields.as_deref(), &projection)?;
 

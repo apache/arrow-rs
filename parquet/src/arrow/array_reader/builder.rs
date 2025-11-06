@@ -37,6 +37,7 @@ use crate::arrow::schema::virtual_type::RowNumber;
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::ParquetMetaData;
 use crate::schema::types::{ColumnDescriptor, ColumnPath, Type};
 
 /// Builder for [`CacheOptions`]
@@ -90,6 +91,8 @@ pub struct ArrayReaderBuilder<'a> {
     row_groups: &'a dyn RowGroups,
     /// Optional cache options for the array reader
     cache_options: Option<&'a CacheOptions<'a>>,
+    /// Parquet metadata for computing virtual column values
+    parquet_metadata: Option<&'a ParquetMetaData>,
     /// metrics
     metrics: &'a ArrowReaderMetrics,
 }
@@ -99,6 +102,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         Self {
             row_groups,
             cache_options: None,
+            parquet_metadata: None,
             metrics,
         }
     }
@@ -106,6 +110,12 @@ impl<'a> ArrayReaderBuilder<'a> {
     /// Add cache options to the builder
     pub fn with_cache_options(mut self, cache_options: Option<&'a CacheOptions<'a>>) -> Self {
         self.cache_options = cache_options;
+        self
+    }
+
+    /// Add parquet metadata to the builder for computing virtual column values
+    pub fn with_parquet_metadata(mut self, parquet_metadata: &'a ParquetMetaData) -> Self {
+        self.parquet_metadata = Some(parquet_metadata);
         self
     }
 
@@ -173,7 +183,16 @@ impl<'a> ArrayReaderBuilder<'a> {
     }
 
     fn build_row_number_reader(&self) -> Result<Box<dyn ArrayReader>> {
-        Ok(Box::new(RowNumberReader::try_new(self.row_groups.row_groups())?))
+        let parquet_metadata = self.parquet_metadata.ok_or_else(|| {
+            ParquetError::General(
+                "ParquetMetaData is required to read virtual row number columns. \
+                 Use ArrayReaderBuilder::with_parquet_metadata()".to_string()
+            )
+        })?;
+        Ok(Box::new(RowNumberReader::try_new(
+            parquet_metadata,
+            self.row_groups.row_groups(),
+        )?))
     }
 
     /// Build array reader for map type.
@@ -488,7 +507,29 @@ mod tests {
 
     #[test]
     fn test_create_array_reader_with_row_numbers() {
-        let file = get_test_file("nulls.snappy.parquet");
+        use tempfile::tempfile;
+        use crate::arrow::ArrowWriter;
+        use crate::file::serialized_reader::SerializedFileReader;
+        use arrow_array::{ArrayRef, Int32Array};
+        use std::sync::Arc;
+
+        // Create a simple test file with just an int column
+        let schema = Arc::new(arrow_schema::Schema::new(vec![
+            arrow_schema::Field::new("value", DataType::Int32, false),
+        ]));
+
+        let batch = arrow_array::RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+        ).unwrap();
+
+        // Write to a temp file
+        let file = tempfile().unwrap();
+        let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema, None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Now read it back
         let file_reader: Arc<dyn FileReader> = Arc::new(SerializedFileReader::new(file).unwrap());
 
         let file_metadata = file_reader.metadata().file_metadata();
@@ -504,16 +545,13 @@ mod tests {
 
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(&file_reader, &metrics)
+            .with_parquet_metadata(file_reader.metadata())
             .build_array_reader(fields.as_ref(), &mask)
             .unwrap();
 
         // Create arrow types
         let arrow_type = DataType::Struct(Fields::from(vec![
-            Field::new(
-                "b_struct",
-                DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
-                true,
-            ),
+            Field::new("value", DataType::Int32, false),
             row_number_field,
         ]));
 

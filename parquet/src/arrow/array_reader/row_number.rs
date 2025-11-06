@@ -17,10 +17,11 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::RowGroupMetaData;
+use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use arrow_array::{ArrayRef, Int64Array};
 use arrow_schema::DataType;
 use std::any::Any;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 pub(crate) struct RowNumberReader {
@@ -30,16 +31,38 @@ pub(crate) struct RowNumberReader {
 
 impl RowNumberReader {
     pub(crate) fn try_new<'a>(
+        parquet_metadata: &'a ParquetMetaData,
         row_groups: impl Iterator<Item = &'a RowGroupMetaData>,
     ) -> Result<Self> {
-        let ranges = row_groups
+        // Collect ordinals from the selected row groups
+        let selected_ordinals: HashSet<i16> = row_groups
             .map(|rg| {
-                let first_row_index = rg.first_row_index().ok_or(ParquetError::General(
-                    "Row group missing row number".to_string(),
-                ))?;
-                Ok(first_row_index..first_row_index + rg.num_rows())
+                rg.ordinal().ok_or_else(|| {
+                    ParquetError::General(
+                        "Row group missing ordinal field, required to compute row numbers".to_string()
+                    )
+                })
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<_>>()?;
+
+        // Iterate through all row groups once, computing first_row_index and creating ranges
+        // This is O(M) where M is total row groups, much better than O(N * O) where N is selected
+        let mut first_row_index: i64 = 0;
+        let mut ranges = Vec::new();
+
+        for rg in parquet_metadata.row_groups() {
+            if let Some(ordinal) = rg.ordinal() {
+                if selected_ordinals.contains(&ordinal) {
+                    ranges.push((ordinal, first_row_index..first_row_index + rg.num_rows()));
+                }
+            }
+            first_row_index += rg.num_rows();
+        }
+
+        // Sort ranges by ordinal to maintain original row group order
+        ranges.sort_by_key(|(ordinal, _)| *ordinal);
+        let ranges: Vec<_> = ranges.into_iter().map(|(_, range)| range).collect();
+
         Ok(Self {
             buffered_row_numbers: Vec::new(),
             remaining_row_numbers: ranges.into_iter().flatten(),

@@ -616,7 +616,6 @@ pub type RowGroupMetaDataPtr = Arc<RowGroupMetaData>;
 pub struct RowGroupMetaData {
     columns: Vec<ColumnChunkMetaData>,
     num_rows: i64,
-    first_row_index: Option<i64>,
     sorting_columns: Option<Vec<SortingColumn>>,
     total_byte_size: i64,
     schema_descr: SchemaDescPtr,
@@ -655,11 +654,6 @@ impl RowGroupMetaData {
     /// Number of rows in this row group.
     pub fn num_rows(&self) -> i64 {
         self.num_rows
-    }
-
-    /// Returns the global index number for the first row in this row group.
-    pub fn first_row_index(&self) -> Option<i64> {
-        self.first_row_index
     }
 
     /// Returns the sort ordering of the rows in this RowGroup if any
@@ -719,7 +713,6 @@ impl RowGroupMetaDataBuilder {
             schema_descr,
             file_offset: None,
             num_rows: 0,
-            first_row_index: None,
             sorting_columns: None,
             total_byte_size: 0,
             ordinal: None,
@@ -729,12 +722,6 @@ impl RowGroupMetaDataBuilder {
     /// Sets number of rows in this row group.
     pub fn set_num_rows(mut self, value: i64) -> Self {
         self.0.num_rows = value;
-        self
-    }
-
-    /// Sets the first row number in this row group.
-    pub fn set_first_row_index(mut self, value: i64) -> Self {
-        self.0.first_row_index = Some(value);
         self
     }
 
@@ -1631,7 +1618,6 @@ mod tests {
             .set_num_rows(1000)
             .set_total_byte_size(2000)
             .set_column_metadata(columns)
-            .set_first_row_index(0)
             .set_ordinal(1)
             .build()
             .unwrap();
@@ -1889,10 +1875,10 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2264;
+        let base_expected_size = 2248;
         #[cfg(feature = "encryption")]
         // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
-        let base_expected_size = 2432;
+        let base_expected_size = 2416;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1921,10 +1907,10 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2690;
+        let bigger_expected_size = 2674;
         #[cfg(feature = "encryption")]
         // Not as accurate as it should be: https://github.com/apache/arrow-rs/issues/8472
-        let bigger_expected_size = 2858;
+        let bigger_expected_size = 2842;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
