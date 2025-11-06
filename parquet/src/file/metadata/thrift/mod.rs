@@ -744,6 +744,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                 version = Some(i32::read_thrift(&mut prot)?);
             }
             2 => {
+                // If schema was passed in, skip parsing it
                 if schema_descr.is_some() {
                     prot.skip(field_ident.field_type)?;
                 } else {

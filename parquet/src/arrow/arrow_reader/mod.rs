@@ -510,6 +510,10 @@ impl ArrowReaderOptions {
 
     /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
     /// footer will be skipped.
+    ///
+    /// This can be used to avoid reparsing the schema from the file when it is
+    /// already known.
+    
     pub fn with_parquet_schema(mut self, schema: Arc<SchemaDescriptor>) -> Self {
         self.metadata_options.set_schema(schema);
         self
