@@ -182,7 +182,7 @@ pub fn parquet_to_arrow_field_levels_with_virtual(
         }
     }
 
-    match complex::convert_schema(schema, mask, hint, virtual_columns)? {
+    match complex::convert_schema_with_virtual(schema, mask, hint, virtual_columns)? {
         Some(field) => match &field.arrow_type {
             DataType::Struct(fields) => Ok(FieldLevels {
                 fields: fields.clone(),

@@ -27,6 +27,7 @@ use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
 use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
+use arrow_schema::extension::ExtensionType;
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -590,14 +591,23 @@ fn convert_virtual_field(
         parent_def_level
     };
 
-    // Determine the virtual column type based on the extension type
-    let virtual_type = if arrow_field.try_extension_type::<RowNumber>().is_ok() {
-        VirtualColumnType::RowNumber // TODO @vustef: Don't like the ifelse approach...
-    } else {
-        return Err(ParquetError::ArrowError(format!(
-            "unsupported virtual column type for field '{}'",
+    // Determine the virtual column type based on the extension type name
+    let extension_name = arrow_field.extension_type_name().ok_or_else(|| {
+        ParquetError::ArrowError(format!(
+            "virtual column field '{}' must have an extension type",
             arrow_field.name()
-        )));
+        ))
+    })?;
+
+    let virtual_type = match extension_name {
+        RowNumber::NAME => VirtualColumnType::RowNumber,
+        _ => {
+            return Err(ParquetError::ArrowError(format!(
+                "unsupported virtual column type '{}' for field '{}'",
+                extension_name,
+                arrow_field.name()
+            )))
+        }
     };
 
     Ok(ParquetField {
@@ -662,8 +672,41 @@ pub fn convert_schema(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     embedded_arrow_schema: Option<&Fields>,
-    virtual_columns: &[Field], // TODO @vustef: Also a pub API change...
 ) -> Result<Option<ParquetField>> {
+    convert_schema_with_virtual(schema, mask, embedded_arrow_schema, &[])
+}
+
+/// Computes the [`ParquetField`] for the provided [`SchemaDescriptor`] with support for virtual columns
+///
+/// This function is similar to [`convert_schema`] but allows specifying virtual columns that should be
+/// included in the schema. Virtual columns are columns that don't exist in the Parquet file but are
+/// generated during reading (e.g., row numbers).
+///
+/// # Arguments
+/// * `schema` - The Parquet schema descriptor
+/// * `mask` - Projection mask to select which columns to include
+/// * `embedded_arrow_schema` - Optional embedded Arrow schema from metadata
+/// * `virtual_columns` - Virtual columns to append to the schema
+///
+/// # Notes
+/// - Virtual columns must have extension type names starting with "arrow.virtual."
+/// - This does not support out of order column projection
+pub fn convert_schema_with_virtual(
+    schema: &SchemaDescriptor,
+    mask: ProjectionMask,
+    embedded_arrow_schema: Option<&Fields>,
+    virtual_columns: &[Field],
+) -> Result<Option<ParquetField>> {
+    // Validate that all fields are virtual columns
+    for field in virtual_columns {
+        if !super::virtual_type::is_virtual_column(field) {
+            return Err(ParquetError::ArrowError(format!(
+                "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                field.name()
+            )));
+        }
+    }
+
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask,
