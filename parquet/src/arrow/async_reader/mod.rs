@@ -21,6 +21,7 @@
 //!
 //! See example on [`ParquetRecordBatchStreamBuilder::new`]
 
+use crate::arrow::arrow_reader::should_force_selectors;
 use std::collections::VecDeque;
 use std::fmt::Formatter;
 use std::io::SeekFrom;
@@ -700,7 +701,7 @@ where
             .await?;
 
         if plan_builder.mask_preferred()
-        // && !should_force_selectors(plan_builder.selection(), &projection, offset_index)
+            && !should_force_selectors(plan_builder.selection(), &projection, offset_index)
         {
             plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
         }
@@ -1009,7 +1010,6 @@ mod tests {
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
-    use crate::basic::Compression;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
