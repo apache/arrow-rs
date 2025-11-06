@@ -1133,7 +1133,7 @@ pub enum ColumnOrder {
 impl ColumnOrder {
     /// Returns sort order for a physical/logical type.
     #[deprecated(
-        since = "57.0.0",
+        since = "57.1.0",
         note = "use `ColumnOrder::sort_order_for_type` instead"
     )]
     pub fn get_sort_order(
