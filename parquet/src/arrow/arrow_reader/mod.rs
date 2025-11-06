@@ -524,8 +524,51 @@ impl ArrowReaderOptions {
     ///
     /// # Example
     /// ```
-    /// let virtual_columns = vec![Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default())];
-    /// let options = ArrowReaderOptions::new().with_virtual_columns(virtual_columns);
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::{ArrowWriter, RowNumber};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// # use tempfile::tempfile;
+    /// #
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Create a simple record batch with some data
+    /// let values = Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef;
+    /// let batch = RecordBatch::try_from_iter(vec![("value", values)])?;
+    ///
+    /// // Write the batch to a temporary parquet file
+    /// let file = tempfile()?;
+    /// let mut writer = ArrowWriter::try_new(
+    ///     file.try_clone()?,
+    ///     batch.schema(),
+    ///     None
+    /// )?;
+    /// writer.write(&batch)?;
+    /// writer.close()?;
+    ///
+    /// // Create a virtual column for row numbers
+    /// let row_number_field = Field::new("row_number", DataType::Int64, false)
+    ///     .with_extension_type(RowNumber::default());
+    ///
+    /// // Configure options with virtual columns
+    /// let options = ArrowReaderOptions::new()
+    ///     .with_virtual_columns(vec![row_number_field]);
+    ///
+    /// // Create a reader with the options
+    /// let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+    ///     file,
+    ///     options
+    /// )?
+    /// .build()?;
+    ///
+    /// // Read the batch - it will include both the original column and the virtual row_number column
+    /// let result_batch = reader.next().unwrap()?;
+    /// assert_eq!(result_batch.num_columns(), 2); // "value" + "row_number"
+    /// assert_eq!(result_batch.num_rows(), 3);
+    /// #
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_virtual_columns(self, virtual_columns: Vec<Field>) -> Self {
         // Validate that all fields are virtual columns
         for field in &virtual_columns {
