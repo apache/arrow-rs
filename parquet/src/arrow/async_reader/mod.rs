@@ -38,7 +38,6 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 use arrow_array::RecordBatch;
 use arrow_schema::{DataType, Fields, Schema, SchemaRef};
 
-use crate::arrow::arrow_reader::should_force_selectors;
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
     RowFilter, RowSelection, RowSelectionStrategy,
@@ -701,7 +700,7 @@ where
             .await?;
 
         if plan_builder.mask_preferred()
-            && !should_force_selectors(plan_builder.selection(), &projection, offset_index)
+        // && !should_force_selectors(plan_builder.selection(), &projection, offset_index)
         {
             plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
         }
@@ -1010,18 +1009,21 @@ mod tests {
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
+    use crate::basic::Compression;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
+    use arrow::compute::or;
     use arrow::error::Result as ArrowResult;
     use arrow_array::builder::{ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Int8Array, Int32Array, RecordBatchReader, Scalar, StringArray,
-        StructArray, UInt64Array,
+        Array, ArrayRef, Float64Array, Int8Array, Int32Array, Int64Array, RecordBatchReader,
+        Scalar, StringArray, StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
+    use arrow_select::concat::concat_batches;
     use futures::{StreamExt, TryStreamExt};
     use rand::{Rng, rng};
     use std::collections::HashMap;
@@ -1070,6 +1072,40 @@ mod tests {
             ));
             futures::future::ready(Ok(self.metadata.clone().unwrap().clone())).boxed()
         }
+    }
+
+    const SECOND_MATCH_INDEX: usize = 31;
+    const SECOND_MATCH_VALUE: i64 = 9998;
+
+    fn build_mask_pruning_parquet() -> Bytes {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Float64, false),
+        ]));
+
+        let num_rows = 32usize;
+        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
+        int_values[0] = 9999;
+        int_values[SECOND_MATCH_INDEX] = SECOND_MATCH_VALUE;
+        let keys = Int64Array::from(int_values);
+        let values = Float64Array::from_iter_values((0..num_rows).map(|v| v as f64 * 1.5));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(2)
+            .set_data_page_row_count_limit(2)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        Bytes::from(buffer)
     }
 
     #[tokio::test]
@@ -1445,6 +1481,46 @@ mod tests {
         let actual_rows: usize = async_batches.into_iter().map(|b| b.num_rows()).sum();
 
         assert_eq!(actual_rows, expected_rows);
+    }
+
+    #[tokio::test]
+    async fn test_row_filter_full_page_skip_is_handled_async() {
+        let data = build_mask_pruning_parquet();
+
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index(true),
+        )
+        .await
+        .unwrap();
+        let schema = builder.parquet_schema().clone();
+        let filter_mask = ProjectionMask::leaves(&schema, [0]);
+        let output_mask = ProjectionMask::leaves(&schema, [1]);
+
+        let predicate = ArrowPredicateFn::new(filter_mask, move |batch: RecordBatch| {
+            let column = batch.column(0);
+            let match_first = eq(column, &Int64Array::new_scalar(9999))?;
+            let match_second = eq(column, &Int64Array::new_scalar(SECOND_MATCH_VALUE))?;
+            or(&match_first, &match_second)
+        });
+
+        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data),
+            ArrowReaderOptions::new().with_page_index(true),
+        )
+        .await
+        .unwrap()
+        .with_projection(output_mask)
+        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+        .with_batch_size(32)
+        .build()
+        .unwrap();
+
+        // Collecting into batches validates the plan now downgrades to selectors instead of panicking.
+        let schema = stream.schema().clone();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        let result = concat_batches(&schema, &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
     }
 
     #[tokio::test]

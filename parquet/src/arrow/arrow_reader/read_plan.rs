@@ -38,7 +38,7 @@ pub enum RowSelectionStrategy {
     Mask,
 }
 
-const AVG_SELECTOR_LEN_MASK_THRESHOLD: usize = 160000;
+const AVG_SELECTOR_LEN_MASK_THRESHOLD: usize = 32;
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]

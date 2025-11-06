@@ -951,30 +951,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         let mask_preferred = plan_builder.mask_preferred();
         if mask_preferred {
-            let mut force_selectors = false;
-            // if let (Some(offset_index), Some(mut selection)) = (
-            //     reader
-            //         .metadata
-            //         .offset_index()
-            //         .filter(|index| !index.is_empty()),
-            //     plan_builder.selection().cloned(),
-            // ) {
-            //     for &row_group_idx in &reader.row_groups {
-            //         let row_count = reader.metadata.row_group(row_group_idx).num_rows() as usize;
-            //         let row_group_selection = selection.split_off(row_count);
-            //         let columns = offset_index
-            //             .get(row_group_idx)
-            //             .map(|columns| columns.as_slice());
-            //         if should_force_selectors(Some(&row_group_selection), &projection, columns) {
-            //             force_selectors = true;
-            //             break;
-            //         }
-            //     }
-            // }
-
-            if !force_selectors {
-                plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
-            }
+            // There's no page skipping in the sync reader, so always use Mask selection strategy when it's preferred
+            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
         }
 
         let read_plan = plan_builder.build();
@@ -1307,12 +1285,11 @@ mod tests {
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionStrategy,
-        RowSelector,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
-    use crate::basic::{Compression, ConvertedType, Encoding, Repetition, Type as PhysicalType};
+    use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
@@ -5195,8 +5172,8 @@ mod tests {
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
 
-    const SECOND_MATCH_INDEX: usize = 4096;
-    const SECOND_MATCH_VALUE: i64 = 12345;
+    const SECOND_MATCH_INDEX: usize = 31;
+    const SECOND_MATCH_VALUE: i64 = 9998;
 
     fn build_mask_pruning_parquet() -> Bytes {
         let schema = Arc::new(Schema::new(vec![
@@ -5204,7 +5181,7 @@ mod tests {
             Field::new("value", ArrowDataType::Float64, false),
         ]));
 
-        let num_rows = 8192usize;
+        let num_rows = 32usize;
         let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
         int_values[0] = 9999;
         int_values[SECOND_MATCH_INDEX] = SECOND_MATCH_VALUE;
@@ -5217,9 +5194,8 @@ mod tests {
         .unwrap();
 
         let props = WriterProperties::builder()
-            .set_compression(Compression::SNAPPY)
-            .set_data_page_size_limit(1024)
-            .set_data_page_row_count_limit(32)
+            .set_write_batch_size(2)
+            .set_data_page_row_count_limit(2)
             .build();
 
         let mut buffer = Vec::new();
