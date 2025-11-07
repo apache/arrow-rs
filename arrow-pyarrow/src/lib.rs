@@ -515,8 +515,25 @@ impl Table {
         record_batches: Vec<RecordBatch>,
         schema: SchemaRef,
     ) -> Result<Self, ArrowError> {
+        /// This function was copied from `pyo3_arrow/utils.rs` for now. I don't understand yet why
+        /// this is required instead of a "normal" `schema == record_batch.schema()` check.
+        ///
+        /// TODO: Either remove this check, replace it with something already existing in `arrow-rs`
+        ///     or move it to a central `utils` location.
+        fn schema_equals(left: &SchemaRef, right: &SchemaRef) -> bool {
+            left.fields
+                .iter()
+                .zip(right.fields.iter())
+                .all(|(left_field, right_field)| {
+                    left_field.name() == right_field.name()
+                        && left_field
+                            .data_type()
+                            .equals_datatype(right_field.data_type())
+                })
+        }
+
         for record_batch in &record_batches {
-            if schema != record_batch.schema() {
+            if !schema_equals(&schema, &record_batch.schema()) {
                 return Err(ArrowError::SchemaError(
                     //"All record batches must have the same schema.".to_owned(),
                     format!(
