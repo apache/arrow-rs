@@ -45,8 +45,8 @@ use super::Buffer;
 /// * For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
 /// * To apply bitwise operations, see [`apply_bitwise_binary_op`] and [`apply_bitwise_unary_op`]
 ///
-/// [`apply_bitwise_binary_op`]: crate::buffer::ops::apply_bitwise_binary_op and
-/// [`apply_bitwise_unary_op`]: crate::buffer::ops::apply_bitwise_unary_op
+/// [`apply_bitwise_binary_op`]: crate::bit_util::apply_bitwise_binary_op
+/// [`apply_bitwise_unary_op`]: crate::bit_util::apply_bitwise_unary_op
 ///
 /// # Example
 ///
