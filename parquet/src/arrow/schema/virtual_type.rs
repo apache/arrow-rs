@@ -21,7 +21,11 @@
 use arrow_schema::{ArrowError, DataType, Field, extension::ExtensionType};
 
 /// Prefix for virtual column extension type names.
-const VIRTUAL_PREFIX: &str = "parquet.virtual.";
+macro_rules! VIRTUAL_PREFIX {
+    () => {
+        "parquet.virtual."
+    };
+}
 
 /// The extension type for row numbers.
 ///
@@ -32,7 +36,7 @@ const VIRTUAL_PREFIX: &str = "parquet.virtual.";
 pub struct RowNumber;
 
 impl ExtensionType for RowNumber {
-    const NAME: &'static str = concat!(VIRTUAL_PREFIX, "row_number");
+    const NAME: &'static str = concat!(VIRTUAL_PREFIX!(), "row_number");
     type Metadata = &'static str;
 
     fn metadata(&self) -> &Self::Metadata {
@@ -79,7 +83,7 @@ mod tests {
     #[test]
     fn valid() -> Result<(), ArrowError> {
         let mut field = Field::new("", DataType::Int64, false);
-        field.try_with_extension_type(RowNumber::default())?;
+        field.try_with_extension_type(RowNumber)?;
         field.try_extension_type::<RowNumber>()?;
 
         Ok(())
@@ -99,7 +103,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "expected Int64, found Int32")]
     fn invalid_type() {
-        Field::new("", DataType::Int32, false).with_extension_type(RowNumber::default());
+        Field::new("", DataType::Int32, false).with_extension_type(RowNumber);
     }
 
     #[test]
@@ -136,6 +140,6 @@ mod tests {
 /// Virtual columns have extension type names starting with `parquet.virtual.`.
 pub fn is_virtual_column(field: &Field) -> bool {
     field.extension_type_name()
-        .map(|name| name.starts_with(VIRTUAL_PREFIX))
+        .map(|name| name.starts_with(VIRTUAL_PREFIX!()))
         .unwrap_or(false)
 }
