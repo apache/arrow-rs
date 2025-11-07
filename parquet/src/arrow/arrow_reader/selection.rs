@@ -740,7 +740,7 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
 /// [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan).
 ///
 /// This keeps per-reader state such as the current position and delegates the
-/// actual storage strategy to [`RowSelectionBacking`].
+/// actual storage strategy to the internal `RowSelectionBacking`.
 #[derive(Debug)]
 pub struct RowSelectionCursor {
     /// Backing storage describing how the selection is materialised
