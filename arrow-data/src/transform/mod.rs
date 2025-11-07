@@ -900,8 +900,12 @@ fn merge_dictionaries_casted<'a, K: ArrowNativeType>(
             Ok(new_keys)
         })
         .collect::<Result<Vec<Vec<K>>, ArrowError>>()?;
-    let new_values_data = MutableArrayData::new(data_refs, false, indices.len());
-    let shared_value_data = interleave(new_values_data, indices);
+    let shared_value_data = if indices.is_empty() {
+        ArrayData::new_empty(data_refs[0].data_type())
+    } else {
+        let new_values_data = MutableArrayData::new(data_refs, false, indices.len());
+        interleave(new_values_data, indices)
+    };
 
     Ok((
         new_dict_keys
