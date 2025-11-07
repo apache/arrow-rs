@@ -71,6 +71,28 @@ pub fn bitwise_bin_op_helper<F>(
 where
     F: FnMut(u64, u64) -> u64,
 {
+    // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
+    // to improve performance.
+    if left_offset_in_bits == 0 && right_offset_in_bits == 0 {
+        unsafe {
+            let (left_prefix, left_u64s, left_suffix) = left.as_slice().align_to::<u64>();
+            let (right_prefix, right_u64s, right_suffix) = right.as_slice().align_to::<u64>();
+            // if there is no prefix or suffix, both buffers are aligned and we can do the operation directly
+            // on u64s
+            // TODO also handle non empty suffixes by processing them separately
+            if left_prefix.is_empty() && right_prefix.is_empty() && left_suffix.is_empty() && right_suffix.is_empty() {
+                let result_u64s = left_u64s
+                    .iter()
+                    .zip(right_u64s.iter())
+                    .map(|(l, r)| op(*l, *r))
+                    .collect::<Vec<u64>>();
+                return result_u64s.into();
+            }
+        }
+    }
+
+
+
     let left_chunks = left.bit_chunks(left_offset_in_bits, len_in_bits);
     let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
 
