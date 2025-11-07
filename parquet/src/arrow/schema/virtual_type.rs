@@ -21,12 +21,12 @@
 use arrow_schema::{ArrowError, DataType, Field, extension::ExtensionType};
 
 /// Prefix for virtual column extension type names.
-const VIRTUAL_PREFIX: &str = "arrow.virtual.";
+const VIRTUAL_PREFIX: &str = "parquet.virtual.";
 
 /// Macro to concatenate VIRTUAL_PREFIX with a suffix.
 macro_rules! virtual_name {
     ($suffix:literal) => {
-        concat!("arrow.virtual.", $suffix)
+        concat!("parquet.virtual.", $suffix)
     };
 }
 
