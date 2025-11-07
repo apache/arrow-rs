@@ -68,7 +68,7 @@ impl Drop for AvgSelectorLenMaskThresholdGuard {
     }
 }
 
-/// Override [`AVG_SELECTOR_LEN_MASK_THRESHOLD`] (primarily for tests / benchmarks).
+/// Override AVG_SELECTOR_LEN_MASK_THRESHOLD (primarily for tests / benchmarks).
 ///
 /// Returns an [`AvgSelectorLenMaskThresholdGuard`] that restores the previous value on drop.
 pub fn set_avg_selector_len_mask_threshold(value: usize) -> AvgSelectorLenMaskThresholdGuard {

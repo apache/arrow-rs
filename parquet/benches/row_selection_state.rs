@@ -313,7 +313,7 @@ fn build_utf8view_batch(total_rows: usize) -> RecordBatch {
 
 fn build_utf8view_batch_with_len(total_rows: usize, len: usize) -> RecordBatch {
     let mut builder = StringViewBuilder::new();
-    let value: String = std::iter::repeat('a').take(len).collect();
+    let value: String = "a".repeat(len);
     for _ in 0..total_rows {
         builder.append_value(&value);
     }
