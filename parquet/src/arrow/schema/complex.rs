@@ -26,8 +26,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
-use arrow_schema::extension::ExtensionType;
+use arrow_schema::{DataType, Field, Fields, SchemaBuilder, extension::ExtensionType};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -132,17 +131,15 @@ impl VisitorContext {
 /// See [Logical Types] for more information on the conversion algorithm
 ///
 /// [Logical Types]: https://github.com/apache/parquet-format/blob/master/LogicalTypes.md
-struct Visitor<'a> {
+struct Visitor {
     /// The column index of the next leaf column
     next_col_idx: usize,
 
     /// Mask of columns to include
     mask: ProjectionMask,
-
-    virtual_columns: &'a [Field],
 }
 
-impl<'a> Visitor<'a> {
+impl Visitor {
     fn visit_primitive(
         &mut self,
         primitive_type: &TypePtr,
@@ -209,8 +206,8 @@ impl<'a> Visitor<'a> {
             None => None,
         };
 
-        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len() + self.virtual_columns.len());
-        let mut children = Vec::with_capacity(parquet_fields.len() + self.virtual_columns.len());
+        let mut child_fields = SchemaBuilder::with_capacity(parquet_fields.len());
+        let mut children = Vec::with_capacity(parquet_fields.len());
 
         // Perform a DFS of children
         for (idx, parquet_field) in parquet_fields.iter().enumerate() {
@@ -240,20 +237,6 @@ impl<'a> Visitor<'a> {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
                 child_fields.push(convert_field(parquet_field, &mut child, arrow_field)?);
-                children.push(child);
-            }
-        }
-
-        if rep_level == 0 && def_level == 0 {
-            for virtual_column in self.virtual_columns {
-                // Ensure this is actually a virtual column
-                assert!(
-                    super::virtual_type::is_virtual_column(virtual_column),
-                    "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
-                    virtual_column.name()
-                );
-                child_fields.push(virtual_column.clone());
-                let child = convert_virtual_field(virtual_column, rep_level, def_level)?;
                 children.push(child);
             }
         }
@@ -579,7 +562,7 @@ impl<'a> Visitor<'a> {
 /// - If nullable: def_level = parent_def_level + 1
 /// - If required: def_level = parent_def_level
 /// - rep_level = parent_rep_level (virtual fields are not repeated)
-fn convert_virtual_field(
+pub(super) fn convert_virtual_field(
     arrow_field: &Field,
     parent_rep_level: i16,
     parent_def_level: i16,
@@ -673,44 +656,9 @@ pub fn convert_schema(
     mask: ProjectionMask,
     embedded_arrow_schema: Option<&Fields>,
 ) -> Result<Option<ParquetField>> {
-    convert_schema_with_virtual(schema, mask, embedded_arrow_schema, &[])
-}
-
-/// Computes the [`ParquetField`] for the provided [`SchemaDescriptor`] with support for virtual columns
-///
-/// This function is similar to [`convert_schema`] but allows specifying virtual columns that should be
-/// included in the schema. Virtual columns are columns that don't exist in the Parquet file but are
-/// generated during reading (e.g., row numbers).
-///
-/// # Arguments
-/// * `schema` - The Parquet schema descriptor
-/// * `mask` - Projection mask to select which columns to include
-/// * `embedded_arrow_schema` - Optional embedded Arrow schema from metadata
-/// * `virtual_columns` - Virtual columns to append to the schema
-///
-/// # Notes
-/// - Virtual columns must have extension type names starting with "arrow.virtual."
-/// - This does not support out of order column projection
-pub fn convert_schema_with_virtual(
-    schema: &SchemaDescriptor,
-    mask: ProjectionMask,
-    embedded_arrow_schema: Option<&Fields>,
-    virtual_columns: &[Field],
-) -> Result<Option<ParquetField>> {
-    // Validate that all fields are virtual columns
-    for field in virtual_columns {
-        if !super::virtual_type::is_virtual_column(field) {
-            return Err(ParquetError::ArrowError(format!(
-                "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
-                field.name()
-            )));
-        }
-    }
-
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask,
-        virtual_columns,
     };
 
     let context = VisitorContext {
@@ -727,7 +675,6 @@ pub fn convert_type(parquet_type: &TypePtr) -> Result<ParquetField> {
     let mut visitor = Visitor {
         next_col_idx: 0,
         mask: ProjectionMask::all(),
-        virtual_columns: &[],
     };
 
     let context = VisitorContext {

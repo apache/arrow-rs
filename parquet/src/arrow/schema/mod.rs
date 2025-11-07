@@ -182,18 +182,69 @@ pub fn parquet_to_arrow_field_levels_with_virtual(
         }
     }
 
-    match complex::convert_schema_with_virtual(schema, mask, hint, virtual_columns)? {
-        Some(field) => match &field.arrow_type {
-            DataType::Struct(fields) => Ok(FieldLevels {
-                fields: fields.clone(),
-                levels: Some(field),
-            }),
-            _ => unreachable!(),
-        },
-        None => Ok(FieldLevels {
-            fields: Fields::empty(),
-            levels: None,
+    // Convert the regular schema first
+    let mut parquet_field = match complex::convert_schema(schema, mask, hint)? {
+        Some(field) => field,
+        None if virtual_columns.is_empty() => {
+            return Ok(FieldLevels {
+                fields: Fields::empty(),
+                levels: None,
+            });
+        }
+        None => {
+            // No regular fields, but we have virtual columns - create empty root struct
+            ParquetField {
+                rep_level: 0,
+                def_level: 0,
+                nullable: false,
+                arrow_type: DataType::Struct(Fields::empty()),
+                field_type: ParquetFieldType::Group {
+                    children: Vec::new(),
+                },
+            }
+        }
+    };
+
+    // Append virtual columns if any
+    if !virtual_columns.is_empty() {
+        match &mut parquet_field.field_type {
+            ParquetFieldType::Group { children } => {
+                // Get the mutable fields from the struct type
+                let DataType::Struct(ref mut fields) = parquet_field.arrow_type else {
+                    unreachable!("Root field must be a struct");
+                };
+
+                // Convert to mutable Vec to append
+                let mut fields_vec: Vec<Arc<Field>> = fields.iter().cloned().collect();
+
+                // Append each virtual column
+                for virtual_column in virtual_columns {
+                    // Virtual columns can only be added at the root level
+                    assert_eq!(parquet_field.rep_level, 0, "Virtual columns can only be added at rep level 0");
+                    assert_eq!(parquet_field.def_level, 0, "Virtual columns can only be added at def level 0");
+
+                    fields_vec.push(Arc::new(virtual_column.clone()));
+                    let virtual_parquet_field = complex::convert_virtual_field(
+                        virtual_column,
+                        parquet_field.rep_level,
+                        parquet_field.def_level,
+                    )?;
+                    children.push(virtual_parquet_field);
+                }
+
+                // Update the fields
+                parquet_field.arrow_type = DataType::Struct(Fields::from(fields_vec));
+            }
+            _ => unreachable!("Root field must be a group"),
+        }
+    }
+
+    match &parquet_field.arrow_type {
+        DataType::Struct(fields) => Ok(FieldLevels {
+            fields: fields.clone(),
+            levels: Some(parquet_field),
         }),
+        _ => unreachable!(),
     }
 }
 
