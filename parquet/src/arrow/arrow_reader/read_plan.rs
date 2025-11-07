@@ -28,6 +28,10 @@ use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+// The average selector length threshold for choosing between
+// `RowSelectionStrategy::Mask` and `RowSelectionStrategy::Selectors`.
+// If the average selector length is less than this value,
+// `RowSelectionStrategy::Mask` is preferred.
 const AVG_SELECTOR_LEN_MASK_THRESHOLD: usize = 32;
 
 // The logic in `preferred_selection_strategy` depends on the constant
