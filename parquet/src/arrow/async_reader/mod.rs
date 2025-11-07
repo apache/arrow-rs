@@ -707,7 +707,7 @@ where
             let force_selectors = plan_builder.selection().is_some_and(|selection| {
                 selection.should_force_selectors(&projection, offset_index)
             });
-            if force_selectors {
+            if !force_selectors {
                 plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
             }
         }
@@ -1464,14 +1464,21 @@ mod tests {
         // build data with row selection average length 4
         // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
         // The Row Selection would be [1111, (skip 10), 9999]
-        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
 
         let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
         int_values[0] = first_value;
         int_values[num_rows - 1] = last_value;
-        let keys = Int64Array::from(int_values);
-        let batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(keys) as ArrayRef]).unwrap();
+        let keys = Int64Array::from(int_values.clone());
+        let values = Int64Array::from(int_values.clone());
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+        )
+        .unwrap();
 
         let props = WriterProperties::builder()
             .set_write_batch_size(2)
