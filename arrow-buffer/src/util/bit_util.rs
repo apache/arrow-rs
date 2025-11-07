@@ -162,32 +162,32 @@ pub(crate) fn read_up_to_byte_from_offset(
 /// # Example: Modify entire buffer
 /// ```
 /// # use arrow_buffer::MutableBuffer;
-/// # use arrow_buffer::bit_util::bitwise_binary_op;
+/// # use arrow_buffer::bit_util::apply_bitwise_binary_op;
 /// let mut left = MutableBuffer::new(2);
 /// left.extend_from_slice(&[0b11110000u8, 0b00110011u8]);
 /// let right = &[0b10101010u8, 0b10101010u8];
 /// // apply bitwise AND between left and right buffers, updating left in place
-/// bitwise_binary_op(left.as_slice_mut(), 0, right, 0, 16, |a, b| a & b);
+/// apply_bitwise_binary_op(left.as_slice_mut(), 0, right, 0, 16, |a, b| a & b);
 /// assert_eq!(left.as_slice(), &[0b10100000u8, 0b00100010u8]);
 /// ```
 ///
 /// # Example: Modify buffer with offsets
 /// ```
 /// # use arrow_buffer::MutableBuffer;
-/// # use arrow_buffer::bit_util::bitwise_binary_op;
+/// # use arrow_buffer::bit_util::apply_bitwise_binary_op;
 /// let mut left = MutableBuffer::new(2);
 /// left.extend_from_slice(&[0b00000000u8, 0b00000000u8]);
 /// let right = &[0b10110011u8, 0b11111110u8];
 /// // apply bitwise OR between left and right buffers,
 /// // Apply only 8 bits starting from bit offset 3 in left and bit offset 2 in right
-/// bitwise_binary_op(left.as_slice_mut(), 3, right, 2, 8, |a, b| a | b);
+/// apply_bitwise_binary_op(left.as_slice_mut(), 3, right, 2, 8, |a, b| a | b);
 /// assert_eq!(left.as_slice(), &[0b01100000, 0b00000101u8]);
 /// ```
 ///
 /// # Panics
 ///
 /// If the offset or lengths exceed the buffer or slice size.
-pub fn bitwise_binary_op<F>(
+pub fn apply_bitwise_binary_op<F>(
     left: &mut [u8],
     left_offset_in_bits: usize,
     right: impl AsRef<[u8]>,
@@ -274,30 +274,34 @@ pub fn bitwise_binary_op<F>(
 /// # Example: Modify entire buffer
 /// ```
 /// # use arrow_buffer::MutableBuffer;
-/// # use arrow_buffer::bit_util::bitwise_unary_op;
+/// # use arrow_buffer::bit_util::apply_bitwise_unary_op;
 /// let mut buffer = MutableBuffer::new(2);
 /// buffer.extend_from_slice(&[0b11110000u8, 0b00110011u8]);
 /// // apply bitwise NOT to the buffer in place
-/// bitwise_unary_op(buffer.as_slice_mut(), 0, 16, |a| !a);
+/// apply_bitwise_unary_op(buffer.as_slice_mut(), 0, 16, |a| !a);
 /// assert_eq!(buffer.as_slice(), &[0b00001111u8, 0b11001100u8]);
 /// ```
 ///
 /// # Example: Modify buffer with offsets
 /// ```
 /// # use arrow_buffer::MutableBuffer;
-/// # use arrow_buffer::bit_util::bitwise_unary_op;
+/// # use arrow_buffer::bit_util::apply_bitwise_unary_op;
 /// let mut buffer = MutableBuffer::new(2);
 /// buffer.extend_from_slice(&[0b00000000u8, 0b00000000u8]);
 /// // apply bitwise NOT to 8 bits starting from bit offset 3
-/// bitwise_unary_op(buffer.as_slice_mut(), 3, 8, |a| !a);
+/// apply_bitwise_unary_op(buffer.as_slice_mut(), 3, 8, |a| !a);
 /// assert_eq!(buffer.as_slice(), &[0b11111000u8, 0b00000111u8]);
 /// ```
 ///
 /// # Panics
 ///
 /// If the offset and length exceed the buffer size.
-pub fn bitwise_unary_op<F>(buffer: &mut [u8], offset_in_bits: usize, len_in_bits: usize, mut op: F)
-where
+pub fn apply_bitwise_unary_op<F>(
+    buffer: &mut [u8],
+    offset_in_bits: usize,
+    len_in_bits: usize,
+    mut op: F,
+) where
     F: FnMut(u64) -> u64,
 {
     if len_in_bits == 0 {
@@ -1092,7 +1096,7 @@ mod tests {
             .map(|(l, r)| expected_op(*l, *r))
             .collect();
 
-        bitwise_binary_op(
+        apply_bitwise_binary_op(
             left_buffer.as_slice_mut(),
             left_offset_in_bits,
             right_buffer.inner(),
@@ -1133,7 +1137,7 @@ mod tests {
             .map(|b| expected_op(*b))
             .collect();
 
-        bitwise_unary_op(buffer.as_slice_mut(), offset_in_bits, len_in_bits, op);
+        apply_bitwise_unary_op(buffer.as_slice_mut(), offset_in_bits, len_in_bits, op);
 
         let result: Vec<bool> =
             BitIterator::new(buffer.as_slice(), offset_in_bits, len_in_bits).collect();
@@ -1416,7 +1420,7 @@ mod tests {
         let input = vec![0b10101010u8, 0b01010101u8];
         let mut buffer = MutableBuffer::new(2); // space for 16 bits
         buffer.extend_from_slice(&input); // only 2 bytes
-        bitwise_binary_op(
+        apply_bitwise_binary_op(
             buffer.as_slice_mut(),
             100, // exceeds buffer length, becomes a noop
             [0b11110000u8, 0b00001111u8],
@@ -1432,7 +1436,7 @@ mod tests {
     fn test_bitwise_binary_op_length_out_of_bounds() {
         let mut buffer = MutableBuffer::new(2); // space for 16 bits
         buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
-        bitwise_binary_op(
+        apply_bitwise_binary_op(
             buffer.as_slice_mut(),
             0, // exceeds buffer length
             [0b11110000u8, 0b00001111u8],
@@ -1448,7 +1452,7 @@ mod tests {
     fn test_bitwise_binary_op_right_len_out_of_bounds() {
         let mut buffer = MutableBuffer::new(2); // space for 16 bits
         buffer.extend_from_slice(&[0b10101010u8, 0b01010101u8]); // only 2 bytes
-        bitwise_binary_op(
+        apply_bitwise_binary_op(
             buffer.as_slice_mut(),
             0, // exceeds buffer length
             [0b11110000u8, 0b00001111u8],
@@ -1465,7 +1469,7 @@ mod tests {
         let input = vec![0b10101010u8, 0b01010101u8];
         let mut buffer = MutableBuffer::new(2); // space for 16 bits
         buffer.extend_from_slice(&input); // only 2 bytes
-        bitwise_unary_op(
+        apply_bitwise_unary_op(
             buffer.as_slice_mut(),
             100, // exceeds buffer length, becomes a noop
             8,
@@ -1480,7 +1484,7 @@ mod tests {
         let input = vec![0b10101010u8, 0b01010101u8];
         let mut buffer = MutableBuffer::new(2); // space for 16 bits
         buffer.extend_from_slice(&input); // only 2 bytes
-        bitwise_unary_op(
+        apply_bitwise_unary_op(
             buffer.as_slice_mut(),
             3,   // start at bit 3, to exercise different path
             100, // exceeds buffer length
