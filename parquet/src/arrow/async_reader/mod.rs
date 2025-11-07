@@ -1074,40 +1074,6 @@ mod tests {
         }
     }
 
-    const SECOND_MATCH_INDEX: usize = 31;
-    const SECOND_MATCH_VALUE: i64 = 9998;
-
-    fn build_mask_pruning_parquet() -> Bytes {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", DataType::Int64, false),
-            Field::new("value", DataType::Float64, false),
-        ]));
-
-        let num_rows = 32usize;
-        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
-        int_values[0] = 9999;
-        int_values[SECOND_MATCH_INDEX] = SECOND_MATCH_VALUE;
-        let keys = Int64Array::from(int_values);
-        let values = Float64Array::from_iter_values((0..num_rows).map(|v| v as f64 * 1.5));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
-        )
-        .unwrap();
-
-        let props = WriterProperties::builder()
-            .set_write_batch_size(2)
-            .set_data_page_row_count_limit(2)
-            .build();
-
-        let mut buffer = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        Bytes::from(buffer)
-    }
-
     #[tokio::test]
     async fn test_async_reader() {
         let testdata = arrow::util::test_util::parquet_test_data();
@@ -1485,7 +1451,36 @@ mod tests {
 
     #[tokio::test]
     async fn test_row_filter_full_page_skip_is_handled_async() {
-        let data = build_mask_pruning_parquet();
+        let first_value: i64 = 1111;
+        let last_value: i64 = 9999;
+        let num_rows: usize = 12;
+
+        // build data with row selection average length 4
+        // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
+        // The Row Selection would be [1111, (skip 10), 9999]
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Int64,
+            false,
+        )]));
+
+        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
+        int_values[0] = first_value;
+        int_values[num_rows - 1] = last_value;
+        let keys = Int64Array::from(int_values);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(keys) as ArrayRef]).unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(2)
+            .set_data_page_row_count_limit(2)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buffer);
 
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
@@ -1495,24 +1490,24 @@ mod tests {
         .unwrap();
         let schema = builder.parquet_schema().clone();
         let filter_mask = ProjectionMask::leaves(&schema, [0]);
-        let output_mask = ProjectionMask::leaves(&schema, [1]);
 
         let predicate = ArrowPredicateFn::new(filter_mask, move |batch: RecordBatch| {
             let column = batch.column(0);
-            let match_first = eq(column, &Int64Array::new_scalar(9999))?;
-            let match_second = eq(column, &Int64Array::new_scalar(SECOND_MATCH_VALUE))?;
+            let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
+            let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
             or(&match_first, &match_second)
         });
 
+        // The batch size is set to 12 to read all rows in one go after filtering
+        // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
         let stream = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data),
             ArrowReaderOptions::new().with_page_index(true),
         )
         .await
         .unwrap()
-        .with_projection(output_mask)
         .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
-        .with_batch_size(32)
+        .with_batch_size(12)
         .build()
         .unwrap();
 

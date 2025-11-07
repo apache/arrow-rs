@@ -5172,26 +5172,27 @@ mod tests {
         c0.iter().zip(c1.iter()).for_each(|(l, r)| assert_eq!(l, r));
     }
 
-    const SECOND_MATCH_INDEX: usize = 31;
-    const SECOND_MATCH_VALUE: i64 = 9998;
+    #[test]
+    fn test_row_filter_full_page_skip_is_handled() {
+        let first_value: i64 = 1111;
+        let last_value: i64 = 9999;
+        let num_rows: usize = 12;
 
-    fn build_mask_pruning_parquet() -> Bytes {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("key", ArrowDataType::Int64, false),
-            Field::new("value", ArrowDataType::Float64, false),
-        ]));
+        // build data with row selection average length 4
+        // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
+        // The Row Selection would be [1111, (skip 10), 9999]
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            ArrowDataType::Int64,
+            false,
+        )]));
 
-        let num_rows = 32usize;
         let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
-        int_values[0] = 9999;
-        int_values[SECOND_MATCH_INDEX] = SECOND_MATCH_VALUE;
+        int_values[0] = first_value;
+        int_values[num_rows - 1] = last_value;
         let keys = Int64Array::from(int_values);
-        let values = Float64Array::from_iter_values((0..num_rows).map(|v| v as f64 * 1.5));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(keys) as ArrayRef]).unwrap();
 
         let props = WriterProperties::builder()
             .set_write_batch_size(2)
@@ -5202,39 +5203,28 @@ mod tests {
         let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
         writer.write(&batch).unwrap();
         writer.close().unwrap();
+        let data = Bytes::from(buffer);
 
-        Bytes::from(buffer)
-    }
-
-    #[test]
-    fn test_row_filter_full_page_skip_is_handled() {
-        let data = build_mask_pruning_parquet();
-
-        let filter_mask;
-        let output_mask;
-        {
-            let options = ArrowReaderOptions::new().with_page_index(true);
-            let builder =
-                ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
-                    .unwrap();
-            let schema = builder.parquet_schema().clone();
-            filter_mask = ProjectionMask::leaves(&schema, [0]);
-            output_mask = ProjectionMask::leaves(&schema, [1]);
-        }
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
+        let schema = builder.parquet_schema().clone();
+        let filter_mask = ProjectionMask::leaves(&schema, [0]);
 
         let options = ArrowReaderOptions::new().with_page_index(true);
         let predicate = ArrowPredicateFn::new(filter_mask, move |batch: RecordBatch| {
             let column = batch.column(0);
-            let match_first = eq(column, &Int64Array::new_scalar(9999))?;
-            let match_second = eq(column, &Int64Array::new_scalar(SECOND_MATCH_VALUE))?;
+            let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
+            let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
             or(&match_first, &match_second)
         });
 
+        // The batch size is set to 12 to read all rows in one go after filtering
+        // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
         let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)
             .unwrap()
-            .with_projection(output_mask)
             .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
-            .with_batch_size(256)
+            .with_batch_size(12)
             .build()
             .unwrap();
 
