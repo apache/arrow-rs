@@ -704,7 +704,7 @@ where
         if preferred_strategy == RowSelectionStrategy::Mask {
             // If the plan builder prefers mask for better performance, but the there's some limits(e.g. the skipped pages)
             // that prevent it from using mask, we need to check again here.
-            let force_selectors = plan_builder.selection().map_or(false, |selection| {
+            let force_selectors = plan_builder.selection().is_some_and(|selection| {
                 selection.should_force_selectors(&projection, offset_index)
             });
             if force_selectors {

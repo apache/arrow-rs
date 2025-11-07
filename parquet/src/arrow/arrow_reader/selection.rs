@@ -754,7 +754,7 @@ pub struct RowSelectionCursor {
 /// The cursor either walks a boolean mask (dense representation) or a queue
 /// of [`RowSelector`] ranges (sparse representation).
 #[derive(Debug)]
-enum RowSelectionBacking {
+pub enum RowSelectionBacking {
     Mask(BooleanBuffer),
     Selectors(VecDeque<RowSelector>),
 }
