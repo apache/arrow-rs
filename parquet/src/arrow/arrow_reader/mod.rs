@@ -548,7 +548,7 @@ impl ArrowReaderOptions {
     ///
     /// // Create a virtual column for row numbers
     /// let row_number_field = Field::new("row_number", DataType::Int64, false)
-    ///     .with_extension_type(RowNumber::default());
+    ///     .with_extension_type(RowNumber);
     ///
     /// // Configure options with virtual columns
     /// let options = ArrowReaderOptions::new()
@@ -5099,7 +5099,7 @@ pub(crate) mod tests {
             Field::new("value", ArrowDataType::Int64, false),
         ]);
 
-        let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default()));
+        let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
 
         let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
         let options = options.with_virtual_columns(vec![row_number_field.clone()]);
@@ -5144,7 +5144,7 @@ pub(crate) mod tests {
             "value",
             Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
         )]);
-        let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default()));
+        let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
         let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()]);
         let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
         let num_columns = metadata.metadata.file_metadata().schema_descr().num_columns();
@@ -5186,7 +5186,7 @@ pub(crate) mod tests {
             false,
             |path, selection, _row_filter, batch_size| {
                 let file = File::open(path).unwrap();
-                let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default()));
+                let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
                 let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()
@@ -5207,7 +5207,7 @@ pub(crate) mod tests {
             true,
             |path, selection, row_filter, batch_size| {
                 let file = File::open(path).unwrap();
-                let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber::default()));
+                let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
                 let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()

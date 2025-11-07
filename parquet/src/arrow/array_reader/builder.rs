@@ -534,7 +534,7 @@ mod tests {
 
         let file_metadata = file_reader.metadata().file_metadata();
         let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
-        let row_number_field = Arc::new(Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber::default()));
+        let row_number_field = Arc::new(Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber));
         let (_, fields) = parquet_to_arrow_schema_and_fields(
             file_metadata.schema_descr(),
             ProjectionMask::all(),
