@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow_ipc::writer;
-use arrow_schema::{DataType, Field, Fields, Schema, TimeUnit};
+use arrow_schema::{DataType, Field, FieldRef, Fields, Schema, TimeUnit};
 
 use crate::basic::{
     ConvertedType, LogicalType, Repetition, TimeUnit as ParquetTimeUnit, Type as PhysicalType,
@@ -75,7 +75,7 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     parquet_schema: &SchemaDescriptor,
     mask: ProjectionMask,
     key_value_metadata: Option<&Vec<KeyValue>>,
-    virtual_columns: &[Field],
+    virtual_columns: &[FieldRef],
 ) -> Result<(Schema, Option<ParquetField>)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
     let maybe_schema = metadata
@@ -170,7 +170,7 @@ pub fn parquet_to_arrow_field_levels_with_virtual(
     schema: &SchemaDescriptor,
     mask: ProjectionMask,
     hint: Option<&Fields>,
-    virtual_columns: &[Field],
+    virtual_columns: &[FieldRef],
 ) -> Result<FieldLevels> {
     // Validate that all fields are virtual columns
     for field in virtual_columns {
@@ -215,7 +215,7 @@ pub fn parquet_to_arrow_field_levels_with_virtual(
                 };
 
                 // Convert to mutable Vec to append
-                let mut fields_vec: Vec<Arc<Field>> = fields.iter().cloned().collect();
+                let mut fields_vec: Vec<FieldRef> = fields.iter().cloned().collect();
 
                 // Append each virtual column
                 for virtual_column in virtual_columns {
@@ -223,7 +223,7 @@ pub fn parquet_to_arrow_field_levels_with_virtual(
                     assert_eq!(parquet_field.rep_level, 0, "Virtual columns can only be added at rep level 0");
                     assert_eq!(parquet_field.def_level, 0, "Virtual columns can only be added at def level 0");
 
-                    fields_vec.push(Arc::new(virtual_column.clone()));
+                    fields_vec.push(virtual_column.clone());
                     let virtual_parquet_field = complex::convert_virtual_field(
                         virtual_column,
                         parquet_field.rep_level,
@@ -2362,7 +2362,7 @@ mod tests {
         let descriptor = SchemaDescriptor::new(parquet_schema);
 
         // Try to pass a regular field (not a virtual column)
-        let regular_field = Field::new("regular_column", DataType::Int64, false);
+        let regular_field = Arc::new(Field::new("regular_column", DataType::Int64, false));
         let result = parquet_to_arrow_field_levels_with_virtual(
             &descriptor,
             ProjectionMask::all(),
