@@ -19,45 +19,20 @@
 //!
 
 use arrow_schema::{ArrowError, DataType, Field, extension::ExtensionType};
-use core::marker::PhantomData;
 
 /// Prefix for virtual column extension type names.
 const VIRTUAL_PREFIX: &str = "parquet.virtual.";
 
-/// Macro to concatenate VIRTUAL_PREFIX with a suffix.
-macro_rules! virtual_name {
-    ($suffix:literal) => {
-        concat!("parquet.virtual.", $suffix)
-    };
-}
-
-/// Trait for virtual column name constants.
+/// The extension type for row numbers.
 ///
-/// Implementors must provide a unique name suffix for their virtual column type.
-trait VirtualColumnName: Default {
-    const NAME: &'static str;
-}
-
-/// Generic virtual column extension type.
+/// Extension name: `parquet.virtual.row_number`.
 ///
-/// This struct provides a common implementation for all virtual column types.
-///
-/// The storage type of the extension is `Int64`.
+/// This virtual column has storage type `Int64` and uses empty string metadata.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct VirtualColumn<N: VirtualColumnName> {
-    _m: PhantomData<N>,
-}
+pub struct RowNumber;
 
-// Constructors & helpers
-impl<N: VirtualColumnName> VirtualColumn<N> {
-    fn new() -> Self {
-        Self { _m: PhantomData }
-    }
-}
-
-impl<N: VirtualColumnName> ExtensionType for VirtualColumn<N> {
-    const NAME: &'static str = N::NAME;
-
+impl ExtensionType for RowNumber {
+    const NAME: &'static str = concat!(VIRTUAL_PREFIX, "row_number");
     type Metadata = &'static str;
 
     fn metadata(&self) -> &Self::Metadata {
@@ -88,23 +63,9 @@ impl<N: VirtualColumnName> ExtensionType for VirtualColumn<N> {
     }
 
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        Self::default().supports_data_type(data_type).map(|_| Self::default())
+        Self.supports_data_type(data_type).map(|_| Self)
     }
 }
-
-
-/// Marker type for row number virtual column.
-#[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub(crate) struct RowNumberName;
-
-impl VirtualColumnName for RowNumberName {
-    const NAME: &'static str = virtual_name!("row_number");
-}
-
-/// The extension type for row numbers.
-///
-/// Extension name: `parquet.virtual.row_number`.
-pub type RowNumber = VirtualColumn<RowNumberName>;
 
 #[cfg(test)]
 mod tests {
