@@ -19,6 +19,7 @@
 //!
 
 use arrow_schema::{ArrowError, DataType, Field, extension::ExtensionType};
+use core::marker::PhantomData;
 
 /// Prefix for virtual column extension type names.
 const VIRTUAL_PREFIX: &str = "parquet.virtual.";
@@ -30,10 +31,11 @@ macro_rules! virtual_name {
     };
 }
 
-/// Constants for virtual column type identifiers.
-mod virtual_column_type {
-    /// Row number virtual column.
-    pub(super) const ROW_NUMBER: u8 = 0;
+/// Trait for virtual column name constants.
+///
+/// Implementors must provide a unique name suffix for their virtual column type.
+trait VirtualColumnName: Default {
+    const NAME: &'static str;
 }
 
 /// Generic virtual column extension type.
@@ -42,13 +44,19 @@ mod virtual_column_type {
 ///
 /// The storage type of the extension is `Int64`.
 #[derive(Debug, Default, Clone, Copy, PartialEq)]
-pub struct VirtualColumn<const TYPE: u8>;
+pub struct VirtualColumn<N: VirtualColumnName> {
+    _m: PhantomData<N>,
+}
 
-impl<const TYPE: u8> ExtensionType for VirtualColumn<TYPE> {
-    const NAME: &'static str = match TYPE {
-        virtual_column_type::ROW_NUMBER => virtual_name!("row_number"),
-        _ => panic!("Unknown virtual column type"),
-    };
+// Constructors & helpers
+impl<N: VirtualColumnName> VirtualColumn<N> {
+    fn new() -> Self {
+        Self { _m: PhantomData }
+    }
+}
+
+impl<N: VirtualColumnName> ExtensionType for VirtualColumn<N> {
+    const NAME: &'static str = N::NAME;
 
     type Metadata = &'static str;
 
@@ -80,14 +88,23 @@ impl<const TYPE: u8> ExtensionType for VirtualColumn<TYPE> {
     }
 
     fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
-        Self.supports_data_type(data_type).map(|_| Self)
+        Self::default().supports_data_type(data_type).map(|_| Self::default())
     }
+}
+
+
+/// Marker type for row number virtual column.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub(crate) struct RowNumberName;
+
+impl VirtualColumnName for RowNumberName {
+    const NAME: &'static str = virtual_name!("row_number");
 }
 
 /// The extension type for row numbers.
 ///
-/// Extension name: `arrow.virtual.row_number`.
-pub type RowNumber = VirtualColumn<{ virtual_column_type::ROW_NUMBER }>;
+/// Extension name: `parquet.virtual.row_number`.
+pub type RowNumber = VirtualColumn<RowNumberName>;
 
 #[cfg(test)]
 mod tests {
@@ -155,7 +172,7 @@ mod tests {
 
 /// Returns `true` if the field is a virtual column.
 ///
-/// Virtual columns have extension type names starting with `arrow.virtual.`.
+/// Virtual columns have extension type names starting with `parquet.virtual.`.
 pub fn is_virtual_column(field: &Field) -> bool {
     field.extension_type_name()
         .map(|name| name.starts_with(VIRTUAL_PREFIX))
