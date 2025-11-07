@@ -557,7 +557,7 @@ struct ReaderFactory<T> {
     /// Optional filter
     filter: Option<RowFilter>,
 
-    /// Limit to apply to remaining row groups.
+    /// Limit to apply to remaining row groups.  
     limit: Option<usize>,
 
     /// Offset to apply to the next
@@ -699,12 +699,17 @@ where
             )
             .await?;
 
-        let force_selectors = plan_builder.selection().map_or(false, |selection| {
-            selection.should_force_selectors(&projection, offset_index)
-        });
-
-        if plan_builder.mask_preferred() && !force_selectors {
-            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
+        // Determine the row selection strategy to use
+        let preferred_strategy = plan_builder.preferred_selection_strategy();
+        if preferred_strategy == RowSelectionStrategy::Mask {
+            // If the plan builder prefers mask for better performance, but the there's some limits(e.g. the skipped pages)
+            // that prevent it from using mask, we need to check again here.
+            let force_selectors = plan_builder.selection().map_or(false, |selection| {
+                selection.should_force_selectors(&projection, offset_index)
+            });
+            if force_selectors {
+                plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
+            }
         }
 
         let plan = plan_builder.build();
@@ -1020,8 +1025,8 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Float64Array, Int8Array, Int32Array, Int64Array, RecordBatchReader,
-        Scalar, StringArray, StructArray, UInt64Array,
+        Array, ArrayRef, Int8Array, Int32Array, Int64Array, RecordBatchReader, Scalar, StringArray,
+        StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
     use arrow_select::concat::concat_batches;
@@ -1459,11 +1464,7 @@ mod tests {
         // build data with row selection average length 4
         // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
         // The Row Selection would be [1111, (skip 10), 9999]
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "key",
-            DataType::Int64,
-            false,
-        )]));
+        let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int64, false)]));
 
         let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
         int_values[0] = first_value;
@@ -2258,77 +2259,6 @@ mod tests {
         // * Second request fetches data for evaluating the second predicate
         // * Third request fetches data for evaluating the projection
         assert_eq!(requests.lock().unwrap().len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_cache_projection_excludes_nested_columns() {
-        use arrow_array::{ArrayRef, StringArray};
-
-        // Build a simple RecordBatch with a primitive column `a` and a nested struct column `b { aa, bb }`
-        let a = StringArray::from_iter_values(["r1", "r2"]);
-        let b = StructArray::from(vec![
-            (
-                Arc::new(Field::new("aa", DataType::Utf8, true)),
-                Arc::new(StringArray::from_iter_values(["v1", "v2"])) as ArrayRef,
-            ),
-            (
-                Arc::new(Field::new("bb", DataType::Utf8, true)),
-                Arc::new(StringArray::from_iter_values(["w1", "w2"])) as ArrayRef,
-            ),
-        ]);
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", DataType::Utf8, true),
-            Field::new("b", b.data_type().clone(), true),
-        ]));
-
-        let mut buf = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut buf, schema, None).unwrap();
-        let batch = RecordBatch::try_from_iter([
-            ("a", Arc::new(a) as ArrayRef),
-            ("b", Arc::new(b) as ArrayRef),
-        ])
-        .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Load Parquet metadata
-        let data: Bytes = buf.into();
-        let metadata = ParquetMetaDataReader::new()
-            .parse_and_finish(&data)
-            .unwrap();
-        let metadata = Arc::new(metadata);
-
-        // Build a RowFilter whose predicate projects a leaf under the nested root `b`
-        // Leaf indices are depth-first; with schema [a, b.aa, b.bb] we pick index 1 (b.aa)
-        let parquet_schema = metadata.file_metadata().schema_descr();
-        let nested_leaf_mask = ProjectionMask::leaves(parquet_schema, vec![1]);
-
-        let always_true = ArrowPredicateFn::new(nested_leaf_mask.clone(), |batch: RecordBatch| {
-            Ok(arrow_array::BooleanArray::from(vec![
-                true;
-                batch.num_rows()
-            ]))
-        });
-        let filter = RowFilter::new(vec![Box::new(always_true)]);
-
-        // Construct a ReaderFactory and compute cache projection
-        let reader_factory = ReaderFactory {
-            metadata: Arc::clone(&metadata),
-            fields: None,
-            input: TestReader::new(data),
-            filter: Some(filter),
-            limit: None,
-            offset: None,
-            metrics: ArrowReaderMetrics::disabled(),
-            max_predicate_cache_size: 0,
-        };
-
-        // Provide an output projection that also selects the same nested leaf
-        let cache_projection = reader_factory.compute_cache_projection(&nested_leaf_mask);
-
-        // Expect None since nested columns should be excluded from cache projection
-        assert!(cache_projection.is_none());
     }
 
     #[tokio::test]

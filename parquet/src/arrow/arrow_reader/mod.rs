@@ -22,7 +22,7 @@ use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelector};
+pub use selection::{RowSelection, RowSelectionCursor, RowSelectionStrategy, RowSelector};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -44,7 +44,7 @@ use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-pub use read_plan::{ReadPlan, ReadPlanBuilder, RowSelectionStrategy};
+pub use read_plan::{ReadPlan, ReadPlanBuilder};
 
 mod filter;
 pub mod metrics;
@@ -916,11 +916,8 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .with_limit(limit)
             .build_limited();
 
-        let mask_preferred = plan_builder.mask_preferred();
-        if mask_preferred {
-            // There's no page skipping in the sync reader, so always use Mask selection strategy when it's preferred
-            plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
-        }
+        let preferred_strategy = plan_builder.preferred_selection_strategy();
+        plan_builder = plan_builder.with_selection_strategy(preferred_strategy);
 
         let read_plan = plan_builder.build();
 
