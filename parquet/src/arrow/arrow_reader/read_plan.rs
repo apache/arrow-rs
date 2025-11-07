@@ -51,6 +51,27 @@ fn avg_selector_len_mask_threshold() -> usize {
     AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.load(Ordering::Relaxed)
 }
 
+/// An RAII guard that restores the previous value of the override when it is dropped.
+/// This ensures that any change to the global threshold is temporary and scoped to
+/// the test or benchmark where it's used, even in the case of a panic.
+pub struct AvgSelectorLenMaskThresholdGuard {
+    previous: usize,
+}
+
+impl Drop for AvgSelectorLenMaskThresholdGuard {
+    fn drop(&mut self) {
+        AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.store(self.previous, Ordering::SeqCst);
+    }
+}
+
+/// Override [`AVG_SELECTOR_LEN_MASK_THRESHOLD`] (primarily for tests / benchmarks).
+///
+/// Returns an [`AvgSelectorLenMaskThresholdGuard`] that restores the previous value on drop.
+pub fn set_avg_selector_len_mask_threshold(value: usize) -> AvgSelectorLenMaskThresholdGuard {
+    let previous = AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.swap(value, Ordering::SeqCst);
+    AvgSelectorLenMaskThresholdGuard { previous }
+}
+
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
 pub struct ReadPlanBuilder {
@@ -310,32 +331,6 @@ impl ReadPlan {
     }
 }
 
-/// An RAII guard that restores the previous value of the override when it is dropped.
-/// This ensures that any change to the global threshold is temporary and scoped to
-/// the test or benchmark where it's used, even in the case of a panic.
-#[cfg(test)]
-pub struct AvgSelectorLenMaskThresholdGuard {
-    previous: usize,
-}
-
-#[cfg(test)]
-impl Drop for AvgSelectorLenMaskThresholdGuard {
-    fn drop(&mut self) {
-        AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.store(self.previous, Ordering::SeqCst);
-    }
-}
-
-/// Override [`AVG_SELECTOR_LEN_MASK_THRESHOLD`] for tests and benchmarks.
-///
-/// Returns an [`AvgSelectorLenMaskThresholdGuard`] that restores the previous value on drop.
-#[cfg(test)]
-pub fn set_avg_selector_len_mask_threshold_for_test(
-    value: usize,
-) -> AvgSelectorLenMaskThresholdGuard {
-    let previous = AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.swap(value, Ordering::SeqCst);
-    AvgSelectorLenMaskThresholdGuard { previous }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,7 +351,7 @@ mod tests {
 
     #[test]
     fn preferred_selection_strategy_prefers_selectors_when_threshold_small() {
-        let _guard = set_avg_selector_len_mask_threshold_for_test(1);
+        let _guard = set_avg_selector_len_mask_threshold(1);
         let selection = RowSelection::from(vec![RowSelector::select(8)]);
         let builder = builder_with_selection(selection);
         assert_eq!(

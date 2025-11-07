@@ -43,7 +43,11 @@ use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-pub use read_plan::{ReadPlan, ReadPlanBuilder};
+// Exposed so integration tests and benchmarks can temporarily override the threshold.
+pub use read_plan::{
+    AvgSelectorLenMaskThresholdGuard, ReadPlan, ReadPlanBuilder,
+    set_avg_selector_len_mask_threshold,
+};
 
 mod filter;
 pub mod metrics;

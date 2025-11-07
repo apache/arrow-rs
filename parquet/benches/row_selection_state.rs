@@ -26,7 +26,7 @@ use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
     AvgSelectorLenMaskThresholdGuard, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
-    set_avg_selector_len_mask_threshold_for_test,
+    set_avg_selector_len_mask_threshold,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -464,8 +464,8 @@ impl BenchMode {
 
     fn override_threshold(self) -> Option<AvgSelectorLenMaskThresholdGuard> {
         match self {
-            BenchMode::ReadSelector => Some(set_avg_selector_len_mask_threshold_for_test(0)),
-            BenchMode::ReadMask => Some(set_avg_selector_len_mask_threshold_for_test(usize::MAX)),
+            BenchMode::ReadSelector => Some(set_avg_selector_len_mask_threshold(0)),
+            BenchMode::ReadMask => Some(set_avg_selector_len_mask_threshold(usize::MAX)),
         }
     }
 }
