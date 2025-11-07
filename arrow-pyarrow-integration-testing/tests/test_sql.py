@@ -630,12 +630,16 @@ def test_table_roundtrip():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    metadata = {b'key1': b'value1'}
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata=metadata)
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
     ]
-    table = pa.Table.from_batches(batches)
+    table = pa.Table.from_batches(batches, schema=schema)
+    # TODO: Remove these `assert`s as soon as the metadata issue is solved in Rust
+    assert table.schema.metadata == metadata
+    assert all(batch.schema.metadata == metadata for batch in table.to_batches())
     new_table = rust.round_trip_table(table)
 
     assert table.schema == new_table.schema
@@ -643,8 +647,7 @@ def test_table_roundtrip():
     assert len(table.to_batches()) == len(new_table.to_batches())
 
 
-@pytest.mark.parametrize("set_schema", (True, False))
-def test_table_from_batches(set_schema: bool):
+def test_table_from_batches():
     """
     Python -> Rust -> Python
     """
@@ -654,7 +657,7 @@ def test_table_from_batches(set_schema: bool):
         pa.record_batch([[None, [], [5, 6]]], schema),
     ]
     table = pa.Table.from_batches(batches)
-    new_table = rust.build_table(batches, schema=schema if set_schema else None)
+    new_table = rust.build_table(batches, schema)
 
     assert table.schema == new_table.schema
     assert table == new_table
@@ -672,19 +675,7 @@ def test_table_error_inconsistent_schema():
         pa.record_batch([[None, [], [5.6, 6.4]]], schema_2),
     ]
     with pytest.raises(pa.ArrowException, match="Schema error: All record batches must have the same schema."):
-        rust.build_table(batches)
-
-
-def test_table_error_no_schema():
-    """
-    Python -> Rust -> Python
-    """
-    batches = []
-    with pytest.raises(
-        pa.ArrowException,
-        match="Schema error: If no schema is supplied explicitly, there must be at least one RecordBatch!"
-    ):
-        rust.build_table(batches)
+        rust.build_table(batches, schema_1)
 
 
 def test_reject_other_classes():

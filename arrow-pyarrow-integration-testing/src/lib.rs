@@ -145,18 +145,15 @@ fn round_trip_table(obj: PyArrowType<Table>) -> PyResult<PyArrowType<Table>> {
     Ok(obj)
 }
 
-/// Function for testing whether a `Vec<RecordBatch>` is exportable as `pyarrow.Table`, with or
-/// without explicitly providing a schema
 #[pyfunction]
-#[pyo3(signature = (record_batches, *, schema=None))]
 pub fn build_table(
     record_batches: Vec<PyArrowType<RecordBatch>>,
-    schema: Option<PyArrowType<Schema>>,
+    schema: PyArrowType<Schema>,
 ) -> PyResult<PyArrowType<Table>> {
     Ok(PyArrowType(
         Table::try_new(
             record_batches.into_iter().map(|rb| rb.0).collect(),
-            schema.map(|s| Arc::new(s.0)),
+            Arc::new(schema.0),
         )
         .map_err(to_py_err)?,
     ))

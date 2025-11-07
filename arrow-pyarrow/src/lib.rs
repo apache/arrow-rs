@@ -51,13 +51,13 @@
 //! as `pyarrow.RecordBatchReader`. (`Box<dyn RecordBatchReader + Send>` is typically
 //! easier to create.)
 //!
-//! (2) Although arrow-rs offers a [pyarrow.Table](https://arrow.apache.org/docs/python/generated/pyarrow.Table)
-//! convenience wrapper [Table] (which internally holds `Vec<RecordBatch>`), this is more meant for
-//! use cases where you already have `Vec<RecordBatch>` on the Rust side and want to export that in
-//! bulk as a `pyarrow.Table`. In general, it is recommended to use streaming approaches instead of
-//! dealing with bulk data.
-//! For example, a `pyarrow.Table` can be imported to Rust through `PyArrowType<ArrowArrayStreamReader>`
-//! instead (since `pyarrow.Table` implements the ArrayStream PyCapsule interface).
+//! (2) Although arrow-rs offers [Table], a convenience wrapper for [pyarrow.Table](https://arrow.apache.org/docs/python/generated/pyarrow.Table)
+//! that internally holds `Vec<RecordBatch>`, it is meant primarily for use cases where you already
+//! have `Vec<RecordBatch>` on the Rust side and want to export that in bulk as a `pyarrow.Table`.
+//! In general, it is recommended to use streaming approaches instead of dealing with data in bulk.
+//! For example, a `pyarrow.Table` (or any other object that implements the ArrayStream PyCapsule
+//! interface) can be imported to Rust through `PyArrowType<ArrowArrayStreamReader>>` instead of
+//! forcing eager reading into `Vec<RecordBatch>`.
 
 use std::convert::{From, TryFrom};
 use std::ptr::{addr_of, addr_of_mut};
@@ -511,33 +511,20 @@ pub struct Table {
 }
 
 impl Table {
-    pub unsafe fn new_unchecked(record_batches: Vec<RecordBatch>, schema: SchemaRef) -> Self {
-        Self {
-            record_batches,
-            schema,
-        }
-    }
-
     pub fn try_new(
         record_batches: Vec<RecordBatch>,
-        schema: Option<SchemaRef>,
+        schema: SchemaRef,
     ) -> Result<Self, ArrowError> {
-        let schema = match schema {
-            Some(s) => s,
-            None => {
-                record_batches
-                    .get(0)
-                    .ok_or_else(|| ArrowError::SchemaError(
-                        "If no schema is supplied explicitly, there must be at least one RecordBatch!".to_owned()
-                    ))?
-                    .schema()
-                    .clone()
-            }
-        };
         for record_batch in &record_batches {
             if schema != record_batch.schema() {
                 return Err(ArrowError::SchemaError(
-                    "All record batches must have the same schema.".to_owned(),
+                    //"All record batches must have the same schema.".to_owned(),
+                    format!(
+                        "All record batches must have the same schema. \
+                         Expected schema: {:?}, got schema: {:?}",
+                        schema,
+                        record_batch.schema()
+                    ),
                 ));
             }
         }
@@ -560,47 +547,26 @@ impl Table {
     }
 }
 
-impl TryFrom<ArrowArrayStreamReader> for Table {
+impl TryFrom<Box<dyn RecordBatchReader>> for Table {
     type Error = ArrowError;
 
-    fn try_from(value: ArrowArrayStreamReader) -> Result<Self, ArrowError> {
+    fn try_from(value: Box<dyn RecordBatchReader>) -> Result<Self, ArrowError> {
         let schema = value.schema();
         let batches = value.collect::<Result<Vec<_>, _>>()?;
-        // We assume all batches have the same schema here.
-        unsafe { Ok(Self::new_unchecked(batches, schema)) }
+        Self::try_new(batches, schema)
     }
 }
 
+/// Convert a `pyarrow.Table` (or any other ArrowArrayStream compliant object) into [`Table`]
 impl FromPyArrow for Table {
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
-        let array_stream_reader: PyResult<ArrowArrayStreamReader> = {
-            // First, try whether the object implements the Arrow ArrayStreamReader protocol directly
-            // (which `pyarrow.Table` does) or test whether it is a RecordBatchReader.
-            let reader_result = if let Ok(reader) = ArrowArrayStreamReader::from_pyarrow_bound(ob) {
-                Some(reader)
-            }
-            // If that is not the case, test whether it has a `to_reader` method (which
-            // `pyarrow.Table` does) whose return value implements the Arrow ArrayStreamReader
-            // protocol or is a RecordBatchReader.
-            else if ob.hasattr(intern!(ob.py(), "to_reader"))? {
-                let py_reader = ob.getattr(intern!(ob.py(), "to_reader"))?.call0()?;
-                ArrowArrayStreamReader::from_pyarrow_bound(&py_reader).ok()
-            } else {
-                None
-            };
-
-            match reader_result {
-                Some(reader) => Ok(reader),
-                None => Err(PyTypeError::new_err(
-                    "Expected Arrow Table, Arrow RecordBatchReader or other object which conforms to the Arrow ArrayStreamReader protocol.",
-                )),
-            }
-        };
-        Self::try_from(array_stream_reader?)
-            .map_err(|err| PyErr::new::<PyValueError, _>(err.to_string()))
+        let reader: Box<dyn RecordBatchReader> =
+            Box::new(ArrowArrayStreamReader::from_pyarrow_bound(ob)?);
+        Self::try_from(reader).map_err(|err| PyErr::new::<PyValueError, _>(err.to_string()))
     }
 }
 
+/// Convert a [`Table`] into `pyarrow.Table`.
 impl IntoPyArrow for Table {
     fn into_pyarrow(self, py: Python) -> PyResult<Bound<PyAny>> {
         let module = py.import(intern!(py, "pyarrow"))?;
