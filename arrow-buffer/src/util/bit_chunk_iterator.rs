@@ -223,7 +223,8 @@ impl<'a> BitChunks<'a> {
     pub fn new(buffer: &'a [u8], offset: usize, len: usize) -> Self {
         assert!(
             ceil(offset + len, 8) <= buffer.len(),
-            "offset + len out of bounds"
+            "offset + len out of bounds. Buffer length in bits: {}, requested offset: {offset}, len: {len}",
+            buffer.len(),
         );
 
         let byte_offset = offset / 8;

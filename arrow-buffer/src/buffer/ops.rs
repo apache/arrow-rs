@@ -80,7 +80,11 @@ where
             // if there is no prefix or suffix, both buffers are aligned and we can do the operation directly
             // on u64s
             // TODO also handle non empty suffixes by processing them separately
-            if left_prefix.is_empty() && right_prefix.is_empty() && left_suffix.is_empty() && right_suffix.is_empty() {
+            if left_prefix.is_empty()
+                && right_prefix.is_empty()
+                && left_suffix.is_empty()
+                && right_suffix.is_empty()
+            {
                 let result_u64s = left_u64s
                     .iter()
                     .zip(right_u64s.iter())
@@ -90,8 +94,6 @@ where
             }
         }
     }
-
-
 
     let left_chunks = left.bit_chunks(left_offset_in_bits, len_in_bits);
     let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
@@ -124,6 +126,21 @@ pub fn bitwise_unary_op_helper<F>(
 where
     F: FnMut(u64) -> u64,
 {
+    // If the underlying buffer is aligned to u64, apply the operation directly on the u64 slices
+    // to improve performance.
+    if offset_in_bits == 0 && len_in_bits > 0 {
+        unsafe {
+            let (prefix, u64s, suffix) = left.as_slice().align_to::<u64>();
+            // if there is no prefix or suffix, the buffer is aligned and we can do the operation directly
+            // on u64s
+            // TODO also handle non empty suffixes by processing them separately
+            if prefix.is_empty() && suffix.is_empty() {
+                let result_u64s = u64s.iter().map(|l| op(*l)).collect::<Vec<u64>>();
+                return result_u64s.into();
+            }
+        }
+    }
+
     // reserve capacity and set length so we can get a typed view of u64 chunks
     let mut result =
         MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
