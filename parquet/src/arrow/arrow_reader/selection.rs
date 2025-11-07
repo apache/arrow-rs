@@ -21,7 +21,8 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
-use crate::file::page_index::offset_index::PageLocation;
+use crate::arrow::ProjectionMask;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
 /// scanning a parquet file
@@ -211,6 +212,39 @@ impl RowSelection {
         }
 
         ranges
+    }
+
+    /// Returns true if this selection would skip any data pages within the provided columns
+    fn selection_skips_any_page(
+        &self,
+        projection: &ProjectionMask,
+        columns: &[OffsetIndexMetaData],
+    ) -> bool {
+        columns.iter().enumerate().any(|(leaf_idx, column)| {
+            if !projection.leaf_included(leaf_idx) {
+                return false;
+            }
+
+            let locations = column.page_locations();
+            if locations.is_empty() {
+                return false;
+            }
+
+            let ranges = self.scan_ranges(locations);
+            !ranges.is_empty() && ranges.len() < locations.len()
+        })
+    }
+
+    /// Returns true if selectors should be forced, preventing mask materialisation
+    pub(crate) fn should_force_selectors(
+        &self,
+        projection: &ProjectionMask,
+        offset_index: Option<&[OffsetIndexMetaData]>,
+    ) -> bool {
+        match offset_index {
+            Some(columns) => self.selection_skips_any_page(projection, columns),
+            None => false,
+        }
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]

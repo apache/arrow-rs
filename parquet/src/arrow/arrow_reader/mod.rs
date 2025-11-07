@@ -146,39 +146,6 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
     }
 }
 
-fn selection_skips_any_page(
-    selection: &RowSelection,
-    projection: &ProjectionMask,
-    columns: &[OffsetIndexMetaData],
-) -> bool {
-    columns.iter().enumerate().any(|(leaf_idx, column)| {
-        if !projection.leaf_included(leaf_idx) {
-            return false;
-        }
-
-        let locations = column.page_locations();
-        if locations.is_empty() {
-            return false;
-        }
-
-        let ranges = selection.scan_ranges(locations);
-        !ranges.is_empty() && ranges.len() < locations.len()
-    })
-}
-
-pub(crate) fn should_force_selectors(
-    selection: Option<&RowSelection>,
-    projection: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
-) -> bool {
-    match (selection, offset_index) {
-        (Some(selection), Some(columns)) => {
-            selection_skips_any_page(selection, projection, columns)
-        }
-        _ => false,
-    }
-}
-
 impl<T> ArrowReaderBuilder<T> {
     pub(crate) fn new_builder(input: T, metadata: ArrowReaderMetadata) -> Self {
         Self {

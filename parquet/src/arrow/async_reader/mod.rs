@@ -21,7 +21,6 @@
 //!
 //! See example on [`ParquetRecordBatchStreamBuilder::new`]
 
-use crate::arrow::arrow_reader::should_force_selectors;
 use std::collections::VecDeque;
 use std::fmt::Formatter;
 use std::io::SeekFrom;
@@ -700,9 +699,11 @@ where
             )
             .await?;
 
-        if plan_builder.mask_preferred()
-            && !should_force_selectors(plan_builder.selection(), &projection, offset_index)
-        {
+        let force_selectors = plan_builder.selection().map_or(false, |selection| {
+            selection.should_force_selectors(&projection, offset_index)
+        });
+
+        if plan_builder.mask_preferred() && !force_selectors {
             plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
         }
 
