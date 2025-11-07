@@ -387,8 +387,6 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
-    // TODO: page header could be huge because of statistics. We should set a
-    // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
@@ -398,6 +396,8 @@ pub(crate) fn decode_page(
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer[..offset]);
+            // decompressed size of zero corresponds to a page with no non-null values
+            // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
             if decompressed_size > 0 {
                 let compressed = &buffer[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
@@ -2695,5 +2695,32 @@ mod tests {
                 metadata.row_group(i).column(0).data_page_offset()
             );
         }
+    }
+
+    #[test]
+    fn test_read_unknown_logical_type() {
+        let file = get_test_file("unknown-logical-type.parquet");
+        let reader = SerializedFileReader::new(file).expect("Error opening file");
+
+        let schema = reader.metadata().file_metadata().schema_descr();
+        assert_eq!(
+            schema.column(0).logical_type(),
+            Some(basic::LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type(),
+            Some(basic::LogicalType::_Unknown { field_id: 2555 })
+        );
+        assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
+
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut num_rows = 0;
+        while iter.next().is_some() {
+            num_rows += 1;
+        }
+        assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
     }
 }

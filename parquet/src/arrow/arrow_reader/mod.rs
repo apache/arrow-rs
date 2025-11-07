@@ -1289,7 +1289,7 @@ mod tests {
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
-    use crate::basic::{ConvertedType, Encoding, Repetition, Type as PhysicalType};
+    use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
     use crate::data_type::{
         BoolType, ByteArray, ByteArrayType, DataType, FixedLenByteArray, FixedLenByteArrayType,
@@ -5294,5 +5294,28 @@ mod tests {
             .unwrap();
         assert!(sbbf.check(&"Hello"));
         assert!(!sbbf.check(&"Hello_Not_Exists"));
+    }
+
+    #[test]
+    fn test_read_unknown_logical_type() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/unknown-logical-type.parquet");
+        let test_file = File::open(path).unwrap();
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(test_file)
+            .expect("Error creating reader builder");
+
+        let schema = builder.metadata().file_metadata().schema_descr();
+        assert_eq!(schema.column(0).logical_type(), Some(LogicalType::String));
+        assert_eq!(
+            schema.column(1).logical_type(),
+            Some(LogicalType::_Unknown { field_id: 2555 })
+        );
+        assert_eq!(schema.column(1).physical_type(), PhysicalType::BYTE_ARRAY);
+
+        let mut reader = builder.build().unwrap();
+        let out = reader.next().unwrap().unwrap();
+        assert_eq!(out.num_rows(), 3);
+        assert_eq!(out.num_columns(), 2);
     }
 }

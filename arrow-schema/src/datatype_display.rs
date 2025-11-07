@@ -22,11 +22,7 @@ use crate::DataType;
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn format_metadata(metadata: &HashMap<String, String>) -> String {
-            if metadata.is_empty() {
-                String::new()
-            } else {
-                format!(", metadata: {metadata:?}")
-            }
+            format!("{}", FormatMetadata(metadata))
         }
 
         fn format_field(field: &crate::Field) -> String {
@@ -139,8 +135,9 @@ impl fmt::Display for DataType {
                 Ok(())
             }
             Self::Union(union_fields, union_mode) => {
-                write!(f, "Union({union_mode:?}, ")?;
+                write!(f, "Union({union_mode:?}")?;
                 if !union_fields.is_empty() {
+                    write!(f, ", ")?;
                     let fields_str = union_fields
                         .iter()
                         .map(|v| {
@@ -178,6 +175,23 @@ impl fmt::Display for DataType {
                 write!(f, "{run_ends_str}, {values_str})")?;
                 Ok(())
             }
+        }
+    }
+}
+
+/// Adapter to format a metadata HashMap consistently.
+struct FormatMetadata<'a>(&'a HashMap<String, String>);
+
+impl fmt::Display for FormatMetadata<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let metadata = self.0;
+        if metadata.is_empty() {
+            Ok(())
+        } else {
+            let mut entries: Vec<(&String, &String)> = metadata.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            write!(f, ", metadata: ")?;
+            f.debug_map().entries(entries).finish()
         }
     }
 }
@@ -361,14 +375,16 @@ mod tests {
 
         // Test with metadata
         let mut field_with_metadata = Field::new("b", DataType::Utf8, true);
-        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let metadata = HashMap::from([
+            ("key".to_string(), "value".to_string()),
+            ("key2".to_string(), "value2".to_string()),
+        ]);
         field_with_metadata.set_metadata(metadata);
         let struct_fields_with_metadata =
             vec![Field::new("a", DataType::Int32, false), field_with_metadata];
         let struct_data_type_with_metadata = DataType::Struct(struct_fields_with_metadata.into());
         let struct_data_type_with_metadata_string = struct_data_type_with_metadata.to_string();
-        let expected_string_with_metadata =
-            "Struct(\"a\": Int32, \"b\": nullable Utf8, metadata: {\"key\": \"value\"})";
+        let expected_string_with_metadata = "Struct(\"a\": Int32, \"b\": nullable Utf8, metadata: {\"key\": \"value\", \"key2\": \"value2\"})";
         assert_eq!(
             struct_data_type_with_metadata_string,
             expected_string_with_metadata
