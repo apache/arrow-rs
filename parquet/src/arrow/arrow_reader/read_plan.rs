@@ -26,8 +26,30 @@ use crate::arrow::arrow_reader::{
 use crate::errors::{ParquetError, Result};
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 const AVG_SELECTOR_LEN_MASK_THRESHOLD: usize = 32;
+
+// The logic in `preferred_selection_strategy` depends on the constant
+// `AVG_SELECTOR_LEN_MASK_THRESHOLD`. To allow unit testing of this logic,
+// we use a mutable global variable that can be temporarily changed during tests.
+//
+// An `AtomicUsize` is used because the Rust test runner (`cargo test`) runs tests
+// in parallel by default. The atomic operations prevent data races between
+// different test threads that might try to modify this value simultaneously.
+//
+// For the production code path, `load(Ordering::Relaxed)` is used. This is the
+// weakest memory ordering and for a simple load on most modern architectures,
+// it compiles down to a regular memory read with negligible performance overhead.
+// The more expensive atomic operations with stronger ordering are only used in the
+// test-only functions below.
+static AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE: AtomicUsize =
+    AtomicUsize::new(AVG_SELECTOR_LEN_MASK_THRESHOLD);
+
+#[inline(always)]
+fn avg_selector_len_mask_threshold() -> usize {
+    AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.load(Ordering::Relaxed)
+}
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -105,7 +127,7 @@ impl ReadPlanBuilder {
 
         let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
         let selector_count = selectors.len();
-        if total_rows < selector_count.saturating_mul(AVG_SELECTOR_LEN_MASK_THRESHOLD) {
+        if total_rows < selector_count.saturating_mul(avg_selector_len_mask_threshold()) {
             RowSelectionStrategy::Mask
         } else {
             RowSelectionStrategy::Selectors
@@ -285,5 +307,61 @@ impl ReadPlan {
     #[inline(always)]
     pub fn batch_size(&self) -> usize {
         self.batch_size
+    }
+}
+
+/// An RAII guard that restores the previous value of the override when it is dropped.
+/// This ensures that any change to the global threshold is temporary and scoped to
+/// the test or benchmark where it's used, even in the case of a panic.
+#[cfg(test)]
+pub struct AvgSelectorLenMaskThresholdGuard {
+    previous: usize,
+}
+
+#[cfg(test)]
+impl Drop for AvgSelectorLenMaskThresholdGuard {
+    fn drop(&mut self) {
+        AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.store(self.previous, Ordering::SeqCst);
+    }
+}
+
+/// Override [`AVG_SELECTOR_LEN_MASK_THRESHOLD`] for tests and benchmarks.
+///
+/// Returns an [`AvgSelectorLenMaskThresholdGuard`] that restores the previous value on drop.
+#[cfg(test)]
+pub fn set_avg_selector_len_mask_threshold_for_test(
+    value: usize,
+) -> AvgSelectorLenMaskThresholdGuard {
+    let previous = AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.swap(value, Ordering::SeqCst);
+    AvgSelectorLenMaskThresholdGuard { previous }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn builder_with_selection(selection: RowSelection) -> ReadPlanBuilder {
+        ReadPlanBuilder::new(1024).with_selection(Some(selection))
+    }
+
+    #[test]
+    fn preferred_selection_strategy_prefers_mask_by_default() {
+        let selection = RowSelection::from(vec![RowSelector::select(8)]);
+        let builder = builder_with_selection(selection);
+        assert_eq!(
+            builder.preferred_selection_strategy(),
+            RowSelectionStrategy::Mask
+        );
+    }
+
+    #[test]
+    fn preferred_selection_strategy_prefers_selectors_when_threshold_small() {
+        let _guard = set_avg_selector_len_mask_threshold_for_test(1);
+        let selection = RowSelection::from(vec![RowSelector::select(8)]);
+        let builder = builder_with_selection(selection);
+        assert_eq!(
+            builder.preferred_selection_strategy(),
+            RowSelectionStrategy::Selectors
+        );
     }
 }

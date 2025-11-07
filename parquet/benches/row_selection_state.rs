@@ -24,16 +24,20 @@ use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::{ParquetRecordBatchReaderBuilder, RowSelection, RowSelector};
+use parquet::arrow::arrow_reader::{
+    AvgSelectorLenMaskThresholdGuard, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
+    set_avg_selector_len_mask_threshold_for_test,
+};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
 const TOTAL_ROWS: usize = 1 << 20;
 const BATCH_SIZE: usize = 1 << 10;
 const BASE_SEED: u64 = 0xA55AA55A;
-const BENCH_LABEL: &str = "read_auto";
 const AVG_SELECTOR_LENGTHS: &[usize] = &[4, 8, 12, 16, 20, 24, 28, 32, 36, 40];
 const COLUMN_WIDTHS: &[usize] = &[2, 4, 8, 16, 32];
+const UTF8VIEW_LENS: &[usize] = &[4, 8, 16, 32, 64, 128, 256];
+const BENCH_MODES: &[BenchMode] = &[BenchMode::ReadSelector, BenchMode::ReadMask];
 
 struct DataProfile {
     name: &'static str,
@@ -56,39 +60,27 @@ const DATA_PROFILES: &[DataProfile] = &[
 ];
 
 fn criterion_benchmark(c: &mut Criterion) {
-    /* uniform50 (50% selected, constant run lengths, starts with skip)
-    ```text
-    ┌───────────────┐
-    │               │  skip
-    │               │
-    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│  select
-    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    │               │  skip
-    │               │
-    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│  select
-    │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
-    │      ...      │
-    └───────────────┘
-    ``` */
-    let default_scenario = Scenario {
-        name: "uniform50",
-        select_ratio: 0.5,
-        start_with_select: false,
-        distribution: RunDistribution::Constant,
-    };
-
-    let default_parquet = build_parquet_data(TOTAL_ROWS, build_int32_batch);
-    bench_over_lengths(
-        c,
-        "len",
-        "default",
-        &default_parquet,
-        &default_scenario,
-        BASE_SEED,
-    );
-
-    // Additional scenarios reuse the same data/type defaults but change row selection shapes.
     let scenarios = [
+        /* uniform50 (50% selected, constant run lengths, starts with skip)
+        ```text
+        ┌───────────────┐
+        │               │  skip
+        │               │
+        │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│  select
+        │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+        │               │  skip
+        │               │
+        │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│  select
+        │▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+        │      ...      │
+        └───────────────┘
+        ``` */
+        Scenario {
+            name: "uniform50",
+            select_ratio: 0.5,
+            start_with_select: false,
+            distribution: RunDistribution::Constant,
+        },
         /* spread50 (50% selected, large jitter in run lengths, starts with skip)
         ```text
         ┌───────────────┐
@@ -157,14 +149,20 @@ fn criterion_benchmark(c: &mut Criterion) {
         },
     ];
 
+    let base_parquet = build_parquet_data(TOTAL_ROWS, build_int32_batch);
+    let base_scenario = &scenarios[0];
+
     for (idx, scenario) in scenarios.iter().enumerate() {
+        // The first scenario is a special case for backwards compatibility with
+        // existing benchmark result formats.
+        let suite = if idx == 0 { "len" } else { "scenario" };
         bench_over_lengths(
             c,
-            "scenario",
+            suite,
             scenario.name,
-            &default_parquet,
+            &base_parquet,
             scenario,
-            BASE_SEED ^ ((idx as u64 + 1) << 16),
+            BASE_SEED ^ ((idx as u64) << 16),
         );
     }
 
@@ -175,7 +173,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             "dtype",
             profile.name,
             &parquet_data,
-            &default_scenario,
+            base_scenario,
             BASE_SEED ^ ((profile_idx as u64) << 24),
         );
     }
@@ -188,8 +186,22 @@ fn criterion_benchmark(c: &mut Criterion) {
             "columns",
             &variant_label,
             &parquet_data,
-            &default_scenario,
+            base_scenario,
             BASE_SEED ^ ((offset as u64) << 32),
+        );
+    }
+
+    for (offset, &len) in UTF8VIEW_LENS.iter().enumerate() {
+        let batch = build_utf8view_batch_with_len(TOTAL_ROWS, len);
+        let parquet_data = write_parquet_batch(batch);
+        let variant_label = format!("utf8view-L{:03}", len);
+        bench_over_lengths(
+            c,
+            "utf8view-len",
+            &variant_label,
+            &parquet_data,
+            base_scenario,
+            BASE_SEED ^ ((offset as u64) << 40),
         );
     }
 }
@@ -222,16 +234,20 @@ fn bench_over_lengths(
             selection,
         };
 
-        c.bench_with_input(
-            BenchmarkId::new(BENCH_LABEL, &suffix),
-            &bench_input,
-            |b, input| {
-                b.iter(|| {
-                    let total = run_read(&input.parquet_data, &input.selection);
-                    hint::black_box(total);
-                });
-            },
-        );
+        for &mode in BENCH_MODES {
+            c.bench_with_input(
+                BenchmarkId::new(mode.label(), &suffix),
+                &bench_input,
+                |b, input| {
+                    let _guard = mode.override_threshold();
+                    b.iter(|| {
+                        let total = run_read(&input.parquet_data, &input.selection);
+                        hint::black_box(total);
+                    });
+                    drop(_guard);
+                },
+            );
+        }
     }
 }
 
@@ -290,6 +306,16 @@ fn build_utf8view_batch(total_rows: usize) -> RecordBatch {
             3 => builder.append_value("delta"),
             _ => builder.append_value("a longer utf8 string payload to test view storage"),
         }
+    }
+    let values: StringViewArray = builder.finish();
+    build_single_column_batch(DataType::Utf8View, Arc::new(values) as ArrayRef)
+}
+
+fn build_utf8view_batch_with_len(total_rows: usize, len: usize) -> RecordBatch {
+    let mut builder = StringViewBuilder::new();
+    let value: String = std::iter::repeat('a').take(len).collect();
+    for _ in 0..total_rows {
+        builder.append_value(&value);
     }
     let values: StringViewArray = builder.finish();
     build_single_column_batch(DataType::Utf8View, Arc::new(values) as ArrayRef)
@@ -418,6 +444,28 @@ fn sample_length(mean: f64, distribution: &RunDistribution, rng: &mut StdRng) ->
                 short_factor.max(0.1)
             };
             (mean * factor).round().max(1.0) as usize
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum BenchMode {
+    ReadSelector,
+    ReadMask,
+}
+
+impl BenchMode {
+    fn label(self) -> &'static str {
+        match self {
+            BenchMode::ReadSelector => "read_selector",
+            BenchMode::ReadMask => "read_mask",
+        }
+    }
+
+    fn override_threshold(self) -> Option<AvgSelectorLenMaskThresholdGuard> {
+        match self {
+            BenchMode::ReadSelector => Some(set_avg_selector_len_mask_threshold_for_test(0)),
+            BenchMode::ReadMask => Some(set_avg_selector_len_mask_threshold_for_test(usize::MAX)),
         }
     }
 }
