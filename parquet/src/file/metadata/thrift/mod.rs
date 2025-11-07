@@ -726,8 +726,30 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 let schema_descr = schema_descr.as_ref().unwrap();
                 let list_ident = prot.read_list_begin()?;
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
-                for _ in 0..list_ident.size {
-                    rg_vec.push(read_row_group(&mut prot, schema_descr)?);
+
+                // Read row groups and handle ordinal assignment
+                let mut first_has_ordinal = false;
+                for ordinal in 0..list_ident.size {
+                    let mut rg = read_row_group(&mut prot, schema_descr)?;
+
+                    // Check first row group to determine ordinal strategy
+                    let rg_has_ordinal = rg.ordinal.is_some();
+                    if ordinal == 0 {
+                        first_has_ordinal = rg_has_ordinal;
+                    }
+
+                    if !first_has_ordinal && !rg_has_ordinal {
+                        rg.ordinal = Some(ordinal as i16);
+                    } else if first_has_ordinal != rg_has_ordinal {
+                        return Err(general_err!(
+                            "Inconsistent ordinal assignment: first_has_ordinal is set to {} but first_has_ordinal for row-group {} is set to{}",
+                            first_has_ordinal,
+                            ordinal,
+                            rg_has_ordinal
+                        ));
+                    }
+
+                    rg_vec.push(rg);
                 }
                 row_groups = Some(rg_vec);
             }

@@ -507,29 +507,7 @@ mod tests {
 
     #[test]
     fn test_create_array_reader_with_row_numbers() {
-        use tempfile::tempfile;
-        use crate::arrow::ArrowWriter;
-        use crate::file::serialized_reader::SerializedFileReader;
-        use arrow_array::{ArrayRef, Int32Array};
-        use std::sync::Arc;
-
-        // Create a simple test file with just an int column
-        let schema = Arc::new(arrow_schema::Schema::new(vec![
-            arrow_schema::Field::new("value", DataType::Int32, false),
-        ]));
-
-        let batch = arrow_array::RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
-        ).unwrap();
-
-        // Write to a temp file
-        let file = tempfile().unwrap();
-        let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), schema, None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Now read it back
+        let file = get_test_file("nulls.snappy.parquet");
         let file_reader: Arc<dyn FileReader> = Arc::new(SerializedFileReader::new(file).unwrap());
 
         let file_metadata = file_reader.metadata().file_metadata();
@@ -551,7 +529,11 @@ mod tests {
 
         // Create arrow types
         let arrow_type = DataType::Struct(Fields::from(vec![
-            Field::new("value", DataType::Int32, false),
+            Field::new(
+                "b_struct",
+                DataType::Struct(vec![Field::new("b_c_int", DataType::Int32, true)].into()),
+                true,
+            ),
             (*row_number_field).clone(),
         ]));
 

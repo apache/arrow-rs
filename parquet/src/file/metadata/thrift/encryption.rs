@@ -293,10 +293,33 @@ pub(crate) fn parquet_metadata_with_encryption(
         file_decryptor = Some(file_decryptor_value);
     }
 
-    // decrypt column chunk info
+    // decrypt column chunk info and handle ordinal assignment
+    let mut first_has_ordinal = false;
     let row_groups = row_groups
         .into_iter()
-        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref()))
+        .enumerate()
+        .map(|(ordinal, rg)| {
+            let mut rg = row_group_from_encrypted_thrift(rg, file_decryptor.as_ref())?;
+
+            // Check first row group to determine ordinal strategy
+            let rg_has_ordinal = rg.ordinal.is_some();
+            if ordinal == 0 {
+                first_has_ordinal = rg_has_ordinal;
+            }
+
+            if !first_has_ordinal && !rg_has_ordinal {
+                rg.ordinal = Some(ordinal as i16);
+            } else if first_has_ordinal != rg_has_ordinal {
+                return Err(general_err!(
+                    "Inconsistent ordinal assignment: first_has_ordinal is set to {} but first_has_ordinal for row-group {} is set to{}",
+                    first_has_ordinal,
+                    ordinal,
+                    rg_has_ordinal
+                ));
+            }
+
+            Ok(rg)
+        })
         .collect::<Result<Vec<_>>>()?;
 
     let metadata = ParquetMetaDataBuilder::new(file_metadata)
