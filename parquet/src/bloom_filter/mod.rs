@@ -116,7 +116,7 @@ pub struct BloomFilterHeader {
 
 /// Each block is 256 bits, broken up into eight contiguous "words", each consisting of 32 bits.
 /// Each word is thought of as an array of bits; each bit is either "set" or "not set".
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(transparent)]
 struct Block([u32; 8]);
 impl Block {
@@ -195,7 +195,7 @@ impl std::ops::IndexMut<usize> for Block {
 ///
 /// The creation of this structure is based on the [`crate::file::properties::BloomFilterProperties`]
 /// struct set via [`crate::file::properties::WriterProperties`] and is thus hidden by default.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sbbf(Vec<Block>);
 
 pub(crate) const SBBF_HEADER_SIZE_ESTIMATE: usize = 20;
@@ -245,6 +245,42 @@ fn num_of_bits_from_ndv_fpp(ndv: u64, fpp: f64) -> usize {
 
 impl Sbbf {
     /// Create a new [Sbbf] from raw bitset bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use parquet::errors::Result;
+    /// # use parquet::bloom_filter::Sbbf;
+    /// # fn main() -> Result<()> {
+    /// // In a real application you would read a serialized bloom filter from a Parquet file.
+    /// // For example, using ParquetRecordBatchStreamBuilder:
+    /// //
+    /// // let file = std::fs::File::open("data.parquet")?;
+    /// // let reader = ParquetRecordBatchStreamBuilder::new(file).await?;
+    /// // let bloom_filter = reader
+    /// //     .get_row_group_column_bloom_filter(row_group_index, column_index)
+    /// //     .await?;
+    /// //
+    /// // For this example we handcraft a 32-byte bitset.
+    /// let bitset_bytes = vec![0u8; 32];
+    /// let original = Sbbf::new(&bitset_bytes);
+    ///
+    /// // Persist the filter (header + bitset) into an in-memory buffer.
+    /// let mut serialized = Vec::new();
+    /// original.write(&mut serialized)?;
+    ///
+    /// // When reading the filter back, reuse the bitset portion of the buffer.
+    /// let bitset_slice = &serialized[serialized.len() - bitset_bytes.len()..];
+    /// let reconstructed = Sbbf::new(bitset_slice);
+    ///
+    /// assert_eq!(reconstructed, original);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// A practical way to obtain a correctly sized bitset slice for this constructor is to
+    /// serialize an existing filter with [`Sbbf::write`] and reuse the bitset bytes that follow
+    /// the header.
     pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
             .chunks_exact(4 * 8)
