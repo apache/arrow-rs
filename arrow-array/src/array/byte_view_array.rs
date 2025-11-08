@@ -512,18 +512,36 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             };
         }
 
-        struct GcCopyGroup {
-            total_buffer_bytes: usize,
-            total_len: usize,
-        }
+        let (views_buf, data_blocks) = if total_large < i32::MAX as usize {
+            // fast path, the entire data fits in a single buffer
+            // 3) Allocate exactly capacity for all non-inline data
+            let mut data_buf = Vec::with_capacity(total_large);
 
-        let mut groups = vec![];
-        let one_group = [GcCopyGroup {
-            total_buffer_bytes: total_large,
-            total_len: len,
-        }];
-        let gc_copy_groups = if total_large > i32::MAX as usize {
-            // Slow-path: need to split into multiple copy groups
+            // 4) Iterate over views and process each inline/non-inline view
+            let views_buf: Vec<u128> = (0..len)
+                .map(|i| unsafe { self.copy_view_to_buffer(i, 0, &mut data_buf) })
+                .collect();
+            let data_block = Buffer::from_vec(data_buf);
+            let data_blocks = vec![data_block];
+            (views_buf, data_blocks)
+        } else {
+            // slow path, need to split into multiple buffers
+
+            struct GcCopyGroup {
+                total_buffer_bytes: usize,
+                total_len: usize,
+            }
+
+            impl GcCopyGroup {
+                fn new(total_buffer_bytes: u32, total_len: usize) -> Self {
+                    Self {
+                        total_buffer_bytes: total_buffer_bytes as usize,
+                        total_len,
+                    }
+                }
+            }
+
+            let mut groups = Vec::with_capacity(total_large / (i32::MAX as usize) + 1);
             let mut current_length = 0;
             let mut current_elements = 0;
 
@@ -532,10 +550,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 if len > MAX_INLINE_VIEW_LEN {
                     if current_length + len > i32::MAX as u32 {
                         // Start a new group
-                        groups.push(GcCopyGroup {
-                            total_buffer_bytes: current_length as usize,
-                            total_len: current_elements,
-                        });
+                        groups.push(GcCopyGroup::new(current_length, current_elements));
                         current_length = 0;
                         current_elements = 0;
                     }
@@ -544,38 +559,37 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 }
             }
             if current_elements != 0 {
-                groups.push(GcCopyGroup {
-                    total_buffer_bytes: current_length as usize,
-                    total_len: current_elements,
-                });
+                groups.push(GcCopyGroup::new(current_length, current_elements));
             }
-            &groups
-        } else {
-            one_group.as_slice()
+            debug_assert!(groups.len() <= i32::MAX as usize);
+
+            // 3) Copy the buffers group by group
+            let mut views_buf = Vec::with_capacity(len);
+            let mut data_blocks = Vec::with_capacity(groups.len());
+
+            let mut current_view_idx = 0;
+
+            for (group_idx, gc_copy_group) in groups.iter().enumerate() {
+                let mut data_buf = Vec::with_capacity(gc_copy_group.total_buffer_bytes);
+
+                // Directly push views to avoid intermediate Vec allocation
+                let new_views = (current_view_idx..current_view_idx + gc_copy_group.total_len).map(
+                    |view_idx| {
+                        // safety: the view index came from iterating over valid range
+                        unsafe {
+                            self.copy_view_to_buffer(view_idx, group_idx as i32, &mut data_buf)
+                        }
+                    },
+                );
+                views_buf.extend(new_views);
+
+                data_blocks.push(Buffer::from_vec(data_buf));
+                current_view_idx += gc_copy_group.total_len;
+            }
+            (views_buf, data_blocks)
         };
-        debug_assert!(gc_copy_groups.len() <= i32::MAX as usize);
 
-        // 3) Copy the buffers group by group
-        let mut views_buf = Vec::with_capacity(len);
-        let mut data_blocks = Vec::with_capacity(gc_copy_groups.len());
-
-        let mut current_view_idx = 0;
-
-        for (group_idx, gc_copy_group) in gc_copy_groups.iter().enumerate() {
-            let mut data_buf = Vec::with_capacity(gc_copy_group.total_buffer_bytes);
-
-            // Directly push views to avoid intermediate Vec allocation
-            for view_idx in current_view_idx..current_view_idx + gc_copy_group.total_len {
-                let view =
-                    unsafe { self.copy_view_to_buffer(view_idx, group_idx as i32, &mut data_buf) };
-                views_buf.push(view);
-            }
-
-            data_blocks.push(Buffer::from_vec(data_buf));
-            current_view_idx += gc_copy_group.total_len;
-        }
-
-        // 4) Wrap up buffers
+        // 5) Wrap up buffers
         let views_scalar = ScalarBuffer::from(views_buf);
 
         // SAFETY: views_scalar, data_blocks, and nulls are correctly aligned and sized
