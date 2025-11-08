@@ -802,12 +802,12 @@ impl RowSelectionCursor {
     }
 
     /// Return the next [`RowSelector`] when using the sparse representation
-    pub fn next_selector(&mut self) -> Option<RowSelector> {
+    pub fn next_selector(&mut self) -> RowSelector {
         match &mut self.storage {
             RowSelectionBacking::Selectors(selectors) => {
-                let selector = selectors.pop_front()?;
+                let selector = selectors.pop_front().unwrap();
                 self.position += selector.row_count;
-                Some(selector)
+                selector
             }
             RowSelectionBacking::Mask(_) => {
                 unreachable!("next_selector called for mask-based RowSelectionCursor")

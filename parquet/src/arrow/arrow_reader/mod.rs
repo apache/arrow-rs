@@ -1117,7 +1117,7 @@ impl ParquetRecordBatchReader {
                     }
                 }
                 while read_records < batch_size && !selection_cursor.is_empty() {
-                    let front = selection_cursor.next_selector().unwrap();
+                    let front = selection_cursor.next_selector();
                     if front.skip {
                         let skipped = self.array_reader.skip_records(front.row_count)?;
 
