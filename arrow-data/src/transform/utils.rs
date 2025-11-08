@@ -61,9 +61,7 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
     *unsafe { offsets.get_unchecked(offsets.len() - 1) }
 }
 
-fn iter_in_bytes_variable_sized<'a, T: ArrowNativeType + Integer>(
-    data: &'a ArrayData,
-) -> Vec<&'a [u8]> {
+fn iter_in_bytes_variable_sized<T: ArrowNativeType + Integer>(data: &ArrayData) -> Vec<&[u8]> {
     let offsets = data.buffer::<T>(0);
 
     // the offsets of the `ArrayData` are ignored as they are only applied to the offset buffer.
@@ -77,7 +75,7 @@ fn iter_in_bytes_variable_sized<'a, T: ArrowNativeType + Integer>(
         .collect::<Vec<_>>()
 }
 
-fn iter_in_bytes_fixed_sized<'a>(data: &'a ArrayData, size: usize) -> Vec<&'a [u8]> {
+fn iter_in_bytes_fixed_sized(data: &ArrayData, size: usize) -> Vec<&[u8]> {
     let values = &data.buffers()[0].as_slice()[data.offset() * size..];
     values.chunks(size).collect::<Vec<_>>()
 }

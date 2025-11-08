@@ -37,7 +37,7 @@ fn merge_dictionaries_casted<'a, K: ArrowNativeType>(
         .iter()
         .enumerate()
         .map(|(dict_idx, dict)| {
-            let value_data = dict.child_data().get(0).unwrap();
+            let value_data = dict.child_data().first().unwrap();
             let old_keys = dict.buffer::<K>(0);
             data_refs.push(value_data);
             let mut new_keys = vec![K::usize_as(0); old_keys.len()];
