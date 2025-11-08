@@ -669,9 +669,8 @@ impl<'a> MutableArrayData<'a> {
                         if dict_concat {
                             next_offset += dict_len;
                         }
-                        // offset is 0
-                        // dict len is 256
-                        // max offset is 255
+
+                        // -1 since offset is exclusive 
                         build_extend_dictionary(array, offset, 1.max(offset + dict_len) - 1)
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
