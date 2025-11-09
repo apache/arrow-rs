@@ -245,6 +245,9 @@ impl FilterBuilder {
 
     /// Determines if calling [FilterBuilder::optimize] is beneficial for the given type even when
     /// filtering just a single array.
+    ///
+    /// Optimizaton will be beneficial if there is more than one child array 
+    /// (e.g. a StructArray with multiple fields)
     pub fn is_optimize_beneficial(data_type: &DataType) -> bool {
         match data_type {
             DataType::Struct(fields) => {
