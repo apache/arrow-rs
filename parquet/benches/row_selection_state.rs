@@ -25,8 +25,7 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
-    AvgSelectorLenMaskThresholdGuard, ParquetRecordBatchReaderBuilder, RowSelection, RowSelector,
-    set_avg_selector_len_mask_threshold,
+    ParquetRecordBatchReaderBuilder, RowSelection, RowSelectionStrategy, RowSelector,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -239,12 +238,11 @@ fn bench_over_lengths(
                 BenchmarkId::new(mode.label(), &suffix),
                 &bench_input,
                 |b, input| {
-                    let _guard = mode.override_threshold();
                     b.iter(|| {
-                        let total = run_read(&input.parquet_data, &input.selection);
+                        let total =
+                            run_read(&input.parquet_data, &input.selection, mode.strategy());
                         hint::black_box(total);
                     });
-                    drop(_guard);
                 },
             );
         }
@@ -259,11 +257,16 @@ struct BenchInput {
     selection: RowSelection,
 }
 
-fn run_read(parquet_data: &Bytes, selection: &RowSelection) -> usize {
+fn run_read(
+    parquet_data: &Bytes,
+    selection: &RowSelection,
+    strategy: RowSelectionStrategy,
+) -> usize {
     let reader = ParquetRecordBatchReaderBuilder::try_new(parquet_data.clone())
         .unwrap()
         .with_batch_size(BATCH_SIZE)
         .with_row_selection(selection.clone())
+        .with_row_selection_strategy(strategy)
         .build()
         .unwrap();
 
@@ -462,10 +465,10 @@ impl BenchMode {
         }
     }
 
-    fn override_threshold(self) -> Option<AvgSelectorLenMaskThresholdGuard> {
+    fn strategy(self) -> RowSelectionStrategy {
         match self {
-            BenchMode::ReadSelector => Some(set_avg_selector_len_mask_threshold(0)),
-            BenchMode::ReadMask => Some(set_avg_selector_len_mask_threshold(usize::MAX)),
+            BenchMode::ReadSelector => RowSelectionStrategy::Selectors,
+            BenchMode::ReadMask => RowSelectionStrategy::Mask,
         }
     }
 }

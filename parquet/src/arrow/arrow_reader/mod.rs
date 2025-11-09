@@ -44,10 +44,7 @@ use crate::schema::types::SchemaDescriptor;
 
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 // Exposed so integration tests and benchmarks can temporarily override the threshold.
-pub use read_plan::{
-    AvgSelectorLenMaskThresholdGuard, ReadPlan, ReadPlanBuilder,
-    set_avg_selector_len_mask_threshold,
-};
+pub use read_plan::{ReadPlan, ReadPlanBuilder};
 
 mod filter;
 pub mod metrics;
@@ -121,6 +118,8 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) selection: Option<RowSelection>,
 
+    pub(crate) selection_strategy: RowSelectionStrategy,
+
     pub(crate) limit: Option<usize>,
 
     pub(crate) offset: Option<usize>,
@@ -142,6 +141,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("projection", &self.projection)
             .field("filter", &self.filter)
             .field("selection", &self.selection)
+            .field("selection_strategy", &self.selection_strategy)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
@@ -161,6 +161,7 @@ impl<T> ArrowReaderBuilder<T> {
             projection: ProjectionMask::all(),
             filter: None,
             selection: None,
+            selection_strategy: RowSelectionStrategy::default(),
             limit: None,
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
@@ -205,6 +206,14 @@ impl<T> ArrowReaderBuilder<T> {
     pub fn with_projection(self, mask: ProjectionMask) -> Self {
         Self {
             projection: mask,
+            ..self
+        }
+    }
+
+    /// Configure how row selections should be materialised during execution
+    pub fn with_row_selection_strategy(self, strategy: RowSelectionStrategy) -> Self {
+        Self {
+            selection_strategy: strategy,
             ..self
         }
     }
@@ -860,16 +869,19 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     ///
     /// Note: this will eagerly evaluate any `RowFilter` before returning
     pub fn build(self) -> Result<ParquetRecordBatchReader> {
+        let selection_strategy = self.selection_strategy;
+
         let Self {
             input,
             metadata,
             schema: _,
             fields,
-            batch_size: _,
+            batch_size,
             row_groups,
             projection,
             mut filter,
             selection,
+            selection_strategy: _,
             limit,
             offset,
             metrics,
@@ -878,9 +890,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         } = self;
 
         // Try to avoid allocate large buffer
-        let batch_size = self
-            .batch_size
-            .min(metadata.file_metadata().num_rows() as usize);
+        let batch_size = batch_size.min(metadata.file_metadata().num_rows() as usize);
 
         let row_groups = row_groups.unwrap_or_else(|| (0..metadata.num_row_groups()).collect());
 
@@ -890,7 +900,9 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             row_groups,
         };
 
-        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
+        let mut plan_builder = ReadPlanBuilder::new(batch_size)
+            .with_selection(selection)
+            .with_selection_strategy(selection_strategy);
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {

@@ -26,13 +26,28 @@ use crate::arrow::ProjectionMask;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
 /// Strategy for materialising [`RowSelection`] during execution.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RowSelectionStrategy {
     /// Use a queue of [`RowSelector`] values
-    #[default]
     Selectors,
     /// Use a boolean mask to materialise the selection
     Mask,
+    /// Choose between [`Self::Mask`] and [`Self::Selectors`] based on selector density
+    Auto {
+        /// Average selector length below which masks are preferred
+        threshold: usize,
+        /// Fallback to selectors when mask would be unsafe (e.g. page skipping)
+        safe_strategy: bool,
+    },
+}
+
+impl Default for RowSelectionStrategy {
+    fn default() -> Self {
+        Self::Auto {
+            threshold: 32,
+            safe_strategy: true,
+        }
+    }
 }
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when
@@ -780,6 +795,9 @@ impl RowSelectionCursor {
                 RowSelectionBacking::Mask(boolean_mask_from_selectors(&selectors))
             }
             RowSelectionStrategy::Selectors => RowSelectionBacking::Selectors(selectors.into()),
+            RowSelectionStrategy::Auto { .. } => {
+                panic!("RowSelectionStrategy::Auto must be resolved before creating cursor")
+            }
         };
 
         Self {

@@ -508,6 +508,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             filter: self.filter,
             metadata: self.metadata.clone(),
             fields: self.fields,
+            selection_strategy: self.selection_strategy,
             limit: self.limit,
             offset: self.offset,
             metrics: self.metrics,
@@ -556,6 +557,9 @@ struct ReaderFactory<T> {
 
     /// Optional filter
     filter: Option<RowFilter>,
+
+    /// Strategy used to materialise row selections
+    selection_strategy: RowSelectionStrategy,
 
     /// Limit to apply to remaining row groups.  
     limit: Option<usize>,
@@ -620,7 +624,9 @@ where
         let cache_options_builder = CacheOptionsBuilder::new(&cache_projection, &row_group_cache);
 
         let filter = self.filter.as_mut();
-        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
+        let mut plan_builder = ReadPlanBuilder::new(batch_size)
+            .with_selection(selection)
+            .with_selection_strategy(self.selection_strategy);
 
         // Update selection based on any filters
         if let Some(filter) = filter {
@@ -700,17 +706,24 @@ where
             .await?;
 
         // Determine the row selection strategy to use
+        let allow_safe_fallback = plan_builder.selection_strategy_allows_safe_fallback();
         let preferred_strategy = plan_builder.preferred_selection_strategy();
-        if preferred_strategy == RowSelectionStrategy::Mask {
-            // If the plan builder prefers mask for better performance, but the there's some limits(e.g. the skipped pages)
+        let resolved_strategy = if preferred_strategy == RowSelectionStrategy::Mask {
+            // If the plan builder prefers mask for better performance, but there's some limits (e.g. skipped pages)
             // that prevent it from using mask, we need to check again here.
-            let force_selectors = plan_builder.selection().is_some_and(|selection| {
-                selection.should_force_selectors(&projection, offset_index)
-            });
-            if !force_selectors {
-                plan_builder = plan_builder.with_selection_strategy(RowSelectionStrategy::Mask);
+            let force_selectors = allow_safe_fallback
+                && plan_builder.selection().is_some_and(|selection| {
+                    selection.should_force_selectors(&projection, offset_index)
+                });
+            if force_selectors {
+                RowSelectionStrategy::Selectors
+            } else {
+                RowSelectionStrategy::Mask
             }
-        }
+        } else {
+            preferred_strategy
+        };
+        plan_builder = plan_builder.with_selection_strategy(resolved_strategy);
 
         let plan = plan_builder.build();
 
@@ -1861,6 +1874,7 @@ mod tests {
             fields: fields.map(Arc::new),
             input: async_reader,
             filter: None,
+            selection_strategy: RowSelectionStrategy::default(),
             limit: None,
             offset: None,
             metrics: ArrowReaderMetrics::disabled(),

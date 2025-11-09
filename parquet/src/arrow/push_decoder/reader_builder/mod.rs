@@ -23,7 +23,7 @@ use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection,
+    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionStrategy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -155,6 +155,9 @@ pub(crate) struct RowGroupReaderBuilder {
     /// The metrics collector
     metrics: ArrowReaderMetrics,
 
+    /// Strategy for materialising row selections
+    selection_strategy: RowSelectionStrategy,
+
     /// Current state of the decoder.
     ///
     /// It is taken when processing, and must be put back before returning
@@ -179,6 +182,7 @@ impl RowGroupReaderBuilder {
         metrics: ArrowReaderMetrics,
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
+        selection_strategy: RowSelectionStrategy,
     ) -> Self {
         Self {
             batch_size,
@@ -190,6 +194,7 @@ impl RowGroupReaderBuilder {
             offset,
             metrics,
             max_predicate_cache_size,
+            selection_strategy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -233,7 +238,9 @@ impl RowGroupReaderBuilder {
                 "Internal Error: next_row_group called while still reading a row group. Expected Finished state, got {state:?}"
             )));
         }
-        let plan_builder = ReadPlanBuilder::new(self.batch_size).with_selection(selection);
+        let plan_builder = ReadPlanBuilder::new(self.batch_size)
+            .with_selection(selection)
+            .with_selection_strategy(self.selection_strategy);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -654,6 +661,6 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 192);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
     }
 }

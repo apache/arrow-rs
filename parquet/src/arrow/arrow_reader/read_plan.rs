@@ -26,55 +26,6 @@ use crate::arrow::arrow_reader::{
 use crate::errors::{ParquetError, Result};
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
-// The average selector length threshold for choosing between
-// `RowSelectionStrategy::Mask` and `RowSelectionStrategy::Selectors`.
-// If the average selector length is less than this value,
-// `RowSelectionStrategy::Mask` is preferred.
-const AVG_SELECTOR_LEN_MASK_THRESHOLD: usize = 32;
-
-// The logic in `preferred_selection_strategy` depends on the constant
-// `AVG_SELECTOR_LEN_MASK_THRESHOLD`. To allow unit testing of this logic,
-// we use a mutable global variable that can be temporarily changed during tests.
-//
-// An `AtomicUsize` is used because the Rust test runner (`cargo test`) runs tests
-// in parallel by default. The atomic operations prevent data races between
-// different test threads that might try to modify this value simultaneously.
-//
-// For the production code path, `load(Ordering::Relaxed)` is used. This is the
-// weakest memory ordering and for a simple load on most modern architectures,
-// it compiles down to a regular memory read with negligible performance overhead.
-// The more expensive atomic operations with stronger ordering are only used in the
-// test-only functions below.
-static AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE: AtomicUsize =
-    AtomicUsize::new(AVG_SELECTOR_LEN_MASK_THRESHOLD);
-
-#[inline(always)]
-fn avg_selector_len_mask_threshold() -> usize {
-    AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.load(Ordering::Relaxed)
-}
-
-/// An RAII guard that restores the previous value of the override when it is dropped.
-/// This ensures that any change to the global threshold is temporary and scoped to
-/// the test or benchmark where it's used, even in the case of a panic.
-pub struct AvgSelectorLenMaskThresholdGuard {
-    previous: usize,
-}
-
-impl Drop for AvgSelectorLenMaskThresholdGuard {
-    fn drop(&mut self) {
-        AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.store(self.previous, Ordering::SeqCst);
-    }
-}
-
-/// Override AVG_SELECTOR_LEN_MASK_THRESHOLD (primarily for tests / benchmarks).
-///
-/// Returns an [`AvgSelectorLenMaskThresholdGuard`] that restores the previous value on drop.
-pub fn set_avg_selector_len_mask_threshold(value: usize) -> AvgSelectorLenMaskThresholdGuard {
-    let previous = AVG_SELECTOR_LEN_MASK_THRESHOLD_OVERRIDE.swap(value, Ordering::SeqCst);
-    AvgSelectorLenMaskThresholdGuard { previous }
-}
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -102,7 +53,7 @@ impl ReadPlanBuilder {
         self
     }
 
-    /// Force a specific strategy when materialising the [`RowSelection`]
+    /// Configure the strategy to use when materialising the [`RowSelection`]
     pub fn with_selection_strategy(mut self, strategy: RowSelectionStrategy) -> Self {
         self.selection_strategy = strategy;
         self
@@ -139,24 +90,45 @@ impl ReadPlanBuilder {
 
     /// Returns the preferred [`RowSelectionStrategy`] for materialising the current selection.
     pub fn preferred_selection_strategy(&self) -> RowSelectionStrategy {
-        let selection = match self.selection.as_ref() {
-            Some(selection) => selection,
-            None => return RowSelectionStrategy::Mask,
-        };
+        match self.selection_strategy {
+            RowSelectionStrategy::Selectors => RowSelectionStrategy::Selectors,
+            RowSelectionStrategy::Mask => RowSelectionStrategy::Mask,
+            RowSelectionStrategy::Auto { threshold, .. } => {
+                let selection = match self.selection.as_ref() {
+                    Some(selection) => selection,
+                    None => return RowSelectionStrategy::Mask,
+                };
 
-        let trimmed = selection.clone().trim();
-        let selectors: Vec<RowSelector> = trimmed.into();
-        if selectors.is_empty() {
-            return RowSelectionStrategy::Mask;
-        }
+                let trimmed = selection.clone().trim();
+                let selectors: Vec<RowSelector> = trimmed.into();
+                if selectors.is_empty() {
+                    return RowSelectionStrategy::Mask;
+                }
 
-        let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
-        let selector_count = selectors.len();
-        if total_rows < selector_count.saturating_mul(avg_selector_len_mask_threshold()) {
-            RowSelectionStrategy::Mask
-        } else {
-            RowSelectionStrategy::Selectors
+                let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
+                let selector_count = selectors.len();
+                if selector_count == 0 {
+                    return RowSelectionStrategy::Mask;
+                }
+
+                if total_rows < selector_count.saturating_mul(threshold) {
+                    RowSelectionStrategy::Mask
+                } else {
+                    RowSelectionStrategy::Selectors
+                }
+            }
         }
+    }
+
+    /// Returns `true` if the configured strategy allows falling back to selectors for safety.
+    pub(crate) fn selection_strategy_allows_safe_fallback(&self) -> bool {
+        matches!(
+            self.selection_strategy,
+            RowSelectionStrategy::Auto {
+                safe_strategy: true,
+                ..
+            }
+        )
     }
 
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
@@ -206,7 +178,10 @@ impl ReadPlanBuilder {
         if !self.selects_any() {
             self.selection = Some(RowSelection::from(vec![]));
         }
-        let selection_strategy = self.selection_strategy;
+        let selection_strategy = match self.selection_strategy {
+            RowSelectionStrategy::Auto { .. } => self.preferred_selection_strategy(),
+            strategy => strategy,
+        };
         let Self {
             batch_size,
             selection,
@@ -355,12 +330,44 @@ mod tests {
 
     #[test]
     fn preferred_selection_strategy_prefers_selectors_when_threshold_small() {
-        let _guard = set_avg_selector_len_mask_threshold(1);
         let selection = RowSelection::from(vec![RowSelector::select(8)]);
-        let builder = builder_with_selection(selection);
+        let builder =
+            builder_with_selection(selection).with_selection_strategy(RowSelectionStrategy::Auto {
+                threshold: 1,
+                safe_strategy: true,
+            });
         assert_eq!(
             builder.preferred_selection_strategy(),
             RowSelectionStrategy::Selectors
         );
+    }
+
+    #[test]
+    fn selection_strategy_safe_fallback_detection() {
+        let selection = RowSelection::from(vec![RowSelector::select(8)]);
+
+        let builder_safe = builder_with_selection(selection.clone()).with_selection_strategy(
+            RowSelectionStrategy::Auto {
+                threshold: 32,
+                safe_strategy: true,
+            },
+        );
+        assert!(builder_safe.selection_strategy_allows_safe_fallback());
+
+        let builder_unsafe = builder_with_selection(selection.clone()).with_selection_strategy(
+            RowSelectionStrategy::Auto {
+                threshold: 32,
+                safe_strategy: false,
+            },
+        );
+        assert!(!builder_unsafe.selection_strategy_allows_safe_fallback());
+
+        let builder_mask = builder_with_selection(selection.clone())
+            .with_selection_strategy(RowSelectionStrategy::Mask);
+        assert!(!builder_mask.selection_strategy_allows_safe_fallback());
+
+        let builder_selectors = builder_with_selection(selection)
+            .with_selection_strategy(RowSelectionStrategy::Selectors);
+        assert!(!builder_selectors.selection_strategy_allows_safe_fallback());
     }
 }

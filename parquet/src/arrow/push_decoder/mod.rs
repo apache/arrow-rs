@@ -158,6 +158,7 @@ impl ParquetPushDecoderBuilder {
 
     /// Create a [`ParquetPushDecoder`] with the configured options
     pub fn build(self) -> Result<ParquetPushDecoder, ParquetError> {
+        let selection_strategy = self.selection_strategy;
         let Self {
             input: file_len,
             metadata: parquet_metadata,
@@ -171,6 +172,7 @@ impl ParquetPushDecoderBuilder {
             limit,
             offset,
             metrics,
+            selection_strategy: _,
             max_predicate_cache_size,
         } = self;
 
@@ -191,6 +193,7 @@ impl ParquetPushDecoderBuilder {
             metrics,
             max_predicate_cache_size,
             buffers,
+            selection_strategy,
         );
 
         // Initialize the decoder with the configured options
