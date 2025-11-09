@@ -1019,6 +1019,8 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 /// Typically, either reads from a file or an in memory buffer [`Bytes`]
 ///
 /// Created by [`ParquetRecordBatchReaderBuilder`]
+///
+/// [`Bytes`]: bytes::Bytes
 pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
