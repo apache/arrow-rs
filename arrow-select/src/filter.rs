@@ -131,6 +131,7 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// If multiple arrays (or record batches) need to be filtered using the same predicate array,
 /// consider using [FilterBuilder] to create a single [FilterPredicate] and then
 /// calling [FilterPredicate::filter_record_batch].
+///
 /// In contrast to this function, it is then the responsibility of the caller
 /// to use [FilterBuilder::optimize] if appropriate.
 ///
@@ -226,8 +227,13 @@ impl FilterBuilder {
     /// Compute an optimized representation of the provided `filter` mask that can be
     /// applied to an array more quickly.
     ///
-    /// Note: There is limited benefit to calling this to then filter a single array
-    /// Note: This will likely have a larger memory footprint than the original mask
+    /// When filtering multiple arrays (e.g. a [`RecordBatch`] or a
+    /// [`StructArray`] with multiple fields), optimizing the filter can provide
+    /// significant performance benefits.
+    ///
+    /// However, optimization takes time and can have a larger memory footprint
+    /// than the original mask, so it is often faster to filter a single array,
+    /// without filter optimization.
     pub fn optimize(mut self) -> Self {
         match self.strategy {
             IterationStrategy::SlicesIterator => {
@@ -243,11 +249,10 @@ impl FilterBuilder {
         self
     }
 
-    /// Determines if calling [FilterBuilder::optimize] is beneficial for the given type even when
-    /// filtering just a single array.
+    /// Determines if calling [FilterBuilder::optimize] is beneficial for the
+    /// given type even when filtering just a single array.
     ///
-    /// Optimizaton will be beneficial if there is more than one child array 
-    /// (e.g. a StructArray with multiple fields)
+    /// See [`FilterBuilder::optimize`] for more details.
     pub fn is_optimize_beneficial(data_type: &DataType) -> bool {
         match data_type {
             DataType::Struct(fields) => {
