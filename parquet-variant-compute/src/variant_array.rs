@@ -1172,9 +1172,9 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
         Date32 | Time64(TimeUnit::Microsecond) => borrow!(),
         Date64 | Time32(_) | Time64(_) | Duration(_) | Interval(_) => fail!(),
 
-        // Binary and string are allowed. Force Binary to BinaryView because that's what the parquet
+        // Binary and string are allowed. Force Binary/LargeBinary to BinaryView because that's what the parquet
         // reader returns and what the rest of the variant code expects.
-        Binary => Cow::Owned(DataType::BinaryView),
+        Binary | LargeBinary => Cow::Owned(BinaryView),
         BinaryView | Utf8 | LargeUtf8 | Utf8View => borrow!(),
 
         // UUID maps to 16-byte fixed-size binary; no other width is allowed
@@ -1182,7 +1182,7 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
         FixedSizeBinary(_) | FixedSizeList(..) => fail!(),
 
         // We can _possibly_ allow (some of) these some day?
-        LargeBinary | ListView(_) | LargeList(_) | LargeListView(_) => {
+        ListView(_) | LargeList(_) | LargeListView(_) => {
             fail!()
         }
 
