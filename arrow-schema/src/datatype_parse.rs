@@ -17,7 +17,7 @@
 
 use std::{fmt::Display, iter::Peekable, str::Chars, sync::Arc};
 
-use crate::{ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit};
+use crate::{ArrowError, DataType, Field, Fields, IntervalUnit, TimeUnit, UnionFields, UnionMode};
 
 /// Parses a DataType from a string representation
 ///
@@ -88,6 +88,9 @@ impl<'a> Parser<'a> {
             Token::LargeListView => self.parse_large_list_view(),
             Token::FixedSizeList => self.parse_fixed_size_list(),
             Token::Struct => self.parse_struct(),
+            Token::Union => self.parse_union(),
+            Token::Map => self.parse_map(),
+            Token::RunEndEncoded => self.parse_run_end_encoded(),
             tok => Err(make_error(
                 self.val,
                 &format!("finding next type, got unexpected '{tok}'"),
@@ -95,73 +98,78 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// Parses list field name. Returns default field name if not found.
-    fn parse_list_field_name(&mut self, context: &str) -> ArrowResult<String> {
-        // field must be after a comma
-        if self
+    /// parses Field, this is the inversion of `format_field` in `datatype_display.rs`.
+    /// E.g: "a": nullable Int64
+    ///
+    /// TODO: support metadata: `"a": nullable Int64 metadata: {"foo": "value"}`
+    fn parse_field(&mut self) -> ArrowResult<Field> {
+        let name = self.parse_double_quoted_string("Field")?;
+        self.expect_token(Token::Colon)?;
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+        Ok(Field::new(name, data_type, nullable))
+    }
+
+    /// Parses field inside a list. Use `Field::LIST_FIELD_DEFAULT_NAME`
+    /// if no field name is specified.
+    /// E.g: `nullable Int64, field: 'foo'` or `nullable Int64`
+    ///
+    /// TODO: support metadata: `nullable Int64, metadata: {"foo2": "value"}`
+    fn parse_list_field(&mut self, context: &str) -> ArrowResult<Field> {
+        let nullable = self.parse_opt_nullable();
+        let data_type = self.parse_next_type()?;
+
+        // the field name (if exists) must be after a comma
+        let field_name = if self
             .tokenizer
             .next_if(|next| matches!(next, Ok(Token::Comma)))
             .is_none()
         {
-            return Ok(Field::LIST_FIELD_DEFAULT_NAME.into());
-        }
+            Field::LIST_FIELD_DEFAULT_NAME.into()
+        } else {
+            // expects: `field: 'field_name'`.
+            self.expect_token(Token::Field)?;
+            self.expect_token(Token::Colon)?;
+            self.parse_single_quoted_string(context)?
+        };
 
-        // expects: `field: 'field_name'`.
-        self.expect_token(Token::Field)?;
-        self.expect_token(Token::Colon)?;
-        self.parse_single_quoted_string(context)
+        Ok(Field::new(field_name, data_type, nullable))
     }
 
     /// Parses the List type (called after `List` has been consumed)
     /// E.g: List(nullable Int64, field: 'foo')
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("List")?;
+        let field = self.parse_list_field("List")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::List(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::List(Arc::new(field)))
     }
 
     /// Parses the ListView type (called after `ListView` has been consumed)
     /// E.g: ListView(nullable Int64, field: 'foo')
     fn parse_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("ListView")?;
+        let field = self.parse_list_field("ListView")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::ListView(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::ListView(Arc::new(field)))
     }
 
     /// Parses the LargeList type (called after `LargeList` has been consumed)
     /// E.g: LargeList(nullable Int64, field: 'foo')
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("LargeList")?;
+        let field = self.parse_list_field("LargeList")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::LargeList(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::LargeList(Arc::new(field)))
     }
 
     /// Parses the LargeListView type (called after `LargeListView` has been consumed)
     /// E.g: LargeListView(nullable Int64, field: 'foo')
     fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("LargeListView")?;
+        let field = self.parse_list_field("LargeListView")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::LargeListView(Arc::new(Field::new(
-            field, data_type, nullable,
-        ))))
+        Ok(DataType::LargeListView(Arc::new(field)))
     }
 
     /// Parses the FixedSizeList type (called after `FixedSizeList` has been consumed)
@@ -170,14 +178,9 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let length = self.parse_i32("FixedSizeList")?;
         self.expect_token(Token::X)?;
-        let nullable = self.parse_opt_nullable();
-        let data_type = self.parse_next_type()?;
-        let field = self.parse_list_field_name("FixedSizeList")?;
+        let field = self.parse_list_field("FixedSizeList")?;
         self.expect_token(Token::RParen)?;
-        Ok(DataType::FixedSizeList(
-            Arc::new(Field::new(field, data_type, nullable)),
-            length,
-        ))
+        Ok(DataType::FixedSizeList(Arc::new(field), length))
     }
 
     /// Parses the next timeunit
@@ -413,25 +416,16 @@ impl<'a> Parser<'a> {
         self.expect_token(Token::LParen)?;
         let mut fields = Vec::new();
         loop {
-            // expects:   "field name": [nullable] #datatype
+            if self
+                .tokenizer
+                .next_if(|next| matches!(next, Ok(Token::RParen)))
+                .is_some()
+            {
+                break;
+            }
 
-            let field_name = match self.next_token()? {
-                Token::RParen => {
-                    break;
-                }
-                Token::DoubleQuotedString(field_name) => field_name,
-                tok => {
-                    return Err(make_error(
-                        self.val,
-                        &format!("Expected a double quoted string for a field name; got {tok:?}"),
-                    ));
-                }
-            };
-            self.expect_token(Token::Colon)?;
-
-            let nullable = self.parse_opt_nullable();
-            let field_type = self.parse_next_type()?;
-            fields.push(Arc::new(Field::new(field_name, field_type, nullable)));
+            let field = self.parse_field()?;
+            fields.push(Arc::new(field));
             match self.next_token()? {
                 Token::Comma => continue,
                 Token::RParen => break,
@@ -446,6 +440,90 @@ impl<'a> Parser<'a> {
             }
         }
         Ok(DataType::Struct(Fields::from(fields)))
+    }
+
+    /// Parses the next Union (called after `Union` has been consumed)
+    /// E.g: Union(Sparse, 0: ("a": Int32), 1: ("b": nullable Utf8))
+    fn parse_union(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let union_mode = self.parse_union_mode()?;
+        let mut type_ids = vec![];
+        let mut fields = vec![];
+        loop {
+            if self
+                .tokenizer
+                .next_if(|next| matches!(next, Ok(Token::RParen)))
+                .is_some()
+            {
+                break;
+            }
+            self.expect_token(Token::Comma)?;
+            let (type_id, field) = self.parse_union_field()?;
+            type_ids.push(type_id);
+            fields.push(field);
+        }
+        Ok(DataType::Union(
+            UnionFields::new(type_ids, fields),
+            union_mode,
+        ))
+    }
+
+    /// Parses the next UnionMode
+    fn parse_union_mode(&mut self) -> ArrowResult<UnionMode> {
+        match self.next_token()? {
+            Token::UnionMode(union_mode) => Ok(union_mode),
+            tok => Err(make_error(
+                self.val,
+                &format!("finding UnionMode for Union, got {tok}"),
+            )),
+        }
+    }
+
+    /// Parses the next UnionField
+    /// 0: ("a": nullable Int32)
+    fn parse_union_field(&mut self) -> ArrowResult<(i8, Field)> {
+        let type_id = self.parse_i8("UnionField")?;
+        self.expect_token(Token::Colon)?;
+        self.expect_token(Token::LParen)?;
+        let field = self.parse_field()?;
+        self.expect_token(Token::RParen)?;
+        Ok((type_id, field))
+    }
+
+    /// Parses the next Map (called after `Map` has been consumed)
+    /// E.g: Map("entries": Struct("key": Utf8, "value": nullable Int32), sorted)
+    fn parse_map(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let field = self.parse_field()?;
+        self.expect_token(Token::Comma)?;
+        let sorted = self.parse_map_sorted()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::Map(Arc::new(field), sorted))
+    }
+
+    /// Parses map's sorted
+    fn parse_map_sorted(&mut self) -> ArrowResult<bool> {
+        match self.next_token()? {
+            Token::MapSorted(sorted) => Ok(sorted),
+            tok => Err(make_error(
+                self.val,
+                &format!("Expected sorted or unsorted for a map; got {tok:?}"),
+            )),
+        }
+    }
+
+    /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed)
+    /// E.g: RunEndEncoded("run_ends": UInt32, "values": nullable Int32)
+    fn parse_run_end_encoded(&mut self) -> ArrowResult<DataType> {
+        self.expect_token(Token::LParen)?;
+        let run_ends = self.parse_field()?;
+        self.expect_token(Token::Comma)?;
+        let values = self.parse_field()?;
+        self.expect_token(Token::RParen)?;
+        Ok(DataType::RunEndEncoded(
+            Arc::new(run_ends),
+            Arc::new(values),
+        ))
     }
 
     /// return and consume if the next token is `Token::Nullable`
@@ -485,7 +563,7 @@ enum QuoteType {
 }
 
 #[derive(Debug)]
-/// Splits a strings like Dictionary(Int32, Int64) into tokens sutable for parsing
+/// Splits a strings like Dictionary(Int32, Int64) into tokens suitable for parsing
 ///
 /// For example the string "Timestamp(ns)" would be parsed into:
 ///
@@ -611,6 +689,16 @@ impl<'a> Tokenizer<'a> {
             "x" => Token::X,
 
             "Struct" => Token::Struct,
+
+            "Union" => Token::Union,
+            "Sparse" => Token::UnionMode(UnionMode::Sparse),
+            "Dense" => Token::UnionMode(UnionMode::Dense),
+
+            "Map" => Token::Map,
+            "sorted" => Token::MapSorted(true),
+            "unsorted" => Token::MapSorted(false),
+
+            "RunEndEncoded" => Token::RunEndEncoded,
 
             token => {
                 return Err(make_error(self.val, &format!("unknown token: {token}")));
@@ -752,6 +840,11 @@ enum Token {
     LargeListView,
     FixedSizeList,
     Struct,
+    Union,
+    UnionMode(UnionMode),
+    Map,
+    MapSorted(bool),
+    RunEndEncoded,
     Nullable,
     Field,
     X,
@@ -789,6 +882,13 @@ impl Display for Token {
             Token::DoubleQuotedString(s) => write!(f, "DoubleQuotedString({s})"),
             Token::SingleQuotedString(s) => write!(f, "SingleQuotedString({s})"),
             Token::Struct => write!(f, "Struct"),
+            Token::Union => write!(f, "Union"),
+            Token::UnionMode(m) => write!(f, "{m:?}"),
+            Token::Map => write!(f, "Map"),
+            Token::MapSorted(sorted) => {
+                write!(f, "{}", if *sorted { "sorted" } else { "unsorted" })
+            }
+            Token::RunEndEncoded => write!(f, "RunEndEncoded"),
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
             Token::X => write!(f, "x"),
@@ -930,6 +1030,7 @@ mod test {
                     true,
                 ),
             ])),
+            DataType::Struct(Fields::from(vec![Field::new("f1", DataType::Int64, true)])),
             DataType::Struct(Fields::empty()),
             DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
@@ -982,7 +1083,80 @@ mod test {
                 )),
                 2,
             ),
-            // TODO support more structured types (Union, Map, RunEndEncoded, etc)
+            DataType::Union(
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("Int32", DataType::Int32, false),
+                        Field::new("Utf8", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Sparse,
+            ),
+            DataType::Union(
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new("Int32", DataType::Int32, false),
+                        Field::new("Utf8", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Dense,
+            ),
+            DataType::Union(
+                UnionFields::new(
+                    vec![0, 1],
+                    vec![
+                        Field::new_union(
+                            "nested_union",
+                            vec![0, 1],
+                            vec![
+                                Field::new("Int32", DataType::Int32, false),
+                                Field::new("Utf8", DataType::Utf8, true),
+                            ],
+                            UnionMode::Dense,
+                        ),
+                        Field::new("Utf8", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Sparse,
+            ),
+            DataType::Union(
+                UnionFields::new(vec![0], vec![Field::new("Int32", DataType::Int32, false)]),
+                UnionMode::Dense,
+            ),
+            DataType::Union(
+                UnionFields::new(Vec::<i8>::new(), Vec::<Field>::new()),
+                UnionMode::Sparse,
+            ),
+            DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), true),
+            DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), false),
+            DataType::Map(
+                Arc::new(Field::new_map(
+                    "nested_map",
+                    "entries",
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                    false,
+                    true,
+                )),
+                true,
+            ),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new(
+                    "nested_run_end_encoded",
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new("run_ends", DataType::UInt32, false)),
+                        Arc::new(Field::new("values", DataType::Int32, true)),
+                    ),
+                    true,
+                )),
+                Arc::new(Field::new("values", DataType::Int32, true)),
+            ),
         ]
     }
 

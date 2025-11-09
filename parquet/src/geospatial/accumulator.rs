@@ -33,7 +33,7 @@ pub fn try_new_geo_stats_accumulator(
     descr: &ColumnDescPtr,
 ) -> Option<Box<dyn GeoStatsAccumulator>> {
     if !matches!(
-        descr.logical_type(),
+        descr.logical_type_ref(),
         Some(LogicalType::Geometry { .. }) | Some(LogicalType::Geography { .. })
     ) {
         return None;

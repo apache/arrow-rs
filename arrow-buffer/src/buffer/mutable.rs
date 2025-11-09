@@ -35,15 +35,18 @@ use super::Buffer;
 
 /// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
 ///
-/// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to have its pointer aligned
+/// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to be aligned
 /// along cache lines and in multiple of 64 bytes.
 ///
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
 /// to insert many items, and `into` to convert it to [`Buffer`].
 ///
-/// For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
+/// # See Also
+/// * For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
+/// * To apply bitwise operations, see [`apply_bitwise_binary_op`] and [`apply_bitwise_unary_op`]
 ///
-/// Note: this may be deprecated in a future release ([#1176](https://github.com/apache/arrow-rs/issues/1176))
+/// [`apply_bitwise_binary_op`]: crate::bit_util::apply_bitwise_binary_op
+/// [`apply_bitwise_unary_op`]: crate::bit_util::apply_bitwise_unary_op
 ///
 /// # Example
 ///
@@ -809,6 +812,12 @@ impl std::ops::Deref for MutableBuffer {
 impl std::ops::DerefMut for MutableBuffer {
     fn deref_mut(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.as_mut_ptr(), self.len) }
+    }
+}
+
+impl AsRef<[u8]> for &MutableBuffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 
