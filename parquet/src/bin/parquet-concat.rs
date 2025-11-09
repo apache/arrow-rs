@@ -37,11 +37,12 @@
 //!
 
 use clap::Parser;
+use parquet::bloom_filter::Sbbf;
 use parquet::column::writer::ColumnCloseResult;
 use parquet::errors::{ParquetError, Result};
-use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
-use parquet::file::page_index::column_index::ColumnIndexMetaData;
+use parquet::file::metadata::{ColumnChunkMetaData, PageIndexPolicy, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
+use parquet::file::reader::ChunkReader;
 use parquet::file::writer::SerializedFileWriter;
 use std::fs::File;
 use std::sync::Arc;
@@ -55,6 +56,10 @@ struct Args {
 
     /// Path to input files
     input: Vec<String>,
+}
+
+fn read_bloom_filter<R: ChunkReader>(column: &ColumnChunkMetaData, input: &R) -> Option<Sbbf> {
+    Sbbf::read_from_column_chunk(column, input).ok().flatten()
 }
 
 impl Args {
@@ -103,21 +108,16 @@ impl Args {
                 let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
                 let mut rg_out = writer.next_row_group()?;
                 for (col_idx, column) in rg.columns().iter().enumerate() {
-                    let column_index = rg_column_indexes
-                        .and_then(|row| row.get(col_idx))
-                        .cloned()
-                        .flatten();
+                    let bloom_filter = read_bloom_filter(column, &input);
+                    let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
 
-                    let offset_index = rg_offset_indexes
-                        .and_then(|row| row.get(col_idx))
-                        .cloned()
-                        .flatten();
+                    let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
 
                     let result = ColumnCloseResult {
                         bytes_written: column.compressed_size() as _,
                         rows_written: rg.num_rows() as _,
                         metadata: column.clone(),
-                        bloom_filter: None,
+                        bloom_filter,
                         column_index,
                         offset_index,
                     };
