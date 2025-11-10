@@ -704,14 +704,13 @@ fn overide_selector_strategy_if_needed(
     offset_index: Option<&[OffsetIndexMetaData]>,
 ) -> ReadPlanBuilder {
     // override only applies to Auto policy
-    let RowSelectionPolicy::Auto { safe_strategy, .. } = plan_builder.row_selection_policy() else {
+    let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {
         return plan_builder;
     };
 
     let preferred_strategy = plan_builder.resolve_selection_strategy();
 
-    let force_selectors = *safe_strategy
-        && matches!(preferred_strategy, RowSelectionStrategy::Mask)
+    let force_selectors = matches!(preferred_strategy, RowSelectionStrategy::Mask)
         && plan_builder.selection().is_some_and(|selection| {
             selection.should_force_selectors(projection_mask, offset_index)
         });

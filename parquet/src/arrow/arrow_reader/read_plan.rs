@@ -350,11 +350,8 @@ mod tests {
     #[test]
     fn preferred_selection_strategy_prefers_selectors_when_threshold_small() {
         let selection = RowSelection::from(vec![RowSelector::select(8)]);
-        let builder =
-            builder_with_selection(selection).with_row_selection_policy(RowSelectionPolicy::Auto {
-                threshold: 1,
-                safe_strategy: true,
-            });
+        let builder = builder_with_selection(selection)
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 1 });
         assert_eq!(
             builder.resolve_selection_strategy(),
             RowSelectionStrategy::Selectors

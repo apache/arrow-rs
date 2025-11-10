@@ -39,17 +39,12 @@ pub enum RowSelectionPolicy {
     Auto {
         /// Average selector length below which masks are preferred
         threshold: usize,
-        /// Fallback to selectors when mask would be unsafe (e.g. page skipping)
-        safe_strategy: bool,
     },
 }
 
 impl Default for RowSelectionPolicy {
     fn default() -> Self {
-        Self::Auto {
-            threshold: 32,
-            safe_strategy: true,
-        }
+        Self::Auto { threshold: 32 }
     }
 }
 
