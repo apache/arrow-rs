@@ -29,10 +29,12 @@
 use std::{
     cmp::Ordering,
     io::{Read, Write},
+    ops::Range,
 };
 
 use crate::{
     errors::{ParquetError, Result},
+    file::writer::TrackedWrite,
     write_thrift_field,
 };
 use std::io::Error;
@@ -521,6 +523,12 @@ impl<'a> ThriftSliceInputProtocol<'a> {
     pub fn as_slice(&self) -> &'a [u8] {
         self.buf
     }
+
+    /// Reset the underlying slice.
+    #[allow(dead_code)]
+    pub fn reset(&mut self, buf: &'a [u8]) {
+        self.buf = buf;
+    }
 }
 
 impl<'b, 'a: 'b> ThriftCompactInputProtocol<'b> for ThriftSliceInputProtocol<'a> {
@@ -687,6 +695,47 @@ where
     Ok(res)
 }
 
+/// Collects metadata index information during writes of the Parquet footer
+pub(crate) struct MetadataIndexBuilder {
+    start_offset: usize,
+    pub(crate) schema_range: Range<i64>,
+    pub(crate) row_group_offsets: Vec<i64>,
+    pub(crate) col_chunk_offsets: Vec<i64>,
+    pub(crate) col_meta_lengths: Vec<i64>,
+}
+
+impl MetadataIndexBuilder {
+    pub(crate) fn new(start_offset: usize, num_row_groups: usize, num_columns: usize) -> Self {
+        Self {
+            start_offset,
+            schema_range: Default::default(),
+            row_group_offsets: Vec::with_capacity(num_row_groups + 1),
+            col_chunk_offsets: Vec::with_capacity(num_row_groups * (num_columns + 1)),
+            col_meta_lengths: Vec::with_capacity(num_row_groups * num_columns),
+        }
+    }
+
+    pub(crate) fn set_schema_range(&mut self, start: usize, end: usize) {
+        let start = (start - self.start_offset) as i64;
+        let end = (end - self.start_offset) as i64;
+        self.schema_range = start..end;
+    }
+
+    pub(crate) fn push_row_group(&mut self, offset: usize) {
+        self.row_group_offsets
+            .push((offset - self.start_offset) as i64);
+    }
+
+    pub(crate) fn push_column(&mut self, offset: usize) {
+        self.col_chunk_offsets
+            .push((offset - self.start_offset) as i64);
+    }
+
+    pub(crate) fn push_col_meta_length(&mut self, length: usize) {
+        self.col_meta_lengths.push(length as i64);
+    }
+}
+
 /////////////////////////
 // thrift compact output
 
@@ -699,13 +748,69 @@ where
 ///
 /// [compact output]: https://github.com/apache/thrift/blob/master/doc/specs/thrift-compact-protocol.md
 pub(crate) struct ThriftCompactOutputProtocol<W: Write> {
-    writer: W,
+    writer: TrackedWrite<W>,
+    index: Option<MetadataIndexBuilder>,
 }
 
 impl<W: Write> ThriftCompactOutputProtocol<W> {
     /// Create a new `ThriftCompactOutputProtocol` wrapping the byte sink `writer`.
+    ///
+    /// This will first wrap `writer` in a [`TrackedWrite`]
     pub(crate) fn new(writer: W) -> Self {
-        Self { writer }
+        Self::new_tracked(TrackedWrite::new(writer))
+    }
+
+    /// Create a new [`ThriftCompactOutputProtocol`], wrapping the input [`TrackedWrite`].
+    pub(crate) fn new_tracked(writer: TrackedWrite<W>) -> Self {
+        Self {
+            writer,
+            index: None,
+        }
+    }
+
+    /// Add a `MetadataIndexBuilder` to this writer.
+    pub(crate) fn set_index(&mut self, index: MetadataIndexBuilder) {
+        self.index = Some(index);
+    }
+
+    /// Take the index from this writer, leaving `None` in its place.
+    pub(crate) fn take_index(&mut self) -> Option<MetadataIndexBuilder> {
+        self.index.take()
+    }
+
+    // pass-thru methods for the index
+
+    /// Set the start and end positions in the index for the schema.
+    pub(crate) fn set_schema_range(&mut self, start: usize, end: usize) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.set_schema_range(start, end);
+        }
+    }
+
+    /// Call to mark the position where a row group begins (or ends for last row group).
+    pub(crate) fn mark_row_group(&mut self) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.push_row_group(self.writer.bytes_written());
+        }
+    }
+
+    /// Call to mark the position where a column chunk begins (or ends for last column in row group).
+    pub(crate) fn mark_column_chunk(&mut self) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.push_column(self.writer.bytes_written());
+        }
+    }
+
+    /// Add a length to the list of `ColumnMetaData` encoded lengths.
+    pub(crate) fn push_col_meta_length(&mut self, length: usize) {
+        if let Some(idx) = self.index.as_mut() {
+            idx.push_col_meta_length(length);
+        }
+    }
+
+    /// Return the number of bytes written to the inner [`Write`]
+    pub(crate) fn bytes_written(&self) -> usize {
+        self.writer.bytes_written()
     }
 
     /// Write a single byte to the output stream.
