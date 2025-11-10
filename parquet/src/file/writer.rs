@@ -2445,8 +2445,7 @@ mod tests {
     }
 
     #[test]
-    fn test_rewrite_missing_no_page_indexes() {
-        // this file has an INT96 column that lacks a column index entry
+    fn test_rewrite_no_page_indexes() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let metadata = ParquetMetaDataReader::new()
             .with_page_index_policy(PageIndexPolicy::Optional)
