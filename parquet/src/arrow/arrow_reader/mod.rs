@@ -1052,6 +1052,10 @@ impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
                 .map(move |i| self.metadata.row_group(*i)),
         )
     }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        self.metadata.as_ref()
+    }
 }
 
 struct ReaderPageIterator<T: ChunkReader> {
@@ -1231,7 +1235,8 @@ impl ParquetRecordBatchReader {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
-            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?; // TODO: .with_parquet_metadata(&reader.metadata)
+            .with_parquet_metadata(row_groups.metadata())
+            .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         let read_plan = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)

@@ -27,6 +27,7 @@ use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::{FilePageIterator, FileReader};
 
 mod builder;
@@ -143,6 +144,8 @@ pub trait RowGroups {
 
     /// Returns an iterator over the row groups in this collection
     fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_>;
+
+    fn metadata(&self) -> &ParquetMetaData;
 }
 
 impl RowGroups for Arc<dyn FileReader> {
@@ -157,6 +160,10 @@ impl RowGroups for Arc<dyn FileReader> {
 
     fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
         Box::new(self.metadata().row_groups().iter())
+    }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        self.metadata()
     }
 }
 

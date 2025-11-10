@@ -230,6 +230,10 @@ impl RowGroups for InMemoryRowGroup<'_> {
     fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
         Box::new(std::iter::once(self.metadata.row_group(self.row_group_idx)))
     }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        self.metadata
+    }
 }
 
 /// An in-memory column chunk.
