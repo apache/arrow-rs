@@ -113,6 +113,10 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
                 if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
+                    // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
+                    if matches!(column_index, ColumnIndexMetaData::NONE) {
+                        continue;
+                    }
                     let start_offset = self.buf.bytes_written();
                     self.object_writer.write_column_index(
                         column_index,
@@ -227,22 +231,38 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             None => builder.set_row_groups(row_groups),
         };
 
-        let column_indexes: Option<ParquetColumnIndex> = column_indexes.map(|ovvi| {
-            ovvi.into_iter()
-                .map(|vi| {
-                    vi.into_iter()
-                        .map(|oi| oi.unwrap_or(ColumnIndexMetaData::NONE))
-                        .collect()
-                })
-                .collect()
-        });
+        // test to see if all indexes for this file are empty
+        let all_none = column_indexes
+            .as_ref()
+            .is_some_and(|ci| ci.iter().all(|cii| cii.iter().all(|idx| idx.is_none())));
+        let column_indexes: Option<ParquetColumnIndex> = if all_none {
+            None
+        } else {
+            column_indexes.map(|ovvi| {
+                ovvi.into_iter()
+                    .map(|vi| {
+                        vi.into_iter()
+                            .map(|oi| oi.unwrap_or(ColumnIndexMetaData::NONE))
+                            .collect()
+                    })
+                    .collect()
+            })
+        };
 
-        // FIXME(ets): this will panic if there's a missing index.
-        let offset_indexes: Option<ParquetOffsetIndex> = offset_indexes.map(|ovvi| {
-            ovvi.into_iter()
-                .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
-                .collect()
-        });
+        // test to see if all indexes for this file are empty
+        let all_none = offset_indexes
+            .as_ref()
+            .is_some_and(|oi| oi.iter().all(|oii| oii.iter().all(|idx| idx.is_none())));
+        let offset_indexes: Option<ParquetOffsetIndex> = if all_none {
+            None
+        } else {
+            // FIXME(ets): this will panic if there's a missing index.
+            offset_indexes.map(|ovvi| {
+                ovvi.into_iter()
+                    .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
+                    .collect()
+            })
+        };
 
         builder = builder.set_column_index(column_indexes);
         builder = builder.set_offset_index(offset_indexes);
