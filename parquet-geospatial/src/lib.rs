@@ -34,5 +34,4 @@ pub mod testing;
 
 mod types;
 
-pub use types::Geography as GeographyType;
-pub use types::Geometry as GeometryType;
+pub use types::WkbType;

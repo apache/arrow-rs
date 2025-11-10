@@ -567,7 +567,6 @@ fn convert_field(
                 _ => Field::new(name, data_type, nullable),
             };
 
-            println!("OINK! hint: {hint:?}");
             Ok(field.with_metadata(hint.metadata().clone()))
         }
         None => {

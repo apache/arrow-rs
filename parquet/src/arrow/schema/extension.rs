@@ -56,13 +56,12 @@ pub(crate) fn try_add_extension_type(
             arrow_field.try_with_extension_type(arrow_schema::extension::Json::default())?;
         }
         #[cfg(feature = "geospatial")]
-        LogicalType::Geometry { crs } => {
-            let geom = parquet_geospatial::GeometryType::with_parse_crs(&crs.unwrap());
-            arrow_field.try_with_extension_type(geom)?;
+        LogicalType::Geometry { .. } => {
+            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::default())?;
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geography { .. } => {
-            arrow_field.try_with_extension_type(parquet_geospatial::GeographyType)?;
+            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::default())?;
         }
         _ => {}
     };
@@ -149,17 +148,13 @@ pub(crate) fn logical_type_for_string(_field: &Field) -> Option<LogicalType> {
 
 #[cfg(feature = "geospatial")]
 pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
-    use parquet_geospatial::{GeographyType, GeometryType};
+    use parquet_geospatial::WkbType;
 
     match field.extension_type_name() {
-        Some(n) if n == GeometryType::NAME => match field.try_extension_type::<GeometryType>() {
-            Ok(GeometryType) => Some(LogicalType::Geometry { crs: todo!() }),
-            Err(_e) => None,
-        },
-        Some(n) if n == GeographyType::NAME => match field.try_extension_type::<GeographyType>() {
-            Ok(GeographyType) => Some(LogicalType::Geography {
-                crs: todo!(),
-                algorithm: todo!(),
+        Some(n) if n == WkbType::NAME => match field.try_extension_type::<WkbType>() {
+            // TODO: detect and differentiate between Geometry and Geography
+            Ok(wkb_type) => Some(LogicalType::Geometry {
+                crs: wkb_type.serialize_metadata(),
             }),
             Err(_e) => None,
         },

@@ -56,7 +56,7 @@ mod tests {
 
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::RecordBatch;
-    use parquet_geospatial::GeometryType;
+    use parquet_geospatial::WkbType;
 
     use crate::{arrow::arrow_reader::ArrowReaderBuilder, file::reader::ChunkReader};
 
@@ -70,7 +70,9 @@ mod tests {
         let batch = read_geospatial_test_case("crs-projjson.parquet");
 
         assert_geometry_metadata(&batch, "geometry");
-        // let var_column = batch.column_by_name("var").expect("expected var column");
+        let _geom_column = batch
+            .column_by_name("geometry")
+            .expect("expected geometry column");
         // let var_array =
         //     VariantArray::try_new(&var_column).expect("expected var column to be a VariantArray");
 
@@ -101,7 +103,7 @@ mod tests {
 
         // verify that `GeometryType` also correctly finds the metadata
         field
-            .try_extension_type::<GeometryType>()
+            .try_extension_type::<WkbType>()
             .expect("GeometryExtensionType should be readable");
     }
 
