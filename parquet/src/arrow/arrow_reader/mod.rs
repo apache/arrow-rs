@@ -99,6 +99,13 @@ pub mod statistics;
 /// [`StatisticsConverter`]: statistics::StatisticsConverter
 /// [Querying Parquet with Millisecond Latency]: https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/
 pub struct ArrowReaderBuilder<T> {
+    /// The "input" to read parquet data from.
+    ///
+    /// Note in the case of the [`ParquetPushDecoderBuilder`], there
+    /// is no underlying input, which is indicated by a type parameter of [`NoInput`]
+    ///
+    /// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
+    /// [`NoInput`]: crate::arrow::push_decoder::NoInput
     pub(crate) input: T,
 
     pub(crate) metadata: Arc<ParquetMetaData>,
