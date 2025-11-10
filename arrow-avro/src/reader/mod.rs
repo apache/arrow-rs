@@ -831,11 +831,11 @@ impl Decoder {
     /// If a schema change was detected while decoding rows for the current batch, the
     /// schema switch is applied **after** flushing this batch, so the **next** batch
     /// (if any) may have a different schema.
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>> {
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
         self.apply_pending_schema();
-        batch
+        batch.map_err(ArrowError::from)
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
