@@ -26,6 +26,7 @@ use crate::arrow::arrow_reader::{
 use crate::errors::{ParquetError, Result};
 use arrow_array::Array;
 use arrow_select::filter::prep_null_mask_filter;
+use std::collections::VecDeque;
 
 /// A builder for [`ReadPlan`]
 #[derive(Clone, Debug)]
@@ -89,6 +90,8 @@ impl ReadPlanBuilder {
     }
 
     /// Returns the preferred [`RowSelectionStrategy`] for materialising the current selection.
+    ///
+    /// Guarantees to return either `Selectors` or `Mask`, never `Auto`.
     pub fn preferred_selection_strategy(&self) -> RowSelectionStrategy {
         match self.selection_strategy {
             RowSelectionStrategy::Selectors => RowSelectionStrategy::Selectors,
@@ -167,25 +170,35 @@ impl ReadPlanBuilder {
         if !self.selects_any() {
             self.selection = Some(RowSelection::from(vec![]));
         }
-        let selection_strategy = match self.selection_strategy {
-            RowSelectionStrategy::Auto { .. } => self.preferred_selection_strategy(),
-            strategy => strategy,
-        };
+
+        // Preferred strategy must not be Auto
+        let selection_strategy = self.preferred_selection_strategy();
+
         let Self {
             batch_size,
             selection,
             selection_strategy: _,
         } = self;
 
-        let selection = selection.map(|s| {
-            let trimmed = s.trim();
-            let selectors: Vec<RowSelector> = trimmed.into();
-            RowSelectionCursor::new(selectors, selection_strategy)
-        });
+        let selection = selection.map(|s| s.trim());
+
+        let row_selection_cursor = selection
+            .map(|s| {
+                let trimmed = s.trim();
+                let selectors: Vec<RowSelector> = trimmed.into();
+                match selection_strategy {
+                    RowSelectionStrategy::Mask => {
+                        RowSelectionCursor::new_mask_from_selectors(selectors)
+                    }
+                    RowSelectionStrategy::Selectors => RowSelectionCursor::new_selectors(selectors),
+                    RowSelectionStrategy::Auto { .. } => unreachable!(),
+                }
+            })
+            .unwrap_or(RowSelectionCursor::new_all());
 
         ReadPlan {
             batch_size,
-            selection,
+            row_selection_cursor,
         }
     }
 }
@@ -283,13 +296,23 @@ pub struct ReadPlan {
     /// The number of rows to read in each batch
     batch_size: usize,
     /// Row ranges to be selected from the data source
-    selection: Option<RowSelectionCursor>,
+    row_selection_cursor: RowSelectionCursor,
 }
 
 impl ReadPlan {
-    /// Returns a mutable reference to the selection, if any
-    pub fn selection_mut(&mut self) -> Option<&mut RowSelectionCursor> {
-        self.selection.as_mut()
+    /// Returns a mutable reference to the selection selectors, if any
+    #[deprecated(since = "57.1.0", note = "Use `row_selection_cursor_mut` instead")]
+    pub fn selection_mut(&mut self) -> Option<&mut VecDeque<RowSelector>> {
+        if let RowSelectionCursor::Selectors(selectors_cursor) = &mut self.row_selection_cursor {
+            Some(selectors_cursor.selectors_mut())
+        } else {
+            None
+        }
+    }
+
+    /// Returns a mutable reference to the row selection cursor
+    pub fn row_selection_cursor_mut(&mut self) -> &mut RowSelectionCursor {
+        &mut self.row_selection_cursor
     }
 
     /// Return the number of rows to read in each output batch
