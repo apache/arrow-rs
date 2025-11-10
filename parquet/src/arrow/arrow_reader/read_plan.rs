@@ -96,7 +96,7 @@ impl ReadPlanBuilder {
             RowSelectionStrategy::Auto { threshold, .. } => {
                 let selection = match self.selection.as_ref() {
                     Some(selection) => selection,
-                    None => return RowSelectionStrategy::Mask,
+                    None => return RowSelectionStrategy::Selectors,
                 };
 
                 let trimmed = selection.clone().trim();
@@ -118,17 +118,6 @@ impl ReadPlanBuilder {
                 }
             }
         }
-    }
-
-    /// Returns `true` if the configured strategy allows falling back to selectors for safety.
-    pub(crate) fn selection_strategy_allows_safe_fallback(&self) -> bool {
-        matches!(
-            self.selection_strategy,
-            RowSelectionStrategy::Auto {
-                safe_strategy: true,
-                ..
-            }
-        )
     }
 
     /// Evaluates an [`ArrowPredicate`], updating this plan's `selection`
@@ -340,34 +329,5 @@ mod tests {
             builder.preferred_selection_strategy(),
             RowSelectionStrategy::Selectors
         );
-    }
-
-    #[test]
-    fn selection_strategy_safe_fallback_detection() {
-        let selection = RowSelection::from(vec![RowSelector::select(8)]);
-
-        let builder_safe = builder_with_selection(selection.clone()).with_selection_strategy(
-            RowSelectionStrategy::Auto {
-                threshold: 32,
-                safe_strategy: true,
-            },
-        );
-        assert!(builder_safe.selection_strategy_allows_safe_fallback());
-
-        let builder_unsafe = builder_with_selection(selection.clone()).with_selection_strategy(
-            RowSelectionStrategy::Auto {
-                threshold: 32,
-                safe_strategy: false,
-            },
-        );
-        assert!(!builder_unsafe.selection_strategy_allows_safe_fallback());
-
-        let builder_mask = builder_with_selection(selection.clone())
-            .with_selection_strategy(RowSelectionStrategy::Mask);
-        assert!(!builder_mask.selection_strategy_allows_safe_fallback());
-
-        let builder_selectors = builder_with_selection(selection)
-            .with_selection_strategy(RowSelectionStrategy::Selectors);
-        assert!(!builder_selectors.selection_strategy_allows_safe_fallback());
     }
 }

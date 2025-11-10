@@ -31,6 +31,7 @@ use crate::arrow::push_decoder::reader_builder::filter::CacheInfo;
 use crate::arrow::schema::ParquetField;
 use crate::errors::ParquetError;
 use crate::file::metadata::ParquetMetaData;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::util::push_buffers::PushBuffers;
 use bytes::Bytes;
 use data::DataRequest;
@@ -491,7 +492,7 @@ impl RowGroupReaderBuilder {
                 }
 
                 // Apply any limit and offset
-                let plan_builder = plan_builder
+                let mut plan_builder = plan_builder
                     .limited(row_count)
                     .with_offset(self.offset)
                     .with_limit(self.limit)
@@ -530,6 +531,34 @@ impl RowGroupReaderBuilder {
                 // Final projection fetch shouldn't expand selection for cache
                 // so don't call with_cache_projection here
                 .build();
+
+                match self.selection_strategy {
+                    RowSelectionStrategy::Auto {
+                        threshold: _threshold,
+                        safe_strategy,
+                    } => {
+                        let preferred_strategy = plan_builder.preferred_selection_strategy();
+                        let offset_index = self.row_group_offset_index(row_group_idx);
+                        let force_selectors = safe_strategy
+                            && matches!(preferred_strategy, RowSelectionStrategy::Mask)
+                            && plan_builder.selection().is_some_and(|selection| {
+                                selection.should_force_selectors(&self.projection, offset_index)
+                            });
+
+                        let resolved_strategy = if force_selectors {
+                            RowSelectionStrategy::Selectors
+                        } else {
+                            preferred_strategy
+                        };
+
+                        plan_builder = plan_builder.with_selection_strategy(resolved_strategy);
+                    }
+                    _ => {
+                        // If a non-auto strategy is specified, override any plan builder strategy
+                        plan_builder =
+                            plan_builder.with_selection_strategy(self.selection_strategy);
+                    }
+                }
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -657,11 +686,21 @@ impl RowGroupReaderBuilder {
             Some(ProjectionMask::leaves(schema, included_leaves))
         }
     }
+
+    /// Get the offset index for the specified row group, if any
+    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[OffsetIndexMetaData]> {
+        self.metadata
+            .offset_index()
+            .filter(|index| !index.is_empty())
+            .and_then(|index| index.get(row_group_idx))
+            .map(|columns| columns.as_slice())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
