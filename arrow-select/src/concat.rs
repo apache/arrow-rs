@@ -1576,7 +1576,7 @@ mod tests {
 
     #[test]
     fn concat_dictionary_list_array_simple() {
-        let scalars = vec![
+        let scalars = [
             create_single_row_list_of_dict(vec![Some("a")]),
             create_single_row_list_of_dict(vec![Some("a")]),
             create_single_row_list_of_dict(vec![Some("b")]),

@@ -388,8 +388,8 @@ impl Buffer {
     /// # Errors
     ///
     /// Returns `Err(self)` if
-    /// 1. this buffer does not have the same [`Layout`] as the destination Vec
-    /// 2. contains a non-zero offset
+    /// 1. The buffer does not have the same [`Layout`] as the destination Vec
+    /// 2. The buffer contains a non-zero offset
     /// 3. The buffer is shared
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
@@ -521,6 +521,12 @@ impl std::ops::Deref for Buffer {
 
     fn deref(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
+    }
+}
+
+impl AsRef<[u8]> for &Buffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 

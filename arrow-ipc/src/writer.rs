@@ -771,9 +771,10 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 }
 
 /// Controls how dictionaries are handled in Arrow IPC messages
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DictionaryHandling {
     /// Send the entire dictionary every time it is encountered (default)
+    #[default]
     Resend,
     /// Send only new dictionary values since the last batch (delta encoding)
     ///
@@ -781,12 +782,6 @@ pub enum DictionaryHandling {
     /// For subsequent batches, only values that are new (not previously sent)
     /// are transmitted with the `isDelta` flag set to true.
     Delta,
-}
-
-impl Default for DictionaryHandling {
-    fn default() -> Self {
-        Self::Resend
-    }
 }
 
 /// Describes what kind of update took place after a call to [`DictionaryTracker::insert`].
