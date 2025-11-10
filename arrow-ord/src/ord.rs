@@ -1640,7 +1640,7 @@ fn compare_struct(
 ///
 /// # Note
 ///
-/// For better performance we recommend you use [`make_typed_comparator`] which
+/// For better performance we recommend you use [`Comparator`] which
 /// returns a typed comparator that uses enum dispatch for scalar types, eliminating
 /// the overhead of dynamic dispatch for common comparison operations.
 ///
