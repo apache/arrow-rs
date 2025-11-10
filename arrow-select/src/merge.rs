@@ -107,6 +107,12 @@ impl MergeIndex for Option<usize> {
 ///
 /// ```
 pub fn merge_n(values: &[&dyn Array], indices: &[impl MergeIndex]) -> Result<ArrayRef, ArrowError> {
+    if values.is_empty() {
+        return Err(ArrowError::InvalidArgumentError(
+            "merge_n requires at least one value array".to_string(),
+        ));
+    }
+
     let data_type = values[0].data_type();
 
     for array in values.iter().skip(1) {
@@ -307,6 +313,7 @@ mod tests {
     use crate::merge::{MergeIndex, merge, merge_n};
     use arrow_array::cast::AsArray;
     use arrow_array::{Array, BooleanArray, StringArray};
+    use arrow_schema::ArrowError::InvalidArgumentError;
 
     #[derive(PartialEq, Eq, Copy, Clone)]
     struct CompactMergeIndex {
@@ -346,6 +353,15 @@ mod tests {
         assert_eq!(merged.value(4), "E");
         assert!(!merged.is_valid(5));
     }
+    #[test]
+    fn test_merge_empty_mask() {
+        let a1 = StringArray::from(vec![Some("A")]);
+        let a2 = StringArray::from(vec![Some("B")]);
+        let mask: Vec<bool> = vec![];
+        let mask = BooleanArray::from(mask);
+        let result = merge(&mask, &a1, &a2).unwrap();
+        assert_eq!(result.len(), 0);
+    }
 
     #[test]
     fn test_merge_n() {
@@ -382,5 +398,30 @@ mod tests {
         assert_eq!(merged.value(5), "D");
         assert!(!merged.is_valid(6));
         assert!(!merged.is_valid(7));
+    }
+
+    #[test]
+    fn test_merge_n_empty_indices() {
+        let a1 = StringArray::from(vec![Some("A")]);
+        let a2 = StringArray::from(vec![Some("B"), None, None]);
+        let a3 = StringArray::from(vec![Some("C"), Some("D")]);
+
+        let indices: Vec<CompactMergeIndex> = vec![];
+
+        let arrays = [a1, a2, a3];
+        let array_refs = arrays.iter().map(|a| a as &dyn Array).collect::<Vec<_>>();
+        let merged = merge_n(&array_refs, &indices).unwrap();
+
+        assert_eq!(merged.len(), indices.len());
+    }
+
+    #[test]
+    fn test_merge_n_empty_values() {
+        let indices: Vec<CompactMergeIndex> = vec![];
+
+        let arrays: Vec<&dyn Array> = vec![];
+        let merged = merge_n(&arrays, &indices);
+
+        assert!(matches!(merged, Err(InvalidArgumentError { .. })));
     }
 }
