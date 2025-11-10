@@ -27,6 +27,864 @@ use std::cmp::Ordering;
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
 
+/// Comparator that uses enum dispatch for scalar types and dynamic dispatch for complex types.
+///
+/// This enum provides an optimized comparator implementation that eliminates the overhead of
+/// dynamic dispatch for common scalar types, while falling back to dynamic dispatch for
+/// complex recursive types (List, Struct, Map, Dictionary).
+pub enum Comparator {
+    // Primitive integer types
+    Int8 {
+        left: arrow_buffer::ScalarBuffer<i8>,
+        right: arrow_buffer::ScalarBuffer<i8>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Int16 {
+        left: arrow_buffer::ScalarBuffer<i16>,
+        right: arrow_buffer::ScalarBuffer<i16>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Int32 {
+        left: arrow_buffer::ScalarBuffer<i32>,
+        right: arrow_buffer::ScalarBuffer<i32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Int64 {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Unsigned integer types
+    UInt8 {
+        left: arrow_buffer::ScalarBuffer<u8>,
+        right: arrow_buffer::ScalarBuffer<u8>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    UInt16 {
+        left: arrow_buffer::ScalarBuffer<u16>,
+        right: arrow_buffer::ScalarBuffer<u16>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    UInt32 {
+        left: arrow_buffer::ScalarBuffer<u32>,
+        right: arrow_buffer::ScalarBuffer<u32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    UInt64 {
+        left: arrow_buffer::ScalarBuffer<u64>,
+        right: arrow_buffer::ScalarBuffer<u64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Floating point types
+    Float16 {
+        left: arrow_buffer::ScalarBuffer<<Float16Type as ArrowPrimitiveType>::Native>,
+        right: arrow_buffer::ScalarBuffer<<Float16Type as ArrowPrimitiveType>::Native>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Float32 {
+        left: arrow_buffer::ScalarBuffer<f32>,
+        right: arrow_buffer::ScalarBuffer<f32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Float64 {
+        left: arrow_buffer::ScalarBuffer<f64>,
+        right: arrow_buffer::ScalarBuffer<f64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Date and time types
+    Date32 {
+        left: arrow_buffer::ScalarBuffer<i32>,
+        right: arrow_buffer::ScalarBuffer<i32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Date64 {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Time32Second {
+        left: arrow_buffer::ScalarBuffer<i32>,
+        right: arrow_buffer::ScalarBuffer<i32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Time32Millisecond {
+        left: arrow_buffer::ScalarBuffer<i32>,
+        right: arrow_buffer::ScalarBuffer<i32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Time64Microsecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Time64Nanosecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Timestamp types
+    TimestampSecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    TimestampMillisecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    TimestampMicrosecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    TimestampNanosecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Duration types
+    DurationSecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    DurationMillisecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    DurationMicrosecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    DurationNanosecond {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Interval types
+    IntervalYearMonth {
+        left: arrow_buffer::ScalarBuffer<i32>,
+        right: arrow_buffer::ScalarBuffer<i32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    IntervalDayTime {
+        left: arrow_buffer::ScalarBuffer<arrow_buffer::IntervalDayTime>,
+        right: arrow_buffer::ScalarBuffer<arrow_buffer::IntervalDayTime>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    IntervalMonthDayNano {
+        left: arrow_buffer::ScalarBuffer<arrow_buffer::IntervalMonthDayNano>,
+        right: arrow_buffer::ScalarBuffer<arrow_buffer::IntervalMonthDayNano>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Decimal types
+    Decimal32 {
+        left: arrow_buffer::ScalarBuffer<i32>,
+        right: arrow_buffer::ScalarBuffer<i32>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Decimal64 {
+        left: arrow_buffer::ScalarBuffer<i64>,
+        right: arrow_buffer::ScalarBuffer<i64>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Decimal128 {
+        left: arrow_buffer::ScalarBuffer<i128>,
+        right: arrow_buffer::ScalarBuffer<i128>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Decimal256 {
+        left: arrow_buffer::ScalarBuffer<arrow_buffer::i256>,
+        right: arrow_buffer::ScalarBuffer<arrow_buffer::i256>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Boolean type
+    Boolean {
+        left: arrow_buffer::BooleanBuffer,
+        right: arrow_buffer::BooleanBuffer,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // String types
+    Utf8 {
+        left: GenericByteArray<Utf8Type>,
+        right: GenericByteArray<Utf8Type>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    LargeUtf8 {
+        left: GenericByteArray<LargeUtf8Type>,
+        right: GenericByteArray<LargeUtf8Type>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    Utf8View {
+        left: GenericByteViewArray<StringViewType>,
+        right: GenericByteViewArray<StringViewType>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Binary types
+    Binary {
+        left: GenericByteArray<BinaryType>,
+        right: GenericByteArray<BinaryType>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    LargeBinary {
+        left: GenericByteArray<LargeBinaryType>,
+        right: GenericByteArray<LargeBinaryType>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+    BinaryView {
+        left: GenericByteViewArray<BinaryViewType>,
+        right: GenericByteViewArray<BinaryViewType>,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // FixedSizeBinary
+    FixedSizeBinary {
+        left: FixedSizeBinaryArray,
+        right: FixedSizeBinaryArray,
+        left_nulls: Option<NullBuffer>,
+        right_nulls: Option<NullBuffer>,
+        opts: SortOptions,
+    },
+
+    // Dynamic fallback for recursive/complex types:
+    // - List, LargeList, FixedSizeList
+    // - Struct
+    // - Map
+    // - Dictionary
+    Dynamic(DynComparator),
+}
+
+/// Helper macro to reduce duplication for float comparisons using total_cmp
+macro_rules! compare_float {
+    ($left:expr, $right:expr, $left_nulls:expr, $right_nulls:expr, $opts:expr, $i:expr, $j:expr) => {{
+        let ord = match (
+            $left_nulls.as_ref().map_or(false, |n| n.is_null($i)),
+            $right_nulls.as_ref().map_or(false, |n| n.is_null($j)),
+        ) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => {
+                return if $opts.nulls_first {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                };
+            }
+            (false, true) => {
+                return if $opts.nulls_first {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                };
+            }
+            (false, false) => {
+                let left_slice = $left.as_ref();
+                let right_slice = $right.as_ref();
+                left_slice[$i].total_cmp(&right_slice[$j])
+            }
+        };
+
+        if $opts.descending {
+            ord.reverse()
+        } else {
+            ord
+        }
+    }};
+}
+
+/// Compare values using Ord::cmp for types that implement Ord (integers, decimals, intervals, etc.)
+#[inline]
+fn compare_ord_values<T: ArrowNativeType + Ord>(
+    left: &arrow_buffer::ScalarBuffer<T>,
+    right: &arrow_buffer::ScalarBuffer<T>,
+    left_nulls: &Option<NullBuffer>,
+    right_nulls: &Option<NullBuffer>,
+    opts: &SortOptions,
+    i: usize,
+    j: usize,
+) -> Ordering {
+    // Check nulls first
+    let ord = match (
+        left_nulls.as_ref().map_or(false, |n| n.is_null(i)),
+        right_nulls.as_ref().map_or(false, |n| n.is_null(j)),
+    ) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => {
+            return if opts.nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        (false, true) => {
+            return if opts.nulls_first {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+        (false, false) => {
+            let left_slice: &[T] = left.as_ref();
+            let right_slice: &[T] = right.as_ref();
+            left_slice[i].cmp(&right_slice[j])
+        }
+    };
+
+    if opts.descending {
+        ord.reverse()
+    } else {
+        ord
+    }
+}
+
+#[inline]
+fn compare_boolean_values(
+    left: &arrow_buffer::BooleanBuffer,
+    right: &arrow_buffer::BooleanBuffer,
+    left_nulls: &Option<NullBuffer>,
+    right_nulls: &Option<NullBuffer>,
+    opts: &SortOptions,
+    i: usize,
+    j: usize,
+) -> Ordering {
+    // Check nulls first
+    let ord = match (
+        left_nulls.as_ref().map_or(false, |n| n.is_null(i)),
+        right_nulls.as_ref().map_or(false, |n| n.is_null(j)),
+    ) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => {
+            return if opts.nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        (false, true) => {
+            return if opts.nulls_first {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+        (false, false) => left.value(i).cmp(&right.value(j)),
+    };
+
+    if opts.descending {
+        ord.reverse()
+    } else {
+        ord
+    }
+}
+
+#[inline]
+fn compare_bytes_values<T: ByteArrayType>(
+    left: &GenericByteArray<T>,
+    right: &GenericByteArray<T>,
+    left_nulls: &Option<NullBuffer>,
+    right_nulls: &Option<NullBuffer>,
+    opts: &SortOptions,
+    i: usize,
+    j: usize,
+) -> Ordering {
+    // Check nulls first
+    let ord = match (
+        left_nulls.as_ref().map_or(false, |n| n.is_null(i)),
+        right_nulls.as_ref().map_or(false, |n| n.is_null(j)),
+    ) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => {
+            return if opts.nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        (false, true) => {
+            return if opts.nulls_first {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+        (false, false) => {
+            let l: &[u8] = left.value(i).as_ref();
+            let r: &[u8] = right.value(j).as_ref();
+            l.cmp(r)
+        }
+    };
+
+    if opts.descending {
+        ord.reverse()
+    } else {
+        ord
+    }
+}
+
+#[inline]
+fn compare_byte_view_values<T: ByteViewType>(
+    left: &GenericByteViewArray<T>,
+    right: &GenericByteViewArray<T>,
+    left_nulls: &Option<NullBuffer>,
+    right_nulls: &Option<NullBuffer>,
+    opts: &SortOptions,
+    i: usize,
+    j: usize,
+) -> Ordering {
+    // Check nulls first
+    let ord = match (
+        left_nulls.as_ref().map_or(false, |n| n.is_null(i)),
+        right_nulls.as_ref().map_or(false, |n| n.is_null(j)),
+    ) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => {
+            return if opts.nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        (false, true) => {
+            return if opts.nulls_first {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+        (false, false) => {
+            let l: &[u8] = left.value(i).as_ref();
+            let r: &[u8] = right.value(j).as_ref();
+            l.cmp(r)
+        }
+    };
+
+    if opts.descending {
+        ord.reverse()
+    } else {
+        ord
+    }
+}
+
+#[inline]
+fn compare_fixed_binary_values(
+    left: &FixedSizeBinaryArray,
+    right: &FixedSizeBinaryArray,
+    left_nulls: &Option<NullBuffer>,
+    right_nulls: &Option<NullBuffer>,
+    opts: &SortOptions,
+    i: usize,
+    j: usize,
+) -> Ordering {
+    // Check nulls first
+    let ord = match (
+        left_nulls.as_ref().map_or(false, |n| n.is_null(i)),
+        right_nulls.as_ref().map_or(false, |n| n.is_null(j)),
+    ) {
+        (true, true) => return Ordering::Equal,
+        (true, false) => {
+            return if opts.nulls_first {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            };
+        }
+        (false, true) => {
+            return if opts.nulls_first {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            };
+        }
+        (false, false) => left.value(i).cmp(right.value(j)),
+    };
+
+    if opts.descending {
+        ord.reverse()
+    } else {
+        ord
+    }
+}
+
+impl Comparator {
+    /// Compare elements at indices i (from left array) and j (from right array)
+    #[inline]
+    pub fn compare(&self, i: usize, j: usize) -> Ordering {
+        match self {
+            Self::Int8 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Int16 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Int32 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Int64 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::UInt8 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::UInt16 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::UInt32 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::UInt64 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Float16 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_float!(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Float32 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_float!(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Float64 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_float!(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Date32 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Date64 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Time32Second {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Time32Millisecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Time64Microsecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Time64Nanosecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::TimestampSecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::TimestampMillisecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::TimestampMicrosecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::TimestampNanosecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::DurationSecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::DurationMillisecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::DurationMicrosecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::DurationNanosecond {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::IntervalYearMonth {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::IntervalDayTime {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::IntervalMonthDayNano {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Decimal32 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Decimal64 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Decimal128 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Decimal256 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_ord_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Boolean {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_boolean_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Utf8 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_bytes_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::LargeUtf8 {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_bytes_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Utf8View {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_byte_view_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Binary {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_bytes_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::LargeBinary {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_bytes_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::BinaryView {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_byte_view_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::FixedSizeBinary {
+                left,
+                right,
+                left_nulls,
+                right_nulls,
+                opts,
+            } => compare_fixed_binary_values(left, right, left_nulls, right_nulls, opts, i, j),
+            Self::Dynamic(cmp) => cmp(i, j),
+        }
+    }
+}
+
 /// If parent sort order is descending we need to invert the value of nulls_first so that
 /// when the parent is sorted based on the produced ranks, nulls are still ordered correctly
 fn child_opts(opts: SortOptions) -> SortOptions {
@@ -296,6 +1154,520 @@ fn compare_struct(
     Ok(f)
 }
 
+/// Creates a typed comparator for the given arrays and sort options.
+///
+/// This function returns a [`Comparator`] enum that uses enum dispatch for scalar types,
+/// eliminating the overhead of dynamic dispatch for common comparison operations.
+/// Complex recursive types (List, Struct, Map, Dictionary) fall back to dynamic dispatch.
+///
+/// # Example
+///
+/// ```
+/// # use std::cmp::Ordering;
+/// # use arrow_array::Int32Array;
+/// # use arrow_ord::ord::make_typed_comparator;
+/// # use arrow_schema::SortOptions;
+/// #
+/// let left = Int32Array::from(vec![1, 2, 3]);
+/// let right = Int32Array::from(vec![3, 2, 1]);
+/// let opts = SortOptions::default();
+/// let comparator = make_typed_comparator(&left, &right, opts).unwrap();
+/// let ordering = comparator.compare(0, 2); // Compare left[0] with right[2]
+/// assert_eq!(ordering, Ordering::Less);
+/// ```
+pub fn make_typed_comparator(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<Comparator, ArrowError> {
+    use arrow_schema::DataType::*;
+
+    let left_nulls = left.nulls().filter(|x| x.null_count() > 0).cloned();
+    let right_nulls = right.nulls().filter(|x| x.null_count() > 0).cloned();
+
+    Ok(match (left.data_type(), right.data_type()) {
+        (Int8, Int8) => {
+            let left = left.as_primitive::<Int8Type>();
+            let right = right.as_primitive::<Int8Type>();
+            Comparator::Int8 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Int16, Int16) => {
+            let left = left.as_primitive::<Int16Type>();
+            let right = right.as_primitive::<Int16Type>();
+            Comparator::Int16 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Int32, Int32) => {
+            let left = left.as_primitive::<Int32Type>();
+            let right = right.as_primitive::<Int32Type>();
+            Comparator::Int32 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Int64, Int64) => {
+            let left = left.as_primitive::<Int64Type>();
+            let right = right.as_primitive::<Int64Type>();
+            Comparator::Int64 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (UInt8, UInt8) => {
+            let left = left.as_primitive::<UInt8Type>();
+            let right = right.as_primitive::<UInt8Type>();
+            Comparator::UInt8 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (UInt16, UInt16) => {
+            let left = left.as_primitive::<UInt16Type>();
+            let right = right.as_primitive::<UInt16Type>();
+            Comparator::UInt16 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (UInt32, UInt32) => {
+            let left = left.as_primitive::<UInt32Type>();
+            let right = right.as_primitive::<UInt32Type>();
+            Comparator::UInt32 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (UInt64, UInt64) => {
+            let left = left.as_primitive::<UInt64Type>();
+            let right = right.as_primitive::<UInt64Type>();
+            Comparator::UInt64 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Float16, Float16) => {
+            let left = left.as_primitive::<Float16Type>();
+            let right = right.as_primitive::<Float16Type>();
+            Comparator::Float16 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Float32, Float32) => {
+            let left = left.as_primitive::<Float32Type>();
+            let right = right.as_primitive::<Float32Type>();
+            Comparator::Float32 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Float64, Float64) => {
+            let left = left.as_primitive::<Float64Type>();
+            let right = right.as_primitive::<Float64Type>();
+            Comparator::Float64 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Date32, Date32) => {
+            let left = left.as_primitive::<Date32Type>();
+            let right = right.as_primitive::<Date32Type>();
+            Comparator::Date32 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Date64, Date64) => {
+            let left = left.as_primitive::<Date64Type>();
+            let right = right.as_primitive::<Date64Type>();
+            Comparator::Date64 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Time32(arrow_schema::TimeUnit::Second), Time32(arrow_schema::TimeUnit::Second)) => {
+            let left = left.as_primitive::<Time32SecondType>();
+            let right = right.as_primitive::<Time32SecondType>();
+            Comparator::Time32Second {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Time32(arrow_schema::TimeUnit::Millisecond), Time32(arrow_schema::TimeUnit::Millisecond)) => {
+            let left = left.as_primitive::<Time32MillisecondType>();
+            let right = right.as_primitive::<Time32MillisecondType>();
+            Comparator::Time32Millisecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Time64(arrow_schema::TimeUnit::Microsecond), Time64(arrow_schema::TimeUnit::Microsecond)) => {
+            let left = left.as_primitive::<Time64MicrosecondType>();
+            let right = right.as_primitive::<Time64MicrosecondType>();
+            Comparator::Time64Microsecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Time64(arrow_schema::TimeUnit::Nanosecond), Time64(arrow_schema::TimeUnit::Nanosecond)) => {
+            let left = left.as_primitive::<Time64NanosecondType>();
+            let right = right.as_primitive::<Time64NanosecondType>();
+            Comparator::Time64Nanosecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Timestamp(arrow_schema::TimeUnit::Second, _), Timestamp(arrow_schema::TimeUnit::Second, _)) => {
+            let left = left.as_primitive::<TimestampSecondType>();
+            let right = right.as_primitive::<TimestampSecondType>();
+            Comparator::TimestampSecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Timestamp(arrow_schema::TimeUnit::Millisecond, _), Timestamp(arrow_schema::TimeUnit::Millisecond, _)) => {
+            let left = left.as_primitive::<TimestampMillisecondType>();
+            let right = right.as_primitive::<TimestampMillisecondType>();
+            Comparator::TimestampMillisecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Timestamp(arrow_schema::TimeUnit::Microsecond, _), Timestamp(arrow_schema::TimeUnit::Microsecond, _)) => {
+            let left = left.as_primitive::<TimestampMicrosecondType>();
+            let right = right.as_primitive::<TimestampMicrosecondType>();
+            Comparator::TimestampMicrosecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Timestamp(arrow_schema::TimeUnit::Nanosecond, _), Timestamp(arrow_schema::TimeUnit::Nanosecond, _)) => {
+            let left = left.as_primitive::<TimestampNanosecondType>();
+            let right = right.as_primitive::<TimestampNanosecondType>();
+            Comparator::TimestampNanosecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Duration(arrow_schema::TimeUnit::Second), Duration(arrow_schema::TimeUnit::Second)) => {
+            let left = left.as_primitive::<DurationSecondType>();
+            let right = right.as_primitive::<DurationSecondType>();
+            Comparator::DurationSecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Duration(arrow_schema::TimeUnit::Millisecond), Duration(arrow_schema::TimeUnit::Millisecond)) => {
+            let left = left.as_primitive::<DurationMillisecondType>();
+            let right = right.as_primitive::<DurationMillisecondType>();
+            Comparator::DurationMillisecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Duration(arrow_schema::TimeUnit::Microsecond), Duration(arrow_schema::TimeUnit::Microsecond)) => {
+            let left = left.as_primitive::<DurationMicrosecondType>();
+            let right = right.as_primitive::<DurationMicrosecondType>();
+            Comparator::DurationMicrosecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Duration(arrow_schema::TimeUnit::Nanosecond), Duration(arrow_schema::TimeUnit::Nanosecond)) => {
+            let left = left.as_primitive::<DurationNanosecondType>();
+            let right = right.as_primitive::<DurationNanosecondType>();
+            Comparator::DurationNanosecond {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Interval(arrow_schema::IntervalUnit::YearMonth), Interval(arrow_schema::IntervalUnit::YearMonth)) => {
+            let left = left.as_primitive::<IntervalYearMonthType>();
+            let right = right.as_primitive::<IntervalYearMonthType>();
+            Comparator::IntervalYearMonth {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Interval(arrow_schema::IntervalUnit::DayTime), Interval(arrow_schema::IntervalUnit::DayTime)) => {
+            let left = left.as_primitive::<IntervalDayTimeType>();
+            let right = right.as_primitive::<IntervalDayTimeType>();
+            Comparator::IntervalDayTime {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Interval(arrow_schema::IntervalUnit::MonthDayNano), Interval(arrow_schema::IntervalUnit::MonthDayNano)) => {
+            let left = left.as_primitive::<IntervalMonthDayNanoType>();
+            let right = right.as_primitive::<IntervalMonthDayNanoType>();
+            Comparator::IntervalMonthDayNano {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Decimal32(_, _), Decimal32(_, _)) => {
+            let left = left.as_primitive::<Decimal32Type>();
+            let right = right.as_primitive::<Decimal32Type>();
+            Comparator::Decimal32 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Decimal64(_, _), Decimal64(_, _)) => {
+            let left = left.as_primitive::<Decimal64Type>();
+            let right = right.as_primitive::<Decimal64Type>();
+            Comparator::Decimal64 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Decimal128(_, _), Decimal128(_, _)) => {
+            let left = left.as_primitive::<Decimal128Type>();
+            let right = right.as_primitive::<Decimal128Type>();
+            Comparator::Decimal128 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Decimal256(_, _), Decimal256(_, _)) => {
+            let left = left.as_primitive::<Decimal256Type>();
+            let right = right.as_primitive::<Decimal256Type>();
+            Comparator::Decimal256 {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Boolean, Boolean) => {
+            let left = left.as_boolean();
+            let right = right.as_boolean();
+            Comparator::Boolean {
+                left: left.values().clone(),
+                right: right.values().clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Utf8, Utf8) => {
+            let left = left.as_string::<i32>();
+            let right = right.as_string::<i32>();
+            Comparator::Utf8 {
+                left: left.clone(),
+                right: right.clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (LargeUtf8, LargeUtf8) => {
+            let left = left.as_string::<i64>();
+            let right = right.as_string::<i64>();
+            Comparator::LargeUtf8 {
+                left: left.clone(),
+                right: right.clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Utf8View, Utf8View) => {
+            let left = left.as_string_view();
+            let right = right.as_string_view();
+            Comparator::Utf8View {
+                left: left.clone(),
+                right: right.clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (Binary, Binary) => {
+            let left = left.as_binary::<i32>();
+            let right = right.as_binary::<i32>();
+            Comparator::Binary {
+                left: left.clone(),
+                right: right.clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (LargeBinary, LargeBinary) => {
+            let left = left.as_binary::<i64>();
+            let right = right.as_binary::<i64>();
+            Comparator::LargeBinary {
+                left: left.clone(),
+                right: right.clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (BinaryView, BinaryView) => {
+            let left = left.as_binary_view();
+            let right = right.as_binary_view();
+            Comparator::BinaryView {
+                left: left.clone(),
+                right: right.clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        (FixedSizeBinary(_), FixedSizeBinary(_)) => {
+            let left = left.as_fixed_size_binary();
+            let right = right.as_fixed_size_binary();
+            Comparator::FixedSizeBinary {
+                left: left.clone(),
+                right: right.clone(),
+                left_nulls,
+                right_nulls,
+                opts,
+            }
+        }
+        // Fall back to dynamic dispatch for complex types
+        (List(_), List(_)) => {
+            let cmp = compare_list::<i32>(left, right, opts)?;
+            Comparator::Dynamic(cmp)
+        }
+        (LargeList(_), LargeList(_)) => {
+            let cmp = compare_list::<i64>(left, right, opts)?;
+            Comparator::Dynamic(cmp)
+        }
+        (FixedSizeList(_, _), FixedSizeList(_, _)) => {
+            let cmp = compare_fixed_list(left, right, opts)?;
+            Comparator::Dynamic(cmp)
+        }
+        (Struct(_), Struct(_)) => {
+            let cmp = compare_struct(left, right, opts)?;
+            Comparator::Dynamic(cmp)
+        }
+        (Dictionary(l_key, _), Dictionary(r_key, _)) => {
+            macro_rules! dict_helper {
+                ($t:ty, $left:expr, $right:expr, $opts: expr) => {
+                    compare_dict::<$t>($left, $right, $opts)
+                };
+            }
+            let cmp = downcast_integer! {
+                l_key.as_ref(), r_key.as_ref() => (dict_helper, left, right, opts),
+                _ => unreachable!()
+            }?;
+            Comparator::Dynamic(cmp)
+        }
+        (Map(_, _), Map(_, _)) => {
+            let cmp = compare_map(left, right, opts)?;
+            Comparator::Dynamic(cmp)
+        }
+        (lhs, rhs) => {
+            return Err(ArrowError::InvalidArgumentError(match lhs == rhs {
+                true => format!("The data type type {lhs:?} has no natural order"),
+                false => "Can't compare arrays of different types".to_string(),
+            }));
+        }
+    })
+}
+
 /// Returns a comparison function that compares two values at two different positions
 /// between the two arrays.
 ///
@@ -303,6 +1675,12 @@ fn compare_struct(
 ///
 /// If `nulls_first` is true `NULL` values will be considered less than any non-null value,
 /// otherwise they will be considered greater.
+///
+/// # Note
+/// 
+/// For better performance we recommend you use [`make_typed_comparator`] which
+/// returns a typed comparator that uses enum dispatch for scalar types, eliminating
+/// the overhead of dynamic dispatch for common comparison operations.
 ///
 /// # Basic Usage
 ///
@@ -370,53 +1748,8 @@ pub fn make_comparator(
     right: &dyn Array,
     opts: SortOptions,
 ) -> Result<DynComparator, ArrowError> {
-    use arrow_schema::DataType::*;
-
-    macro_rules! primitive_helper {
-        ($t:ty, $left:expr, $right:expr, $nulls_first:expr) => {
-            Ok(compare_primitive::<$t>($left, $right, $nulls_first))
-        };
-    }
-    downcast_primitive! {
-        left.data_type(), right.data_type() => (primitive_helper, left, right, opts),
-        (Boolean, Boolean) => Ok(compare_boolean(left, right, opts)),
-        (Utf8, Utf8) => Ok(compare_bytes::<Utf8Type>(left, right, opts)),
-        (LargeUtf8, LargeUtf8) => Ok(compare_bytes::<LargeUtf8Type>(left, right, opts)),
-        (Utf8View, Utf8View) => Ok(compare_byte_view::<StringViewType>(left, right, opts)),
-        (Binary, Binary) => Ok(compare_bytes::<BinaryType>(left, right, opts)),
-        (LargeBinary, LargeBinary) => Ok(compare_bytes::<LargeBinaryType>(left, right, opts)),
-        (BinaryView, BinaryView) => Ok(compare_byte_view::<BinaryViewType>(left, right, opts)),
-        (FixedSizeBinary(_), FixedSizeBinary(_)) => {
-            let left = left.as_fixed_size_binary();
-            let right = right.as_fixed_size_binary();
-
-            let l = left.clone();
-            let r = right.clone();
-            Ok(compare(left, right, opts, move |i, j| {
-                l.value(i).cmp(r.value(j))
-            }))
-        },
-        (List(_), List(_)) => compare_list::<i32>(left, right, opts),
-        (LargeList(_), LargeList(_)) => compare_list::<i64>(left, right, opts),
-        (FixedSizeList(_, _), FixedSizeList(_, _)) => compare_fixed_list(left, right, opts),
-        (Struct(_), Struct(_)) => compare_struct(left, right, opts),
-        (Dictionary(l_key, _), Dictionary(r_key, _)) => {
-             macro_rules! dict_helper {
-                ($t:ty, $left:expr, $right:expr, $opts: expr) => {
-                     compare_dict::<$t>($left, $right, $opts)
-                 };
-             }
-            downcast_integer! {
-                 l_key.as_ref(), r_key.as_ref() => (dict_helper, left, right, opts),
-                 _ => unreachable!()
-             }
-        },
-        (Map(_, _), Map(_, _)) => compare_map(left, right, opts),
-        (lhs, rhs) => Err(ArrowError::InvalidArgumentError(match lhs == rhs {
-            true => format!("The data type type {lhs:?} has no natural order"),
-            false => "Can't compare arrays of different types".to_string(),
-        }))
-    }
+    let comparator = make_typed_comparator(left, right, opts)?;
+    Ok(Box::new(move |i, j| comparator.compare(i, j)))
 }
 
 #[cfg(test)]
