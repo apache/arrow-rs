@@ -195,8 +195,8 @@ fn bench_merge_on_input_generator(c: &mut Criterion, input_generator: &impl Inpu
         "non_null_scalar_vs_array",
         &mut group,
         &masks,
-        &array_1_10pct_nulls,
         &non_null_scalar_1,
+        &array_1_10pct_nulls,
     );
 
     bench_merge_input_on_all_masks(
