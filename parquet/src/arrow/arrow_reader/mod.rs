@@ -1014,7 +1014,7 @@ impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 /// Reads Parquet data as Arrow [`RecordBatch`]es
 ///
 /// This struct implements the [`RecordBatchReader`] trait and is an
-/// `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`].s
+/// `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]es.
 ///
 /// Typically, either reads from a file or an in memory buffer [`Bytes`]
 ///
