@@ -24,7 +24,7 @@ use arrow_buffer::BooleanBuffer;
 use arrow_schema::{ArrowError, SortOptions};
 
 use crate::cmp::distinct;
-use crate::ord::make_comparator;
+use crate::ord::Comparator;
 
 /// A computed set of partitions, see [`partition`]
 #[derive(Debug, Clone)]
@@ -163,8 +163,8 @@ fn find_boundaries(v: &dyn Array) -> Result<BooleanBuffer, ArrowError> {
     }
     // Given that we're only comparing values, null ordering in the input or
     // sort options do not matter.
-    let cmp = make_comparator(&v1, &v2, SortOptions::default())?;
-    Ok((0..slice_len).map(|i| !cmp(i, i).is_eq()).collect())
+    let cmp = Comparator::try_new(&v1, &v2, SortOptions::default())?;
+    Ok((0..slice_len).map(|i| !cmp.compare(i, i).is_eq()).collect())
 }
 
 #[cfg(test)]

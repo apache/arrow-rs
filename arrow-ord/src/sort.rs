@@ -17,7 +17,7 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{DynComparator, make_comparator};
+use crate::ord::Comparator;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
@@ -989,14 +989,14 @@ where
 /// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
 /// at given two indices. The lifetime is the same at the data wrapped.
 pub struct LexicographicalComparator {
-    compare_items: Vec<DynComparator>,
+    compare_items: Vec<Comparator>,
 }
 
 impl LexicographicalComparator {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
-            match comparator(a_idx, b_idx) {
+            match comparator.compare(a_idx, b_idx) {
                 Ordering::Equal => continue,
                 r => return r,
             }
@@ -1010,7 +1010,7 @@ impl LexicographicalComparator {
         let compare_items = columns
             .iter()
             .map(|c| {
-                make_comparator(
+                Comparator::try_new(
                     c.values.as_ref(),
                     c.values.as_ref(),
                     c.options.unwrap_or_default(),
@@ -1025,14 +1025,14 @@ impl LexicographicalComparator {
 /// at given two indices. This version of the comparator is for compile-time constant number of columns.
 /// The lifetime is the same at the data wrapped.
 pub struct FixedLexicographicalComparator<const N: usize> {
-    compare_items: [DynComparator; N],
+    compare_items: [Comparator; N],
 }
 
 impl<const N: usize> FixedLexicographicalComparator<N> {
     /// lexicographically compare values at the wrapped columns with given indices.
     pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
         for comparator in &self.compare_items {
-            match comparator(a_idx, b_idx) {
+            match comparator.compare(a_idx, b_idx) {
                 Ordering::Equal => continue,
                 r => return r,
             }
@@ -1049,7 +1049,7 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
         let compare_items = columns
             .iter()
             .map(|c| {
-                make_comparator(
+                Comparator::try_new(
                     c.values.as_ref(),
                     c.values.as_ref(),
                     c.options.unwrap_or_default(),
@@ -1057,10 +1057,9 @@ impl<const N: usize> FixedLexicographicalComparator<N> {
             })
             .collect::<Result<Vec<_>, ArrowError>>()?
             .try_into();
-        let compare_items: [Box<dyn Fn(usize, usize) -> Ordering + Send + Sync + 'static>; N] =
-            compare_items.map_err(|_| {
-                ArrowError::ComputeError("Could not create fixed size array".to_string())
-            })?;
+        let compare_items: [Comparator; N] = compare_items.map_err(|_| {
+            ArrowError::ComputeError("Could not create fixed size array".to_string())
+        })?;
         Ok(FixedLexicographicalComparator { compare_items })
     }
 }
