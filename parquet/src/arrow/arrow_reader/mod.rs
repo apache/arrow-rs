@@ -950,16 +950,12 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
             .build_array_reader(fields.as_deref(), &projection)?;
 
-        let mut plan_builder = plan_builder
+        let read_plan = plan_builder
             .limited(reader.num_rows())
             .with_offset(offset)
             .with_limit(limit)
-            .build_limited();
-
-        let preferred_strategy = plan_builder.preferred_selection_strategy();
-        plan_builder = plan_builder.with_selection_strategy(preferred_strategy);
-
-        let read_plan = plan_builder.build();
+            .build_limited()
+            .build();
 
         Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
     }
