@@ -38,11 +38,8 @@ async fn main() -> Result<()> {
     let metadata = Arc::try_unwrap(file.get_metadata(None).await?).unwrap();
 
     for row_group_idx in 0..metadata.row_groups().len() {
-        let mut rowgroup = InMemoryRowGroup::create(
-            metadata.clone(),
-            row_group_idx,
-            ProjectionMask::all(),
-        );
+        let mut rowgroup =
+            InMemoryRowGroup::create(metadata.clone(), row_group_idx, ProjectionMask::all());
         rowgroup.async_fetch_data(&mut file, None).await?;
         let reader = rowgroup.build_reader(1024, None)?;
 
@@ -146,7 +143,12 @@ impl RowGroups for InMemoryRowGroup {
 
 impl InMemoryRowGroup {
     pub fn create(metadata: ParquetMetaData, row_group_idx: usize, mask: ProjectionMask) -> Self {
-        let column_chunks = metadata.row_group(row_group_idx).columns().iter().map(|_| None).collect::<Vec<_>>();
+        let column_chunks = metadata
+            .row_group(row_group_idx)
+            .columns()
+            .iter()
+            .map(|_| None)
+            .collect::<Vec<_>>();
 
         Self {
             metadata,

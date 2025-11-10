@@ -28,7 +28,9 @@ use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
-use crate::arrow::schema::{ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column};
+use crate::arrow::schema::{
+    ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column,
+};
 use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels_with_virtual};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
@@ -38,7 +40,9 @@ use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use crate::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -408,7 +412,7 @@ pub struct ArrowReaderOptions {
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 
-    virtual_columns: Vec<FieldRef>
+    virtual_columns: Vec<FieldRef>,
 }
 
 impl ArrowReaderOptions {
@@ -679,7 +683,11 @@ impl ArrowReaderMetadata {
     /// of the settings in `options`. See [`Self::load`] to load metadata including the page index if needed.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
         match options.supplied_schema {
-            Some(supplied_schema) => Self::with_supplied_schema(metadata, supplied_schema.clone(), &options.virtual_columns),
+            Some(supplied_schema) => Self::with_supplied_schema(
+                metadata,
+                supplied_schema.clone(),
+                &options.virtual_columns,
+            ),
             None => {
                 let kv_metadata = match options.skip_arrow_metadata {
                     true => None,
@@ -1282,7 +1290,7 @@ pub(crate) mod tests {
     use std::sync::Arc;
 
     use rand::rngs::StdRng;
-    use rand::{random, rng, Rng, RngCore, SeedableRng};
+    use rand::{Rng, RngCore, SeedableRng, random, rng};
     use tempfile::tempfile;
 
     use arrow_array::builder::*;
@@ -5164,11 +5172,11 @@ pub(crate) mod tests {
             "value",
             Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
         )]);
-        let supplied_fields = Fields::from(vec![
-            Field::new("value", ArrowDataType::Int64, false),
-        ]);
+        let supplied_fields = Fields::from(vec![Field::new("value", ArrowDataType::Int64, false)]);
 
-        let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
 
         let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
         let options = options.with_virtual_columns(vec![row_number_field.clone()]);
@@ -5213,10 +5221,17 @@ pub(crate) mod tests {
             "value",
             Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
         )]);
-        let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
-        let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()]);
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let options =
+            ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()]);
         let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
-        let num_columns = metadata.metadata.file_metadata().schema_descr().num_columns();
+        let num_columns = metadata
+            .metadata
+            .file_metadata()
+            .schema_descr()
+            .num_columns();
 
         let mut arrow_reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
             .with_projection(ProjectionMask::none(num_columns))
@@ -5224,9 +5239,7 @@ pub(crate) mod tests {
             .expect("reader with schema");
 
         let batch = arrow_reader.next().unwrap().unwrap();
-        let schema = Arc::new(Schema::new(vec![
-            row_number_field,
-        ]));
+        let schema = Arc::new(Schema::new(vec![row_number_field]));
 
         assert_eq!(batch.schema(), schema);
         assert_eq!(batch.num_columns(), 1);
@@ -5255,8 +5268,12 @@ pub(crate) mod tests {
             false,
             |path, selection, _row_filter, batch_size| {
                 let file = File::open(path).unwrap();
-                let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
-                let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                let row_number_field = Arc::new(
+                    Field::new("row_number", ArrowDataType::Int64, false)
+                        .with_extension_type(RowNumber),
+                );
+                let options =
+                    ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()
                     .with_row_selection(selection)
@@ -5276,8 +5293,12 @@ pub(crate) mod tests {
             true,
             |path, selection, row_filter, batch_size| {
                 let file = File::open(path).unwrap();
-                let row_number_field = Arc::new(Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber));
-                let options = ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                let row_number_field = Arc::new(
+                    Field::new("row_number", ArrowDataType::Int64, false)
+                        .with_extension_type(RowNumber),
+                );
+                let options =
+                    ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()
                     .with_row_selection(selection)

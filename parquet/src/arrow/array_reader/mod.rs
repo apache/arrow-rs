@@ -145,6 +145,7 @@ pub trait RowGroups {
     /// Returns an iterator over the row groups in this collection
     fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_>;
 
+    /// Returns the parquet metadata
     fn metadata(&self) -> &ParquetMetaData;
 }
 
