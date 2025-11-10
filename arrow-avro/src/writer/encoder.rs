@@ -157,7 +157,7 @@ fn write_sign_extended<W: Write + ?Sized>(out: &mut W, src_be: &[u8], n: usize) 
         }
         return out
             .write_all(&src_be[extra..])
-            .map_err(|e| AvroError::General(format!("write decimal fixed: {e}")));
+            .map_err(|e| AvroError::IoError(format!("write decimal fixed: {e}"), e));
     }
     // len < n: prepend sign bytes (sign extension) then the payload
     let pad_len = n - len;
