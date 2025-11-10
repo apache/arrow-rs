@@ -52,6 +52,8 @@ pub enum AvroError {
     SchemaError(String),
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
+    /// Error during IO operations
+    IoError(String, io::Error),
     /// Returned when a function needs more data to complete properly. The `usize` field indicates
     /// the total number of bytes required, not the number of additional bytes.
     NeedMoreData(usize),
@@ -78,6 +80,7 @@ impl std::fmt::Display for AvroError {
             AvroError::ParseError(message) => write!(fmt, "Parse error: {message}"),
             AvroError::SchemaError(message) => write!(fmt, "Schema error: {message}"),
             AvroError::External(e) => write!(fmt, "External: {e}"),
+            AvroError::IoError(message, e) => write!(fmt, "I/O Error: {message}: {e}"),
             AvroError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
             AvroError::NeedMoreDataRange(range) => {
                 write!(fmt, "NeedMoreDataRange: {}..{}", range.start, range.end)
@@ -91,6 +94,7 @@ impl Error for AvroError {
         match self {
             AvroError::External(e) => Some(e.as_ref()),
             AvroError::ArrowError(e) => Some(e.as_ref()),
+            AvroError::IoError(_, e) => Some(e),
             _ => None,
         }
     }
@@ -139,7 +143,8 @@ impl From<AvroError> for ArrowError {
     fn from(e: AvroError) -> Self {
         match e {
             AvroError::External(inner) => ArrowError::from_external_error(inner),
-            AvroError::ArrowError(inner) => ArrowError::from_external_error(inner),
+            AvroError::IoError(msg, err) => ArrowError::IoError(msg, err),
+            AvroError::ArrowError(inner) => *inner,
             other => ArrowError::AvroError(other.to_string()),
         }
     }

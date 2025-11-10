@@ -831,11 +831,11 @@ impl Decoder {
     /// If a schema change was detected while decoding rows for the current batch, the
     /// schema switch is applied **after** flushing this batch, so the **next** batch
     /// (if any) may have a different schema.
-    pub fn flush(&mut self) -> Result<Option<RecordBatch>, ArrowError> {
+    pub fn flush(&mut self) -> Result<Option<RecordBatch>> {
         // We must flush the active decoder before switching to the pending one.
         let batch = self.flush_and_reset();
         self.apply_pending_schema();
-        batch.map_err(ArrowError::from)
+        batch
     }
 
     /// Returns the number of rows that can be added to this decoder before it is full.
@@ -1011,12 +1011,9 @@ impl ReaderBuilder {
         reader_schema: Option<&AvroSchema>,
     ) -> Result<Decoder> {
         if let Some(hdr) = header {
-            let writer_schema = hdr
-                .schema()
-                .map_err(|e| AvroError::External(Box::new(e)))?
-                .ok_or_else(|| {
-                    AvroError::ParseError("No Avro schema present in file header".into())
-                })?;
+            let writer_schema = hdr.schema()?.ok_or_else(|| {
+                AvroError::ParseError("No Avro schema present in file header".into())
+            })?;
             let record_decoder =
                 self.make_record_decoder_from_schemas(&writer_schema, reader_schema)?;
             return Ok(self.make_decoder_with_parts(

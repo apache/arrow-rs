@@ -38,9 +38,9 @@ pub(crate) fn read_header<R: BufRead>(mut reader: R) -> Result<Header> {
             break;
         }
     }
-    decoder.flush().ok_or_else(|| {
-        AvroError::ParseError("Unexpected EOF while reading Avro header".to_string())
-    })
+    decoder
+        .flush()
+        .ok_or_else(|| AvroError::EOF("Unexpected EOF while reading Avro header".to_string()))
 }
 
 #[derive(Debug)]
