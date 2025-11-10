@@ -541,7 +541,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
                 }
             }
 
-            let mut groups = Vec::with_capacity(total_large / (i32::MAX as usize) + 1);
+            let mut groups = Vec::new();
             let mut current_length = 0;
             let mut current_elements = 0;
 
@@ -589,7 +589,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
             (views_buf, data_blocks)
         };
 
-        // 5) Wrap up buffers
+        // 5) Wrap up views buffer
         let views_scalar = ScalarBuffer::from(views_buf);
 
         // SAFETY: views_scalar, data_blocks, and nulls are correctly aligned and sized
