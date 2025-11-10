@@ -588,7 +588,8 @@ fn compare_fixed_binary_values(
 /// let right = Int32Array::from(vec![3, 2, 1]);
 /// let opts = SortOptions::default();
 /// let comparator = Comparator::try_new(&left, &right, opts).unwrap();
-/// let ordering = comparator.compare(0, 2); // Compare left[0] with right[2]
+/// // Compare left[0] with right[0] -> 1 vs 3 -> Less
+/// let ordering = comparator.compare(0, 0);
 /// assert_eq!(ordering, Ordering::Less);
 /// ```
 pub struct Comparator {
