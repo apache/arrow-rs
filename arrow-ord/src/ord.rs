@@ -1494,14 +1494,14 @@ fn compare_dict<K: ArrowDictionaryKeyType>(
     let right = right.as_dictionary::<K>();
 
     let c_opts = child_opts(opts);
-    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+    let cmp = Comparator::try_new(left.values().as_ref(), right.values().as_ref(), c_opts)?;
     let left_keys = left.keys().values().clone();
     let right_keys = right.keys().values().clone();
 
     let f = compare(left, right, opts, move |i, j| {
         let l = left_keys[i].as_usize();
         let r = right_keys[j].as_usize();
-        cmp(l, r)
+        cmp.compare(l, r)
     });
     Ok(f)
 }
@@ -1515,7 +1515,7 @@ fn compare_list<O: OffsetSizeTrait>(
     let right = right.as_list::<O>();
 
     let c_opts = child_opts(opts);
-    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+    let cmp = Comparator::try_new(left.values().as_ref(), right.values().as_ref(), c_opts)?;
 
     let l_o = left.offsets().clone();
     let r_o = right.offsets().clone();
@@ -1527,7 +1527,7 @@ fn compare_list<O: OffsetSizeTrait>(
         let r_start = r_o[j].as_usize();
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
-            match cmp(i, j) {
+            match cmp.compare(i, j) {
                 Ordering::Equal => continue,
                 r => return r,
             }
@@ -1546,7 +1546,7 @@ fn compare_fixed_list(
     let right = right.as_fixed_size_list();
 
     let c_opts = child_opts(opts);
-    let cmp = make_comparator(left.values().as_ref(), right.values().as_ref(), c_opts)?;
+    let cmp = Comparator::try_new(left.values().as_ref(), right.values().as_ref(), c_opts)?;
 
     let l_size = left.value_length().to_usize().unwrap();
     let r_size = right.value_length().to_usize().unwrap();
@@ -1558,7 +1558,7 @@ fn compare_fixed_list(
         let r_start = j * r_size;
         let r_end = r_start + r_size;
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
-            match cmp(i, j) {
+            match cmp.compare(i, j) {
                 Ordering::Equal => continue,
                 r => return r,
             }
@@ -1577,7 +1577,7 @@ fn compare_map(
     let right = right.as_map();
 
     let c_opts = child_opts(opts);
-    let cmp = make_comparator(left.entries(), right.entries(), c_opts)?;
+    let cmp = Comparator::try_new(left.entries(), right.entries(), c_opts)?;
 
     let l_o = left.offsets().clone();
     let r_o = right.offsets().clone();
@@ -1589,7 +1589,7 @@ fn compare_map(
         let r_start = r_o[j].as_usize();
 
         for (i, j) in (l_start..l_end).zip(r_start..r_end) {
-            match cmp(i, j) {
+            match cmp.compare(i, j) {
                 Ordering::Equal => continue,
                 r => return r,
             }
@@ -1616,12 +1616,12 @@ fn compare_struct(
     let c_opts = child_opts(opts);
     let columns = left.columns().iter().zip(right.columns());
     let comparators = columns
-        .map(|(l, r)| make_comparator(l, r, c_opts))
+        .map(|(l, r)| Comparator::try_new(l, r, c_opts))
         .collect::<Result<Vec<_>, _>>()?;
 
     let f = compare(left, right, opts, move |i, j| {
         for cmp in &comparators {
-            match cmp(i, j) {
+            match cmp.compare(i, j) {
                 Ordering::Equal => continue,
                 r => return r,
             }
