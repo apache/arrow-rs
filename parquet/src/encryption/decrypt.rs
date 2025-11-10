@@ -21,6 +21,7 @@ use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN}
 use crate::encryption::modules::{ModuleType, create_footer_aad, create_module_aad};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
+use crate::file::metadata::HeapSize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -271,6 +272,12 @@ struct ExplicitDecryptionKeys {
     column_keys: HashMap<String, Vec<u8>>,
 }
 
+impl HeapSize for ExplicitDecryptionKeys {
+    fn heap_size(&self) -> usize {
+        self.footer_key.heap_size() + self.column_keys.heap_size()
+    }
+}
+
 #[derive(Clone)]
 enum DecryptionKeys {
     Explicit(ExplicitDecryptionKeys),
@@ -286,6 +293,19 @@ impl PartialEq for DecryptionKeys {
             }
             (DecryptionKeys::ViaRetriever(_), DecryptionKeys::ViaRetriever(_)) => true,
             _ => false,
+        }
+    }
+}
+
+impl HeapSize for DecryptionKeys {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::Explicit(keys) => keys.heap_size(),
+            Self::ViaRetriever(_) => {
+                // The retriever is a user-defined type we don't control,
+                // so we can't determine the heap size.
+                0
+            }
         }
     }
 }
@@ -334,6 +354,11 @@ pub struct FileDecryptionProperties {
     footer_signature_verification: bool,
 }
 
+impl HeapSize for FileDecryptionProperties {
+    fn heap_size(&self) -> usize {
+        self.keys.heap_size() + self.aad_prefix.heap_size()
+    }
+}
 impl FileDecryptionProperties {
     /// Returns a new [`FileDecryptionProperties`] builder that will use the provided key to
     /// decrypt footer metadata.
@@ -544,6 +569,21 @@ pub(crate) struct FileDecryptor {
 impl PartialEq for FileDecryptor {
     fn eq(&self, other: &Self) -> bool {
         self.decryption_properties == other.decryption_properties && self.file_aad == other.file_aad
+    }
+}
+
+/// Estimate the size in bytes required for the file decryptor.
+/// This is important to track the memory usage of cached Parquet meta data,
+/// and is used via [`crate::file::metadata::ParquetMetaData::memory_size`].
+/// Note that when a [`KeyRetriever`] is used, its heap size won't be included
+/// and the result will be an underestimate.
+/// If the [`FileDecryptionProperties`] are shared between multiple files then the
+/// heap size may also be an overestimate.
+impl HeapSize for FileDecryptor {
+    fn heap_size(&self) -> usize {
+        self.decryption_properties.heap_size()
+            + (Arc::clone(&self.footer_decryptor) as Arc<dyn HeapSize>).heap_size()
+            + self.file_aad.heap_size()
     }
 }
 
