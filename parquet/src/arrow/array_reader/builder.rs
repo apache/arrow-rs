@@ -185,8 +185,7 @@ impl<'a> ArrayReaderBuilder<'a> {
     fn build_row_number_reader(&self) -> Result<Box<dyn ArrayReader>> {
         let parquet_metadata = self.parquet_metadata.ok_or_else(|| {
             ParquetError::General(
-                "ParquetMetaData is required to read virtual row number columns. \
-                 Use ArrayReaderBuilder::with_parquet_metadata()".to_string()
+                "ParquetMetaData is required to read virtual row number columns.".to_string()
             )
         })?;
         Ok(Box::new(RowNumberReader::try_new(

@@ -45,7 +45,7 @@ use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData};
+use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 
 mod metadata;
 pub use metadata::*;
@@ -510,45 +510,42 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             selection,
             batch_size,
             row_groups,
-            projection: self.projection,
-            selection: self.selection,
-            schema,
-            reader_factory: Some(reader_factory),
-            state: StreamState::Init,
+            limit,
+            offset,
+            metrics,
+            max_predicate_cache_size,
+        }
+        .build()?;
+
+        let request_state = RequestState::None { input: input.0 };
+
+        Ok(ParquetRecordBatchStream {
+            schema: projected_schema,
+            decoder,
+            request_state,
         })
     }
 }
 
-/// Returns a [`ReaderFactory`] and an optional [`ParquetRecordBatchReader`] for the next row group
+/// State machine that tracks outstanding requests to fetch data
 ///
-/// Note: If all rows are filtered out in the row group (e.g by filters, limit or
-/// offset), returns `None` for the reader.
-type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)>;
-
-/// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
-/// [`ParquetRecordBatchReader`]
-struct ReaderFactory<T> {
-    metadata: Arc<ParquetMetaData>,
-
-    /// Top level parquet schema
-    fields: Option<Arc<ParquetField>>,
-
-    input: T,
-
-    /// Optional filter
-    filter: Option<RowFilter>,
-
-    /// Limit to apply to remaining row groups.
-    limit: Option<usize>,
-
-    /// Offset to apply to the next
-    offset: Option<usize>,
-
-    /// Metrics
-    metrics: ArrowReaderMetrics,
-
-    /// Maximum size of the predicate cache
-    max_predicate_cache_size: usize,
+/// The parameter `T` is the input, typically an `AsyncFileReader`
+enum RequestState<T> {
+    /// No outstanding requests
+    None {
+        input: T,
+    },
+    /// There is an outstanding request for data
+    Outstanding {
+        /// Ranges that have been requested
+        ranges: Vec<Range<u64>>,
+        /// Future that will resolve (input, requested_ranges)
+        ///
+        /// Note the future owns the reader while the request is outstanding
+        /// and returns it upon completion
+        future: BoxFuture<'static, Result<(T, Vec<Bytes>)>>,
+    },
+    Done,
 }
 
 impl<T> RequestState<T>
