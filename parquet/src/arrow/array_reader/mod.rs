@@ -151,7 +151,7 @@ pub trait RowGroups {
 
 impl RowGroups for Arc<dyn FileReader> {
     fn num_rows(&self) -> usize {
-        self.metadata().file_metadata().num_rows() as usize
+        FileReader::metadata(self.as_ref()).file_metadata().num_rows() as usize
     }
 
     fn column_chunks(&self, column_index: usize) -> Result<Box<dyn PageIterator>> {
@@ -160,11 +160,11 @@ impl RowGroups for Arc<dyn FileReader> {
     }
 
     fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
-        Box::new(self.metadata().row_groups().iter())
+        Box::new(FileReader::metadata(self.as_ref()).row_groups().iter())
     }
 
     fn metadata(&self) -> &ParquetMetaData {
-        self.metadata()
+        FileReader::metadata(self.as_ref())
     }
 }
 
