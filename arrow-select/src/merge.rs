@@ -24,9 +24,9 @@ use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_schema::ArrowError;
 
-/// An index for the [merge] function.
+/// An index for the [merge_n] function.
 ///
-/// This trait allows the indices argument for [merge] to be stored using a more
+/// This trait allows the indices argument for [merge_n] to be stored using a more
 /// compact representation than `usize` when the input arrays are small.
 /// If the number of input arrays is less than 256 for instance, the indices can be stored as `u8`.
 ///
@@ -80,7 +80,7 @@ impl MergeIndex for Option<usize> {
 /// Long spans of null values are also especially cheap because they do not need to be represented
 /// in an input array.
 ///
-/// # Safety
+/// # Panics
 ///
 /// This function does not check that the number of occurrences of any particular array index matches
 /// the length of the corresponding input array. If an array contains more values than required, the
