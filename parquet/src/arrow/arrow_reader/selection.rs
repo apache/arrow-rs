@@ -15,15 +15,15 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::arrow::ProjectionMask;
+use crate::errors::ParquetError;
+use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
 use arrow_select::filter::SlicesIterator;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
-
-use crate::arrow::ProjectionMask;
-use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 
 /// Strategy for materialising [`RowSelection`] during execution.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -751,116 +751,27 @@ fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelec
     iter.collect()
 }
 
-/// Cursor for iterating a [`RowSelection`] during execution within a
-/// [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan).
+/// Cursor for iterating a mask-backed [`RowSelection`]
 ///
-/// This keeps per-reader state such as the current position and delegates the
-/// actual storage strategy to the internal `RowSelectionBacking`.
+/// This is best for dense selections where there are many small skips
+/// or selections. For example, selecting every other row.
 #[derive(Debug)]
-pub struct RowSelectionCursor {
-    /// Backing storage describing how the selection is materialised
-    storage: RowSelectionBacking,
+pub struct MaskCursor {
+    mask: BooleanBuffer,
     /// Current absolute offset into the selection
     position: usize,
 }
 
-/// Backing storage that powers [`RowSelectionCursor`].
-///
-/// The cursor either walks a boolean mask (dense representation) or a queue
-/// of [`RowSelector`] ranges (sparse representation).
-#[derive(Debug)]
-pub enum RowSelectionBacking {
-    Mask(BooleanBuffer),
-    Selectors(VecDeque<RowSelector>),
-}
-
-/// Result of computing the next chunk to read when using a bitmap mask
-#[derive(Debug)]
-pub struct MaskChunk {
-    /// Number of leading rows to skip before reaching selected rows
-    pub initial_skip: usize,
-    /// Total rows covered by this chunk (selected + skipped)
-    pub chunk_rows: usize,
-    /// Rows actually selected within the chunk
-    pub selected_rows: usize,
-    /// Starting offset within the mask where the chunk begins
-    pub mask_start: usize,
-}
-
-impl RowSelectionCursor {
-    /// Create a cursor, choosing an efficient backing representation
-    pub(crate) fn new(selectors: Vec<RowSelector>, strategy: RowSelectionStrategy) -> Self {
-        let storage = match strategy {
-            RowSelectionStrategy::Mask => {
-                RowSelectionBacking::Mask(boolean_mask_from_selectors(&selectors))
-            }
-            RowSelectionStrategy::Selectors => RowSelectionBacking::Selectors(selectors.into()),
-            RowSelectionStrategy::Auto { .. } => {
-                panic!("RowSelectionStrategy::Auto must be resolved before creating cursor")
-            }
-        };
-
-        Self {
-            storage,
-            position: 0,
-        }
-    }
-
+impl MaskCursor {
     /// Returns `true` when no further rows remain
     pub fn is_empty(&self) -> bool {
-        match &self.storage {
-            RowSelectionBacking::Mask(mask) => self.position >= mask.len(),
-            RowSelectionBacking::Selectors(selectors) => selectors.is_empty(),
-        }
-    }
-
-    /// Current position within the overall selection
-    pub fn position(&self) -> usize {
-        self.position
-    }
-
-    /// Return the next [`RowSelector`] when using the sparse representation
-    pub fn next_selector(&mut self) -> RowSelector {
-        match &mut self.storage {
-            RowSelectionBacking::Selectors(selectors) => {
-                let selector = selectors.pop_front().unwrap();
-                self.position += selector.row_count;
-                selector
-            }
-            RowSelectionBacking::Mask(_) => {
-                unreachable!("next_selector called for mask-based RowSelectionCursor")
-            }
-        }
-    }
-
-    /// Return a selector to the front, rewinding the position (sparse-only)
-    pub fn return_selector(&mut self, selector: RowSelector) {
-        match &mut self.storage {
-            RowSelectionBacking::Selectors(selectors) => {
-                self.position = self.position.saturating_sub(selector.row_count);
-                selectors.push_front(selector);
-            }
-            RowSelectionBacking::Mask(_) => {
-                unreachable!("return_selector called for mask-based RowSelectionCursor")
-            }
-        }
-    }
-
-    /// Returns `true` if the cursor is backed by a boolean mask
-    pub fn is_mask_backed(&self) -> bool {
-        matches!(self.storage, RowSelectionBacking::Mask(_))
+        self.position >= self.mask.len()
     }
 
     /// Advance through the mask representation, producing the next chunk summary
     pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
-        if !self.is_mask_backed() {
-            unreachable!("next_mask_chunk called for selector-based RowSelectionCursor")
-        }
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
-            let mask = match &self.storage {
-                RowSelectionBacking::Mask(mask) => mask,
-                RowSelectionBacking::Selectors(_) => return None,
-            };
+            let mask = &self.mask;
 
             if self.position >= mask.len() {
                 return None;
@@ -904,18 +815,101 @@ impl RowSelectionCursor {
     }
 
     /// Materialise the boolean values for a mask-backed chunk
-    pub fn mask_values_for(&self, chunk: &MaskChunk) -> Option<BooleanArray> {
-        match &self.storage {
-            RowSelectionBacking::Mask(mask) => {
-                if chunk.mask_start.saturating_add(chunk.chunk_rows) > mask.len() {
-                    return None;
-                }
-                Some(BooleanArray::from(
-                    mask.slice(chunk.mask_start, chunk.chunk_rows),
-                ))
-            }
-            RowSelectionBacking::Selectors(_) => None,
+    pub fn mask_values_for(&self, chunk: &MaskChunk) -> Result<BooleanArray, ParquetError> {
+        if chunk.mask_start.saturating_add(chunk.chunk_rows) > self.mask.len() {
+            return Err(ParquetError::General(
+                "Internal Error: MaskChunk exceeds mask length".to_string(),
+            ));
         }
+        Ok(BooleanArray::from(
+            self.mask.slice(chunk.mask_start, chunk.chunk_rows),
+        ))
+    }
+}
+
+/// Cursor for iterating a selector-backed [`RowSelection`]
+///
+/// This is best for sparse selections where large contiguous
+/// blocks of rows are selected or skipped.
+#[derive(Debug)]
+pub struct SelectorsCursor {
+    selectors: VecDeque<RowSelector>,
+    /// Current absolute offset into the selection
+    position: usize,
+}
+
+impl SelectorsCursor {
+    /// Returns `true` when no further rows remain
+    pub fn is_empty(&self) -> bool {
+        self.selectors.is_empty()
+    }
+
+    pub(crate) fn selectors_mut(&mut self) -> &mut VecDeque<RowSelector> {
+        &mut self.selectors
+    }
+
+    /// Return the next [`RowSelector`]
+    pub(crate) fn next_selector(&mut self) -> RowSelector {
+        let selector = self.selectors.pop_front().unwrap();
+        self.position += selector.row_count;
+        selector
+    }
+
+    /// Return a selector to the front, rewinding the position
+    pub(crate) fn return_selector(&mut self, selector: RowSelector) {
+        self.position = self.position.saturating_sub(selector.row_count);
+        self.selectors.push_front(selector);
+    }
+}
+
+/// Result of computing the next chunk to read when using a [`MaskCursor`]
+#[derive(Debug)]
+pub struct MaskChunk {
+    /// Number of leading rows to skip before reaching selected rows
+    pub initial_skip: usize,
+    /// Total rows covered by this chunk (selected + skipped)
+    pub chunk_rows: usize,
+    /// Rows actually selected within the chunk
+    pub selected_rows: usize,
+    /// Starting offset within the mask where the chunk begins
+    pub mask_start: usize,
+}
+
+/// Cursor for iterating a [`RowSelection`] during execution within a
+/// [`ReadPlan`](crate::arrow::arrow_reader::ReadPlan).
+///
+/// This keeps per-reader state such as the current position and delegates the
+/// actual storage strategy to the internal `RowSelectionBacking`.
+#[derive(Debug)]
+pub enum RowSelectionCursor {
+    /// Reading all rows
+    All,
+    /// Use a bitmask to back the selection (dense selections)
+    Mask(MaskCursor),
+    /// Use a queue of selectors to back the selection (sparse selections)
+    Selectors(SelectorsCursor),
+}
+
+impl RowSelectionCursor {
+    /// Create a [`MaskCursor`] cursor backed by a bitmask, from an existing set of selectors
+    pub(crate) fn new_mask_from_selectors(selectors: Vec<RowSelector>) -> Self {
+        Self::Mask(MaskCursor {
+            mask: boolean_mask_from_selectors(&selectors),
+            position: 0,
+        })
+    }
+
+    /// Create a [`RowSelectionCursor::Selectors`] from the provided selectors
+    pub(crate) fn new_selectors(selectors: Vec<RowSelector>) -> Self {
+        Self::Selectors(SelectorsCursor {
+            selectors: selectors.into(),
+            position: 0,
+        })
+    }
+
+    /// Create a cursor that selects all rows
+    pub(crate) fn new_all() -> Self {
+        Self::All
     }
 }
 
