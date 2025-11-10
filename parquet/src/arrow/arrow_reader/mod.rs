@@ -894,8 +894,6 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     ///
     /// Note: this will eagerly evaluate any `RowFilter` before returning
     pub fn build(self) -> Result<ParquetRecordBatchReader> {
-        let selection_strategy = self.selection_strategy;
-
         let Self {
             input,
             metadata,
@@ -906,7 +904,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             projection,
             mut filter,
             selection,
-            selection_strategy: _,
+            selection_strategy,
             limit,
             offset,
             metrics,
