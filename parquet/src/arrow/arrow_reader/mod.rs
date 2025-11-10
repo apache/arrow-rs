@@ -572,8 +572,8 @@ impl ArrowReaderOptions {
     /// writer.close()?;
     ///
     /// // Create a virtual column for row numbers
-    /// let row_number_field = Field::new("row_number", DataType::Int64, false)
-    ///     .with_extension_type(RowNumber);
+    /// let row_number_field = Arc::new(Field::new("row_number", DataType::Int64, false)
+    ///     .with_extension_type(RowNumber));
     ///
     /// // Configure options with virtual columns
     /// let options = ArrowReaderOptions::new()
