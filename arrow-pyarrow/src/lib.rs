@@ -56,7 +56,7 @@
 //! have `Vec<RecordBatch>` on the Rust side and want to export that in bulk as a `pyarrow.Table`.
 //! In general, it is recommended to use streaming approaches instead of dealing with data in bulk.
 //! For example, a `pyarrow.Table` (or any other object that implements the ArrayStream PyCapsule
-//! interface) can be imported to Rust through `PyArrowType<ArrowArrayStreamReader>>` instead of
+//! interface) can be imported to Rust through `PyArrowType<ArrowArrayStreamReader>` instead of
 //! forcing eager reading into `Vec<RecordBatch>`.
 
 use std::convert::{From, TryFrom};
