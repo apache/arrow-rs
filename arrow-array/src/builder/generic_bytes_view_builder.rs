@@ -25,7 +25,7 @@ use arrow_schema::ArrowError;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 
-use crate::builder::{ArrayBuilder, StringLikeArrayBuilder};
+use crate::builder::{ArrayBuilder, BinaryLikeArrayBuilder, StringLikeArrayBuilder};
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{Array, ArrayRef, GenericByteViewArray};
@@ -569,6 +569,21 @@ impl StringLikeArrayBuilder for StringViewBuilder {
 /// ```
 ///
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
+
+impl BinaryLikeArrayBuilder for BinaryViewBuilder {
+    fn type_name() -> &'static str {
+        std::any::type_name::<BinaryViewBuilder>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn append_value(&mut self, value: &[u8]) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
 
 /// Creates a view from a fixed length input (the compiler can generate
 /// specialized code for this)
