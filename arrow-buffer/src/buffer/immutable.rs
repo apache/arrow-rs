@@ -524,6 +524,12 @@ impl std::ops::Deref for Buffer {
     }
 }
 
+impl AsRef<[u8]> for &Buffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
 impl From<MutableBuffer> for Buffer {
     #[inline]
     fn from(buffer: MutableBuffer) -> Self {

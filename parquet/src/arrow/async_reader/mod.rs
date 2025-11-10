@@ -21,26 +21,23 @@
 //!
 //! See example on [`ParquetRecordBatchStreamBuilder::new`]
 
-use std::collections::VecDeque;
 use std::fmt::Formatter;
 use std::io::SeekFrom;
 use std::ops::Range;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use futures::future::{BoxFuture, FutureExt};
-use futures::ready;
 use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
 use arrow_array::RecordBatch;
-use arrow_schema::{DataType, Fields, Schema, SchemaRef};
+use arrow_schema::{Schema, SchemaRef};
 
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-    RowFilter, RowSelection,
 };
 
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
@@ -56,12 +53,8 @@ pub use metadata::*;
 #[cfg(feature = "object_store")]
 mod store;
 
-use crate::arrow::ProjectionMask;
-use crate::arrow::array_reader::{ArrayReaderBuilder, CacheOptionsBuilder, RowGroupCache};
-use crate::arrow::arrow_reader::ReadPlanBuilder;
-use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::in_memory_row_group::{FetchRanges, InMemoryRowGroup};
-use crate::arrow::schema::ParquetField;
+use crate::DecodeResult;
+use crate::arrow::push_decoder::{NoInput, ParquetPushDecoder, ParquetPushDecoderBuilder};
 #[cfg(feature = "object_store")]
 pub use store::*;
 
@@ -201,10 +194,10 @@ impl ArrowReaderMetadata {
 }
 
 #[doc(hidden)]
-// A newtype used within `ReaderOptionsBuilder` to distinguish sync readers from async
-//
-// Allows sharing the same builder for both the sync and async versions, whilst also not
-// breaking the pre-existing ParquetRecordBatchStreamBuilder API
+/// Newtype (wrapper) used within [`ArrowReaderBuilder`] to distinguish sync readers from async
+///
+/// Allows sharing the same builder for different readers while keeping the same
+/// ParquetRecordBatchStreamBuilder API
 pub struct AsyncReader<T>(T);
 
 /// A builder for reading parquet files from an `async` source as  [`ParquetRecordBatchStream`]
@@ -483,300 +476,112 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
     ///
     /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
     pub fn build(self) -> Result<ParquetRecordBatchStream<T>> {
-        let num_row_groups = self.metadata.row_groups().len();
-
-        let row_groups = match self.row_groups {
-            Some(row_groups) => {
-                if let Some(col) = row_groups.iter().find(|x| **x >= num_row_groups) {
-                    return Err(general_err!(
-                        "row group {} out of bounds 0..{}",
-                        col,
-                        num_row_groups
-                    ));
-                }
-                row_groups.into()
-            }
-            None => (0..self.metadata.row_groups().len()).collect(),
-        };
-
-        // Try to avoid allocate large buffer
-        let batch_size = self
-            .batch_size
-            .min(self.metadata.file_metadata().num_rows() as usize);
-        let reader_factory = ReaderFactory {
-            input: self.input.0,
-            filter: self.filter,
-            metadata: self.metadata.clone(),
-            fields: self.fields,
-            limit: self.limit,
-            offset: self.offset,
-            metrics: self.metrics,
-            max_predicate_cache_size: self.max_predicate_cache_size,
-        };
+        let Self {
+            input,
+            metadata,
+            schema,
+            fields,
+            batch_size,
+            row_groups,
+            projection,
+            filter,
+            selection,
+            limit,
+            offset,
+            metrics,
+            max_predicate_cache_size,
+        } = self;
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
-        let projected_fields = match reader_factory.fields.as_deref().map(|pf| &pf.arrow_type) {
-            Some(DataType::Struct(fields)) => {
-                fields.filter_leaves(|idx, _| self.projection.leaf_included(idx))
-            }
-            None => Fields::empty(),
-            _ => unreachable!("Must be Struct for root type"),
-        };
-        let schema = Arc::new(Schema::new(projected_fields));
+        let projected_fields = schema
+            .fields
+            .filter_leaves(|idx, _| projection.leaf_included(idx));
+        let projected_schema = Arc::new(Schema::new(projected_fields));
 
-        Ok(ParquetRecordBatchStream {
-            metadata: self.metadata,
+        let decoder = ParquetPushDecoderBuilder {
+            input: NoInput,
+            metadata,
+            schema,
+            fields,
+            projection,
+            filter,
+            selection,
             batch_size,
             row_groups,
-            projection: self.projection,
-            selection: self.selection,
-            schema,
-            reader_factory: Some(reader_factory),
-            state: StreamState::Init,
+            limit,
+            offset,
+            metrics,
+            max_predicate_cache_size,
+        }
+        .build()?;
+
+        let request_state = RequestState::None { input: input.0 };
+
+        Ok(ParquetRecordBatchStream {
+            schema: projected_schema,
+            decoder,
+            request_state,
         })
     }
 }
 
-/// Returns a [`ReaderFactory`] and an optional [`ParquetRecordBatchReader`] for the next row group
+/// State machine that tracks outstanding requests to fetch data
 ///
-/// Note: If all rows are filtered out in the row group (e.g by filters, limit or
-/// offset), returns `None` for the reader.
-type ReadResult<T> = Result<(ReaderFactory<T>, Option<ParquetRecordBatchReader>)>;
-
-/// [`ReaderFactory`] is used by [`ParquetRecordBatchStream`] to create
-/// [`ParquetRecordBatchReader`]
-struct ReaderFactory<T> {
-    metadata: Arc<ParquetMetaData>,
-
-    /// Top level parquet schema
-    fields: Option<Arc<ParquetField>>,
-
-    input: T,
-
-    /// Optional filter
-    filter: Option<RowFilter>,
-
-    /// Limit to apply to remaining row groups.  
-    limit: Option<usize>,
-
-    /// Offset to apply to the next
-    offset: Option<usize>,
-
-    /// Metrics
-    metrics: ArrowReaderMetrics,
-
-    /// Maximum size of the predicate cache
-    ///
-    /// See [`RowGroupCache`] for details.
-    max_predicate_cache_size: usize,
+/// The parameter `T` is the input, typically an `AsyncFileReader`
+enum RequestState<T> {
+    /// No outstanding requests
+    None {
+        input: T,
+    },
+    /// There is an outstanding request for data
+    Outstanding {
+        /// Ranges that have been requested
+        ranges: Vec<Range<u64>>,
+        /// Future that will resolve (input, requested_ranges)
+        ///
+        /// Note the future owns the reader while the request is outstanding
+        /// and returns it upon completion
+        future: BoxFuture<'static, Result<(T, Vec<Bytes>)>>,
+    },
+    Done,
 }
 
-impl<T> ReaderFactory<T>
+impl<T> RequestState<T>
 where
-    T: AsyncFileReader + Send,
+    T: AsyncFileReader + Unpin + Send + 'static,
 {
-    /// Reads the next row group with the provided `selection`, `projection` and `batch_size`
-    ///
-    /// Updates the `limit` and `offset` of the reader factory
-    ///
-    /// Note: this captures self so that the resulting future has a static lifetime
-    async fn read_row_group(
-        mut self,
-        row_group_idx: usize,
-        selection: Option<RowSelection>,
-        projection: ProjectionMask,
-        batch_size: usize,
-    ) -> ReadResult<T> {
-        // TODO: calling build_array multiple times is wasteful
+    /// Issue a request to fetch `ranges`, returning the Outstanding state
+    fn begin_request(mut input: T, ranges: Vec<Range<u64>>) -> Self {
+        let ranges_captured = ranges.clone();
 
-        let meta = self.metadata.row_group(row_group_idx);
-        let offset_index = self
-            .metadata
-            .offset_index()
-            // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
-            .filter(|index| !index.is_empty())
-            .map(|x| x[row_group_idx].as_slice());
-
-        // Reuse columns that are selected and used by the filters
-        let cache_projection = match self.compute_cache_projection(&projection) {
-            Some(projection) => projection,
-            None => ProjectionMask::none(meta.columns().len()),
-        };
-        let row_group_cache = Arc::new(Mutex::new(RowGroupCache::new(
-            batch_size,
-            self.max_predicate_cache_size,
-        )));
-
-        let mut row_group = InMemoryRowGroup {
-            // schema: meta.schema_descr_ptr(),
-            row_count: meta.num_rows() as usize,
-            column_chunks: vec![None; meta.columns().len()],
-            offset_index,
-            row_group_idx,
-            metadata: self.metadata.as_ref(),
-        };
-
-        let cache_options_builder = CacheOptionsBuilder::new(&cache_projection, &row_group_cache);
-
-        let filter = self.filter.as_mut();
-        let mut plan_builder = ReadPlanBuilder::new(batch_size).with_selection(selection);
-
-        // Update selection based on any filters
-        if let Some(filter) = filter {
-            let cache_options = cache_options_builder.clone().producer();
-
-            for predicate in filter.predicates.iter_mut() {
-                if !plan_builder.selects_any() {
-                    return Ok((self, None)); // ruled out entire row group
-                }
-
-                // (pre) Fetch only the columns that are selected by the predicate
-                let selection = plan_builder.selection();
-                // Fetch predicate columns; expand selection only for cached predicate columns
-                let cache_mask = Some(&cache_projection);
-                row_group
-                    .fetch(
-                        &mut self.input,
-                        predicate.projection(),
-                        selection,
-                        batch_size,
-                        cache_mask,
-                    )
-                    .await?;
-
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_cache_options(Some(&cache_options))
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
-
-                plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
-            }
+        // Note this must move the input *into* the future
+        // because the get_byte_ranges future has a lifetime
+        // (aka can have references internally) and thus must
+        // own the input while the request is outstanding.
+        let future = async move {
+            let data = input.get_byte_ranges(ranges_captured).await?;
+            Ok((input, data))
         }
-
-        // Compute the number of rows in the selection before applying limit and offset
-        let rows_before = plan_builder
-            .num_rows_selected()
-            .unwrap_or(row_group.row_count);
-
-        if rows_before == 0 {
-            return Ok((self, None)); // ruled out entire row group
-        }
-
-        // Apply any limit and offset
-        let plan_builder = plan_builder
-            .limited(row_group.row_count)
-            .with_offset(self.offset)
-            .with_limit(self.limit)
-            .build_limited();
-
-        let rows_after = plan_builder
-            .num_rows_selected()
-            .unwrap_or(row_group.row_count);
-
-        // Update running offset and limit for after the current row group is read
-        if let Some(offset) = &mut self.offset {
-            // Reduction is either because of offset or limit, as limit is applied
-            // after offset has been "exhausted" can just use saturating sub here
-            *offset = offset.saturating_sub(rows_before - rows_after)
-        }
-
-        if rows_after == 0 {
-            return Ok((self, None)); // ruled out entire row group
-        }
-
-        if let Some(limit) = &mut self.limit {
-            *limit -= rows_after;
-        }
-        // fetch the pages needed for decoding
-        row_group
-            // Final projection fetch shouldn't expand selection for cache; pass None
-            .fetch(
-                &mut self.input,
-                &projection,
-                plan_builder.selection(),
-                batch_size,
-                None,
-            )
-            .await?;
-
-        let plan = plan_builder.build();
-
-        let cache_options = cache_options_builder.consumer();
-        let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
-            .with_cache_options(Some(&cache_options))
-            .build_array_reader(self.fields.as_deref(), &projection)?;
-
-        let reader = ParquetRecordBatchReader::new(array_reader, plan);
-
-        Ok((self, Some(reader)))
-    }
-
-    /// Compute which columns are used in filters and the final (output) projection
-    fn compute_cache_projection(&self, projection: &ProjectionMask) -> Option<ProjectionMask> {
-        // Do not compute the projection mask if the predicate cache is disabled
-        if self.max_predicate_cache_size == 0 {
-            return None;
-        }
-
-        let filters = self.filter.as_ref()?;
-        let mut cache_projection = filters.predicates.first()?.projection().clone();
-        for predicate in filters.predicates.iter() {
-            cache_projection.union(predicate.projection());
-        }
-        cache_projection.intersect(projection);
-        self.exclude_nested_columns_from_cache(&cache_projection)
-    }
-
-    /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
-    fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
-        let schema = self.metadata.file_metadata().schema_descr();
-        let num_leaves = schema.num_columns();
-
-        // Count how many leaves each root column has
-        let num_roots = schema.root_schema().get_fields().len();
-        let mut root_leaf_counts = vec![0usize; num_roots];
-        for leaf_idx in 0..num_leaves {
-            let root_idx = schema.get_column_root_idx(leaf_idx);
-            root_leaf_counts[root_idx] += 1;
-        }
-
-        // Keep only leaves whose root has exactly one leaf (non-nested)
-        let mut included_leaves = Vec::new();
-        for leaf_idx in 0..num_leaves {
-            if mask.leaf_included(leaf_idx) {
-                let root_idx = schema.get_column_root_idx(leaf_idx);
-                if root_leaf_counts[root_idx] == 1 {
-                    included_leaves.push(leaf_idx);
-                }
-            }
-        }
-
-        if included_leaves.is_empty() {
-            None
-        } else {
-            Some(ProjectionMask::leaves(schema, included_leaves))
-        }
+        .boxed();
+        RequestState::Outstanding { ranges, future }
     }
 }
 
-enum StreamState<T> {
-    /// At the start of a new row group, or the end of the parquet stream
-    Init,
-    /// Decoding a batch
-    Decoding(ParquetRecordBatchReader),
-    /// Reading data from input
-    Reading(BoxFuture<'static, ReadResult<T>>),
-    /// Error
-    Error,
-}
-
-impl<T> std::fmt::Debug for StreamState<T> {
+impl<T> std::fmt::Debug for RequestState<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            StreamState::Init => write!(f, "StreamState::Init"),
-            StreamState::Decoding(_) => write!(f, "StreamState::Decoding"),
-            StreamState::Reading(_) => write!(f, "StreamState::Reading"),
-            StreamState::Error => write!(f, "StreamState::Error"),
+            RequestState::None { input: _ } => f
+                .debug_struct("RequestState::None")
+                .field("input", &"...")
+                .finish(),
+            RequestState::Outstanding { ranges, .. } => f
+                .debug_struct("RequestState::Outstanding")
+                .field("ranges", &ranges)
+                .finish(),
+            RequestState::Done => {
+                write!(f, "RequestState::Done")
+            }
         }
     }
 }
@@ -796,35 +601,23 @@ impl<T> std::fmt::Debug for StreamState<T> {
 /// required, which is especially important for object stores, where IO operations
 /// have latencies in the hundreds of milliseconds
 ///
+/// See [`ParquetPushDecoderBuilder`] for an API with lower level control over
+/// buffering.
 ///
 /// [`Stream`]: https://docs.rs/futures/latest/futures/stream/trait.Stream.html
 pub struct ParquetRecordBatchStream<T> {
-    metadata: Arc<ParquetMetaData>,
-
+    /// Output schema of the stream
     schema: SchemaRef,
-
-    row_groups: VecDeque<usize>,
-
-    projection: ProjectionMask,
-
-    batch_size: usize,
-
-    selection: Option<RowSelection>,
-
-    /// This is an option so it can be moved into a future
-    reader_factory: Option<ReaderFactory<T>>,
-
-    state: StreamState<T>,
+    /// Input and Outstanding IO request, if any
+    request_state: RequestState<T>,
+    /// Decoding state machine (no IO)
+    decoder: ParquetPushDecoder,
 }
 
 impl<T> std::fmt::Debug for ParquetRecordBatchStream<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ParquetRecordBatchStream")
-            .field("metadata", &self.metadata)
-            .field("schema", &self.schema)
-            .field("batch_size", &self.batch_size)
-            .field("projection", &self.projection)
-            .field("state", &self.state)
+            .field("request_state", &self.request_state)
             .finish()
     }
 }
@@ -858,45 +651,35 @@ where
     /// - `Ok(Some(reader))` which holds all the data for the row group.
     pub async fn next_row_group(&mut self) -> Result<Option<ParquetRecordBatchReader>> {
         loop {
-            match &mut self.state {
-                StreamState::Decoding(_) | StreamState::Reading(_) => {
-                    return Err(ParquetError::General(
-                        "Cannot combine the use of next_row_group with the Stream API".to_string(),
-                    ));
-                }
-                StreamState::Init => {
-                    let row_group_idx = match self.row_groups.pop_front() {
-                        Some(idx) => idx,
-                        None => return Ok(None),
-                    };
-
-                    let row_count = self.metadata.row_group(row_group_idx).num_rows() as usize;
-
-                    let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
-
-                    let reader_factory = self.reader_factory.take().expect("lost reader factory");
-
-                    let (reader_factory, maybe_reader) = reader_factory
-                        .read_row_group(
-                            row_group_idx,
-                            selection,
-                            self.projection.clone(),
-                            self.batch_size,
-                        )
-                        .await
-                        .inspect_err(|_| {
-                            self.state = StreamState::Error;
-                        })?;
-                    self.reader_factory = Some(reader_factory);
-
-                    if let Some(reader) = maybe_reader {
-                        return Ok(Some(reader));
-                    } else {
-                        // All rows skipped, read next row group
-                        continue;
+            // Take ownership of request state to process, leaving self in a
+            // valid state
+            let request_state = std::mem::replace(&mut self.request_state, RequestState::Done);
+            match request_state {
+                // No outstanding requests, proceed to setup next row group
+                RequestState::None { input } => {
+                    match self.decoder.try_next_reader()? {
+                        DecodeResult::NeedsData(ranges) => {
+                            self.request_state = RequestState::begin_request(input, ranges);
+                            continue; // poll again (as the input might be ready immediately)
+                        }
+                        DecodeResult::Data(reader) => {
+                            self.request_state = RequestState::None { input };
+                            return Ok(Some(reader));
+                        }
+                        DecodeResult::Finished => return Ok(None),
                     }
                 }
-                StreamState::Error => return Ok(None), // Ends the stream as error happens.
+                RequestState::Outstanding { ranges, future } => {
+                    let (input, data) = future.await?;
+                    // Push the requested data to the decoder and try again
+                    self.decoder.push_ranges(ranges, data)?;
+                    self.request_state = RequestState::None { input };
+                    continue; // try and decode on next iteration
+                }
+                RequestState::Done => {
+                    self.request_state = RequestState::Done;
+                    return Ok(None);
+                }
             }
         }
     }
@@ -907,102 +690,82 @@ where
     T: AsyncFileReader + Unpin + Send + 'static,
 {
     type Item = Result<RecordBatch>;
-
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        loop {
-            match &mut self.state {
-                StreamState::Decoding(batch_reader) => match batch_reader.next() {
-                    Some(Ok(batch)) => {
-                        return Poll::Ready(Some(Ok(batch)));
-                    }
-                    Some(Err(e)) => {
-                        self.state = StreamState::Error;
-                        return Poll::Ready(Some(Err(ParquetError::ArrowError(e.to_string()))));
-                    }
-                    None => self.state = StreamState::Init,
-                },
-                StreamState::Init => {
-                    let row_group_idx = match self.row_groups.pop_front() {
-                        Some(idx) => idx,
-                        None => return Poll::Ready(None),
-                    };
-
-                    let reader = self.reader_factory.take().expect("lost reader factory");
-
-                    let row_count = self.metadata.row_group(row_group_idx).num_rows() as usize;
-
-                    let selection = self.selection.as_mut().map(|s| s.split_off(row_count));
-
-                    let fut = reader
-                        .read_row_group(
-                            row_group_idx,
-                            selection,
-                            self.projection.clone(),
-                            self.batch_size,
-                        )
-                        .boxed();
-
-                    self.state = StreamState::Reading(fut)
-                }
-                StreamState::Reading(f) => match ready!(f.poll_unpin(cx)) {
-                    Ok((reader_factory, maybe_reader)) => {
-                        self.reader_factory = Some(reader_factory);
-                        match maybe_reader {
-                            // Read records from [`ParquetRecordBatchReader`]
-                            Some(reader) => self.state = StreamState::Decoding(reader),
-                            // All rows skipped, read next row group
-                            None => self.state = StreamState::Init,
-                        }
-                    }
-                    Err(e) => {
-                        self.state = StreamState::Error;
-                        return Poll::Ready(Some(Err(e)));
-                    }
-                },
-                StreamState::Error => return Poll::Ready(None), // Ends the stream as error happens.
+        match self.poll_next_inner(cx) {
+            Ok(res) => {
+                // Successfully decoded a batch, or reached end of stream.
+                // convert Option<RecordBatch> to Option<Result<RecordBatch>>
+                res.map(|res| Ok(res).transpose())
+            }
+            Err(e) => {
+                self.request_state = RequestState::Done;
+                Poll::Ready(Some(Err(e)))
             }
         }
     }
 }
 
-// Note this implementation is not with the rest of the InMemoryRowGroup
-// implementation because it relies on several async traits and types
-// that are only available when the "async" feature is enabled.
-impl InMemoryRowGroup<'_> {
-    /// Fetches any additional column data specified in `projection` that is not already
-    /// present in `self.column_chunks`.
+impl<T> ParquetRecordBatchStream<T>
+where
+    T: AsyncFileReader + Unpin + Send + 'static,
+{
+    /// Inner state machine
     ///
-    /// If `selection` is provided, only the pages required for the selection
-    /// are fetched. Otherwise, all pages are fetched.
-    pub(crate) async fn fetch<T: AsyncFileReader + Send>(
-        &mut self,
-        input: &mut T,
-        projection: &ProjectionMask,
-        selection: Option<&RowSelection>,
-        batch_size: usize,
-        cache_mask: Option<&ProjectionMask>,
-    ) -> Result<()> {
-        // Figure out what ranges to fetch
-        let FetchRanges {
-            ranges,
-            page_start_offsets,
-        } = self.fetch_ranges(projection, selection, batch_size, cache_mask);
-        // do the actual fetch
-        let chunk_data = input.get_byte_ranges(ranges).await?.into_iter();
-        // update our in memory buffers (self.column_chunks) with the fetched data
-        self.fill_column_chunks(projection, page_start_offsets, chunk_data);
-        Ok(())
+    /// Note this is separate from poll_next so we can use ? operator to check for errors
+    /// as it returns `Result<Poll<Option<RecordBatch>>>`
+    fn poll_next_inner(&mut self, cx: &mut Context<'_>) -> Result<Poll<Option<RecordBatch>>> {
+        loop {
+            let request_state = std::mem::replace(&mut self.request_state, RequestState::Done);
+            match request_state {
+                RequestState::None { input } => {
+                    // No outstanding requests, proceed to decode the next batch
+                    match self.decoder.try_decode()? {
+                        DecodeResult::NeedsData(ranges) => {
+                            self.request_state = RequestState::begin_request(input, ranges);
+                            continue; // poll again (as the input might be ready immediately)
+                        }
+                        DecodeResult::Data(batch) => {
+                            self.request_state = RequestState::None { input };
+                            return Ok(Poll::Ready(Some(batch)));
+                        }
+                        DecodeResult::Finished => {
+                            self.request_state = RequestState::Done;
+                            return Ok(Poll::Ready(None));
+                        }
+                    }
+                }
+                RequestState::Outstanding { ranges, mut future } => match future.poll_unpin(cx) {
+                    // Data was ready, push it to the decoder and continue
+                    Poll::Ready(result) => {
+                        let (input, data) = result?;
+                        // Push the requested data to the decoder
+                        self.decoder.push_ranges(ranges, data)?;
+                        self.request_state = RequestState::None { input };
+                        continue; // next iteration will try to decode the next batch
+                    }
+                    Poll::Pending => {
+                        self.request_state = RequestState::Outstanding { ranges, future };
+                        return Ok(Poll::Pending);
+                    }
+                },
+                RequestState::Done => {
+                    // Stream is done (error or end), return None
+                    self.request_state = RequestState::Done;
+                    return Ok(Poll::Ready(None));
+                }
+            }
+        }
     }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::ArrowWriter;
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowSelector,
+        ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-    use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
+    use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
@@ -1725,98 +1488,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[allow(deprecated)]
-    async fn test_in_memory_row_group_sparse() {
-        let testdata = arrow::util::test_util::parquet_test_data();
-        let path = format!("{testdata}/alltypes_tiny_pages.parquet");
-        let data = Bytes::from(std::fs::read(path).unwrap());
-
-        let metadata = ParquetMetaDataReader::new()
-            .with_page_indexes(true)
-            .parse_and_finish(&data)
-            .unwrap();
-
-        let offset_index = metadata.offset_index().expect("reading offset index")[0].clone();
-
-        let mut metadata_builder = metadata.into_builder();
-        let mut row_groups = metadata_builder.take_row_groups();
-        row_groups.truncate(1);
-        let row_group_meta = row_groups.pop().unwrap();
-
-        let metadata = metadata_builder
-            .add_row_group(row_group_meta)
-            .set_column_index(None)
-            .set_offset_index(Some(vec![offset_index.clone()]))
-            .build();
-
-        let metadata = Arc::new(metadata);
-
-        let num_rows = metadata.row_group(0).num_rows();
-
-        assert_eq!(metadata.num_row_groups(), 1);
-
-        let async_reader = TestReader::new(data.clone());
-
-        let requests = async_reader.requests.clone();
-        let (_, fields) = parquet_to_arrow_schema_and_fields(
-            metadata.file_metadata().schema_descr(),
-            ProjectionMask::all(),
-            None,
-        )
-        .unwrap();
-
-        let _schema_desc = metadata.file_metadata().schema_descr();
-
-        let projection = ProjectionMask::leaves(metadata.file_metadata().schema_descr(), vec![0]);
-
-        let reader_factory = ReaderFactory {
-            metadata,
-            fields: fields.map(Arc::new),
-            input: async_reader,
-            filter: None,
-            limit: None,
-            offset: None,
-            metrics: ArrowReaderMetrics::disabled(),
-            max_predicate_cache_size: 0,
-        };
-
-        let mut skip = true;
-        let mut pages = offset_index[0].page_locations.iter().peekable();
-
-        // Setup `RowSelection` so that we can skip every other page, selecting the last page
-        let mut selectors = vec![];
-        let mut expected_page_requests: Vec<Range<usize>> = vec![];
-        while let Some(page) = pages.next() {
-            let num_rows = if let Some(next_page) = pages.peek() {
-                next_page.first_row_index - page.first_row_index
-            } else {
-                num_rows - page.first_row_index
-            };
-
-            if skip {
-                selectors.push(RowSelector::skip(num_rows as usize));
-            } else {
-                selectors.push(RowSelector::select(num_rows as usize));
-                let start = page.offset as usize;
-                let end = start + page.compressed_page_size as usize;
-                expected_page_requests.push(start..end);
-            }
-            skip = !skip;
-        }
-
-        let selection = RowSelection::from(selectors);
-
-        let (_factory, _reader) = reader_factory
-            .read_row_group(0, Some(selection), projection.clone(), 48)
-            .await
-            .expect("reading row group");
-
-        let requests = requests.lock().unwrap();
-
-        assert_eq!(&requests[..], &expected_page_requests)
-    }
-
-    #[tokio::test]
     async fn test_batch_size_overallocate() {
         let testdata = arrow::util::test_util::parquet_test_data();
         // `alltypes_plain.parquet` only have 8 rows
@@ -1831,13 +1502,16 @@ mod tests {
 
         let file_rows = builder.metadata().file_metadata().num_rows() as usize;
 
-        let stream = builder
+        let builder = builder
             .with_projection(ProjectionMask::all())
-            .with_batch_size(1024)
-            .build()
-            .unwrap();
+            .with_batch_size(1024);
+
+        // even though the batch size is set to 1024, it should adjust to the max
+        // number of rows in the file (8)
         assert_ne!(1024, file_rows);
-        assert_eq!(stream.batch_size, file_rows);
+        assert_eq!(builder.batch_size, file_rows);
+
+        let _stream = builder.build().unwrap();
     }
 
     #[tokio::test]
