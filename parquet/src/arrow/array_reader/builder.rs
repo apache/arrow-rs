@@ -32,7 +32,6 @@ use crate::arrow::array_reader::{
     make_byte_array_reader,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::schema::virtual_type::RowNumber;
 use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
@@ -469,6 +468,7 @@ impl<'a> ArrayReaderBuilder<'a> {
 mod tests {
     use super::*;
     use crate::arrow::schema::parquet_to_arrow_schema_and_fields;
+    use crate::arrow::schema::virtual_type::RowNumber;
     use crate::file::reader::{FileReader, SerializedFileReader};
     use crate::util::test_common::file_util::get_test_file;
     use arrow::datatypes::Field;

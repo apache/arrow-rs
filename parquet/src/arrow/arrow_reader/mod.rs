@@ -20,7 +20,7 @@
 use arrow_array::Array;
 use arrow_array::cast::AsArray;
 use arrow_array::{RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Field, FieldRef, Schema, SchemaRef};
+use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelector};
 use std::fmt::{Debug, Formatter};

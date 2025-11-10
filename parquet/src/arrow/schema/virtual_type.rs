@@ -71,6 +71,16 @@ impl ExtensionType for RowNumber {
     }
 }
 
+/// Returns `true` if the field is a virtual column.
+///
+/// Virtual columns have extension type names starting with `parquet.virtual.`.
+pub fn is_virtual_column(field: &Field) -> bool {
+    field
+        .extension_type_name()
+        .map(|name| name.starts_with(VIRTUAL_PREFIX!()))
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use arrow_schema::{
@@ -139,14 +149,4 @@ mod tests {
         );
         field.extension_type::<RowNumber>();
     }
-}
-
-/// Returns `true` if the field is a virtual column.
-///
-/// Virtual columns have extension type names starting with `parquet.virtual.`.
-pub fn is_virtual_column(field: &Field) -> bool {
-    field
-        .extension_type_name()
-        .map(|name| name.starts_with(VIRTUAL_PREFIX!()))
-        .unwrap_or(false)
 }
