@@ -25,9 +25,12 @@ use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::Range;
 
-/// Strategy for materialising [`RowSelection`] during execution.
+/// Policy for picking a strategy to materialise [`RowSelection`] during execution.
+///
+/// Note that this is a user-provided preference, and the actual strategy used
+/// may differ based on safety considerations (e.g. page skipping).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RowSelectionStrategy {
+pub enum RowSelectionPolicy {
     /// Use a queue of [`RowSelector`] values
     Selectors,
     /// Use a boolean mask to materialise the selection
@@ -41,13 +44,25 @@ pub enum RowSelectionStrategy {
     },
 }
 
-impl Default for RowSelectionStrategy {
+impl Default for RowSelectionPolicy {
     fn default() -> Self {
         Self::Auto {
             threshold: 32,
             safe_strategy: true,
         }
     }
+}
+
+/// Fully resolved strategy for materializing [`RowSelection`] during execution.
+///
+/// This is determined from a combination of user preference (via [`RowSelectionPolicy`])
+/// and safety considerations (e.g. page skipping).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RowSelectionStrategy {
+    /// Use a queue of [`RowSelector`] values
+    Selectors,
+    /// Use a boolean mask to materialise the selection
+    Mask,
 }
 
 /// [`RowSelection`] is a collection of [`RowSelector`] used to skip rows when

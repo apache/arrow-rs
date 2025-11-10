@@ -22,8 +22,9 @@ use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
+use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
-    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionStrategy,
+    ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -157,7 +158,7 @@ pub(crate) struct RowGroupReaderBuilder {
     metrics: ArrowReaderMetrics,
 
     /// Strategy for materialising row selections
-    selection_strategy: RowSelectionStrategy,
+    row_selection_policy: RowSelectionPolicy,
 
     /// Current state of the decoder.
     ///
@@ -183,7 +184,7 @@ impl RowGroupReaderBuilder {
         metrics: ArrowReaderMetrics,
         max_predicate_cache_size: usize,
         buffers: PushBuffers,
-        selection_strategy: RowSelectionStrategy,
+        row_selection_policy: RowSelectionPolicy,
     ) -> Self {
         Self {
             batch_size,
@@ -195,7 +196,7 @@ impl RowGroupReaderBuilder {
             offset,
             metrics,
             max_predicate_cache_size,
-            selection_strategy,
+            row_selection_policy,
             state: Some(RowGroupDecoderState::Finished),
             buffers,
         }
@@ -241,7 +242,7 @@ impl RowGroupReaderBuilder {
         }
         let plan_builder = ReadPlanBuilder::new(self.batch_size)
             .with_selection(selection)
-            .with_selection_strategy(self.selection_strategy);
+            .with_row_selection_policy(self.row_selection_policy);
 
         let row_group_info = RowGroupInfo {
             row_group_idx,
@@ -532,33 +533,13 @@ impl RowGroupReaderBuilder {
                 // so don't call with_cache_projection here
                 .build();
 
-                match self.selection_strategy {
-                    RowSelectionStrategy::Auto {
-                        threshold: _threshold,
-                        safe_strategy,
-                    } => {
-                        let preferred_strategy = plan_builder.preferred_selection_strategy();
-                        let offset_index = self.row_group_offset_index(row_group_idx);
-                        let force_selectors = safe_strategy
-                            && matches!(preferred_strategy, RowSelectionStrategy::Mask)
-                            && plan_builder.selection().is_some_and(|selection| {
-                                selection.should_force_selectors(&self.projection, offset_index)
-                            });
+                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
-                        let resolved_strategy = if force_selectors {
-                            RowSelectionStrategy::Selectors
-                        } else {
-                            preferred_strategy
-                        };
-
-                        plan_builder = plan_builder.with_selection_strategy(resolved_strategy);
-                    }
-                    _ => {
-                        // If a non-auto strategy is specified, override any plan builder strategy
-                        plan_builder =
-                            plan_builder.with_selection_strategy(self.selection_strategy);
-                    }
-                }
+                plan_builder = overide_selector_strategy_if_needed(
+                    plan_builder,
+                    &self.projection,
+                    self.row_group_offset_index(row_group_idx),
+                );
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,
@@ -695,6 +676,59 @@ impl RowGroupReaderBuilder {
             .and_then(|index| index.get(row_group_idx))
             .map(|columns| columns.as_slice())
     }
+}
+
+/// Overrider the selection strategy if needed.
+///
+/// Some pages can be skipped during row-group construction of they are not read
+/// by the selections. This means that the data pages for those rows are never
+/// loaded and definition/repetition levels are never read. When using
+/// `RowSelections` selection works because skip_records() handles this
+/// case and skips the page accordingly.
+///
+/// However, with the current Mask design, all values must be read and decoded
+/// and then a Mask filter is applied filtering. Thus if any pages are skipped
+/// during row-group construction, the data pages are missing and cannot be
+/// decoded.
+///
+/// A simple example:
+/// * the page size is 2, the mask is 100001, row selection should be read(1) skip(4) read(1)
+/// * the ColumnChunkData would be page1(10), page2(skipped), page3(01)
+///
+/// Using the rowselection to skip(4), page2 won't be read at all, so in this
+/// case we can't decode all the rows and apply a mask. To correctly apply the
+/// bit mask, we need all 6 value be read, but the page2 is not in memory.
+fn overide_selector_strategy_if_needed(
+    plan_builder: ReadPlanBuilder,
+    projection_mask: &ProjectionMask,
+    offset_index: Option<&[OffsetIndexMetaData]>,
+) -> ReadPlanBuilder {
+    // override only applies to Auto policy
+    let RowSelectionPolicy::Auto { safe_strategy, .. } = plan_builder.row_selection_policy() else {
+        return plan_builder;
+    };
+
+    let preferred_strategy = plan_builder.resolve_selection_strategy();
+
+    let force_selectors = *safe_strategy
+        && matches!(preferred_strategy, RowSelectionStrategy::Mask)
+        && plan_builder.selection().is_some_and(|selection| {
+            selection.should_force_selectors(projection_mask, offset_index)
+        });
+
+    let resolved_strategy = if force_selectors {
+        RowSelectionStrategy::Selectors
+    } else {
+        preferred_strategy
+    };
+
+    // override the plan builder strategy with the resolved one
+    let new_policy = match resolved_strategy {
+        RowSelectionStrategy::Mask => RowSelectionPolicy::Mask,
+        RowSelectionStrategy::Selectors => RowSelectionPolicy::Selectors,
+    };
+
+    plan_builder.with_row_selection_policy(new_policy)
 }
 
 #[cfg(test)]
