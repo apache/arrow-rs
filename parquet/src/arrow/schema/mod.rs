@@ -34,8 +34,8 @@ use crate::schema::types::{ColumnDescriptor, SchemaDescriptor, Type};
 
 mod complex;
 mod extension;
-pub mod virtual_type;
 mod primitive;
+pub mod virtual_type;
 
 use super::PARQUET_FIELD_ID_META_KEY;
 use crate::arrow::ProjectionMask;
@@ -91,7 +91,8 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     }
 
     let hint = maybe_schema.as_ref().map(|s| s.fields());
-    let field_levels = parquet_to_arrow_field_levels_with_virtual(parquet_schema, mask, hint, virtual_columns)?;
+    let field_levels =
+        parquet_to_arrow_field_levels_with_virtual(parquet_schema, mask, hint, virtual_columns)?;
     let schema = Schema::new_with_metadata(field_levels.fields, metadata);
     Ok((schema, field_levels.levels))
 }
@@ -220,8 +221,14 @@ pub fn parquet_to_arrow_field_levels_with_virtual(
                 // Append each virtual column
                 for virtual_column in virtual_columns {
                     // Virtual columns can only be added at the root level
-                    assert_eq!(parquet_field.rep_level, 0, "Virtual columns can only be added at rep level 0");
-                    assert_eq!(parquet_field.def_level, 0, "Virtual columns can only be added at def level 0");
+                    assert_eq!(
+                        parquet_field.rep_level, 0,
+                        "Virtual columns can only be added at rep level 0"
+                    );
+                    assert_eq!(
+                        parquet_field.def_level, 0,
+                        "Virtual columns can only be added at def level 0"
+                    );
 
                     fields_vec.push(virtual_column.clone());
                     let virtual_parquet_field = complex::convert_virtual_field(
@@ -2371,6 +2378,11 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("is not a virtual column"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("is not a virtual column")
+        );
     }
 }

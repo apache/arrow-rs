@@ -39,7 +39,8 @@ impl RowNumberReader {
             .map(|rg| {
                 rg.ordinal().ok_or_else(|| {
                     ParquetError::General(
-                        "Row group missing ordinal field, required to compute row numbers".to_string()
+                        "Row group missing ordinal field, required to compute row numbers"
+                            .to_string(),
                     )
                 })
             })

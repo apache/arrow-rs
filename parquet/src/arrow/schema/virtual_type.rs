@@ -110,9 +110,12 @@ mod tests {
     #[should_panic(expected = "Virtual column extension type expects an empty string as metadata")]
     fn missing_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
-            [(EXTENSION_TYPE_NAME_KEY.to_owned(), RowNumber::NAME.to_owned())]
-                .into_iter()
-                .collect(),
+            [(
+                EXTENSION_TYPE_NAME_KEY.to_owned(),
+                RowNumber::NAME.to_owned(),
+            )]
+            .into_iter()
+            .collect(),
         );
         field.extension_type::<RowNumber>();
     }
@@ -122,7 +125,10 @@ mod tests {
     fn invalid_metadata() {
         let field = Field::new("", DataType::Int64, false).with_metadata(
             [
-                (EXTENSION_TYPE_NAME_KEY.to_owned(), RowNumber::NAME.to_owned()),
+                (
+                    EXTENSION_TYPE_NAME_KEY.to_owned(),
+                    RowNumber::NAME.to_owned(),
+                ),
                 (
                     EXTENSION_TYPE_METADATA_KEY.to_owned(),
                     "non-empty".to_owned(),
@@ -139,7 +145,8 @@ mod tests {
 ///
 /// Virtual columns have extension type names starting with `parquet.virtual.`.
 pub fn is_virtual_column(field: &Field) -> bool {
-    field.extension_type_name()
+    field
+        .extension_type_name()
         .map(|name| name.starts_with(VIRTUAL_PREFIX!()))
         .unwrap_or(false)
 }

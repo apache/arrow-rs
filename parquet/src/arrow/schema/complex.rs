@@ -589,7 +589,7 @@ pub(super) fn convert_virtual_field(
                 "unsupported virtual column type '{}' for field '{}'",
                 extension_name,
                 arrow_field.name()
-            )))
+            )));
         }
     };
 

@@ -32,8 +32,8 @@ use crate::arrow::array_reader::{
     make_byte_array_reader,
 };
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
 use crate::arrow::schema::virtual_type::RowNumber;
+use crate::arrow::schema::{ParquetField, ParquetFieldType, VirtualColumnType};
 use crate::basic::Type as PhysicalType;
 use crate::data_type::{BoolType, DoubleType, FloatType, Int32Type, Int64Type, Int96Type};
 use crate::errors::{ParquetError, Result};
@@ -124,7 +124,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: Option<&ParquetField>,
         mask: &ProjectionMask,
-) -> Result<Box<dyn ArrayReader>> {
+    ) -> Result<Box<dyn ArrayReader>> {
         let reader = field
             .and_then(|field| self.build_reader(field, mask).transpose())
             .transpose()?
@@ -142,7 +142,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-) -> Result<Option<Box<dyn ArrayReader>>> {
+    ) -> Result<Option<Box<dyn ArrayReader>>> {
         match field.field_type {
             ParquetFieldType::Primitive { col_idx, .. } => {
                 let Some(reader) = self.build_primitive_reader(field, mask)? else {
@@ -185,7 +185,7 @@ impl<'a> ArrayReaderBuilder<'a> {
     fn build_row_number_reader(&self) -> Result<Box<dyn ArrayReader>> {
         let parquet_metadata = self.parquet_metadata.ok_or_else(|| {
             ParquetError::General(
-                "ParquetMetaData is required to read virtual row number columns.".to_string()
+                "ParquetMetaData is required to read virtual row number columns.".to_string(),
             )
         })?;
         Ok(Box::new(RowNumberReader::try_new(
@@ -431,7 +431,7 @@ impl<'a> ArrayReaderBuilder<'a> {
         &self,
         field: &ParquetField,
         mask: &ProjectionMask,
-) -> Result<Option<Box<dyn ArrayReader>>> {
+    ) -> Result<Option<Box<dyn ArrayReader>>> {
         let arrow_fields = match &field.arrow_type {
             DataType::Struct(children) => children,
             _ => unreachable!(),
@@ -511,7 +511,9 @@ mod tests {
 
         let file_metadata = file_reader.metadata().file_metadata();
         let mask = ProjectionMask::leaves(file_metadata.schema_descr(), [0]);
-        let row_number_field = Arc::new(Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber));
+        let row_number_field = Arc::new(
+            Field::new("row_number", DataType::Int64, false).with_extension_type(RowNumber),
+        );
         let (_, fields) = parquet_to_arrow_schema_and_fields(
             file_metadata.schema_descr(),
             ProjectionMask::all(),
