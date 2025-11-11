@@ -38,7 +38,9 @@ use crate::column::page::{PageIterator, PageReader};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+};
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -404,6 +406,8 @@ pub struct ArrowReaderOptions {
     supplied_schema: Option<SchemaRef>,
     /// Policy for reading offset and column indexes.
     pub(crate) page_index_policy: PageIndexPolicy,
+    /// Options to control reading of Parquet metadata
+    metadata_options: ParquetMetaDataOptions,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -523,6 +527,16 @@ impl ArrowReaderOptions {
         }
     }
 
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    ///
+    /// This can be used to avoid reparsing the schema from the file when it is
+    /// already known.
+    pub fn with_parquet_schema(mut self, schema: Arc<SchemaDescriptor>) -> Self {
+        self.metadata_options.set_schema(schema);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
@@ -542,6 +556,11 @@ impl ArrowReaderOptions {
     /// This can be set via [`with_page_index`][Self::with_page_index].
     pub fn page_index(&self) -> bool {
         self.page_index_policy != PageIndexPolicy::Skip
+    }
+
+    /// Retrieve the currently set metadata decoding options.
+    pub fn metadata_options(&self) -> &ParquetMetaDataOptions {
+        &self.metadata_options
     }
 
     /// Retrieve the currently set file decryption properties.
@@ -591,8 +610,9 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata =
-            ParquetMetaDataReader::new().with_page_index_policy(options.page_index_policy);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(options.page_index_policy)
+            .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
             options.file_decryption_properties.as_ref().map(Arc::clone),
@@ -1244,6 +1264,22 @@ mod tests {
 
         // Verify that the schema was correctly parsed
         assert_eq!(original_schema.fields(), reader.schema().fields());
+    }
+
+    #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("parquet/alltypes-java.parquet");
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file.try_clone().unwrap()).unwrap();
+        let expected = builder.metadata;
+        let schema = expected.file_metadata().schema_descr_ptr();
+
+        let arrow_options = ArrowReaderOptions::new().with_parquet_schema(schema.clone());
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, arrow_options).unwrap();
+
+        // Verify that the metadata matches
+        assert_eq!(expected.as_ref(), builder.metadata.as_ref());
     }
 
     #[test]
