@@ -22,7 +22,7 @@ use arrow_array::{Array, RecordBatch, RecordBatchReader};
 use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
-pub use selection::{RowSelection, RowSelectionCursor, RowSelectionStrategy, RowSelector};
+pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
@@ -49,7 +49,7 @@ pub use read_plan::{ReadPlan, ReadPlanBuilder};
 mod filter;
 pub mod metrics;
 mod read_plan;
-mod selection;
+pub(crate) mod selection;
 pub mod statistics;
 
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
@@ -125,7 +125,7 @@ pub struct ArrowReaderBuilder<T> {
 
     pub(crate) selection: Option<RowSelection>,
 
-    pub(crate) selection_strategy: RowSelectionStrategy,
+    pub(crate) row_selection_policy: RowSelectionPolicy,
 
     pub(crate) limit: Option<usize>,
 
@@ -148,7 +148,7 @@ impl<T: Debug> Debug for ArrowReaderBuilder<T> {
             .field("projection", &self.projection)
             .field("filter", &self.filter)
             .field("selection", &self.selection)
-            .field("selection_strategy", &self.selection_strategy)
+            .field("row_selection_policy", &self.row_selection_policy)
             .field("limit", &self.limit)
             .field("offset", &self.offset)
             .field("metrics", &self.metrics)
@@ -168,7 +168,7 @@ impl<T> ArrowReaderBuilder<T> {
             projection: ProjectionMask::all(),
             filter: None,
             selection: None,
-            selection_strategy: RowSelectionStrategy::default(),
+            row_selection_policy: RowSelectionPolicy::default(),
             limit: None,
             offset: None,
             metrics: ArrowReaderMetrics::Disabled,
@@ -218,9 +218,11 @@ impl<T> ArrowReaderBuilder<T> {
     }
 
     /// Configure how row selections should be materialised during execution
-    pub fn with_row_selection_strategy(self, strategy: RowSelectionStrategy) -> Self {
+    ///
+    /// See [`RowSelectionPolicy`] for more details
+    pub fn with_row_selection_policy(self, policy: RowSelectionPolicy) -> Self {
         Self {
-            selection_strategy: strategy,
+            row_selection_policy: policy,
             ..self
         }
     }
@@ -904,7 +906,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             projection,
             mut filter,
             selection,
-            selection_strategy,
+            row_selection_policy,
             limit,
             offset,
             metrics,
@@ -925,7 +927,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
 
         let mut plan_builder = ReadPlanBuilder::new(batch_size)
             .with_selection(selection)
-            .with_selection_strategy(selection_strategy);
+            .with_row_selection_policy(row_selection_policy);
 
         // Update selection based on any filters
         if let Some(filter) = filter.as_mut() {

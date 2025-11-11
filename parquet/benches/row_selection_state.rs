@@ -25,7 +25,7 @@ use bytes::Bytes;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::{
-    ParquetRecordBatchReaderBuilder, RowSelection, RowSelectionStrategy, RowSelector,
+    ParquetRecordBatchReaderBuilder, RowSelection, RowSelectionPolicy, RowSelector,
 };
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
@@ -239,8 +239,7 @@ fn bench_over_lengths(
                 &bench_input,
                 |b, input| {
                     b.iter(|| {
-                        let total =
-                            run_read(&input.parquet_data, &input.selection, mode.strategy());
+                        let total = run_read(&input.parquet_data, &input.selection, mode.policy());
                         hint::black_box(total);
                     });
                 },
@@ -257,16 +256,12 @@ struct BenchInput {
     selection: RowSelection,
 }
 
-fn run_read(
-    parquet_data: &Bytes,
-    selection: &RowSelection,
-    strategy: RowSelectionStrategy,
-) -> usize {
+fn run_read(parquet_data: &Bytes, selection: &RowSelection, policy: RowSelectionPolicy) -> usize {
     let reader = ParquetRecordBatchReaderBuilder::try_new(parquet_data.clone())
         .unwrap()
         .with_batch_size(BATCH_SIZE)
         .with_row_selection(selection.clone())
-        .with_row_selection_strategy(strategy)
+        .with_row_selection_policy(policy)
         .build()
         .unwrap();
 
@@ -465,10 +460,10 @@ impl BenchMode {
         }
     }
 
-    fn strategy(self) -> RowSelectionStrategy {
+    fn policy(self) -> RowSelectionPolicy {
         match self {
-            BenchMode::ReadSelector => RowSelectionStrategy::Selectors,
-            BenchMode::ReadMask => RowSelectionStrategy::Mask,
+            BenchMode::ReadSelector => RowSelectionPolicy::Selectors,
+            BenchMode::ReadMask => RowSelectionPolicy::Mask,
         }
     }
 }
