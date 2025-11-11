@@ -2735,12 +2735,12 @@ mod tests {
 
         let schema = reader.metadata().file_metadata().schema_descr();
         assert_eq!(
-            schema.column(0).logical_type(),
-            Some(basic::LogicalType::String)
+            schema.column(0).logical_type_ref(),
+            Some(&basic::LogicalType::String)
         );
         assert_eq!(
-            schema.column(1).logical_type(),
-            Some(basic::LogicalType::_Unknown { field_id: 2555 })
+            schema.column(1).logical_type_ref(),
+            Some(&basic::LogicalType::_Unknown { field_id: 2555 })
         );
         assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
 
