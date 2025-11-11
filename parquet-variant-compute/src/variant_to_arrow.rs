@@ -716,3 +716,59 @@ define_variant_to_primitive_builder!(
     |_value|  Some(Variant::Null),
     type_name: "Null"
 );
+
+#[cfg(test)]
+mod tests {
+    use super::make_primitive_variant_to_arrow_row_builder;
+    use arrow::compute::CastOptions;
+    use arrow::datatypes::{DataType, Field, Fields, UnionFields, UnionMode};
+    use arrow::error::ArrowError;
+    use std::sync::Arc;
+
+    #[test]
+    fn make_primitive_builder_rejects_non_primitive_types() {
+        let cast_options = CastOptions::default();
+        let item_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let struct_fields = Fields::from(vec![Field::new("child", DataType::Int32, true)]);
+        let map_entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Float64, true),
+            ])),
+            true,
+        ));
+        let union_fields =
+            UnionFields::new(vec![1], vec![Field::new("child", DataType::Int32, true)]);
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let ree_values_field = Arc::new(Field::new("values", DataType::Utf8, true));
+
+        let non_primitive_types = vec![
+            DataType::List(item_field.clone()),
+            DataType::LargeList(item_field.clone()),
+            DataType::ListView(item_field.clone()),
+            DataType::LargeListView(item_field.clone()),
+            DataType::FixedSizeList(item_field.clone(), 2),
+            DataType::Struct(struct_fields.clone()),
+            DataType::Map(map_entries_field.clone(), false),
+            DataType::Union(union_fields.clone(), UnionMode::Dense),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::RunEndEncoded(run_ends_field.clone(), ree_values_field.clone()),
+        ];
+
+        for data_type in non_primitive_types {
+            let err =
+                match make_primitive_variant_to_arrow_row_builder(&data_type, &cast_options, 1) {
+                    Ok(_) => panic!("non-primitive type {data_type:?} should be rejected"),
+                    Err(err) => err,
+                };
+
+            match err {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert!(msg.contains(&format!("{data_type:?}")));
+                }
+                other => panic!("expected InvalidArgumentError, got {other:?}"),
+            }
+        }
+    }
+}
