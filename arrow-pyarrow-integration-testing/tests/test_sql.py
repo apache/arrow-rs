@@ -74,6 +74,10 @@ _supported_pyarrow_types = [
     pa.list_(pa.int32()),
     pa.list_(pa.int32(), 2),
     pa.large_list(pa.uint16()),
+    pa.list_view(pa.uint64()),
+    pa.large_list_view(pa.uint64()),
+    pa.list_view(pa.string()),
+    pa.large_list_view(pa.string()),
     pa.struct(
         [
             pa.field("a", pa.int32()),
@@ -112,8 +116,6 @@ _supported_pyarrow_types = [
     ),
 ]
 
-_unsupported_pyarrow_types = [
-]
 
 # As of pyarrow 14, pyarrow implements the Arrow PyCapsule interface
 # (https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
@@ -157,12 +159,6 @@ def test_type_roundtrip_pycapsule(pyarrow_type):
     restored = rust.round_trip_type(wrapped)
     assert restored == pyarrow_type
     assert restored is not pyarrow_type
-
-
-@pytest.mark.parametrize("pyarrow_type", _unsupported_pyarrow_types, ids=str)
-def test_type_roundtrip_raises(pyarrow_type):
-    with pytest.raises(pa.ArrowException):
-        rust.round_trip_type(pyarrow_type)
 
 @pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
 def test_field_roundtrip(pyarrow_type):
@@ -336,6 +332,20 @@ def test_list_array():
     assert a.type == b.type
     del a
     del b
+
+
+def test_list_view_array():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array([[], None, [1, 2], [4, 5, 6]], pa.list_view(pa.int64()))
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
+
 
 def test_map_array():
     """
