@@ -1893,16 +1893,12 @@ mod tests {
             .column(0)
             .page_encoding_stats_mask()
             .unwrap();
-        assert!(page_encoding_stats.is_set(Encoding::PLAIN));
-        // PLAIN = 0, so 1 << 0 or 1
-        assert_eq!(page_encoding_stats.as_i32() ^ 1, 0);
+        assert!(page_encoding_stats.is_only(Encoding::PLAIN));
         let page_encoding_stats = row_group_metadata
             .column(2)
             .page_encoding_stats_mask()
             .unwrap();
-        assert!(page_encoding_stats.is_set(Encoding::PLAIN_DICTIONARY));
-        // PLAIN_DICTIONARY = 2, so 1 << 2
-        assert_eq!(page_encoding_stats.as_i32() ^ (1 << 2), 0);
+        assert!(page_encoding_stats.is_only(Encoding::PLAIN_DICTIONARY));
     }
 
     #[test]
