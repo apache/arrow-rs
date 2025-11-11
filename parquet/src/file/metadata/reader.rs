@@ -561,6 +561,12 @@ impl ParquetMetaDataReader {
         self.decode_footer_metadata(bytes, file_size, footer)
     }
 
+    /// Size of the serialized thrift metadata plus the 8 byte footer. Only set if
+    /// `self.parse_metadata` is called.
+    pub fn metadata_size(&self) -> Option<usize> {
+        self.metadata_size
+    }
+
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
     /// been provided, then return that value if it is larger than the size of the Parquet
     /// file footer (8 bytes). Otherwise returns `8`.

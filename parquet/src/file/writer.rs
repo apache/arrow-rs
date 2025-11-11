@@ -1421,7 +1421,7 @@ mod tests {
 
     #[test]
     fn test_page_writer_data_pages() {
-        let pages = vec![
+        let pages = [
             Page::DataPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
@@ -1449,7 +1449,7 @@ mod tests {
 
     #[test]
     fn test_page_writer_dict_pages() {
-        let pages = vec![
+        let pages = [
             Page::DictionaryPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5]),
                 num_values: 5,

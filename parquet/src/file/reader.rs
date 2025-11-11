@@ -124,11 +124,25 @@ impl ChunkReader for Bytes {
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
         let start = start as usize;
+        if start > self.len() {
+            return Err(eof_err!(
+                "Expected to read at offset {start}, while file has length {}",
+                self.len()
+            ));
+        }
         Ok(self.slice(start..).reader())
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let start = start as usize;
+        if start > self.len() || start + length > self.len() {
+            return Err(eof_err!(
+                "Expected to read {} bytes at offset {}, while file has length {}",
+                length,
+                start,
+                self.len()
+            ));
+        }
         Ok(self.slice(start..start + length))
     }
 }
@@ -274,3 +288,34 @@ impl Iterator for FilePageIterator {
 }
 
 impl PageIterator for FilePageIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bytes_chunk_reader_get_read_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_read(5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read at offset 5, while file has length 4"
+        );
+    }
+
+    #[test]
+    fn test_bytes_chunk_reader_get_bytes_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_bytes(5, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read 1 bytes at offset 5, while file has length 4"
+        );
+
+        let err = data.get_bytes(2, 3).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read 3 bytes at offset 2, while file has length 4"
+        );
+    }
+}
