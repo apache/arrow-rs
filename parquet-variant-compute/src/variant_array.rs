@@ -1011,16 +1011,6 @@ fn typed_value_to_variant<'a>(
             let value = array.value(index);
             Ok(Variant::from(value))
         }
-        DataType::LargeUtf8 => {
-            let array = typed_value.as_string::<i64>();
-            let value = array.value(index);
-            Variant::from(value)
-        }
-        DataType::Utf8View => {
-            let array = typed_value.as_string_view();
-            let value = array.value(index);
-            Variant::from(value)
-        }
         DataType::Int8 => {
             primitive_conversion_single_value!(Int8Type, typed_value, index)
         }

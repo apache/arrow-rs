@@ -366,8 +366,8 @@ mod test {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, Float32Array,
-        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
-        LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        Float64Array, GenericListArray, Int8Array, Int16Array, Int32Array, Int64Array,
+        LargeBinaryArray, LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
         Time64MicrosecondArray,
     };
     use arrow::buffer::{NullBuffer, OffsetBuffer};
