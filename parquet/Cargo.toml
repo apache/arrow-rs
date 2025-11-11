@@ -261,7 +261,7 @@ harness = false
 required-features = ["arrow"]
 
 [[bench]]
-name = "row_selection_state"
+name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
 
