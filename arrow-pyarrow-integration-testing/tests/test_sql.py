@@ -27,7 +27,9 @@ import pytz
 
 import arrow_pyarrow_integration_testing as rust
 
-PYARROW_PRE_14 = int(pa.__version__.split('.')[0]) < 14
+PYARROW_MAJOR_VER = int(pa.__version__.split(".")[0])
+PYARROW_PRE_14 = PYARROW_MAJOR_VER < 14
+PYARROW_PRE_16 = PYARROW_MAJOR_VER < 16
 
 
 @contextlib.contextmanager
@@ -74,10 +76,6 @@ _supported_pyarrow_types = [
     pa.list_(pa.int32()),
     pa.list_(pa.int32(), 2),
     pa.large_list(pa.uint16()),
-    pa.list_view(pa.uint64()),
-    pa.large_list_view(pa.uint64()),
-    pa.list_view(pa.string()),
-    pa.large_list_view(pa.string()),
     pa.struct(
         [
             pa.field("a", pa.int32()),
@@ -115,6 +113,16 @@ _supported_pyarrow_types = [
         mode=pa.lib.UnionMode_SPARSE,
     ),
 ]
+
+if PYARROW_MAJOR_VER >= 16:
+    _supported_pyarrow_types.extend(
+        [
+            pa.list_view(pa.uint64()),
+            pa.large_list_view(pa.uint64()),
+            pa.list_view(pa.string()),
+            pa.large_list_view(pa.string()),
+        ]
+    )
 
 
 # As of pyarrow 14, pyarrow implements the Arrow PyCapsule interface
@@ -334,6 +342,7 @@ def test_list_array():
     del b
 
 
+@pytest.mark.skipif(PYARROW_PRE_16, reason="requires pyarrow 16")
 def test_list_view_array():
     """
     Python -> Rust -> Python
