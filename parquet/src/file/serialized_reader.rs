@@ -38,7 +38,7 @@ use crate::parquet_thrift::ThriftSliceInputProtocol;
 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use crate::record::Row;
 use crate::record::reader::RowIter;
-use crate::schema::types::Type as SchemaType;
+use crate::schema::types::{SchemaDescPtr, Type as SchemaType};
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
@@ -110,6 +110,7 @@ pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: Option<ReaderProperties>,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl ReadOptionsBuilder {
@@ -152,6 +153,13 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    pub fn with_parquet_schema(mut self, schema: SchemaDescPtr) -> Self {
+        self.metadata_options.set_schema(schema);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -161,18 +169,20 @@ impl ReadOptionsBuilder {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
             props,
+            metadata_options: self.metadata_options,
         }
     }
 }
 
 /// A collection of options for reading a Parquet file.
 ///
-/// Currently, only predicates on row group metadata are supported.
+/// Predicates are currently only supported on row group metadata.
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: ReaderProperties,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -193,6 +203,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options.metadata_options.clone()))
             .parse_and_finish(&chunk_reader)?
             .into_builder();
         let mut predicates = options.predicates;
@@ -387,8 +398,6 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
-    // TODO: page header could be huge because of statistics. We should set a
-    // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
@@ -398,6 +407,8 @@ pub(crate) fn decode_page(
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
             decompressed.extend_from_slice(&buffer[..offset]);
+            // decompressed size of zero corresponds to a page with no non-null values
+            // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
             if decompressed_size > 0 {
                 let compressed = &buffer[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
@@ -2695,6 +2706,26 @@ mod tests {
                 metadata.row_group(i).column(0).data_page_offset()
             );
         }
+    }
+
+    #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("alltypes_plain.parquet");
+        let file_reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let schema = file_reader.metadata().file_metadata().schema_descr_ptr();
+        let expected = file_reader.metadata;
+
+        let options = ReadOptionsBuilder::new()
+            .with_parquet_schema(schema)
+            .build();
+        let file_reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
+        // Should have used the same schema instance
+        assert!(Arc::ptr_eq(
+            &expected.file_metadata().schema_descr_ptr(),
+            &file_reader.metadata.file_metadata().schema_descr_ptr()
+        ));
     }
 
     #[test]
