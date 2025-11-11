@@ -813,6 +813,7 @@ pub struct ColumnChunkMetaData {
     statistics: Option<Statistics>,
     geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
     encoding_stats: Option<Vec<PageEncodingStats>>,
+    encoding_stats_mask: Option<EncodingMask>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
@@ -1050,10 +1051,41 @@ impl ColumnChunkMetaData {
         self.geo_statistics.as_deref()
     }
 
-    /// Returns the offset for the page encoding stats,
-    /// or `None` if no page encoding stats are available.
+    /// Returns the page encoding statistics, or `None` if no page encoding statistics
+    /// are available.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
         self.encoding_stats.as_ref()
+    }
+
+    /// Returns the page encoding statistics reduced to a bitmask, or `None` if statistics are
+    /// not available.
+    ///
+    /// The [`PageEncodingStats`] struct was added to the Parquet specification specifically to
+    /// enable fast determination of whether all pages in a column chunk are dictionary encoded
+    /// (see <https://github.com/apache/parquet-format/pull/16>).
+    /// Decoding the full page encoding statistics, however, can be very costly, and is not
+    /// necessary to support the aforementioned use case. As an alternative, this crate can
+    /// instead distill the list of `PageEncodingStats` down to a bitmask of just the encodings
+    /// used for data pages
+    /// (see [`ParquetMetaDataOptions::set_encoding_stats_as_mask`]).
+    /// To test for an all-dictionary-encoded chunk one could use this bitmask in the following way:
+    ///
+    /// ```rust
+    /// use parquet::basic::Encoding;
+    /// use parquet::file::metadata::ColumnChunkMetaData;
+    /// // test if all data pages in the column chunk are dictionary encoded
+    /// fn is_all_dictionary_encoded(col_meta: &ColumnChunkMetaData) -> bool {
+    ///     // check that dictionary encoding was used
+    ///     col_meta.dictionary_page_offset().is_some()
+    ///         && col_meta.page_encoding_stats_mask().is_some_and(|mask| {
+    ///             // mask should only have one bit set, either for PLAIN_DICTIONARY or
+    ///             // RLE_DICTIONARY
+    ///             mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY)
+    ///         })
+    /// }
+    /// ```
+    pub fn page_encoding_stats_mask(&self) -> Option<&EncodingMask> {
+        self.encoding_stats_mask.as_ref()
     }
 
     /// Returns the offset for the bloom filter.
@@ -1178,6 +1210,7 @@ impl ColumnChunkMetaDataBuilder {
             statistics: None,
             geo_statistics: None,
             encoding_stats: None,
+            encoding_stats_mask: None,
             bloom_filter_offset: None,
             bloom_filter_length: None,
             offset_index_offset: None,
@@ -1275,6 +1308,12 @@ impl ColumnChunkMetaDataBuilder {
     /// Sets page encoding stats for this column chunk.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
         self.0.encoding_stats = Some(value);
+        self
+    }
+
+    /// Sets page encoding stats mask for this column chunk.
+    pub fn set_page_encoding_stats_mask(mut self, value: EncodingMask) -> Self {
+        self.0.encoding_stats_mask = Some(value);
         self
     }
 
@@ -1882,9 +1921,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2766;
+        let base_expected_size = 2798;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2934;
+        let base_expected_size = 2966;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1913,9 +1952,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3192;
+        let bigger_expected_size = 3224;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3360;
+        let bigger_expected_size = 3392;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -1962,7 +2001,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 2058;
+        let base_expected_size = 2074;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = "0123456789012345".as_bytes();
@@ -1988,7 +2027,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3072;
+        let expected_size_with_decryptor = 3088;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(

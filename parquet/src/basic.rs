@@ -737,6 +737,11 @@ impl EncodingMask {
         self.0 & (1 << (val as i32)) != 0
     }
 
+    /// Test if this mask has only the bit for the given [`Encoding`] set.
+    pub fn is_only(&self, val: Encoding) -> bool {
+        self.0 == (1 << (val as i32))
+    }
+
     /// Test if all [`Encoding`]s in a given set are present in this mask.
     pub fn all_set<'a>(&self, mut encodings: impl Iterator<Item = &'a Encoding>) -> bool {
         encodings.all(|&e| self.is_set(e))
@@ -2497,5 +2502,15 @@ mod tests {
             err.to_string(),
             "Parquet error: Attempt to create invalid mask: 0x2"
         );
+    }
+
+    #[test]
+    fn test_encoding_mask_is_only() {
+        let mask = EncodingMask::new_from_encodings([Encoding::PLAIN].iter());
+        assert!(mask.is_only(Encoding::PLAIN));
+
+        let mask =
+            EncodingMask::new_from_encodings([Encoding::PLAIN, Encoding::PLAIN_DICTIONARY].iter());
+        assert!(!mask.is_only(Encoding::PLAIN));
     }
 }
