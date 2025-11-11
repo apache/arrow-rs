@@ -763,6 +763,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::RowSelectionPolicy;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
@@ -1252,27 +1253,31 @@ mod tests {
         let schema = builder.parquet_schema().clone();
         let filter_mask = ProjectionMask::leaves(&schema, [0]);
 
-        let predicate = ArrowPredicateFn::new(filter_mask, move |batch: RecordBatch| {
-            let column = batch.column(0);
-            let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
-            let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
-            or(&match_first, &match_second)
-        });
+        let make_predicate = |mask: ProjectionMask| {
+            ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
+                let column = batch.column(0);
+                let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
+                let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
+                or(&match_first, &match_second)
+            })
+        };
+
+        let predicate = make_predicate(filter_mask.clone());
 
         // The batch size is set to 12 to read all rows in one go after filtering
         // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
         let stream = ParquetRecordBatchStreamBuilder::new_with_options(
-            TestReader::new(data),
+            TestReader::new(data.clone()),
             ArrowReaderOptions::new().with_page_index(true),
         )
         .await
         .unwrap()
         .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
         .with_batch_size(12)
+        .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
         .build()
         .unwrap();
 
-        // Collecting into batches validates the plan now downgrades to selectors instead of panicking.
         let schema = stream.schema().clone();
         let batches: Vec<_> = stream.try_collect().await.unwrap();
         let result = concat_batches(&schema, &batches).unwrap();

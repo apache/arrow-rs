@@ -1074,6 +1074,9 @@ impl ParquetRecordBatchReader {
     fn next_inner(&mut self) -> Result<Option<RecordBatch>> {
         let mut read_records = 0;
         let batch_size = self.batch_size();
+        if batch_size == 0 {
+            return Ok(None);
+        }
         match self.read_plan.row_selection_cursor_mut() {
             RowSelectionCursor::Mask(mask_cursor) => {
                 // Stream the record batch reader using contiguous segments of the selection
@@ -1282,7 +1285,7 @@ mod tests {
 
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
+        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
     };
     use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
     use crate::arrow::{ArrowWriter, ProjectionMask};
@@ -5211,19 +5214,24 @@ mod tests {
         let schema = builder.parquet_schema().clone();
         let filter_mask = ProjectionMask::leaves(&schema, [0]);
 
+        let make_predicate = |mask: ProjectionMask| {
+            ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
+                let column = batch.column(0);
+                let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
+                let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
+                or(&match_first, &match_second)
+            })
+        };
+
         let options = ArrowReaderOptions::new().with_page_index(true);
-        let predicate = ArrowPredicateFn::new(filter_mask, move |batch: RecordBatch| {
-            let column = batch.column(0);
-            let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
-            let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
-            or(&match_first, &match_second)
-        });
+        let predicate = make_predicate(filter_mask.clone());
 
         // The batch size is set to 12 to read all rows in one go after filtering
         // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
-        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data, options)
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
             .unwrap()
             .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+            .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
             .with_batch_size(12)
             .build()
             .unwrap();

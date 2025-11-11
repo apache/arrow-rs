@@ -535,7 +535,7 @@ impl RowGroupReaderBuilder {
 
                 plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
 
-                plan_builder = overide_selector_strategy_if_needed(
+                plan_builder = override_selector_strategy_if_needed(
                     plan_builder,
                     &self.projection,
                     self.row_group_offset_index(row_group_idx),
@@ -678,32 +678,31 @@ impl RowGroupReaderBuilder {
     }
 }
 
-/// Overrider the selection strategy if needed.
+/// Override the selection strategy if needed.
 ///
-/// Some pages can be skipped during row-group construction of they are not read
+/// Some pages can be skipped during row-group construction if they are not read
 /// by the selections. This means that the data pages for those rows are never
 /// loaded and definition/repetition levels are never read. When using
-/// `RowSelections` selection works because skip_records() handles this
+/// `RowSelections` selection works because `skip_records()` handles this
 /// case and skips the page accordingly.
 ///
-/// However, with the current Mask design, all values must be read and decoded
-/// and then a Mask filter is applied filtering. Thus if any pages are skipped
-/// during row-group construction, the data pages are missing and cannot be
-/// decoded.
+/// However, with the current mask design, all values must be read and decoded
+/// and then a mask filter is applied. Thus if any pages are skipped during
+/// row-group construction, the data pages are missing and cannot be decoded.
 ///
 /// A simple example:
 /// * the page size is 2, the mask is 100001, row selection should be read(1) skip(4) read(1)
-/// * the ColumnChunkData would be page1(10), page2(skipped), page3(01)
+/// * the `ColumnChunkData` would be page1(10), page2(skipped), page3(01)
 ///
-/// Using the rowselection to skip(4), page2 won't be read at all, so in this
+/// Using the row selection to skip(4), page2 won't be read at all, so in this
 /// case we can't decode all the rows and apply a mask. To correctly apply the
-/// bit mask, we need all 6 value be read, but the page2 is not in memory.
-fn overide_selector_strategy_if_needed(
+/// bit mask, we need all 6 values be read, but page2 is not in memory.
+fn override_selector_strategy_if_needed(
     plan_builder: ReadPlanBuilder,
     projection_mask: &ProjectionMask,
     offset_index: Option<&[OffsetIndexMetaData]>,
 ) -> ReadPlanBuilder {
-    // override only applies to Auto policy
+    // override only applies to Auto policy, If the policy is already Mask or Selectors, respect that
     let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {
         return plan_builder;
     };

@@ -258,7 +258,9 @@ impl ColumnChunkData {
                 .map(|idx| data[idx].1.clone())
                 .map_err(|_| {
                     ParquetError::General(format!(
-                        "Invalid offset in sparse column chunk data: {start}"
+                        "Invalid offset in sparse column chunk data: {start}, no matching page found.\
+                         If you are using a `SelectionStrategyPolicy::Mask`, ensure that the OffsetIndex is provided when \
+                         creating the InMemoryRowGroup."
                     ))
                 }),
             ColumnChunkData::Dense { offset, data } => {
