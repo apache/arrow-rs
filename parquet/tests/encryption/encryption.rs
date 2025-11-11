@@ -748,7 +748,7 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
 
     let values = Arc::new(values);
     let record_batches =
-        vec![RecordBatch::try_new(schema.clone(), vec![values.clone(), values]).unwrap()];
+        vec![RecordBatch::try_new(schema.clone(), vec![values.clone(), values.clone()]).unwrap()];
 
     let temp_file = tempfile::tempfile().unwrap();
     let mut writer = ArrowWriter::try_new(&temp_file, schema, Some(props)).unwrap();
@@ -768,8 +768,8 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
             assert_eq!(column_stats.min_bytes_opt(), Some(expected_min.as_slice()));
             assert_eq!(column_stats.max_bytes_opt(), Some(expected_max.as_slice()));
         } else {
-            assert!(column.page_encoding_stats().is_none());
             assert!(column.statistics().is_none());
+            assert!(column.page_encoding_stats().is_none());
         }
     };
 
@@ -784,15 +784,15 @@ pub fn test_row_group_statistics_plaintext_encrypted_write() {
     let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
     let metadata = reader_metadata.metadata();
     let row_group = metadata.row_group(0);
-    // TODO: reader should grab encrypted stats since decryption properties are provided
-    check_column_stats(row_group.column(0), false);
+    // Reader reads encrypted stats since decryption properties are provided
+    check_column_stats(row_group.column(0), true);
     check_column_stats(row_group.column(1), true);
 
-    // Check column statistics are not read given plaintext footer and decryption properties are not available
     let options = ArrowReaderOptions::default();
     let reader_metadata = ArrowReaderMetadata::load(&temp_file, options.clone()).unwrap();
     let metadata = reader_metadata.metadata();
     let row_group = metadata.row_group(0);
+    // Reader can't read encrypted stats since decryption properties are not provided
     check_column_stats(row_group.column(0), false);
     check_column_stats(row_group.column(1), true);
 }
