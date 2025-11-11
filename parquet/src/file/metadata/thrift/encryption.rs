@@ -23,7 +23,7 @@ use crate::{
     file::{
         column_crypto_metadata::ColumnCryptoMetaData,
         metadata::{
-            HeapSize, ParquetMetaData, RowGroupMetaData,
+            HeapSize, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
             thrift::{parquet_metadata_from_bytes, read_column_metadata, validate_column_metadata},
         },
     },
@@ -213,6 +213,7 @@ pub(crate) fn parquet_metadata_with_encryption(
     file_decryption_properties: Option<&Arc<FileDecryptionProperties>>,
     encrypted_footer: bool,
     buf: &[u8],
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ParquetMetaData> {
     use crate::file::metadata::ParquetMetaDataBuilder;
 
@@ -262,7 +263,7 @@ pub(crate) fn parquet_metadata_with_encryption(
         }
     }
 
-    let parquet_meta = parquet_metadata_from_bytes(buf)
+    let parquet_meta = parquet_metadata_from_bytes(buf, options)
         .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
 
     let ParquetMetaData {
