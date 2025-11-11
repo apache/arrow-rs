@@ -292,6 +292,23 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             DataType::Decimal256(precision, scale) => Decimal256(
                 VariantToDecimalArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
             ),
+            DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Date64 | DataType::Time32(_) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "DataType {data_type:?} not yet implemented"
+                )));
+            }
+            DataType::Time64(TimeUnit::Microsecond) => Time(
+                VariantToPrimitiveArrowRowBuilder::new(cast_options, capacity),
+            ),
+            DataType::Time64(_) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "DataType {data_type:?} not yet implemented"
+                )));
+            }
             DataType::Timestamp(TimeUnit::Microsecond, None) => TimestampMicroNtz(
                 VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
             ),
@@ -304,22 +321,17 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             DataType::Timestamp(TimeUnit::Nanosecond, tz) => TimestampNano(
                 VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
             ),
-            DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new(
-                cast_options,
-                capacity,
-            )),
-            DataType::Time64(TimeUnit::Microsecond) => Time(
-                VariantToPrimitiveArrowRowBuilder::new(cast_options, capacity),
-            ),
-            DataType::FixedSizeBinary(16) => {
-                Uuid(VariantToUuidArrowRowBuilder::new(cast_options, capacity))
+            DataType::Timestamp(..) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "DataType {data_type:?} not yet implemented"
+                )));
             }
-            DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
-            DataType::LargeUtf8 => {
-                LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
-            }
-            DataType::Utf8View => {
-                StringView(VariantToStringArrowBuilder::new(cast_options, capacity))
+            DataType::Duration(_) | DataType::Interval(_) => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Casting Variant to duration/interval types is not supported. \
+                    The Variant format does not define duration/interval types."
+                        .to_string(),
+                ));
             }
             DataType::Binary => Binary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity)),
             DataType::LargeBinary => {
@@ -328,9 +340,33 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
             DataType::BinaryView => {
                 BinaryView(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
             }
-            _ => {
+            DataType::FixedSizeBinary(16) => {
+                Uuid(VariantToUuidArrowRowBuilder::new(cast_options, capacity))
+            }
+            DataType::FixedSizeBinary(_) => {
                 return Err(ArrowError::NotYetImplemented(format!(
-                    "Data_type {data_type:?} not yet implemented"
+                    "DataType {data_type:?} not yet implemented"
+                )));
+            }
+            DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
+            DataType::LargeUtf8 => {
+                LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
+            }
+            DataType::Utf8View => {
+                StringView(VariantToStringArrowBuilder::new(cast_options, capacity))
+            }
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+            | DataType::Union(..)
+            | DataType::Dictionary(..)
+            | DataType::RunEndEncoded(..) => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Casting to {data_type:?} is not applicable for primitive Variant types"
                 )));
             }
         };
