@@ -36,7 +36,7 @@ pub struct ParquetMetaDataOptions {
     encoding_stats_as_mask: bool,
     // The outer option acts as a global boolean, so if `skip_encoding_stats.is_some()`
     // is `true` then we're at least skipping some stats. The inner `Option` is a keep
-    // list of column indicies to decode.
+    // list of column indices to decode.
     skip_encoding_stats: Option<Option<Arc<HashSet<usize>>>>,
 }
 

@@ -555,7 +555,7 @@ impl ArrowReaderOptions {
         self
     }
 
-    /// Provide a list of column indicies for which to decode `encoding_stats`.
+    /// Provide a list of column indices for which to decode `encoding_stats`.
     pub fn with_keep_encoding_stats(mut self, keep: &[usize]) -> Self {
         self.metadata_options.set_keep_encoding_stats(keep);
         self
