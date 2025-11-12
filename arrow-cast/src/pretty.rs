@@ -27,7 +27,7 @@ use std::fmt::{Display, Write};
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{array, Array, ArrayRef, Int32Array, RecordBatch};
+use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, array};
 use arrow_schema::{ArrowError, Field, SchemaRef};
 
 use crate::display::{ArrayFormatter, DisplayIndex, FormatOptions};
@@ -410,7 +410,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
     use arrow_schema::*;
 
-    use crate::display::{array_value_to_string, DisplayIndex, DurationFormat};
+    use crate::display::{DisplayIndex, DurationFormat, array_value_to_string};
 
     use super::*;
 
