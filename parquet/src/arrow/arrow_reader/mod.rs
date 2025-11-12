@@ -558,7 +558,7 @@ impl ArrowReaderOptions {
 
     /// Include virtual columns in the output.
     ///
-    /// Virtual columns are columns that are not part of the Parquet schema, but are added to the output by the reader.
+    /// Virtual columns are columns that are not part of the Parquet schema, but are added to the output by the reader such as row numbers.
     ///
     /// # Example
     /// ```
