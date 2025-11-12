@@ -515,7 +515,7 @@ pub struct ValueStatistics<T> {
     is_min_max_backwards_compatible: bool,
 }
 
-impl<T: ParquetValueType> ValueStatistics<T> {
+impl<T: AsBytes> ValueStatistics<T> {
     /// Creates new typed statistics.
     pub fn new(
         min: Option<T>,
