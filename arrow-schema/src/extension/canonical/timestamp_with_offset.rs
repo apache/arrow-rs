@@ -107,6 +107,10 @@ impl ExtensionType for TimestampWithOffset {
                             key_type.is_dictionary_key_type()
                                 && matches!(value_type.as_ref(), DataType::Int16)
                         }
+                        DataType::RunEndEncoded(run_ends, values) => {
+                            run_ends.data_type().is_run_ends_type()
+                                && matches!(values.data_type(), DataType::Int16)
+                        }
                         _ => false,
                     };
 
@@ -137,6 +141,8 @@ impl ExtensionType for TimestampWithOffset {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
@@ -175,6 +181,29 @@ mod tests {
                 Field::new(
                     OFFSET_FIELD_NAME,
                     DataType::Dictionary(Box::new(key_type), Box::new(DataType::Int16)),
+                    false,
+                ),
+            ])),
+            false,
+        )
+    }
+
+    fn make_valid_field_run_end_encoded(time_unit: TimeUnit, run_ends_type: DataType) -> Field {
+        assert!(run_ends_type.is_run_ends_type());
+        Field::new(
+            "",
+            DataType::Struct(Fields::from_iter([
+                Field::new(
+                    TIMESTAMP_FIELD_NAME,
+                    DataType::Timestamp(time_unit, Some("UTC".into())),
+                    false,
+                ),
+                Field::new(
+                    OFFSET_FIELD_NAME,
+                    DataType::RunEndEncoded(
+                        Arc::new(Field::new("run_ends", run_ends_type, false)),
+                        Arc::new(Field::new("values", DataType::Int16, false)),
+                    ),
                     false,
                 ),
             ])),
@@ -228,6 +257,33 @@ mod tests {
         for time_unit in time_units {
             for key_type in &key_types {
                 let mut field = make_valid_field_dict_encoded(time_unit, key_type.clone());
+                field.try_with_extension_type(TimestampWithOffset)?;
+                field.try_extension_type::<TimestampWithOffset>()?;
+                #[cfg(feature = "canonical_extension_types")]
+                assert_eq!(
+                    field.try_canonical_extension_type()?,
+                    CanonicalExtensionType::TimestampWithOffset(TimestampWithOffset)
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn valid_run_end_encoded_offsets() -> Result<(), ArrowError> {
+        let time_units = [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ];
+
+        let run_ends_types = [DataType::Int16, DataType::Int32, DataType::Int64];
+
+        for time_unit in time_units {
+            for run_ends_type in &run_ends_types {
+                let mut field = make_valid_field_run_end_encoded(time_unit, run_ends_type.clone());
                 field.try_with_extension_type(TimestampWithOffset)?;
                 field.try_extension_type::<TimestampWithOffset>()?;
                 #[cfg(feature = "canonical_extension_types")]
@@ -329,6 +385,52 @@ mod tests {
             Field::new(
                 OFFSET_FIELD_NAME,
                 DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
+                false,
+            ),
+        ]));
+        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
+    )]
+    fn invalid_type_wrong_run_ends_run_end_encoded() {
+        let data_type = DataType::Struct(Fields::from_iter([
+            Field::new(
+                TIMESTAMP_FIELD_NAME,
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+                false,
+            ),
+            Field::new(
+                OFFSET_FIELD_NAME,
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Boolean, false)),
+                    Arc::new(Field::new("values", DataType::Int16, false)),
+                ),
+                false,
+            ),
+        ]));
+        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
+    )]
+    fn invalid_type_wrong_values_run_end_encoded() {
+        let data_type = DataType::Struct(Fields::from_iter([
+            Field::new(
+                TIMESTAMP_FIELD_NAME,
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+                false,
+            ),
+            Field::new(
+                OFFSET_FIELD_NAME,
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::UInt16, false)),
+                    Arc::new(Field::new("values", DataType::Int32, false)),
+                ),
                 false,
             ),
         ]));
