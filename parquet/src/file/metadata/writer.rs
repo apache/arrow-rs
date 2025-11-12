@@ -636,6 +636,8 @@ impl MetadataObjectWriter {
 
     /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
     ///
+    /// This will return an error if `column_index` is [`ColumnIndexMetaData::NONE`].
+    ///
     /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
