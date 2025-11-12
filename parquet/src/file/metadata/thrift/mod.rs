@@ -905,7 +905,8 @@ impl OrdinalAssigner {
             rg.ordinal = Some(actual_ordinal);
         } else if self.first_has_ordinal != rg_has_ordinal {
             return Err(general_err!(
-                "Inconsistent ordinal assignment: first_has_ordinal is set to {} but first_has_ordinal for row-group {} is set to{}",
+                "Inconsistent ordinal assignment: first_has_ordinal is set to \
+                {} but row-group with actual ordinal {} has rg_has_ordinal set to {}",
                 self.first_has_ordinal,
                 actual_ordinal,
                 rg_has_ordinal
