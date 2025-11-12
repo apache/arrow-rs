@@ -22,10 +22,13 @@ use crate::variant_to_arrow::{
     PrimitiveVariantToArrowRowBuilder, make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, BinaryViewArray, ListArray, ListViewArray, NullBufferBuilder};
+use arrow::array::{
+    ArrayRef, BinaryViewArray, GenericListArray, GenericListViewArray, NullBufferBuilder,
+    OffsetSizeTrait,
+};
 use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, FieldRef, Fields};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef, Fields};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantBuilderExt, VariantList};
 
@@ -114,18 +117,16 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
             )?;
             VariantToShreddedVariantRowBuilder::Object(typed_value_builder)
         }
-        DataType::List(_) | DataType::ListView(_) => {
+        DataType::List(_)
+        | DataType::LargeList(_)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => {
             let typed_value_builder = VariantToShreddedArrayVariantRowBuilder::try_new(
                 data_type,
                 cast_options,
                 capacity,
             )?;
             VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
-        }
-        DataType::LargeList(_) | DataType::LargeListView(_) => {
-            return Err(ArrowError::NotYetImplemented(
-                "Shredding variant array values as arrow lists".to_string(),
-            ));
         }
         DataType::FixedSizeList(..) => {
             return Err(ArrowError::NotYetImplemented(
@@ -281,8 +282,10 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
 }
 
 enum ArrayVariantToArrowRowBuilder<'a> {
-    List(VariantToListArrowRowBuilder<'a>),
-    ListView(VariantToListViewArrowRowBuilder<'a>),
+    List(VariantToListArrowRowBuilder<'a, i32>),
+    LargeList(VariantToListArrowRowBuilder<'a, i64>),
+    ListView(VariantToListViewArrowRowBuilder<'a, i32>),
+    LargeListView(VariantToListViewArrowRowBuilder<'a, i64>),
 }
 
 impl<'a> ArrayVariantToArrowRowBuilder<'a> {
@@ -300,12 +303,26 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
                 cast_options,
                 capacity,
             )?),
+            DataType::LargeList(field) => LargeList(VariantToListArrowRowBuilder::try_new(
+                field.clone(),
+                field.data_type(),
+                cast_options,
+                capacity,
+            )?),
             DataType::ListView(field) => ListView(VariantToListViewArrowRowBuilder::try_new(
                 field.clone(),
                 field.data_type(),
                 cast_options,
                 capacity,
             )?),
+            DataType::LargeListView(field) => {
+                LargeListView(VariantToListViewArrowRowBuilder::try_new(
+                    field.clone(),
+                    field.data_type(),
+                    cast_options,
+                    capacity,
+                )?)
+            }
             other => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Casting to {other:?} is not applicable for array Variant types"
@@ -318,34 +335,40 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
     fn append_null(&mut self) {
         match self {
             Self::List(builder) => builder.append_null(),
+            Self::LargeList(builder) => builder.append_null(),
             Self::ListView(builder) => builder.append_null(),
+            Self::LargeListView(builder) => builder.append_null(),
         }
     }
 
     fn append_value(&mut self, list: VariantList<'_, '_>) -> Result<()> {
         match self {
             Self::List(builder) => builder.append_value(list),
+            Self::LargeList(builder) => builder.append_value(list),
             Self::ListView(builder) => builder.append_value(list),
+            Self::LargeListView(builder) => builder.append_value(list),
         }
     }
 
     fn finish(self) -> Result<ArrayRef> {
         match self {
             Self::List(builder) => builder.finish(),
+            Self::LargeList(builder) => builder.finish(),
             Self::ListView(builder) => builder.finish(),
+            Self::LargeListView(builder) => builder.finish(),
         }
     }
 }
 
-struct VariantToListArrowRowBuilder<'a> {
+struct VariantToListArrowRowBuilder<'a, O: OffsetSizeTrait + ArrowNativeTypeOp> {
     field: FieldRef,
-    offsets: Vec<i32>,
+    offsets: Vec<O>,
     element_builder: Box<VariantToShreddedVariantRowBuilder<'a>>,
     nulls: NullBufferBuilder,
-    current_offset: i32,
+    current_offset: O,
 }
 
-impl<'a> VariantToListArrowRowBuilder<'a> {
+impl<'a, O: OffsetSizeTrait + ArrowNativeTypeOp> VariantToListArrowRowBuilder<'a, O> {
     fn try_new(
         field: FieldRef,
         element_data_type: &'a DataType,
@@ -354,10 +377,10 @@ impl<'a> VariantToListArrowRowBuilder<'a> {
     ) -> Result<Self> {
         let mut offsets = Vec::with_capacity(capacity.checked_add(1).ok_or_else(|| {
             ArrowError::ComputeError(
-                "Capacity exceeded usize::MAX when reserving offsets".to_string(),
+                "Capacity exceeded usize::MAX when reserving list offsets".to_string(),
             )
         })?);
-        offsets.push(0);
+        offsets.push(O::ZERO);
         let element_builder = make_variant_to_shredded_variant_arrow_row_builder(
             element_data_type,
             cast_options,
@@ -369,7 +392,7 @@ impl<'a> VariantToListArrowRowBuilder<'a> {
             offsets,
             element_builder: Box::new(element_builder),
             nulls: NullBufferBuilder::new(capacity),
-            current_offset: 0,
+            current_offset: O::ZERO,
         })
     }
 
@@ -381,11 +404,7 @@ impl<'a> VariantToListArrowRowBuilder<'a> {
     fn append_value(&mut self, list: VariantList<'_, '_>) -> Result<()> {
         for element in list.iter() {
             self.element_builder.append_value(element)?;
-            self.current_offset = self.current_offset.checked_add(1).ok_or_else(|| {
-                ArrowError::ComputeError(
-                    "List offsets exceeded i32::MAX during shredding".to_string(),
-                )
-            })?;
+            self.current_offset = self.current_offset.add_checked(O::ONE)?;
         }
         self.offsets.push(self.current_offset);
         self.nulls.append_non_null();
@@ -402,26 +421,27 @@ impl<'a> VariantToListArrowRowBuilder<'a> {
                 .clone()
                 .with_data_type(element_array.data_type().clone()),
         );
-        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::from(self.offsets));
-        Ok(Arc::new(ListArray::new(
+        let offsets = OffsetBuffer::<O>::new(ScalarBuffer::from(self.offsets));
+        let list_array = GenericListArray::<O>::new(
             field,
             offsets,
             ArrayRef::from(element_array),
             self.nulls.finish(),
-        )))
+        );
+        Ok(Arc::new(list_array))
     }
 }
 
-struct VariantToListViewArrowRowBuilder<'a> {
+struct VariantToListViewArrowRowBuilder<'a, O: OffsetSizeTrait + ArrowNativeTypeOp> {
     field: FieldRef,
-    offsets: Vec<i32>,
-    sizes: Vec<i32>,
+    offsets: Vec<O>,
+    sizes: Vec<O>,
     element_builder: Box<VariantToShreddedVariantRowBuilder<'a>>,
     nulls: NullBufferBuilder,
-    current_offset: i32,
+    current_offset: O,
 }
 
-impl<'a> VariantToListViewArrowRowBuilder<'a> {
+impl<'a, O: OffsetSizeTrait + ArrowNativeTypeOp> VariantToListViewArrowRowBuilder<'a, O> {
     fn try_new(
         field: FieldRef,
         element_data_type: &'a DataType,
@@ -440,13 +460,13 @@ impl<'a> VariantToListViewArrowRowBuilder<'a> {
             sizes: Vec::with_capacity(capacity),
             element_builder: Box::new(element_builder),
             nulls: NullBufferBuilder::new(capacity),
-            current_offset: 0,
+            current_offset: O::ZERO,
         })
     }
 
     fn append_null(&mut self) {
         self.offsets.push(self.current_offset);
-        self.sizes.push(0);
+        self.sizes.push(O::ZERO);
         self.nulls.append_null();
     }
 
@@ -454,11 +474,7 @@ impl<'a> VariantToListViewArrowRowBuilder<'a> {
         let start_offset = self.current_offset;
         for element in list.iter() {
             self.element_builder.append_value(element)?;
-            self.current_offset = self.current_offset.checked_add(1).ok_or_else(|| {
-                ArrowError::ComputeError(
-                    "List offsets exceeded i32::MAX during shredding".to_string(),
-                )
-            })?;
+            self.current_offset = self.current_offset.add_checked(O::ONE)?;
         }
         self.offsets.push(start_offset);
         self.sizes.push(self.current_offset - start_offset);
@@ -468,7 +484,8 @@ impl<'a> VariantToListViewArrowRowBuilder<'a> {
 
     fn finish(mut self) -> Result<ArrayRef> {
         let (value, typed_value, nulls) = self.element_builder.finish()?;
-        let element_array = ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
+        let element_array =
+            ShreddedVariantFieldArray::from_parts(Some(value), Some(typed_value), nulls);
         let field = Arc::new(
             self.field
                 .as_ref()
@@ -477,13 +494,14 @@ impl<'a> VariantToListViewArrowRowBuilder<'a> {
         );
         let offsets = ScalarBuffer::from(self.offsets);
         let sizes = ScalarBuffer::from(self.sizes);
-        Ok(Arc::new(ListViewArray::new(
+        let list_view_array = GenericListViewArray::<O>::new(
             field,
             offsets,
             sizes,
             ArrayRef::from(element_array),
             self.nulls.finish(),
-        )))
+        );
+        Ok(Arc::new(list_view_array))
     }
 }
 
@@ -606,8 +624,8 @@ mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
     use arrow::array::{
-        Array, FixedSizeBinaryArray, Float64Array, Int64Array, ListArray, ListViewArray,
-        StringArray,
+        Array, FixedSizeBinaryArray, Float64Array, Int64Array, LargeListArray, LargeListViewArray,
+        ListArray, ListViewArray, StringArray,
     };
     use arrow::datatypes::{DataType, Field, Fields};
     use parquet_variant::{
@@ -646,13 +664,6 @@ mod tests {
         // Should return array with no value/typed_value fields
         assert!(result.value_field().is_none());
         assert!(result.typed_value_field().is_none());
-    }
-
-    #[test]
-    fn test_unsupported_large_list_schema() {
-        let input = VariantArray::from_iter([Variant::from(42)]);
-        let list_schema = DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true)));
-        shred_variant(&input, &list_schema).expect_err("unsupported");
     }
 
     #[test]
@@ -932,6 +943,46 @@ mod tests {
     }
 
     #[test]
+    fn test_array_shredding_as_large_list() {
+        let mut builder = VariantArrayBuilder::new(3);
+        builder
+            .new_list()
+            .with_value(Variant::from(1i64))
+            .with_value(Variant::from(2i64))
+            .finish();
+        builder.append_variant(Variant::from("not a list"));
+        builder.new_list().finish();
+
+        let input = builder.build();
+        let list_schema = DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true)));
+        let result = shred_variant(&input, &list_schema).unwrap();
+        assert_eq!(result.len(), 3);
+
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<LargeListArray>()
+            .unwrap();
+
+        assert_eq!(typed_value.value_offsets(), &[0, 2, 2, 2]);
+        assert!(typed_value.is_valid(0));
+        assert!(typed_value.is_null(1));
+        assert!(typed_value.is_valid(2));
+
+        let shredded = ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
+        let element_values = shredded
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(element_values.len(), 2);
+        assert_eq!(element_values.value(0), 1);
+        assert_eq!(element_values.value(1), 2);
+    }
+
+    #[test]
     fn test_array_shredding_as_list_view() {
         let mut builder = VariantArrayBuilder::new(4);
         // Row 0: Standard list
@@ -1039,6 +1090,47 @@ mod tests {
             Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(5)),
             Variant::Null
         );
+    }
+
+    #[test]
+    fn test_array_shredding_as_large_list_view() {
+        let mut builder = VariantArrayBuilder::new(3);
+        builder
+            .new_list()
+            .with_value(Variant::from(1i64))
+            .with_value(Variant::from(2i64))
+            .finish();
+        builder.append_variant(Variant::from("fallback"));
+        builder.new_list().finish();
+
+        let input = builder.build();
+        let schema = DataType::LargeListView(Arc::new(Field::new("item", DataType::Int64, true)));
+        let result = shred_variant(&input, &schema).unwrap();
+        assert_eq!(result.len(), 3);
+
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<LargeListViewArray>()
+            .unwrap();
+
+        assert_eq!(typed_value.value_offsets(), &[0, 2, 2]);
+        assert_eq!(typed_value.value_sizes(), &[2, 0, 0]);
+        assert!(typed_value.is_valid(0));
+        assert!(typed_value.is_null(1));
+        assert!(typed_value.is_valid(2));
+
+        let shredded = ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
+        let element_values = shredded
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(element_values.len(), 2);
+        assert_eq!(element_values.value(0), 1);
+        assert_eq!(element_values.value(1), 2);
     }
 
     #[test]
