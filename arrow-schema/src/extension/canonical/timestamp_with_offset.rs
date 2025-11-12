@@ -101,11 +101,20 @@ impl ExtensionType for TimestampWithOffset {
                         }
                     });
 
+                    let offset_type_ok = match maybe_offset.data_type() {
+                        DataType::Int16 => true,
+                        DataType::Dictionary(key_type, value_type) => {
+                            key_type.is_dictionary_key_type()
+                                && matches!(value_type.as_ref(), DataType::Int16)
+                        }
+                        _ => false,
+                    };
+
                     maybe_timestamp.name() == TIMESTAMP_FIELD_NAME
                         && timestamp_type_ok
                         && !maybe_timestamp.is_nullable()
                         && maybe_offset.name() == OFFSET_FIELD_NAME
-                        && matches!(maybe_offset.data_type(), DataType::Int16)
+                        && offset_type_ok
                         && !maybe_offset.is_nullable()
                 }
                 _ => false,
@@ -137,7 +146,7 @@ mod tests {
 
     use super::*;
 
-    fn make_valid_field(time_unit: TimeUnit) -> Field {
+    fn make_valid_field_primitive(time_unit: TimeUnit) -> Field {
         Field::new(
             "",
             DataType::Struct(Fields::from_iter([
@@ -152,8 +161,29 @@ mod tests {
         )
     }
 
+    fn make_valid_field_dict_encoded(time_unit: TimeUnit, key_type: DataType) -> Field {
+        assert!(key_type.is_dictionary_key_type());
+
+        Field::new(
+            "",
+            DataType::Struct(Fields::from_iter([
+                Field::new(
+                    TIMESTAMP_FIELD_NAME,
+                    DataType::Timestamp(time_unit, Some("UTC".into())),
+                    false,
+                ),
+                Field::new(
+                    OFFSET_FIELD_NAME,
+                    DataType::Dictionary(Box::new(key_type), Box::new(DataType::Int16)),
+                    false,
+                ),
+            ])),
+            false,
+        )
+    }
+
     #[test]
-    fn valid() -> Result<(), ArrowError> {
+    fn valid_primitive_offsets() -> Result<(), ArrowError> {
         let time_units = [
             TimeUnit::Second,
             TimeUnit::Millisecond,
@@ -162,7 +192,7 @@ mod tests {
         ];
 
         for time_unit in time_units {
-            let mut field = make_valid_field(time_unit);
+            let mut field = make_valid_field_primitive(time_unit);
             field.try_with_extension_type(TimestampWithOffset)?;
             field.try_extension_type::<TimestampWithOffset>()?;
             #[cfg(feature = "canonical_extension_types")]
@@ -176,9 +206,45 @@ mod tests {
     }
 
     #[test]
+    fn valid_dict_encoded_offsets() -> Result<(), ArrowError> {
+        let time_units = [
+            TimeUnit::Second,
+            TimeUnit::Millisecond,
+            TimeUnit::Microsecond,
+            TimeUnit::Nanosecond,
+        ];
+
+        let key_types = [
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+        ];
+
+        for time_unit in time_units {
+            for key_type in &key_types {
+                let mut field = make_valid_field_dict_encoded(time_unit, key_type.clone());
+                field.try_with_extension_type(TimestampWithOffset)?;
+                field.try_extension_type::<TimestampWithOffset>()?;
+                #[cfg(feature = "canonical_extension_types")]
+                assert_eq!(
+                    field.try_canonical_extension_type()?,
+                    CanonicalExtensionType::TimestampWithOffset(TimestampWithOffset)
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
     #[should_panic(expected = "Field extension type name missing")]
     fn missing_name() {
-        let field = make_valid_field(TimeUnit::Second)
+        let field = make_valid_field_primitive(TimeUnit::Second)
             .with_metadata([(EXTENSION_TYPE_METADATA_KEY.to_owned(), "".to_owned())].into());
         field.extension_type::<TimestampWithOffset>();
     }
@@ -225,6 +291,46 @@ mod tests {
                 false,
             ),
             Field::new(OFFSET_FIELD_NAME, DataType::UInt64, false),
+        ]));
+        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
+    )]
+    fn invalid_type_wrong_offset_key_dict_encoded() {
+        let data_type = DataType::Struct(Fields::from_iter([
+            Field::new(
+                TIMESTAMP_FIELD_NAME,
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+                false,
+            ),
+            Field::new(
+                OFFSET_FIELD_NAME,
+                DataType::Dictionary(Box::new(DataType::Boolean), Box::new(DataType::Int16)),
+                false,
+            ),
+        ]));
+        Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "expected Struct(\"timestamp\": Timestamp(_, Some(\"UTC\")), \"offset_minutes\": Int16), found Struct"
+    )]
+    fn invalid_type_wrong_offset_value_dict_encoded() {
+        let data_type = DataType::Struct(Fields::from_iter([
+            Field::new(
+                TIMESTAMP_FIELD_NAME,
+                DataType::Timestamp(TimeUnit::Second, Some("UTC".into())),
+                false,
+            ),
+            Field::new(
+                OFFSET_FIELD_NAME,
+                DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Int32)),
+                false,
+            ),
         ]));
         Field::new("", data_type, false).with_extension_type(TimestampWithOffset);
     }
@@ -295,7 +401,7 @@ mod tests {
 
     #[test]
     fn no_metadata() {
-        let field = make_valid_field(TimeUnit::Second).with_metadata(
+        let field = make_valid_field_primitive(TimeUnit::Second).with_metadata(
             [(
                 EXTENSION_TYPE_NAME_KEY.to_owned(),
                 TimestampWithOffset::NAME.to_owned(),
@@ -307,7 +413,7 @@ mod tests {
 
     #[test]
     fn empty_metadata() {
-        let field = make_valid_field(TimeUnit::Second).with_metadata(
+        let field = make_valid_field_primitive(TimeUnit::Second).with_metadata(
             [
                 (
                     EXTENSION_TYPE_NAME_KEY.to_owned(),
