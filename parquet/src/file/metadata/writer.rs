@@ -156,8 +156,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .columns()
             .iter()
             .map(|col| {
-                let sort_order = ColumnOrder::get_sort_order(
-                    col.logical_type(),
+                let sort_order = ColumnOrder::sort_order_for_type(
+                    col.logical_type_ref(),
                     col.converted_type(),
                     col.physical_type(),
                 );

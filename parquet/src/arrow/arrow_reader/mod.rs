@@ -41,7 +41,7 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader, RowGroupMetaData,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
@@ -60,9 +60,9 @@ pub mod statistics;
 ///
 /// Most users should use one of the following specializations:
 ///
-/// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
-/// * `async` API: [`ParquetRecordBatchStreamBuilder::new`]
-/// * decoder API: [`ParquetDecoderBuilder::new`]
+/// * synchronous API: [`ParquetRecordBatchReaderBuilder`]
+/// * `async` API: [`ParquetRecordBatchStreamBuilder`]
+/// * decoder API: [`ParquetPushDecoderBuilder`]
 ///
 /// # Features
 /// * Projection pushdown: [`Self::with_projection`]
@@ -97,8 +97,8 @@ pub mod statistics;
 /// You can read more about this design in the [Querying Parquet with
 /// Millisecond Latency] Arrow blog post.
 ///
-/// [`ParquetRecordBatchStreamBuilder::new`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new
-/// [`ParquetDecoderBuilder::new`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::new
+/// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
+/// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
 /// [Apache Arrow]: https://arrow.apache.org/
 /// [`StatisticsConverter`]: statistics::StatisticsConverter
 /// [Querying Parquet with Millisecond Latency]: https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/
@@ -408,6 +408,8 @@ pub struct ArrowReaderOptions {
     supplied_schema: Option<SchemaRef>,
     /// Policy for reading offset and column indexes.
     pub(crate) page_index_policy: PageIndexPolicy,
+    /// Options to control reading of Parquet metadata
+    metadata_options: ParquetMetaDataOptions,
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
@@ -529,6 +531,16 @@ impl ArrowReaderOptions {
         }
     }
 
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    ///
+    /// This can be used to avoid reparsing the schema from the file when it is
+    /// already known.
+    pub fn with_parquet_schema(mut self, schema: Arc<SchemaDescriptor>) -> Self {
+        self.metadata_options.set_schema(schema);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
@@ -617,6 +629,11 @@ impl ArrowReaderOptions {
         self.page_index_policy != PageIndexPolicy::Skip
     }
 
+    /// Retrieve the currently set metadata decoding options.
+    pub fn metadata_options(&self) -> &ParquetMetaDataOptions {
+        &self.metadata_options
+    }
+
     /// Retrieve the currently set file decryption properties.
     ///
     /// This can be set via
@@ -664,8 +681,9 @@ impl ArrowReaderMetadata {
     /// `Self::metadata` is missing the page index, this function will attempt
     /// to load the page index by making an object store request.
     pub fn load<T: ChunkReader>(reader: &T, options: ArrowReaderOptions) -> Result<Self> {
-        let metadata =
-            ParquetMetaDataReader::new().with_page_index_policy(options.page_index_policy);
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(options.page_index_policy)
+            .with_metadata_options(Some(options.metadata_options.clone()));
         #[cfg(feature = "encryption")]
         let metadata = metadata.with_decryption_properties(
             options.file_decryption_properties.as_ref().map(Arc::clone),
@@ -806,11 +824,12 @@ impl<T: Debug + ChunkReader> Debug for SyncReader<T> {
     }
 }
 
-/// A synchronous builder used to construct [`ParquetRecordBatchReader`] for a file
+/// Creates [`ParquetRecordBatchReader`] for reading Parquet files into Arrow [`RecordBatch`]es
 ///
-/// For an async API see [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder`]
-///
-/// See [`ArrowReaderBuilder`] for additional member functions
+/// # See Also
+/// * [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder`] for an async API
+/// * [`crate::arrow::push_decoder::ParquetPushDecoderBuilder`] for a SansIO decoder API
+/// * [`ArrowReaderBuilder`] for additional member functions
 pub type ParquetRecordBatchReaderBuilder<T> = ArrowReaderBuilder<SyncReader<T>>;
 
 impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
@@ -1111,12 +1130,16 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
 
 impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 
-/// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
-/// read from a parquet data source
+/// Reads Parquet data as Arrow [`RecordBatch`]es
 ///
-/// This reader is created by [`ParquetRecordBatchReaderBuilder`], and has all
-/// the buffered state (DataPages, etc) necessary to decode the parquet data into
-/// Arrow arrays.
+/// This struct implements the [`RecordBatchReader`] trait and is an
+/// `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]es.
+///
+/// Typically, either reads from a file or an in memory buffer [`Bytes`]
+///
+/// Created by [`ParquetRecordBatchReaderBuilder`]
+///
+/// [`Bytes`]: bytes::Bytes
 pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
@@ -1342,6 +1365,22 @@ pub(crate) mod tests {
 
         // Verify that the schema was correctly parsed
         assert_eq!(original_schema.fields(), reader.schema().fields());
+    }
+
+    #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("parquet/alltypes-java.parquet");
+
+        let builder = ParquetRecordBatchReaderBuilder::try_new(file.try_clone().unwrap()).unwrap();
+        let expected = builder.metadata;
+        let schema = expected.file_metadata().schema_descr_ptr();
+
+        let arrow_options = ArrowReaderOptions::new().with_parquet_schema(schema.clone());
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file, arrow_options).unwrap();
+
+        // Verify that the metadata matches
+        assert_eq!(expected.as_ref(), builder.metadata.as_ref());
     }
 
     #[test]
@@ -5153,10 +5192,13 @@ pub(crate) mod tests {
             .expect("Error creating reader builder");
 
         let schema = builder.metadata().file_metadata().schema_descr();
-        assert_eq!(schema.column(0).logical_type(), Some(LogicalType::String));
         assert_eq!(
-            schema.column(1).logical_type(),
-            Some(LogicalType::_Unknown { field_id: 2555 })
+            schema.column(0).logical_type_ref(),
+            Some(&LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type_ref(),
+            Some(&LogicalType::_Unknown { field_id: 2555 })
         );
         assert_eq!(schema.column(1).physical_type(), PhysicalType::BYTE_ARRAY);
 
