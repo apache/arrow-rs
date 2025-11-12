@@ -331,6 +331,12 @@ fn create_table(
 
     for batch in results {
         let schema = schema_opt.as_ref().unwrap_or(batch.schema_ref());
+
+        // Could be a custom schema that was provided.
+        if batch.columns().len() != schema.fields().len() {
+            return Err(ArrowError::InvalidArgumentError("Expected the same number of columns in a record batch as the number of fields in the schema".to_owned()));
+        }
+
         let formatters = batch
             .columns()
             .iter()
@@ -1637,5 +1643,32 @@ mod tests {
         ];
         let expected = s.join("\n");
         assert_eq!(expected, buf);
+    }
+
+    #[test]
+    fn test_pretty_format_batches_with_schema_with_wrong_number_of_fields() {
+        let schema_a = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ]));
+        let schema_b = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema_b,
+            vec![Arc::new(array::Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(10),
+                Some(100),
+            ]))],
+        )
+        .unwrap();
+
+        let result = pretty_format_batches_with_schema(schema_a, &[batch]);
+        assert!(
+            matches!(result, Err(ArrowError::InvalidArgumentError(_))),
+            "Error expected"
+        );
     }
 }
