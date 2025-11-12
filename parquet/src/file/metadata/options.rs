@@ -73,19 +73,21 @@ impl ParquetMetaDataOptions {
     // with_schema
     add_mutator!(schema, SchemaDescPtr);
 
-    /// Returns whether to present the `encoding_stats` field of the `ColumnMetaData` as a
-    /// bitmask.
+    /// Returns whether to present the [`encoding_stats`] field of the Parquet `ColumnMetaData`
+    /// as a bitmask.
     ///
     /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for an explanation of why this
     /// might be desirable.
     ///
     /// [`ColumnChunkMetaData::page_encoding_stats_mask`]:
     /// crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn encoding_stats_as_mask(&self) -> bool {
         self.encoding_stats_as_mask
     }
 
-    /// Convert `encoding_stats` from a vector of [`PageEncodingStats`] to a bitmask. This can
+    /// Convert [`encoding_stats`] from a vector of [`PageEncodingStats`] to a bitmask. This can
     /// speed up metadata decoding while still enabling some use cases served by the full stats.
     ///
     /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for more information.
@@ -93,6 +95,8 @@ impl ParquetMetaDataOptions {
     /// [`PageEncodingStats`]: crate::file::metadata::PageEncodingStats
     /// [`ColumnChunkMetaData::page_encoding_stats_mask`]:
     /// crate::file::metadata::ColumnChunkMetaData::page_encoding_stats_mask
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn set_encoding_stats_as_mask(&mut self, val: bool) {
         self.encoding_stats_as_mask = val;
     }
@@ -100,16 +104,22 @@ impl ParquetMetaDataOptions {
     // with_encoding_stats_as_mask
     add_mutator!(encoding_stats_as_mask, bool);
 
-    /// Returns whether to skip decoding the `encoding_stats` in the `ColumnMetaData`
+    /// Returns whether to skip decoding the [`encoding_stats`] in the Parquet `ColumnMetaData`
     /// for the column indexed by `col_index`.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn skip_encoding_stats(&self, col_index: usize) -> bool {
         self.skip_encoding_stats
             .as_ref()
             .is_some_and(|oset| oset.as_ref().is_none_or(|keep| !keep.contains(&col_index)))
     }
 
-    /// Skip decoding of all `encoding_stats`. Takes precedence over
-    /// [`Self::encoding_stats_as_mask`].
+    /// Sets whether to skip decoding of all [`encoding_stats`] in the Parquet `ColumnMetaData`.
+    /// Takes precedence over [`Self::encoding_stats_as_mask`].
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn set_skip_encoding_stats(&mut self, val: bool) {
         self.skip_encoding_stats = if val { Some(None) } else { None };
     }
@@ -117,11 +127,14 @@ impl ParquetMetaDataOptions {
     // with_skip_encoding_stats
     add_mutator!(skip_encoding_stats, bool);
 
-    /// Skip decoding of `encoding_stats`, but decode the stats for those columns in
-    /// the provided list of column indices.
+    /// Skip decoding of [`encoding_stats`] in the Parquet `ColumnMetaData`, but decode the stats
+    /// for those columns in the provided list of column indices.
     ///
     /// This allows for optimizations such as only decoding the page encoding statistics
     /// for columns present in a predicate.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn set_keep_encoding_stats(&mut self, keep: &[usize]) {
         if keep.is_empty() {
             self.set_skip_encoding_stats(true);

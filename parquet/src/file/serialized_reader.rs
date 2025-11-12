@@ -160,16 +160,22 @@ impl ReadOptionsBuilder {
         self
     }
 
-    /// Set whether to convert `encoding_stats` to a bitmask.
+    /// Set whether to convert the [`encoding_stats`] in the Parquet `ColumnMetaData` to a bitmask.
     ///
     /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for an explanation of why this
     /// might be desirable.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn with_encoding_stats_as_mask(mut self, val: bool) -> Self {
         self.metadata_options.set_encoding_stats_as_mask(val);
         self
     }
 
-    /// Set whether to skip decoding `encoding_stats`.
+    /// Set whether to skip decoding the [`encoding_stats`] field of the Parquet `ColumnMetaData`.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn with_skip_encoding_stats(mut self, val: bool) -> Self {
         self.metadata_options.set_skip_encoding_stats(val);
         self
