@@ -136,10 +136,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Serialize the column indexes and transform to `Option<ParquetColumnIndex>`
-    fn finalize_column_indexes(
-        &mut self,
-        column_indexes: Option<Vec<Vec<Option<ColumnIndexMetaData>>>>,
-    ) -> Result<Option<ParquetColumnIndex>> {
+    fn finalize_column_indexes(&mut self) -> Result<Option<ParquetColumnIndex>> {
+        let column_indexes = std::mem::take(&mut self.column_indexes);
+
         // Write column indexes to file
         if let Some(column_indexes) = column_indexes.as_ref() {
             self.write_column_indexes(column_indexes)?;
@@ -170,10 +169,9 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
     }
 
     /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
-    fn finalize_offset_indexes(
-        &mut self,
-        offset_indexes: Option<Vec<Vec<Option<OffsetIndexMetaData>>>>,
-    ) -> Result<Option<ParquetOffsetIndex>> {
+    fn finalize_offset_indexes(&mut self) -> Result<Option<ParquetOffsetIndex>> {
+        let offset_indexes = std::mem::take(&mut self.offset_indexes);
+
         // Write offset indexes to file
         if let Some(offset_indexes) = offset_indexes.as_ref() {
             self.write_offset_indexes(offset_indexes)?;
@@ -203,10 +201,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
         // serialize page indexes and transform to the proper form for use in ParquetMetaData
-        let column_indexes = std::mem::take(&mut self.column_indexes);
-        let column_indexes = self.finalize_column_indexes(column_indexes)?;
-        let offset_indexes = std::mem::take(&mut self.offset_indexes);
-        let offset_indexes = self.finalize_offset_indexes(offset_indexes)?;
+        let column_indexes = self.finalize_column_indexes()?;
+        let offset_indexes = self.finalize_offset_indexes()?;
 
         // We only include ColumnOrder for leaf nodes.
         // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
