@@ -15,8 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_schema::{DataType, Fields, SchemaBuilder};
 use std::sync::{Arc, Mutex};
+
+use arrow_schema::{DataType, Fields, SchemaBuilder};
 
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::byte_view_array::make_byte_view_array_reader;
