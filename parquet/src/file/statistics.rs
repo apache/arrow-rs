@@ -1123,4 +1123,26 @@ mod tests {
             "Parquet error: Incorrect Int96 max statistics"
         );
     }
+
+    // Ensures that we can call ValueStatistics::min_opt from a
+    // generic function without reyling on a bound to a private trait.
+    fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
+        match stats.min_opt() {
+            Some(s) => format!("min: {}", s),
+            None => format!("min: NA"),
+        }
+    }
+
+    #[test]
+    fn test_generic_access() {
+        let stats = Statistics::int32(Some(12), Some(45), None, Some(11), false);
+
+        match stats {
+            Statistics::Int32(v) => {
+                let stats_string = generic_statistics_handler(v);
+                assert_eq!(&stats_string, "min: 12");
+            }
+            _ => unreachable!(),
+        }
+    }
 }
