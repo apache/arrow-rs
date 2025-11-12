@@ -769,8 +769,13 @@ pub(crate) fn parquet_metadata_from_bytes(
                 // Read row groups and handle ordinal assignment
                 let mut assigner = OrdinalAssigner::new();
                 for ordinal in 0..list_ident.size {
-                    rg_vec
-                        .push(assigner.ensure(ordinal, read_row_group(&mut prot, schema_descr)?)?);
+                    let ordinal: i16 = ordinal.try_into().map_err(|_| {
+                        ParquetError::General(format!(
+                            "Row group ordinal {ordinal} exceeds i16 max value",
+                        ))
+                    })?;
+                    let rg = read_row_group(&mut prot, schema_descr)?;
+                    rg_vec.push(assigner.ensure(ordinal, rg)?);
                 }
                 row_groups = Some(rg_vec);
             }
@@ -887,7 +892,7 @@ impl OrdinalAssigner {
     ///    groups must also not have ordinals.
     fn ensure(
         &mut self,
-        actual_ordinal: i32,
+        actual_ordinal: i16,
         mut rg: RowGroupMetaData,
     ) -> Result<RowGroupMetaData> {
         let rg_has_ordinal = rg.ordinal.is_some();
@@ -897,7 +902,7 @@ impl OrdinalAssigner {
 
         // assign ordinal if missing and consistent with first row group
         if !self.first_has_ordinal && !rg_has_ordinal {
-            rg.ordinal = Some(actual_ordinal as i16);
+            rg.ordinal = Some(actual_ordinal);
         } else if self.first_has_ordinal != rg_has_ordinal {
             return Err(general_err!(
                 "Inconsistent ordinal assignment: first_has_ordinal is set to {} but first_has_ordinal for row-group {} is set to{}",

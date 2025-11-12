@@ -144,6 +144,8 @@ pub trait RowGroups {
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
 
     /// Returns an iterator over the row groups in this collection
+    ///
+    /// Note this may not include all row groups in [`Self::metadata`].
     fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_>;
 
     /// Returns the parquet metadata

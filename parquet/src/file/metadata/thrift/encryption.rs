@@ -301,10 +301,10 @@ pub(crate) fn parquet_metadata_with_encryption(
         .into_iter()
         .enumerate()
         .map(|(ordinal, rg)| {
-            let rg = row_group_from_encrypted_thrift(rg, file_decryptor.as_ref())?;
-            let ordinal: i32 = ordinal.try_into().map_err(|_| {
-                ParquetError::General("Row group ordinal exceeds i32 range".to_string())
+            let ordinal: i16 = ordinal.try_into().map_err(|_| {
+                ParquetError::General(format!("Row group ordinal {ordinal} exceeds i32 range"))
             })?;
+            let rg = row_group_from_encrypted_thrift(rg, file_decryptor.as_ref())?;
             let rg = assigner.ensure(ordinal, rg)?;
             Ok(rg)
         })
