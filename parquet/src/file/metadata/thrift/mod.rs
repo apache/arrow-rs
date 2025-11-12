@@ -767,28 +767,10 @@ pub(crate) fn parquet_metadata_from_bytes(
                 let mut rg_vec = Vec::with_capacity(list_ident.size as usize);
 
                 // Read row groups and handle ordinal assignment
-                let mut first_has_ordinal = false;
+                let mut assigner = OrdinalAssigner::new();
                 for ordinal in 0..list_ident.size {
-                    let mut rg = read_row_group(&mut prot, schema_descr)?;
-
-                    // Check first row group to determine ordinal strategy
-                    let rg_has_ordinal = rg.ordinal.is_some();
-                    if ordinal == 0 {
-                        first_has_ordinal = rg_has_ordinal;
-                    }
-
-                    if !first_has_ordinal && !rg_has_ordinal {
-                        rg.ordinal = Some(ordinal as i16);
-                    } else if first_has_ordinal != rg_has_ordinal {
-                        return Err(general_err!(
-                            "Inconsistent ordinal assignment: first_has_ordinal is set to {} but first_has_ordinal for row-group {} is set to{}",
-                            first_has_ordinal,
-                            ordinal,
-                            rg_has_ordinal
-                        ));
-                    }
-
-                    rg_vec.push(rg);
+                    rg_vec
+                        .push(assigner.ensure(ordinal, read_row_group(&mut prot, schema_descr)?)?);
                 }
                 row_groups = Some(rg_vec);
             }
@@ -878,6 +860,54 @@ pub(crate) fn parquet_metadata_from_bytes(
     .with_footer_signing_key_metadata(footer_signing_key_metadata.map(|v| v.to_vec()));
 
     Ok(ParquetMetaData::new(fmd, row_groups))
+}
+
+/// Assign [`RowGroupMetaData::ordinal`]  if it is missing.
+#[derive(Debug, Default)]
+pub(crate) struct OrdinalAssigner {
+    first_has_ordinal: bool,
+}
+
+impl OrdinalAssigner {
+    fn new() -> Self {
+        Default::default()
+    }
+
+    /// Sets [`RowGroupMetaData::ordinal`] if it is missing.
+    ///
+    /// # Arguments
+    /// - actual_ordinal: The ordinal (index) of the row group being processed
+    ///   in the file metadata.
+    /// - rg: The [`RowGroupMetaData`] to potentially modify.
+    ///
+    /// Ensures:
+    /// 1. If the first row group has an ordinal, all subsequent row groups must
+    ///    also have ordinals.
+    /// 2. If the first row group does NOT have an ordinal, all subsequent row
+    ///    groups must also not have ordinals.
+    fn ensure(
+        &mut self,
+        actual_ordinal: i32,
+        mut rg: RowGroupMetaData,
+    ) -> Result<RowGroupMetaData> {
+        let rg_has_ordinal = rg.ordinal.is_some();
+        if actual_ordinal == 0 {
+            self.first_has_ordinal = rg_has_ordinal;
+        }
+
+        // assign ordinal if missing and consistent with first row group
+        if !self.first_has_ordinal && !rg_has_ordinal {
+            rg.ordinal = Some(actual_ordinal as i16);
+        } else if self.first_has_ordinal != rg_has_ordinal {
+            return Err(general_err!(
+                "Inconsistent ordinal assignment: first_has_ordinal is set to {} but first_has_ordinal for row-group {} is set to{}",
+                self.first_has_ordinal,
+                actual_ordinal,
+                rg_has_ordinal
+            ));
+        }
+        Ok(rg)
+    }
 }
 
 thrift_struct!(

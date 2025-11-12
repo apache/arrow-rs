@@ -17,6 +17,7 @@
 
 //! Encryption support for Thrift serialization
 
+use crate::file::metadata::thrift::OrdinalAssigner;
 use crate::{
     encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
     errors::{ParquetError, Result},
@@ -295,30 +296,16 @@ pub(crate) fn parquet_metadata_with_encryption(
     }
 
     // decrypt column chunk info and handle ordinal assignment
-    let mut first_has_ordinal = false;
+    let mut assigner = OrdinalAssigner::new();
     let row_groups = row_groups
         .into_iter()
         .enumerate()
         .map(|(ordinal, rg)| {
-            let mut rg = row_group_from_encrypted_thrift(rg, file_decryptor.as_ref())?;
-
-            // Check first row group to determine ordinal strategy
-            let rg_has_ordinal = rg.ordinal.is_some();
-            if ordinal == 0 {
-                first_has_ordinal = rg_has_ordinal;
-            }
-
-            if !first_has_ordinal && !rg_has_ordinal {
-                rg.ordinal = Some(ordinal as i16);
-            } else if first_has_ordinal != rg_has_ordinal {
-                return Err(general_err!(
-                    "Inconsistent ordinal assignment: first_has_ordinal is set to {} but first_has_ordinal for row-group {} is set to{}",
-                    first_has_ordinal,
-                    ordinal,
-                    rg_has_ordinal
-                ));
-            }
-
+            let rg = row_group_from_encrypted_thrift(rg, file_decryptor.as_ref())?;
+            let ordinal: i32 = ordinal.try_into().map_err(|_| {
+                ParquetError::General("Row group ordinal exceeds i32 range".to_string())
+            })?;
+            let rg = assigner.ensure(ordinal, rg)?;
             Ok(rg)
         })
         .collect::<Result<Vec<_>>>()?;

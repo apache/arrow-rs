@@ -41,7 +41,8 @@ use crate::column::page::{PageIterator, PageReader};
 use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
-    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader, RowGroupMetaData,
+    PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+    RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
