@@ -113,22 +113,21 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         for (row_group_idx, row_group) in self.row_groups.iter_mut().enumerate() {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
                 if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
-                    // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
-                    if matches!(column_index, ColumnIndexMetaData::NONE) {
-                        continue;
-                    }
                     let start_offset = self.buf.bytes_written();
-                    self.object_writer.write_column_index(
+                    // only update column_metadata if the write succeeds
+                    if self.object_writer.write_column_index(
                         column_index,
                         column_metadata,
                         row_group_idx,
                         column_idx,
                         &mut self.buf,
-                    )?;
-                    let end_offset = self.buf.bytes_written();
-                    // set offset and index for offset index
-                    column_metadata.column_index_offset = Some(start_offset as i64);
-                    column_metadata.column_index_length = Some((end_offset - start_offset) as i32);
+                    )? {
+                        let end_offset = self.buf.bytes_written();
+                        // set offset and index for offset index
+                        column_metadata.column_index_offset = Some(start_offset as i64);
+                        column_metadata.column_index_length =
+                            Some((end_offset - start_offset) as i32);
+                    }
                 }
             }
         }
@@ -533,11 +532,15 @@ impl MetadataObjectWriter {
 #[cfg(not(feature = "encryption"))]
 impl MetadataObjectWriter {
     /// Write [`FileMetaData`] in Thrift format
+    ///
+    /// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
     fn write_file_metadata(&self, file_metadata: &FileMeta, sink: impl Write) -> Result<()> {
         Self::write_thrift_object(file_metadata, sink)
     }
 
     /// Write a column [`OffsetIndex`] in Thrift format
+    ///
+    /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_offset_index(
         &self,
         offset_index: &OffsetIndexMetaData,
@@ -550,6 +553,11 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`ColumnIndex`] in Thrift format
+    ///
+    /// If `column_index` is [`ColumnIndexMetaData::NONE`] the index will not be written and
+    /// this will return `false`. Returns `true` otherwise.
+    ///
+    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
         column_index: &ColumnIndexMetaData,
@@ -557,8 +565,15 @@ impl MetadataObjectWriter {
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
-    ) -> Result<()> {
-        Self::write_thrift_object(column_index, sink)
+    ) -> Result<bool> {
+        match column_index {
+            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
+            ColumnIndexMetaData::NONE => Ok(false),
+            _ => {
+                Self::write_thrift_object(column_index, sink)?;
+                Ok(true)
+            }
+        }
     }
 
     /// No-op implementation of row-group metadata encryption
@@ -636,7 +651,8 @@ impl MetadataObjectWriter {
 
     /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
     ///
-    /// This will return an error if `column_index` is [`ColumnIndexMetaData::NONE`].
+    /// If `column_index` is [`ColumnIndexMetaData::NONE`] the index will not be written and
+    /// this will return `false`. Returns `true` otherwise.
     ///
     /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
@@ -646,18 +662,25 @@ impl MetadataObjectWriter {
         row_group_idx: usize,
         column_idx: usize,
         sink: impl Write,
-    ) -> Result<()> {
-        match &self.file_encryptor {
-            Some(file_encryptor) => Self::write_thrift_object_with_encryption(
-                column_index,
-                sink,
-                file_encryptor,
-                column_chunk,
-                ModuleType::ColumnIndex,
-                row_group_idx,
-                column_idx,
-            ),
-            None => Self::write_thrift_object(column_index, sink),
+    ) -> Result<bool> {
+        match column_index {
+            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
+            ColumnIndexMetaData::NONE => Ok(false),
+            _ => {
+                match &self.file_encryptor {
+                    Some(file_encryptor) => Self::write_thrift_object_with_encryption(
+                        column_index,
+                        sink,
+                        file_encryptor,
+                        column_chunk,
+                        ModuleType::ColumnIndex,
+                        row_group_idx,
+                        column_idx,
+                    )?,
+                    None => Self::write_thrift_object(column_index, sink)?,
+                }
+                Ok(true)
+            }
         }
     }
 
