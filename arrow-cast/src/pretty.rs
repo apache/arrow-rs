@@ -23,14 +23,12 @@
 //! [`Array`]: arrow_array::Array
 
 use comfy_table::{Cell, Table};
-use std::fmt::{Display, Write};
-use std::sync::Arc;
+use std::fmt::{Display};
 
-use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, array};
+use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{ArrowError, Field, SchemaRef};
 
-use crate::display::{ArrayFormatter, DisplayIndex, FormatOptions};
+use crate::display::{ArrayFormatter, FormatOptions};
 
 /// Allows creating a new [`ArrayFormatter`] for a given [`Array`] and an optional [`Field`].
 ///
@@ -230,8 +228,7 @@ pub fn pretty_format_batches_with_options(
 ///
 /// # Example
 ///
-/// For an example see [`ArrayFormatterFactory`].
-/// ```
+/// For an example, see [`ArrayFormatterFactory`].
 pub fn pretty_format_batches_with_options_and_formatters(
     results: &[RecordBatch],
     options: &FormatOptions,
