@@ -25,20 +25,23 @@ use crate::{ArrowError, DataType, extension::ExtensionType};
 ///
 /// Extension name: `arrow.timestamp_with_offset`.
 ///
-/// The storage type of the extension is `Struct` where:
-/// - `timestamp`: a `Timestamp(time_unit, Some("UTC"))`, where `time_unit` is any `TimeUnit`
-/// - `offset_minutes`: a signed 16-bit integer (`Int16`) representing the offset in minutes
-///   from the UTC timezone
+/// This type represents a timestamp column that stores potentially different timezone offsets per value.
+/// The timestamp is stored in UTC alongside the original timezone offset in minutes. This extension type
+/// is intended to be compatible with ANSI SQL's `TIMESTAMP WITH TIME ZONE`, which is supported by multiple
+/// database engines.
+///
+/// The storage type of the extension is a `Struct` with 2 fields, in order:
+/// - `timestamp`: a non-nullable `Timestamp(time_unit, "UTC")`, where `time_unit` is any Arrow `TimeUnit` (s, ms, us or ns).
+/// - `offset_minutes`: a non-nullable signed 16-bit integer (`Int16`) representing the offset in minutes
+///   from the UTC timezone. Negative offsets represent time zones west of UTC, while positive offsets represent
+///   east. Offsets range from -779 (-12:59) to +780 (+13:00).
 ///
 /// This type has a `time_unit` type parameter which is a `TimeUnit`.
 ///
 /// Metadata is either empty or an empty string.
 ///
-/// This type represents a timestamp column that stores potentially different timezone offsets
-/// per value. The timestamp is stored in UTC alongside the original timezone offset in minutes.
-///
-/// The main motivation behind this type is to have a way to represent tuples of the ANSI SQL
-/// `TIMESTAMP WITH TIME ZONE`. Different database engines have different names for this.
+/// It is also *permissible* for the `offset_minutes` field to be dictionary-encoded with a preferred (*but not required*)
+/// index type of `int8`, or run-end-encoded with a preferred (*but not required*) runs type of `int8`.
 ///
 /// It's worth noting that the data source needs to resolve timezone strings such as `UTC` or
 /// `Americas/Los_Angeles` into an offset in minutes in order to construct a `TimestampWithOffset`.
