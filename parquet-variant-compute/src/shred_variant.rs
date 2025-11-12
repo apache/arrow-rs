@@ -256,6 +256,8 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
     }
 
     fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        // If the value is not an array, typed_value must be null.
+        // If the value is an array, value must be null.
         match value {
             Variant::List(list) => {
                 self.value_builder.append_null();
