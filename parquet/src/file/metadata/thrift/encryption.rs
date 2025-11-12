@@ -145,10 +145,16 @@ fn row_group_from_encrypted_thrift(
                 }
                 Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(crypto_metadata)) => {
                     let column_name = crypto_metadata.path_in_schema.join(".");
-                    decryptor.get_column_metadata_decryptor(
-                        column_name.as_str(),
-                        crypto_metadata.key_metadata.as_deref(),
-                    )?
+                    if decryptor.is_column_encrypted(column_name.as_str()) {
+                        decryptor.get_column_metadata_decryptor(
+                            column_name.as_str(),
+                            crypto_metadata.key_metadata.as_deref(),
+                        )?
+                    } else {
+                        // We don't have the key for this column, so we can't decrypt it's metadata.
+                        columns.push(c);
+                        continue;
+                    }
                 }
                 Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
                     decryptor.get_footer_decryptor()?
