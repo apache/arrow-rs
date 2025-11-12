@@ -57,23 +57,23 @@ pub enum DurationFormat {
 pub struct FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
-    safe: bool,
+    pub safe: bool,
     /// Format string for nulls
-    null: &'a str,
+    pub null: &'a str,
     /// Date format for date arrays
-    date_format: TimeFormat<'a>,
+    pub date_format: TimeFormat<'a>,
     /// Format for DateTime arrays
-    datetime_format: TimeFormat<'a>,
+    pub datetime_format: TimeFormat<'a>,
     /// Timestamp format for timestamp arrays
-    timestamp_format: TimeFormat<'a>,
+    pub timestamp_format: TimeFormat<'a>,
     /// Timestamp format for timestamp with timezone arrays
-    timestamp_tz_format: TimeFormat<'a>,
+    pub timestamp_tz_format: TimeFormat<'a>,
     /// Time format for time arrays
-    time_format: TimeFormat<'a>,
+    pub time_format: TimeFormat<'a>,
     /// Duration format
-    duration_format: DurationFormat,
+    pub duration_format: DurationFormat,
     /// Show types in visual representation batches
-    types_info: bool,
+    pub types_info: bool,
 }
 
 impl Default for FormatOptions<'_> {
@@ -170,6 +170,10 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Returns true if type info should be included in visual representation of batches
+    #[deprecated(
+        since = "58.0.0",
+        note = "Directly access the `types_info` field instead.`"
+    )]
     pub const fn types_info(&self) -> bool {
         self.types_info
     }
@@ -272,14 +276,16 @@ pub struct ArrayFormatter<'a> {
 }
 
 impl<'a> ArrayFormatter<'a> {
+    /// Returns an [`ArrayFormatter`] using the provided formatter.
+    pub fn new(format: Box<dyn DisplayIndex + 'a>, safe: bool) -> Self {
+        Self { format, safe }
+    }
+
     /// Returns an [`ArrayFormatter`] that can be used to format `array`
     ///
     /// This returns an error if an array of the given data type cannot be formatted
     pub fn try_new(array: &'a dyn Array, options: &FormatOptions<'a>) -> Result<Self, ArrowError> {
-        Ok(Self {
-            format: make_formatter(array, options)?,
-            safe: options.safe,
-        })
+        Ok(Self::new(make_formatter(array, options)?, options.safe))
     }
 
     /// Returns a [`ValueFormatter`] that implements [`Display`] for
@@ -332,12 +338,15 @@ fn make_formatter<'a>(
 }
 
 /// Either an [`ArrowError`] or [`std::fmt::Error`]
-enum FormatError {
+pub enum FormatError {
+    /// An error occurred while formatting the array
     Format(std::fmt::Error),
+    /// An Arrow error occurred while formatting the array.
     Arrow(ArrowError),
 }
 
-type FormatResult = Result<(), FormatError>;
+/// The result of formatting an array element via [`DisplayIndex::write`].
+pub type FormatResult = Result<(), FormatError>;
 
 impl From<std::fmt::Error> for FormatError {
     fn from(value: std::fmt::Error) -> Self {
@@ -352,7 +361,8 @@ impl From<ArrowError> for FormatError {
 }
 
 /// [`Display`] but accepting an index
-trait DisplayIndex {
+pub trait DisplayIndex {
+    /// Write the value of the underlying array at `idx` to `f`.
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult;
 }
 
