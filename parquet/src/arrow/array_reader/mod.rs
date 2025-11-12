@@ -49,6 +49,7 @@ mod struct_array;
 #[cfg(test)]
 mod test_util;
 
+// Note that this crate is public under the `experimental` feature flag.
 use crate::file::metadata::RowGroupMetaData;
 pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
