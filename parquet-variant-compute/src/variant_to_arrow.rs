@@ -762,7 +762,7 @@ impl VariantToNullArrowRowBuilder {
     }
 
     fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if let Some(_) = value.as_null() {
+        if value.as_null().is_some() {
             Ok(true)
         } else {
             // Null type only accepts nulls
