@@ -27,10 +27,10 @@ use std::fmt::{Display, Write};
 use std::sync::Arc;
 
 use arrow_array::cast::AsArray;
-use arrow_array::{Array, ArrayRef, Int32Array, RecordBatch, array};
+use arrow_array::{array, Array, ArrayRef, Int32Array, RecordBatch};
 use arrow_schema::{ArrowError, Field, SchemaRef};
 
-use crate::display::{ArrayFormatter, DisplayIndex, FormatError, FormatOptions};
+use crate::display::{ArrayFormatter, DisplayIndex, FormatOptions};
 
 /// Allows creating a new [`ArrayFormatter`] for a given [`Array`] and an optional [`Field`].
 ///
@@ -404,7 +404,7 @@ mod tests {
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
     use arrow_schema::*;
 
-    use crate::display::{DisplayIndex, DurationFormat, FormatError, array_value_to_string};
+    use crate::display::{array_value_to_string, DisplayIndex, DurationFormat};
 
     use super::*;
 
@@ -1423,49 +1423,77 @@ mod tests {
         assert_eq!(expected_iso, actual, "Actual result:\n{iso}");
     }
 
+    //
+    // Custom Formatting
+    //
+
+    /// The factory that will create the [`ArrayFormatter`]s.
+    struct TestFormatters {}
+
+    impl ArrayFormatterFactory for TestFormatters {
+        fn create_display_index<'formatter>(
+            &self,
+            array: &'formatter dyn Array,
+            options: &'formatter FormatOptions<'formatter>,
+            field: Option<&'formatter Field>,
+        ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError> {
+            if field
+                .map(|f| f.extension_type_name() == Some("my_money"))
+                .unwrap_or(false)
+            {
+                // We assume that my_money always is an Int32.
+                let array = array.as_primitive();
+                let display_index = Box::new(MyMoneyFormatter { array, options });
+                return Ok(Some(ArrayFormatter::new(display_index, options.safe)));
+            }
+
+            if array.data_type() == &DataType::Int32 {
+                // We assume that my_money always is an Int32.
+                let array = array.as_primitive();
+                let display_index = Box::new(MyInt32Formatter { array, options });
+                return Ok(Some(ArrayFormatter::new(display_index, options.safe)));
+            }
+
+            Ok(None)
+        }
+    }
+
+    /// The actual formatter
+    struct MyMoneyFormatter<'a> {
+        array: &'a Int32Array,
+        options: &'a FormatOptions<'a>,
+    }
+
+    impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
+        fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
+            match self.array.is_valid(idx) {
+                true => write!(f, "{} €", self.array.value(idx))?,
+                false => write!(f, "{}", self.options.null)?,
+            }
+
+            Ok(())
+        }
+    }
+
+    /// The actual formatter
+    struct MyInt32Formatter<'a> {
+        array: &'a Int32Array,
+        options: &'a FormatOptions<'a>,
+    }
+
+    impl<'a> DisplayIndex for MyInt32Formatter<'a> {
+        fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
+            match self.array.is_valid(idx) {
+                true => write!(f, "{} (32-Bit)", self.array.value(idx))?,
+                false => write!(f, "{}", self.options.null)?,
+            }
+
+            Ok(())
+        }
+    }
+
     #[test]
-    fn test_writing_with_custom_formatters() {
-        /// The factory that will create the [`ArrayFormatter`]s.
-        struct MyFormatters {}
-
-        impl ArrayFormatterFactory for MyFormatters {
-            fn create_display_index<'formatter>(
-                &self,
-                array: &'formatter dyn Array,
-                options: &'formatter FormatOptions<'formatter>,
-                field: Option<&'formatter Field>,
-            ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError> {
-                if field
-                    .map(|f| f.extension_type_name() == Some("my_money"))
-                    .unwrap_or(false)
-                {
-                    // We assume that my_money always is an Int32.
-                    let array = array.as_primitive();
-                    let display_index = Box::new(MyMoneyFormatter { array, options });
-                    return Ok(Some(ArrayFormatter::new(display_index, options.safe)));
-                }
-
-                Ok(None)
-            }
-        }
-
-        /// The actual formatter
-        struct MyMoneyFormatter<'a> {
-            array: &'a Int32Array,
-            options: &'a FormatOptions<'a>,
-        }
-
-        impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
-            fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
-                match self.array.is_valid(idx) {
-                    true => write!(f, "{} €", self.array.value(idx))?,
-                    false => write!(f, "{}", self.options.null)?,
-                }
-
-                Ok(())
-            }
-        }
-
+    fn test_format_batches_with_custom_formatters() {
         // define a schema.
         let options = FormatOptions::new().with_null("<NULL>");
         let money_metadata = HashMap::from([(
@@ -1495,7 +1523,7 @@ mod tests {
             pretty_format_batches_with_options_and_formatters(
                 &[batch],
                 &options,
-                Some(&MyFormatters {})
+                Some(&TestFormatters {})
             )
             .unwrap()
         )
@@ -1510,6 +1538,102 @@ mod tests {
             "| 10 €   |",
             "| 100 €  |",
             "+--------+",
+        ];
+        let expected = s.join("\n");
+        assert_eq!(expected, buf);
+    }
+
+    #[test]
+    fn test_format_batches_with_custom_formatters_custom_schema_overrules_batch_schema() {
+        // define a schema.
+        let options = FormatOptions::new();
+        let money_metadata = HashMap::from([(
+            extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
+            "my_money".to_owned(),
+        )]);
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("income", DataType::Int32, true).with_metadata(money_metadata.clone()),
+        ]));
+
+        // define data.
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![Arc::new(array::Int32Array::from(vec![
+                Some(1),
+                None,
+                Some(10),
+                Some(100),
+            ]))],
+        )
+        .unwrap();
+
+        let mut buf = String::new();
+        write!(
+            &mut buf,
+            "{}",
+            create_table(
+                // No metadata compared to test_format_batches_with_custom_formatters
+                Some(Arc::new(Schema::new(vec![Field::new(
+                    "income",
+                    DataType::Int32,
+                    true
+                ),]))),
+                &[batch],
+                &options,
+                Some(&TestFormatters {})
+            )
+            .unwrap()
+        )
+        .unwrap();
+
+        // No € formatting as in test_format_batches_with_custom_formatters
+        let s = [
+            "+--------------+",
+            "| income       |",
+            "+--------------+",
+            "| 1 (32-Bit)   |",
+            "|              |",
+            "| 10 (32-Bit)  |",
+            "| 100 (32-Bit) |",
+            "+--------------+",
+        ];
+        let expected = s.join("\n");
+        assert_eq!(expected, buf);
+    }
+
+    #[test]
+    fn test_format_column_with_custom_formatters() {
+        // define data.
+        let array = Arc::new(array::Int32Array::from(vec![
+            Some(1),
+            None,
+            Some(10),
+            Some(100),
+        ]));
+
+        let mut buf = String::new();
+        write!(
+            &mut buf,
+            "{}",
+            pretty_format_columns_with_options_and_formatters(
+                "income",
+                &[array],
+                &FormatOptions::default(),
+                Some(&TestFormatters {})
+            )
+            .unwrap()
+        )
+        .unwrap();
+
+        let s = [
+            "+--------------+",
+            "| income       |",
+            "+--------------+",
+            "| 1 (32-Bit)   |",
+            "|              |",
+            "| 10 (32-Bit)  |",
+            "| 100 (32-Bit) |",
+            "+--------------+",
         ];
         let expected = s.join("\n");
         assert_eq!(expected, buf);
