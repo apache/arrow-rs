@@ -31,6 +31,7 @@ edition = { workspace = true }
 rust-version = { workspace = true }
 
 [dependencies]
+arrow = { workspace = true }
 arrow-schema = { workspace = true }
 geo-traits = { version = "0.3" }
 serde = { version = "1.0", default-features = false, features = ["derive"]}

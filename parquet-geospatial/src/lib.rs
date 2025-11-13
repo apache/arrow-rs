@@ -34,4 +34,6 @@ pub mod testing;
 
 mod types;
 
+pub use types::Metadata as WkbMetadata;
+pub use types::WkbArray;
 pub use types::WkbType;

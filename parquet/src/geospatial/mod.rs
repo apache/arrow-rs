@@ -52,40 +52,124 @@ pub mod statistics;
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::{path::PathBuf, sync::Arc};
 
     use arrow::util::test_util::parquet_test_data;
-    use arrow_array::RecordBatch;
-    use parquet_geospatial::WkbType;
+    use arrow_array::{ArrayRef, BinaryArray, RecordBatch};
+    use arrow_schema::{Schema, extension::ExtensionType};
+    use bytes::Bytes;
+    use parquet_geospatial::{WkbArray, WkbMetadata, WkbType};
 
-    use crate::{arrow::arrow_reader::ArrowReaderBuilder, file::reader::ChunkReader};
+    use crate::{
+        arrow::{ArrowWriter, arrow_reader::ArrowReaderBuilder},
+        file::{
+            metadata::{ParquetMetaData, ParquetMetaDataReader},
+            reader::ChunkReader,
+        },
+    };
 
     /// Ensure a file with Geometry LogicalType, written by another writer in
     /// parquet-testing, can be read as a GeometryArray
     #[test]
     fn read_geometry_logical_type() {
-        // Note: case-075 2 columns ("id", "var")
-        // The variant looks like this:
-        // "Variant(metadata=VariantMetadata(dict={}), value=Variant(type=STRING, value=iceberg))"
         let batch = read_geospatial_test_case("crs-projjson.parquet");
 
-        assert_geometry_metadata(&batch, "geometry");
-        let _geom_column = batch
+        let wkb_type = assert_geometry_metadata(&batch, "geometry");
+        let geom_column = batch
             .column_by_name("geometry")
             .expect("expected geometry column");
-        // let var_array =
-        //     VariantArray::try_new(&var_column).expect("expected var column to be a VariantArray");
+        let wkb_array = WkbArray::try_new(geom_column, wkb_type.metadata().clone())
+            .expect("expected geometry column to be a WkbArray");
 
-        // // verify the value
-        // assert_eq!(var_array.len(), 1);
-        // assert!(var_array.is_valid(0));
-        // let var_value = var_array.value(0);
-        // assert_eq!(var_value, Variant::from("iceberg"));
+        // verify the value
+        assert_eq!(wkb_array.len(), 1);
+        assert!(wkb_array.is_valid(0));
+        let wkb_value = wkb_array.value(0);
+        assert_eq!(wkb_value.len(), 3549);
+    }
+
+    /// Ensure a file with Geography LogicalType, written by another writer in
+    /// parquet-testing, can be read as a GeometryArray
+    #[test]
+    fn read_geography_logical_type() {
+        let batch = read_geospatial_test_case("crs-geography.parquet");
+
+        let wkb_type = assert_geometry_metadata(&batch, "geography");
+        let geom_column = batch
+            .column_by_name("geography")
+            .expect("expected geography column");
+        let wkb_array = WkbArray::try_new(geom_column, wkb_type.metadata().clone())
+            .expect("expected geometry column to be a WkbArray");
+
+        // verify the value
+        assert_eq!(wkb_array.len(), 1);
+        assert!(wkb_array.is_valid(0));
+        let wkb_value = wkb_array.value(0);
+        assert_eq!(wkb_value.len(), 3549);
+    }
+
+    /// Writes a wkb array to a parquet file and ensures the parquet logical type
+    /// annotation is correct
+    #[test]
+    fn write_geometry_logical_type() {
+        let (array, md) = geometry_array();
+        let batch = wkb_array_to_batch(array);
+        let buffer = write_to_buffer(&batch);
+
+        // read the parquet file's metadata and verify the logical type
+        let metadata = read_metadata(&Bytes::from(buffer));
+        let schema = metadata.file_metadata().schema_descr();
+        let fields = schema.root_schema().get_fields();
+        assert_eq!(fields.len(), 1);
+        let field = &fields[0];
+        assert_eq!(field.name(), "data");
+        // data should have been written with the Variant logical type
+        assert_eq!(
+            field.get_basic_info().logical_type(),
+            Some(crate::basic::LogicalType::Geometry {
+                crs: Some(serde_json::to_string(&md).unwrap())
+            })
+        );
+    }
+
+    /// Return a WkbArray with 3 rows:
+    fn geometry_array() -> (WkbArray, WkbMetadata) {
+        let values: Vec<&[u8]> = vec![b"not", b"actually", b"wkb"];
+        let inner = BinaryArray::from_vec(values);
+        let md = WkbMetadata {
+            crs: Some(String::from("test crs")),
+            algorithm: None,
+        };
+
+        (WkbArray::try_new(&inner, Some(md.clone())).unwrap(), md)
+    }
+
+    /// creates a RecordBatch with a single column "data" from a WkbArray,
+    fn wkb_array_to_batch(array: WkbArray) -> RecordBatch {
+        let field = array.field("data");
+        let schema = Schema::new(vec![field]);
+        RecordBatch::try_new(Arc::new(schema), vec![ArrayRef::from(array)]).unwrap()
+    }
+
+    /// writes a RecordBatch to memory buffer and returns the buffer
+    fn write_to_buffer(batch: &RecordBatch) -> Vec<u8> {
+        let mut buffer = vec![];
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema(), None).unwrap();
+        writer.write(batch).unwrap();
+        writer.close().unwrap();
+        buffer
+    }
+
+    /// Reads the Parquet metadata
+    fn read_metadata<T: ChunkReader + 'static>(input: &T) -> ParquetMetaData {
+        let mut reader = ParquetMetaDataReader::new();
+        reader.try_parse(input).unwrap();
+        reader.finish().unwrap()
     }
 
     /// Verifies the geospatial metadata is present in the schema for the specified
     /// field name.
-    fn assert_geometry_metadata(batch: &RecordBatch, field_name: &str) {
+    fn assert_geometry_metadata(batch: &RecordBatch, field_name: &str) -> WkbType {
         println!("{batch:?}");
         let schema = batch.schema();
         let field = schema
@@ -104,7 +188,7 @@ mod tests {
         // verify that `GeometryType` also correctly finds the metadata
         field
             .try_extension_type::<WkbType>()
-            .expect("GeometryExtensionType should be readable");
+            .expect("WkbExtensionType should be readable")
     }
 
     /// Reads a RecordBatch from a reader (e.g. Vec or File)

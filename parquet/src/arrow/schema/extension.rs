@@ -56,12 +56,24 @@ pub(crate) fn try_add_extension_type(
             arrow_field.try_with_extension_type(arrow_schema::extension::Json::default())?;
         }
         #[cfg(feature = "geospatial")]
-        LogicalType::Geometry { .. } => {
-            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::default())?;
+        LogicalType::Geometry { crs } => {
+            let md = crs.map(|c| parquet_geospatial::WkbMetadata {
+                crs: Some(c),
+                algorithm: None,
+            });
+            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(md))?;
         }
         #[cfg(feature = "geospatial")]
-        LogicalType::Geography { .. } => {
-            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::default())?;
+        LogicalType::Geography { crs, algorithm } => {
+            let md = if crs.is_some() || algorithm.is_some() {
+                Some(parquet_geospatial::WkbMetadata {
+                    crs,
+                    algorithm: algorithm.map(|a| a.to_string()),
+                })
+            } else {
+                None
+            };
+            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(md))?;
         }
         _ => {}
     };
@@ -158,10 +170,8 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
             }),
             Err(_e) => None,
         },
-        _ => return None,
-    };
-
-    None
+        _ => None,
+    }
 }
 
 #[cfg(not(feature = "geospatial"))]

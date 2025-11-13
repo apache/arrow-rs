@@ -87,8 +87,6 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
         arrow_schema.metadata().iter().for_each(|(k, v)| {
             metadata.entry(k.clone()).or_insert_with(|| v.clone());
         });
-        #[cfg(feature = "geospatial")]
-        parquet_geospatial::crs::replace_keyvalue(arrow_schema, &metadata)
     }
 
     let hint = maybe_schema.as_ref().map(|s| s.fields());
