@@ -39,7 +39,7 @@ pub(crate) fn try_add_extension_type(
     mut arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
-    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type() else {
+    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
         return Ok(arrow_field);
     };
     match parquet_logical_type {
@@ -65,7 +65,7 @@ pub(crate) fn try_add_extension_type(
 ///
 /// This is used to preallocate the metadata hashmap size
 pub(crate) fn has_extension_type(parquet_type: &Type) -> bool {
-    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type() else {
+    let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
         return false;
     };
     match parquet_logical_type {

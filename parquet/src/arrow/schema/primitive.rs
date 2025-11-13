@@ -164,7 +164,7 @@ fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
 }
 
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int32),
         (
             Some(
@@ -183,7 +183,9 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             (32, false) => Ok(DataType::UInt32),
             _ => Err(arrow_err!("Cannot create INT32 physical type from {:?}", t)),
         },
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => {
+            decimal_128_type(*scale, *precision)
+        }
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
             ParquetTimeUnit::MILLIS => Ok(DataType::Time32(TimeUnit::Millisecond)),
@@ -212,7 +214,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
 }
 
 fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int64),
         (
             Some(LogicalType::Integer {
@@ -243,7 +245,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
                 ParquetTimeUnit::MICROS => TimeUnit::Microsecond,
                 ParquetTimeUnit::NANOS => TimeUnit::Nanosecond,
             },
-            if is_adjusted_to_u_t_c {
+            if *is_adjusted_to_u_t_c {
                 Some("UTC".into())
             } else {
                 None
@@ -260,7 +262,9 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             TimeUnit::Microsecond,
             Some("UTC".into()),
         )),
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => {
+            decimal_128_type(*scale, *precision)
+        }
         (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT64 logical type {:?} or converted type {}",
@@ -271,7 +275,7 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
 }
 
 fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<DataType> {
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (Some(LogicalType::String), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Json), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Bson), _) => Ok(DataType::Binary),
@@ -290,7 +294,7 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
                 precision: p,
             }),
             _,
-        ) => decimal_type(s, p),
+        ) => decimal_type(*s, *p),
         (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
@@ -307,12 +311,12 @@ fn from_fixed_len_byte_array(
     type_length: i32,
 ) -> Result<DataType> {
     // TODO: This should check the type length for the decimal and interval types
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (Some(LogicalType::Decimal { scale, precision }), _) => {
             if type_length <= 16 {
-                decimal_128_type(scale, precision)
+                decimal_128_type(*scale, *precision)
             } else {
-                decimal_256_type(scale, precision)
+                decimal_256_type(*scale, *precision)
             }
         }
         (None, ConvertedType::DECIMAL) => {

@@ -58,9 +58,9 @@ pub mod statistics;
 ///
 /// Most users should use one of the following specializations:
 ///
-/// * synchronous API: [`ParquetRecordBatchReaderBuilder::try_new`]
-/// * `async` API: [`ParquetRecordBatchStreamBuilder::new`]
-/// * decoder API: [`ParquetDecoderBuilder::new`]
+/// * synchronous API: [`ParquetRecordBatchReaderBuilder`]
+/// * `async` API: [`ParquetRecordBatchStreamBuilder`]
+/// * decoder API: [`ParquetPushDecoderBuilder`]
 ///
 /// # Features
 /// * Projection pushdown: [`Self::with_projection`]
@@ -95,8 +95,8 @@ pub mod statistics;
 /// You can read more about this design in the [Querying Parquet with
 /// Millisecond Latency] Arrow blog post.
 ///
-/// [`ParquetRecordBatchStreamBuilder::new`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder::new
-/// [`ParquetDecoderBuilder::new`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder::new
+/// [`ParquetRecordBatchStreamBuilder`]: crate::arrow::async_reader::ParquetRecordBatchStreamBuilder
+/// [`ParquetPushDecoderBuilder`]: crate::arrow::push_decoder::ParquetPushDecoderBuilder
 /// [Apache Arrow]: https://arrow.apache.org/
 /// [`StatisticsConverter`]: statistics::StatisticsConverter
 /// [Querying Parquet with Millisecond Latency]: https://arrow.apache.org/blog/2022/12/26/querying-parquet-with-millisecond-latency/
@@ -775,11 +775,12 @@ impl<T: Debug + ChunkReader> Debug for SyncReader<T> {
     }
 }
 
-/// A synchronous builder used to construct [`ParquetRecordBatchReader`] for a file
+/// Creates [`ParquetRecordBatchReader`] for reading Parquet files into Arrow [`RecordBatch`]es
 ///
-/// For an async API see [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder`]
-///
-/// See [`ArrowReaderBuilder`] for additional member functions
+/// # See Also
+/// * [`crate::arrow::async_reader::ParquetRecordBatchStreamBuilder`] for an async API
+/// * [`crate::arrow::push_decoder::ParquetPushDecoderBuilder`] for a SansIO decoder API
+/// * [`ArrowReaderBuilder`] for additional member functions
 pub type ParquetRecordBatchReaderBuilder<T> = ArrowReaderBuilder<SyncReader<T>>;
 
 impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
@@ -1066,12 +1067,16 @@ impl<T: ChunkReader + 'static> Iterator for ReaderPageIterator<T> {
 
 impl<T: ChunkReader + 'static> PageIterator for ReaderPageIterator<T> {}
 
-/// An `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]
-/// read from a parquet data source
+/// Reads Parquet data as Arrow [`RecordBatch`]es
 ///
-/// This reader is created by [`ParquetRecordBatchReaderBuilder`], and has all
-/// the buffered state (DataPages, etc) necessary to decode the parquet data into
-/// Arrow arrays.
+/// This struct implements the [`RecordBatchReader`] trait and is an
+/// `Iterator<Item = ArrowResult<RecordBatch>>` that yields [`RecordBatch`]es.
+///
+/// Typically, either reads from a file or an in memory buffer [`Bytes`]
+///
+/// Created by [`ParquetRecordBatchReaderBuilder`]
+///
+/// [`Bytes`]: bytes::Bytes
 pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
@@ -5182,10 +5187,13 @@ mod tests {
             .expect("Error creating reader builder");
 
         let schema = builder.metadata().file_metadata().schema_descr();
-        assert_eq!(schema.column(0).logical_type(), Some(LogicalType::String));
         assert_eq!(
-            schema.column(1).logical_type(),
-            Some(LogicalType::_Unknown { field_id: 2555 })
+            schema.column(0).logical_type_ref(),
+            Some(&LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type_ref(),
+            Some(&LogicalType::_Unknown { field_id: 2555 })
         );
         assert_eq!(schema.column(1).physical_type(), PhysicalType::BYTE_ARRAY);
 
