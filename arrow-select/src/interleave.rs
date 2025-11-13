@@ -411,7 +411,7 @@ pub fn interleave_record_batch(
 
 #[cfg(test)]
 mod tests {
-    use std::iter::repeat;
+    use std::iter::repeat_n;
     use std::sync::Arc;
 
     use super::*;
@@ -1193,10 +1193,8 @@ mod tests {
         null_keys: Option<Vec<bool>>,
         values: Vec<u16>,
     ) -> ArrayRef {
-        let input_keys = PrimitiveArray::<K>::from_iter_values_with_nulls(
-            keys,
-            null_keys.map(|nulls| NullBuffer::from(nulls)),
-        );
+        let input_keys =
+            PrimitiveArray::<K>::from_iter_values_with_nulls(keys, null_keys.map(NullBuffer::from));
         let input_values = UInt16Array::from_iter_values(values);
         let input = DictionaryArray::new(input_keys, Arc::new(input_values));
         Arc::new(input) as ArrayRef
@@ -1210,13 +1208,10 @@ mod tests {
         list_nulls: Option<Vec<bool>>,
     ) -> ArrayRef {
         let dict_arr = {
-            let input_1_keys = UInt8Array::from_iter_values_with_nulls(
-                keys,
-                null_keys.map(|nulls| NullBuffer::from(nulls)),
-            );
+            let input_1_keys =
+                UInt8Array::from_iter_values_with_nulls(keys, null_keys.map(NullBuffer::from));
             let input_1_values = UInt16Array::from_iter_values(values);
-            let input_1 = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
-            input_1
+            DictionaryArray::new(input_1_keys, Arc::new(input_1_values))
         };
 
         let offset_buffer = OffsetBuffer::<i32>::from_lengths(lengths);
@@ -1229,10 +1224,9 @@ mod tests {
             )),
             offset_buffer,
             Arc::new(dict_arr) as ArrayRef,
-            list_nulls.map(|nulls| NullBuffer::from(nulls)),
+            list_nulls.map(NullBuffer::from_iter),
         );
-        let arr = Arc::new(list_arr) as ArrayRef;
-        arr
+        Arc::new(list_arr) as ArrayRef
     }
 
     #[test]
@@ -1257,12 +1251,9 @@ mod tests {
                     })
                     .collect::<Vec<_>>(),
             );
-            let struct_arr = StructArray::try_new(
-                fields.clone(),
-                columns,
-                nulls.map(|v| NullBuffer::from_iter(v)),
-            )
-            .unwrap();
+            let struct_arr =
+                StructArray::try_new(fields.clone(), columns, nulls.map(NullBuffer::from_iter))
+                    .unwrap();
             let list_arr = GenericListArray::<i32>::new(
                 Arc::new(Field::new_struct("item", fields, true)),
                 OffsetBuffer::from_lengths(lengths),
@@ -1291,7 +1282,7 @@ mod tests {
                 )) as ArrayRef,
             ],
             None,
-            repeat(1).take(256).collect::<Vec<_>>(),
+            repeat_n(1, 256).collect::<Vec<_>>(),
             None,
         );
 
@@ -1329,7 +1320,7 @@ mod tests {
                 )) as ArrayRef,
             ],
             None,
-            repeat(2).take(128).collect::<Vec<_>>(),
+            repeat_n(2, 128).collect::<Vec<_>>(),
             Some(null_list),
         );
 
@@ -1418,7 +1409,7 @@ mod tests {
             (0..=255).collect(),
             None,
             (0..=255).collect(),
-            repeat(1).take(256).collect(),
+            repeat_n(1, 256).collect(),
             None,
         );
         // [[0]] [[1] [2]]
@@ -1438,7 +1429,7 @@ mod tests {
             (0..=255).rev().collect(),
             Some(null_keys),
             (0..=255).collect(),
-            repeat(2).take(128).collect(),
+            repeat_n(2, 128).collect(),
             Some(null_list),
         );
         // [[255 null] [253 252]] [ null [249 248]]
