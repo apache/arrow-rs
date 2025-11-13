@@ -870,7 +870,7 @@ pub(crate) fn parquet_metadata_from_bytes(
 /// Assign [`RowGroupMetaData::ordinal`]  if it is missing.
 #[derive(Debug, Default)]
 pub(crate) struct OrdinalAssigner {
-    first_has_ordinal: bool,
+    first_has_ordinal: Option<bool>,
 }
 
 impl OrdinalAssigner {
@@ -896,18 +896,21 @@ impl OrdinalAssigner {
         mut rg: RowGroupMetaData,
     ) -> Result<RowGroupMetaData> {
         let rg_has_ordinal = rg.ordinal.is_some();
-        if actual_ordinal == 0 {
-            self.first_has_ordinal = rg_has_ordinal;
+
+        // Only set first_has_ordinal if it's None (first row group that arrives)
+        if self.first_has_ordinal.is_none() {
+            self.first_has_ordinal = Some(rg_has_ordinal);
         }
 
         // assign ordinal if missing and consistent with first row group
-        if !self.first_has_ordinal && !rg_has_ordinal {
+        let first_has_ordinal = self.first_has_ordinal.unwrap();
+        if !first_has_ordinal && !rg_has_ordinal {
             rg.ordinal = Some(actual_ordinal);
-        } else if self.first_has_ordinal != rg_has_ordinal {
+        } else if first_has_ordinal != rg_has_ordinal {
             return Err(general_err!(
                 "Inconsistent ordinal assignment: first_has_ordinal is set to \
                 {} but row-group with actual ordinal {} has rg_has_ordinal set to {}",
-                self.first_has_ordinal,
+                first_has_ordinal,
                 actual_ordinal,
                 rg_has_ordinal
             ));
