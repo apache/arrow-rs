@@ -20,7 +20,7 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::filter::filter_record_batch;
+use crate::filter::{compute_filter_plan, FilterPlan};
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
@@ -232,15 +232,139 @@ impl BatchCoalescer {
     /// let expected_batch = record_batch!(("a", Int32, [1, 3, 4, 6])).unwrap();
     /// assert_eq!(completed_batch, expected_batch);
     /// ```
+    /// Zero-copy implementation using `compute_filter_plan`.
     pub fn push_batch_with_filter(
         &mut self,
         batch: RecordBatch,
-        filter: &BooleanArray,
+        predicate: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        // TODO: optimize this to avoid materializing (copying the results
-        // of filter to a new batch)
-        let filtered_batch = filter_record_batch(&batch, filter)?;
-        self.push_batch(filtered_batch)
+        // First compute the filter plan based on the predicate
+        // (calls FilterBuilder::optimize internally)
+        let plan = compute_filter_plan(predicate);
+
+        match plan {
+            FilterPlan::None => {
+                // No rows selected
+                Ok(())
+            }
+            FilterPlan::All => {
+                // All rows selected: directly call push_batch (consumes batch)
+                self.push_batch(batch)
+            }
+            FilterPlan::Slices(slices) => {
+                // Consume the batch and set sources on in_progress arrays
+                let (_schema, arrays, _nrows) = batch.into_parts();
+                assert_eq!(arrays.len(), self.in_progress_arrays.len());
+
+                self.in_progress_arrays
+                    .iter_mut()
+                    .zip(arrays)
+                    .for_each(|(in_progress, array)| {
+                        in_progress.set_source(Some(array));
+                    });
+
+                // For each contiguous slice, copy rows in chunks fitting target_batch_size
+                for (mut start, end) in slices {
+                    let mut remaining = end - start;
+                    while remaining > 0 {
+                        let space = self.target_batch_size - self.buffered_rows;
+                        debug_assert!(space > 0);
+                        let to_copy = remaining.min(space);
+
+                        for in_progress in self.in_progress_arrays.iter_mut() {
+                            // copy_rows(offset, length)
+                            in_progress.copy_rows(start, to_copy)?;
+                        }
+
+                        self.buffered_rows += to_copy;
+                        start += to_copy;
+                        remaining -= to_copy;
+
+                        if self.buffered_rows == self.target_batch_size {
+                            self.finish_buffered_batch()?;
+                        }
+                    }
+                }
+
+                // Clear sources to allow memory to be freed
+                for in_progress in self.in_progress_arrays.iter_mut() {
+                    in_progress.set_source(None);
+                }
+
+                Ok(())
+            }
+            FilterPlan::Indices(indices) => {
+                // Consume batch and set sources (same as slices path)
+                let (_schema, arrays, _nrows) = batch.into_parts();
+                assert_eq!(arrays.len(), self.in_progress_arrays.len());
+
+                self.in_progress_arrays
+                    .iter_mut()
+                    .zip(arrays)
+                    .for_each(|(in_progress, array)| {
+                        in_progress.set_source(Some(array));
+                    });
+
+                // Merge consecutive indices into ranges to reduce copy_rows calls
+                let mut it = indices.into_iter();
+                if let Some(mut cur) = it.next() {
+                    let mut run_start = cur;
+                    let mut run_end = cur + 1; // exclusive
+                    for idx in it {
+                        if idx == run_end {
+                            // Extend current run
+                            run_end += 1;
+                        } else {
+                            // Flush current run [run_start, run_end)
+                            let mut remaining = run_end - run_start;
+                            let mut src_off = run_start;
+                            while remaining > 0 {
+                                let space = self.target_batch_size - self.buffered_rows;
+                                debug_assert!(space > 0);
+                                let to_copy = remaining.min(space);
+                                for in_progress in self.in_progress_arrays.iter_mut() {
+                                    in_progress.copy_rows(src_off, to_copy)?;
+                                }
+                                self.buffered_rows += to_copy;
+                                src_off += to_copy;
+                                remaining -= to_copy;
+                                if self.buffered_rows == self.target_batch_size {
+                                    self.finish_buffered_batch()?;
+                                }
+                            }
+                            // Start new run
+                            run_start = idx;
+                            run_end = idx + 1;
+                        }
+                    }
+
+                    // Flush last run
+                    let mut remaining = run_end - run_start;
+                    let mut src_off = run_start;
+                    while remaining > 0 {
+                        let space = self.target_batch_size - self.buffered_rows;
+                        debug_assert!(space > 0);
+                        let to_copy = remaining.min(space);
+                        for in_progress in self.in_progress_arrays.iter_mut() {
+                            in_progress.copy_rows(src_off, to_copy)?;
+                        }
+                        self.buffered_rows += to_copy;
+                        src_off += to_copy;
+                        remaining -= to_copy;
+                        if self.buffered_rows == self.target_batch_size {
+                            self.finish_buffered_batch()?;
+                        }
+                    }
+                }
+
+                // Clear sources
+                for in_progress in self.in_progress_arrays.iter_mut() {
+                    in_progress.set_source(None);
+                }
+
+                Ok(())
+            }
+        }
     }
 
     /// Push all the rows from `batch` into the Coalescer
@@ -588,6 +712,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use rand::{Rng, SeedableRng};
     use std::ops::Range;
+    use crate::filter::filter_record_batch;
 
     #[test]
     fn test_coalesce() {

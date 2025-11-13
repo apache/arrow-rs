@@ -176,6 +176,44 @@ fn multiple_arrays(data_type: &DataType) -> bool {
     }
 }
 
+/// A public, lightweight plan describing how to apply a Boolean filter.
+///
+/// Used for zero-copy filtering externally (e.g., in BatchCoalescer):
+/// - `None`: no rows selected
+/// - `All`: all rows selected
+/// - `Slices`: list of continuous ranges `[start, end)` (can be used directly for `copy_rows`)
+/// - `Indices`: list of single-row indices (can be merged into continuous ranges externally)
+#[derive(Debug, Clone)]
+pub enum FilterPlan {
+    None,
+    All,
+    Slices(Vec<(usize, usize)>),
+    Indices(Vec<usize>),
+}
+
+/// Compute a filtering plan based on `FilterBuilder::optimize`.
+///
+/// This function calls `FilterBuilder::new(filter).optimize()`, then
+/// converts the optimized `IterationStrategy` into the above `FilterPlan`
+/// to enable zero-copy execution externally.
+pub fn compute_filter_plan(filter: &BooleanArray) -> FilterPlan {
+    let fb = FilterBuilder::new(filter);
+    let pred = fb.build();
+
+    match pred.strategy {
+        IterationStrategy::None => FilterPlan::None,
+        IterationStrategy::All => FilterPlan::All,
+        IterationStrategy::Slices(s) => FilterPlan::Slices(s), // moved directly
+        IterationStrategy::Indices(i) => FilterPlan::Indices(i), // moved directly
+        IterationStrategy::SlicesIterator => {
+            FilterPlan::Slices(SlicesIterator::new(&pred.filter).collect())
+        }
+        IterationStrategy::IndexIterator => {
+            FilterPlan::Indices(IndexIterator::new(&pred.filter, pred.count).collect())
+        }
+    }
+}
+
 /// Returns a filtered [RecordBatch] where the corresponding elements of
 /// `predicate` are true.
 ///
