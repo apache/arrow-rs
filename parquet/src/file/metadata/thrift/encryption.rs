@@ -295,19 +295,10 @@ pub(crate) fn parquet_metadata_with_encryption(
         file_decryptor = Some(file_decryptor_value);
     }
 
-    // decrypt column chunk info and handle ordinal assignment
-    let mut assigner = OrdinalAssigner::new();
+    // decrypt column chunk info
     let row_groups = row_groups
         .into_iter()
-        .enumerate()
-        .map(|(ordinal, rg)| {
-            let ordinal: i16 = ordinal.try_into().map_err(|_| {
-                ParquetError::General(format!("Row group ordinal {ordinal} exceeds i32 range"))
-            })?;
-            let rg = row_group_from_encrypted_thrift(rg, file_decryptor.as_ref())?;
-            let rg = assigner.ensure(ordinal, rg)?;
-            Ok(rg)
-        })
+        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref()))
         .collect::<Result<Vec<_>>>()?;
 
     let metadata = ParquetMetaDataBuilder::new(file_metadata)
