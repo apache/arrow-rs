@@ -201,6 +201,28 @@ pub fn apply_bitwise_binary_op<F>(
         return;
     }
 
+    // Special case word aligned buffers and use u64 operations
+    if left_offset_in_bits == 0 && right_offset_in_bits == 0 {
+        unsafe {
+            let (left_prefix, left_u64s, left_suffix) = left.align_to_mut::<u64>();
+            let (right_prefix, right_u64s, right_suffix) = right.as_ref().align_to::<u64>();
+            // if there is no prefix or suffix, both buffers are aligned and we can do the operation directly
+            // on u64s
+            // TODO also handle non empty suffixes by processing them separately
+            if left_prefix.is_empty()
+                && right_prefix.is_empty()
+                && left_suffix.is_empty()
+                && right_suffix.is_empty()
+            {
+                left_u64s
+                    .iter_mut()
+                    .zip(right_u64s.iter())
+                    .for_each(|(l, r)| *l = op(*l, *r));
+                return;
+            }
+        }
+    }
+
     // offset inside a byte
     let bit_offset = left_offset_in_bits % 8;
 
@@ -306,6 +328,20 @@ pub fn apply_bitwise_unary_op<F>(
 {
     if len_in_bits == 0 {
         return;
+    }
+
+    // Special case word aligned buffers and use u64 operations
+    if offset_in_bits == 0 {
+        unsafe {
+            let (prefix, u64s, suffix) = buffer.align_to_mut::<u64>();
+            // if there is no prefix or suffix, both buffers are aligned and we can do the operation directly
+            // on u64s
+            // TODO also handle non empty suffixes by processing them separately
+            if prefix.is_empty() && suffix.is_empty() {
+                u64s.iter_mut().for_each(|v| *v = op(*v));
+                return;
+            }
+        }
     }
 
     // offset inside a byte
