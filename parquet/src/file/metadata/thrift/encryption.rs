@@ -17,7 +17,6 @@
 
 //! Encryption support for Thrift serialization
 
-use crate::file::metadata::thrift::OrdinalAssigner;
 use crate::{
     encryption::decrypt::{FileDecryptionProperties, FileDecryptor},
     errors::{ParquetError, Result},
