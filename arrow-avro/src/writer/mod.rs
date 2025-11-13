@@ -26,7 +26,7 @@
 //!   file with header (schema JSON + metadata), optional compression, data blocks, and
 //!   sync markers. See Avro 1.11.1 “Object Container Files.”
 //!   <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
-//! * **[`AvroStreamWriter`](crate::writer::AvroStreamWriter)** — writes a **raw Avro binary stream** (“datum” bytes) without
+//! * **[`AvroStreamWriter`](crate::writer::AvroStreamWriter)** — writes a **Single Object Encoding (SOE) Stream** (“datum” bytes) without
 //!   any container framing. This is useful when the schema is known out‑of‑band (i.e.,
 //!   via a registry) and you want minimal overhead.
 //!
@@ -34,26 +34,31 @@
 //!
 //! * Use **OCF** when you need a portable, self‑contained file. The schema travels with
 //!   the data, making it easy to read elsewhere.
-//! * Use the **raw stream** when your surrounding protocol supplies schema information
-//!   (i.e., a schema registry). If you need **single‑object encoding (SOE)** or Confluent
-//!   **Schema Registry** framing, you must add the appropriate prefix *outside* this writer:
-//!   - **SOE**: `0xC3 0x01` + 8‑byte little‑endian CRC‑64‑AVRO fingerprint + Avro body
-//!     (see Avro 1.11.1 “Single object encoding”).
+//! * Use the **SOE stream** when your surrounding protocol supplies schema information
+//!   (i.e., a schema registry). The writer automatically adds the per‑record prefix:
+//!   - **SOE**: Each record is prefixed with the 2-byte header (`0xC3 0x01`) followed by
+//!     an 8‑byte little‑endian CRC‑64‑AVRO fingerprint, then the Avro body.
+//!     See Avro 1.11.1 "Single object encoding".
 //!     <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
-//!   - **Confluent wire format**: magic `0x00` + **big‑endian** 4‑byte schema ID and Avro body.
+//!   - **Confluent wire format**: Each record is prefixed with magic byte `0x00` followed by
+//!     a **big‑endian** 4‑byte schema ID, then the Avro body. Use `FingerprintStrategy::Id(schema_id)`.
 //!     <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
+//!   - **Apicurio wire format**: Each record is prefixed with magic byte `0x00` followed by
+//!     a **big‑endian** 8‑byte schema ID, then the Avro body. Use `FingerprintStrategy::Id64(schema_id)`.
+//!     <https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry>
 //!
 //! ## Choosing the Avro schema
 //!
 //! By default, the writer converts your Arrow schema to Avro (including a top‑level record
-//! name) and stores the resulting JSON under the `avro::schema` metadata key. If you already
-//! have an Avro schema JSON, you want to use verbatim, put it into the Arrow schema metadata
-//! under the same key before constructing the writer. The builder will pick it up.
+//! name). If you already have an Avro schema JSON you want to use verbatim, put it into the
+//! Arrow schema metadata under the `avro.schema` key before constructing the writer. The
+//! builder will use that schema instead of generating a new one (unless `strip_metadata` is
+//! set to true in the options).
 //!
 //! ## Compression
 //!
 //! For OCF, you may enable a compression codec via `WriterBuilder::with_compression`. The
-//! chosen codec is written into the file header and used for subsequent blocks. Raw stream
+//! chosen codec is written into the file header and used for subsequent blocks. SOE stream
 //! writing doesn’t apply container‑level compression.
 //!
 //! ---
@@ -63,7 +68,7 @@ use crate::schema::{
     AvroSchema, Fingerprint, FingerprintAlgorithm, FingerprintStrategy, SCHEMA_METADATA_KEY,
 };
 use crate::writer::encoder::{RecordEncoder, RecordEncoderBuilder, write_long};
-use crate::writer::format::{AvroBinaryFormat, AvroFormat, AvroOcfFormat};
+use crate::writer::format::{AvroFormat, AvroOcfFormat, AvroSoeFormat};
 use arrow_array::RecordBatch;
 use arrow_schema::{ArrowError, Schema};
 use std::io::Write;
@@ -173,7 +178,7 @@ impl WriterBuilder {
 /// You’ll usually use the concrete aliases:
 ///
 /// * **[`AvroWriter`]** for **OCF** (self‑describing container file)
-/// * **[`AvroStreamWriter`]** for **raw** Avro binary streams
+/// * **[`AvroStreamWriter`]** for **SOE** Avro streams
 #[derive(Debug)]
 pub struct Writer<W: Write, F: AvroFormat> {
     writer: W,
@@ -226,12 +231,13 @@ pub struct Writer<W: Write, F: AvroFormat> {
 /// ```
 pub type AvroWriter<W> = Writer<W, AvroOcfFormat>;
 
-/// Alias for a raw Avro **binary stream** writer.
+/// Alias for an Avro **Single Object Encoding** stream writer.
 ///
 /// ### Example
 ///
-/// This writes only the **Avro body** bytes — no OCF header/sync and no
-/// single‑object or Confluent framing. If you need those frames, add them externally.
+/// This writer automatically adds the appropriate per-record prefix (based on the
+/// fingerprint strategy) before the Avro body of each record. The default is Single
+/// Object Encoding (SOE) with a Rabin fingerprint.
 ///
 /// ```
 /// use std::sync::Arc;
@@ -247,7 +253,7 @@ pub type AvroWriter<W> = Writer<W, AvroOcfFormat>;
 ///     vec![Arc::new(Int64Array::from(vec![10, 20])) as ArrayRef],
 /// )?;
 ///
-/// // Write a raw Avro stream to a Vec<u8>
+/// // Write an Avro Single Object Encoding stream to a Vec<u8>
 /// let sink: Vec<u8> = Vec::new();
 /// let mut w = AvroStreamWriter::new(sink, schema)?;
 /// w.write(&batch)?;
@@ -256,7 +262,7 @@ pub type AvroWriter<W> = Writer<W, AvroOcfFormat>;
 /// assert!(!bytes.is_empty());
 /// # Ok(()) }
 /// ```
-pub type AvroStreamWriter<W> = Writer<W, AvroBinaryFormat>;
+pub type AvroStreamWriter<W> = Writer<W, AvroSoeFormat>;
 
 impl<W: Write> Writer<W, AvroOcfFormat> {
     /// Convenience constructor – same as [`WriterBuilder::build`] with `AvroOcfFormat`.
@@ -294,11 +300,10 @@ impl<W: Write> Writer<W, AvroOcfFormat> {
     }
 }
 
-impl<W: Write> Writer<W, AvroBinaryFormat> {
+impl<W: Write> Writer<W, AvroSoeFormat> {
     /// Convenience constructor to create a new [`AvroStreamWriter`].
     ///
-    /// The resulting stream contains just **Avro binary** bodies (no OCF header/sync and no
-    /// single‑object or Confluent framing). If you need those frames, add them externally.
+    /// The resulting stream contains **Single Object Encodings** (no OCF header/sync).
     ///
     /// ### Example
     ///
@@ -324,7 +329,7 @@ impl<W: Write> Writer<W, AvroBinaryFormat> {
     /// # Ok(()) }
     /// ```
     pub fn new(writer: W, schema: Schema) -> Result<Self, ArrowError> {
-        WriterBuilder::new(schema).build::<W, AvroBinaryFormat>(writer)
+        WriterBuilder::new(schema).build::<W, AvroSoeFormat>(writer)
     }
 }
 
@@ -496,7 +501,7 @@ mod tests {
         let schema_id: u32 = 42;
         let mut writer = WriterBuilder::new(schema.clone())
             .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id))
-            .build::<_, AvroBinaryFormat>(Vec::new())?;
+            .build::<_, AvroSoeFormat>(Vec::new())?;
         writer.write(&batch)?;
         let encoded = writer.into_inner();
         let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
@@ -530,7 +535,7 @@ mod tests {
         let schema_id: u64 = 42;
         let mut writer = WriterBuilder::new(schema.clone())
             .with_fingerprint_strategy(FingerprintStrategy::Id64(schema_id))
-            .build::<_, AvroBinaryFormat>(Vec::new())?;
+            .build::<_, AvroSoeFormat>(Vec::new())?;
         writer.write(&batch)?;
         let encoded = writer.into_inner();
         let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id64);
@@ -1393,7 +1398,7 @@ mod tests {
         let cap = 8192;
         let mut writer = WriterBuilder::new(schema)
             .with_capacity(cap)
-            .build::<_, AvroBinaryFormat>(Vec::new())?;
+            .build::<_, AvroSoeFormat>(Vec::new())?;
         assert_eq!(writer.capacity, cap);
         writer.write(&batch)?;
         let _bytes = writer.into_inner();

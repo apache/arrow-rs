@@ -25,7 +25,7 @@ use arrow_schema::ArrowError;
 use hashbrown::HashTable;
 use hashbrown::hash_table::Entry;
 
-use crate::builder::ArrayBuilder;
+use crate::builder::{ArrayBuilder, BinaryLikeArrayBuilder, StringLikeArrayBuilder};
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
 use crate::{Array, ArrayRef, GenericByteViewArray};
@@ -306,15 +306,30 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// - String length exceeds `u32::MAX`
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        self.try_append_value(value).unwrap()
+    }
+
+    /// Appends a value into the builder
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - String buffer count exceeds `u32::MAX`
+    /// - String length exceeds `u32::MAX`
+    #[inline]
+    pub fn try_append_value(&mut self, value: impl AsRef<T::Native>) -> Result<(), ArrowError> {
         let v: &[u8] = value.as_ref().as_ref();
-        let length: u32 = v.len().try_into().unwrap();
+        let length: u32 = v.len().try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!("String length {} exceeds u32::MAX", v.len()))
+        })?;
+
         if length <= MAX_INLINE_VIEW_LEN {
             let mut view_buffer = [0; 16];
             view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
             view_buffer[4..4 + v.len()].copy_from_slice(v);
             self.views_buffer.push(u128::from_le_bytes(view_buffer));
             self.null_buffer_builder.append_non_null();
-            return;
+            return Ok(());
         }
 
         // Deduplication if:
@@ -339,7 +354,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                     self.views_buffer.push(self.views_buffer[*idx]);
                     self.null_buffer_builder.append_non_null();
                     self.string_tracker = Some((ht, hasher));
-                    return;
+                    return Ok(());
                 }
                 Entry::Vacant(vacant) => {
                     // o.w. we insert the (string hash -> view index)
@@ -356,17 +371,28 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             let to_reserve = v.len().max(self.block_size.next_size() as usize);
             self.in_progress.reserve(to_reserve);
         };
+
         let offset = self.in_progress.len() as u32;
         self.in_progress.extend_from_slice(v);
 
+        let buffer_index: u32 = self.completed.len().try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "Buffer count {} exceeds u32::MAX",
+                self.completed.len()
+            ))
+        })?;
+
         let view = ByteView {
             length,
+            // This won't panic as we checked the length of prefix earlier.
             prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
-            buffer_index: self.completed.len() as u32,
+            buffer_index,
             offset,
         };
         self.views_buffer.push(view.into());
         self.null_buffer_builder.append_non_null();
+
+        Ok(())
     }
 
     /// Append an `Option` value into the builder
@@ -507,6 +533,21 @@ impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 /// ```
 pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
+impl StringLikeArrayBuilder for StringViewBuilder {
+    fn type_name() -> &'static str {
+        std::any::type_name::<StringViewBuilder>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn append_value(&mut self, value: &str) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
+
 ///  Array builder for [`BinaryViewArray`][crate::BinaryViewArray]
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
@@ -528,6 +569,21 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 /// ```
 ///
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
+
+impl BinaryLikeArrayBuilder for BinaryViewBuilder {
+    fn type_name() -> &'static str {
+        std::any::type_name::<BinaryViewBuilder>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn append_value(&mut self, value: &[u8]) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
 
 /// Creates a view from a fixed length input (the compiler can generate
 /// specialized code for this)
@@ -581,7 +637,6 @@ mod tests {
     use core::str;
 
     use super::*;
-    use crate::Array;
 
     #[test]
     fn test_string_view_deduplicate() {

@@ -58,7 +58,13 @@ pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 impl<'a> SlicesIterator<'a> {
     /// Creates a new iterator from a [BooleanArray]
     pub fn new(filter: &'a BooleanArray) -> Self {
-        Self(filter.values().set_slices())
+        filter.values().into()
+    }
+}
+
+impl<'a> From<&'a BooleanBuffer> for SlicesIterator<'a> {
+    fn from(filter: &'a BooleanBuffer) -> Self {
+        Self(filter.set_slices())
     }
 }
 
@@ -122,6 +128,13 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// Returns a filtered `values` [`Array`] where the corresponding elements of
 /// `predicate` are `true`.
 ///
+/// If multiple arrays (or record batches) need to be filtered using the same predicate array,
+/// consider using [FilterBuilder] to create a single [FilterPredicate] and then
+/// calling [FilterPredicate::filter_record_batch].
+///
+/// In contrast to this function, it is then the responsibility of the caller
+/// to use [FilterBuilder::optimize] if appropriate.
+///
 /// # See also
 /// * [`FilterBuilder`] for more control over the filtering process.
 /// * [`filter_record_batch`] to filter a [`RecordBatch`]
@@ -143,7 +156,7 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
 
-    if multiple_arrays(values.data_type()) {
+    if FilterBuilder::is_optimize_beneficial(values.data_type()) {
         // Only optimize if filtering more than one array
         // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
@@ -154,39 +167,35 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
     filter_array(values, &predicate)
 }
 
-fn multiple_arrays(data_type: &DataType) -> bool {
-    match data_type {
-        DataType::Struct(fields) => {
-            fields.len() > 1 || fields.len() == 1 && multiple_arrays(fields[0].data_type())
-        }
-        DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
-        _ => false,
-    }
-}
-
 /// Returns a filtered [RecordBatch] where the corresponding elements of
 /// `predicate` are true.
 ///
 /// This is the equivalent of calling [filter] on each column of the [RecordBatch].
+///
+/// If multiple record batches (or arrays) need to be filtered using the same predicate array,
+/// consider using [FilterBuilder] to create a single [FilterPredicate] and then
+/// calling [FilterPredicate::filter_record_batch].
+/// In contrast to this function, it is then the responsibility of the caller
+/// to use [FilterBuilder::optimize] if appropriate.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
 ) -> Result<RecordBatch, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
-    if record_batch.num_columns() > 1 {
-        // Only optimize if filtering more than one column
+    let num_cols = record_batch.num_columns();
+    if num_cols > 1
+        || (num_cols > 0
+            && FilterBuilder::is_optimize_beneficial(
+                record_batch.schema_ref().field(0).data_type(),
+            ))
+    {
+        // Only optimize if filtering more than one column or if the column contains multiple internal arrays
         // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
     }
     let filter = filter_builder.build();
 
-    let filtered_arrays = record_batch
-        .columns()
-        .iter()
-        .map(|a| filter_array(a, &filter))
-        .collect::<Result<Vec<_>, _>>()?;
-    let options = RecordBatchOptions::default().with_row_count(Some(filter.count()));
-    RecordBatch::try_new_with_options(record_batch.schema(), filtered_arrays, &options)
+    filter.filter_record_batch(record_batch)
 }
 
 /// A builder to construct [`FilterPredicate`]
@@ -215,11 +224,16 @@ impl FilterBuilder {
         }
     }
 
-    /// Compute an optimised representation of the provided `filter` mask that can be
+    /// Compute an optimized representation of the provided `filter` mask that can be
     /// applied to an array more quickly.
     ///
-    /// Note: There is limited benefit to calling this to then filter a single array
-    /// Note: This will likely have a larger memory footprint than the original mask
+    /// When filtering multiple arrays (e.g. a [`RecordBatch`] or a
+    /// [`StructArray`] with multiple fields), optimizing the filter can provide
+    /// significant performance benefits.
+    ///
+    /// However, optimization takes time and can have a larger memory footprint
+    /// than the original mask, so it is often faster to filter a single array,
+    /// without filter optimization.
     pub fn optimize(mut self) -> Self {
         match self.strategy {
             IterationStrategy::SlicesIterator => {
@@ -233,6 +247,22 @@ impl FilterBuilder {
             _ => {}
         }
         self
+    }
+
+    /// Determines if calling [FilterBuilder::optimize] is beneficial for the
+    /// given type even when filtering just a single array.
+    ///
+    /// See [`FilterBuilder::optimize`] for more details.
+    pub fn is_optimize_beneficial(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Struct(fields) => {
+                fields.len() > 1
+                    || fields.len() == 1
+                        && FilterBuilder::is_optimize_beneficial(fields[0].data_type())
+            }
+            DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
+            _ => false,
+        }
     }
 
     /// Construct the final `FilterPredicate`
@@ -300,6 +330,31 @@ impl FilterPredicate {
         filter_array(values, self)
     }
 
+    /// Returns a filtered [`RecordBatch`] containing only the rows that are selected by this
+    /// [`FilterPredicate`].
+    ///
+    /// This is the equivalent of calling [filter] on each column of the [`RecordBatch`].
+    pub fn filter_record_batch(
+        &self,
+        record_batch: &RecordBatch,
+    ) -> Result<RecordBatch, ArrowError> {
+        let filtered_arrays = record_batch
+            .columns()
+            .iter()
+            .map(|a| filter_array(a, self))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // SAFETY: we know that the set of filtered arrays will match the schema of the original
+        // record batch
+        unsafe {
+            Ok(RecordBatch::new_unchecked(
+                record_batch.schema(),
+                filtered_arrays,
+                self.count,
+            ))
+        }
+    }
+
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
@@ -345,6 +400,12 @@ fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<Array
             }
             DataType::FixedSizeBinary(_) => {
                 Ok(Arc::new(filter_fixed_size_binary(values.as_fixed_size_binary(), predicate)))
+            }
+            DataType::ListView(_) => {
+                Ok(Arc::new(filter_list_view::<i32>(values.as_list_view(), predicate)))
+            }
+            DataType::LargeListView(_) => {
+                Ok(Arc::new(filter_list_view::<i64>(values.as_list_view(), predicate)))
             }
             DataType::RunEndEncoded(_, _) => {
                 downcast_run_array!{
@@ -860,6 +921,34 @@ fn filter_sparse_union(
     })
 }
 
+/// `filter` implementation for list views
+fn filter_list_view<OffsetType: OffsetSizeTrait>(
+    array: &GenericListViewArray<OffsetType>,
+    predicate: &FilterPredicate,
+) -> GenericListViewArray<OffsetType> {
+    let filtered_offsets = filter_native::<OffsetType>(array.offsets(), predicate);
+    let filtered_sizes = filter_native::<OffsetType>(array.sizes(), predicate);
+
+    // Filter the nulls
+    let nulls = if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
+
+        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
+    } else {
+        None
+    };
+
+    let list_data = ArrayDataBuilder::new(array.data_type().clone())
+        .nulls(nulls)
+        .buffers(vec![filtered_offsets, filtered_sizes])
+        .child_data(vec![array.values().to_data()])
+        .len(predicate.count);
+
+    let list_data = unsafe { list_data.build_unchecked() };
+
+    GenericListViewArray::from(list_data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1368,6 +1457,69 @@ mod tests {
             .unwrap();
 
         assert_eq!(&make_array(expected), &result);
+    }
+
+    fn test_case_filter_list_view<T: OffsetSizeTrait>() {
+        // [[1, 2], null, [], [3,4]]
+        let mut list_array = GenericListViewBuilder::<T, _>::new(Int32Builder::new());
+        list_array.append_value([Some(1), Some(2)]);
+        list_array.append_null();
+        list_array.append_value([]);
+        list_array.append_value([Some(3), Some(4)]);
+
+        let list_array = list_array.finish();
+        let predicate = BooleanArray::from_iter([true, false, true, false]);
+
+        // Filter result: [[1, 2], []]
+        let filtered = filter(&list_array, &predicate)
+            .unwrap()
+            .as_list_view::<T>()
+            .clone();
+
+        let mut expected =
+            GenericListViewBuilder::<T, _>::with_capacity(Int32Builder::with_capacity(5), 3);
+        expected.append_value([Some(1), Some(2)]);
+        expected.append_value([]);
+        let expected = expected.finish();
+
+        assert_eq!(&filtered, &expected);
+    }
+
+    fn test_case_filter_sliced_list_view<T: OffsetSizeTrait>() {
+        // [[1, 2], null, [], [3,4]]
+        let mut list_array =
+            GenericListViewBuilder::<T, _>::with_capacity(Int32Builder::with_capacity(6), 4);
+        list_array.append_value([Some(1), Some(2)]);
+        list_array.append_null();
+        list_array.append_value([]);
+        list_array.append_value([Some(3), Some(4)]);
+
+        let list_array = list_array.finish();
+
+        // Sliced: [null, [], [3, 4]]
+        let sliced = list_array.slice(1, 3);
+        let predicate = BooleanArray::from_iter([false, false, true]);
+
+        // Filter result: [[1, 2], []]
+        let filtered = filter(&sliced, &predicate)
+            .unwrap()
+            .as_list_view::<T>()
+            .clone();
+
+        let mut expected = GenericListViewBuilder::<T, _>::new(Int32Builder::new());
+        expected.append_value([Some(3), Some(4)]);
+        let expected = expected.finish();
+
+        assert_eq!(&filtered, &expected);
+    }
+
+    #[test]
+    fn test_filter_list_view_array() {
+        test_case_filter_list_view::<i32>();
+        test_case_filter_list_view::<i64>();
+
+        test_case_filter_sliced_list_view::<i32>();
+        test_case_filter_sliced_list_view::<i64>();
     }
 
     #[test]

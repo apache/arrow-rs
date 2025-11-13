@@ -22,11 +22,15 @@ use crate::DataType;
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fn format_metadata(metadata: &HashMap<String, String>) -> String {
-            if metadata.is_empty() {
-                String::new()
-            } else {
-                format!(", metadata: {metadata:?}")
-            }
+            format!("{}", FormatMetadata(metadata))
+        }
+
+        fn format_field(field: &crate::Field) -> String {
+            let name = field.name();
+            let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
+            let data_type = field.data_type();
+            let metadata_str = format_metadata(field.metadata());
+            format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
         }
 
         // A lot of these can still be improved a lot.
@@ -122,13 +126,7 @@ impl fmt::Display for DataType {
                 if !fields.is_empty() {
                     let fields_str = fields
                         .iter()
-                        .map(|field| {
-                            let name = field.name();
-                            let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
-                            let data_type = field.data_type();
-                            let metadata_str = format_metadata(field.metadata());
-                            format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
-                        })
+                        .map(|field| format_field(field))
                         .collect::<Vec<_>>()
                         .join(", ");
                     write!(f, "{fields_str}")?;
@@ -137,17 +135,15 @@ impl fmt::Display for DataType {
                 Ok(())
             }
             Self::Union(union_fields, union_mode) => {
-                write!(f, "Union({union_mode:?}, ")?;
+                write!(f, "Union({union_mode:?}")?;
                 if !union_fields.is_empty() {
+                    write!(f, ", ")?;
                     let fields_str = union_fields
                         .iter()
                         .map(|v| {
                             let type_id = v.0;
-                            let field = v.1;
-                            let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
-                            let data_type = field.data_type();
-                            let metadata_str = format_metadata(field.metadata());
-                            format!("{type_id:?}: {maybe_nullable}{data_type}{metadata_str}")
+                            let field_str = format_field(v.1);
+                            format!("{type_id:?}: ({field_str})")
                         })
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -165,21 +161,37 @@ impl fmt::Display for DataType {
             Self::Decimal256(precision, scale) => write!(f, "Decimal256({precision}, {scale})"),
             Self::Map(field, sorted) => {
                 write!(f, "Map(")?;
-                let name = field.name();
-                let maybe_nullable = if field.is_nullable() { "nullable " } else { "" };
-                let data_type = field.data_type();
-                let metadata_str = format_metadata(field.metadata());
+                let map_field_str = format_field(field);
                 let keys_are_sorted = if *sorted { "sorted" } else { "unsorted" };
 
-                write!(
-                    f,
-                    "\"{name}\": {maybe_nullable}{data_type}{metadata_str}, {keys_are_sorted})"
-                )?;
+                write!(f, "{map_field_str}, {keys_are_sorted})")?;
                 Ok(())
             }
             Self::RunEndEncoded(run_ends_field, values_field) => {
-                write!(f, "RunEndEncoded({run_ends_field}, {values_field})")
+                write!(f, "RunEndEncoded(")?;
+                let run_ends_str = format_field(run_ends_field);
+                let values_str = format_field(values_field);
+
+                write!(f, "{run_ends_str}, {values_str})")?;
+                Ok(())
             }
+        }
+    }
+}
+
+/// Adapter to format a metadata HashMap consistently.
+struct FormatMetadata<'a>(&'a HashMap<String, String>);
+
+impl fmt::Display for FormatMetadata<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let metadata = self.0;
+        if metadata.is_empty() {
+            Ok(())
+        } else {
+            let mut entries: Vec<(&String, &String)> = metadata.iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(b.0));
+            write!(f, ", metadata: ")?;
+            f.debug_map().entries(entries).finish()
         }
     }
 }
@@ -363,14 +375,16 @@ mod tests {
 
         // Test with metadata
         let mut field_with_metadata = Field::new("b", DataType::Utf8, true);
-        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        let metadata = HashMap::from([
+            ("key".to_string(), "value".to_string()),
+            ("key2".to_string(), "value2".to_string()),
+        ]);
         field_with_metadata.set_metadata(metadata);
         let struct_fields_with_metadata =
             vec![Field::new("a", DataType::Int32, false), field_with_metadata];
         let struct_data_type_with_metadata = DataType::Struct(struct_fields_with_metadata.into());
         let struct_data_type_with_metadata_string = struct_data_type_with_metadata.to_string();
-        let expected_string_with_metadata =
-            "Struct(\"a\": Int32, \"b\": nullable Utf8, metadata: {\"key\": \"value\"})";
+        let expected_string_with_metadata = "Struct(\"a\": Int32, \"b\": nullable Utf8, metadata: {\"key\": \"value\", \"key2\": \"value2\"})";
         assert_eq!(
             struct_data_type_with_metadata_string,
             expected_string_with_metadata
@@ -391,7 +405,7 @@ mod tests {
 
         let union_data_type = DataType::Union(union_fields, crate::UnionMode::Sparse);
         let union_data_type_string = union_data_type.to_string();
-        let expected_string = "Union(Sparse, 0: Int32, 1: nullable Utf8)";
+        let expected_string = "Union(Sparse, 0: (\"a\": Int32), 1: (\"b\": nullable Utf8))";
         assert_eq!(union_data_type_string, expected_string);
 
         // Test with metadata
@@ -407,8 +421,7 @@ mod tests {
         let union_data_type_with_metadata =
             DataType::Union(union_fields_with_metadata, crate::UnionMode::Sparse);
         let union_data_type_with_metadata_string = union_data_type_with_metadata.to_string();
-        let expected_string_with_metadata =
-            "Union(Sparse, 0: Int32, 1: nullable Utf8, metadata: {\"key\": \"value\"})";
+        let expected_string_with_metadata = "Union(Sparse, 0: (\"a\": Int32), 1: (\"b\": nullable Utf8, metadata: {\"key\": \"value\"}))";
         assert_eq!(
             union_data_type_with_metadata_string,
             expected_string_with_metadata
@@ -455,5 +468,88 @@ mod tests {
             map_data_type_with_metadata_string,
             expected_string_with_metadata
         );
+    }
+
+    #[test]
+    fn test_display_run_end_encoded() {
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::UInt32, false));
+        let values_field = Arc::new(Field::new("values", DataType::Int32, true));
+        let ree_data_type = DataType::RunEndEncoded(run_ends_field.clone(), values_field.clone());
+        let ree_data_type_string = ree_data_type.to_string();
+        let expected_string = "RunEndEncoded(\"run_ends\": UInt32, \"values\": nullable Int32)";
+        assert_eq!(ree_data_type_string, expected_string);
+
+        // Test with metadata
+        let mut run_ends_field_with_metadata = Field::new("run_ends", DataType::UInt32, false);
+        let metadata = HashMap::from([("key".to_string(), "value".to_string())]);
+        run_ends_field_with_metadata.set_metadata(metadata);
+        let ree_data_type_with_metadata =
+            DataType::RunEndEncoded(Arc::new(run_ends_field_with_metadata), values_field.clone());
+        let ree_data_type_with_metadata_string = ree_data_type_with_metadata.to_string();
+        let expected_string_with_metadata = "RunEndEncoded(\"run_ends\": UInt32, metadata: {\"key\": \"value\"}, \"values\": nullable Int32)";
+        assert_eq!(
+            ree_data_type_with_metadata_string,
+            expected_string_with_metadata
+        );
+    }
+
+    #[test]
+    fn test_display_dictionary() {
+        let dict_data_type =
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8));
+        let dict_data_type_string = dict_data_type.to_string();
+        let expected_string = "Dictionary(Int8, Utf8)";
+        assert_eq!(dict_data_type_string, expected_string);
+
+        // Test with complex index and value types
+        let complex_dict_data_type = DataType::Dictionary(
+            Box::new(DataType::Int16),
+            Box::new(DataType::Struct(
+                vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Utf8, true),
+                ]
+                .into(),
+            )),
+        );
+        let complex_dict_data_type_string = complex_dict_data_type.to_string();
+        let expected_complex_string =
+            "Dictionary(Int16, Struct(\"a\": Int32, \"b\": nullable Utf8))";
+        assert_eq!(complex_dict_data_type_string, expected_complex_string);
+    }
+
+    #[test]
+    fn test_display_interval() {
+        let interval_year_month = DataType::Interval(crate::IntervalUnit::YearMonth);
+        let interval_year_month_string = interval_year_month.to_string();
+        let expected_year_month_string = "Interval(YearMonth)";
+        assert_eq!(interval_year_month_string, expected_year_month_string);
+
+        let interval_day_time = DataType::Interval(crate::IntervalUnit::DayTime);
+        let interval_day_time_string = interval_day_time.to_string();
+        let expected_day_time_string = "Interval(DayTime)";
+        assert_eq!(interval_day_time_string, expected_day_time_string);
+
+        let interval_month_day_nano = DataType::Interval(crate::IntervalUnit::MonthDayNano);
+        let interval_month_day_nano_string = interval_month_day_nano.to_string();
+        let expected_month_day_nano_string = "Interval(MonthDayNano)";
+        assert_eq!(
+            interval_month_day_nano_string,
+            expected_month_day_nano_string
+        );
+    }
+
+    #[test]
+    fn test_display_timestamp() {
+        let timestamp_without_tz = DataType::Timestamp(crate::TimeUnit::Microsecond, None);
+        let timestamp_without_tz_string = timestamp_without_tz.to_string();
+        let expected_without_tz_string = "Timestamp(µs)";
+        assert_eq!(timestamp_without_tz_string, expected_without_tz_string);
+
+        let timestamp_with_tz =
+            DataType::Timestamp(crate::TimeUnit::Nanosecond, Some(Arc::from("UTC")));
+        let timestamp_with_tz_string = timestamp_with_tz.to_string();
+        let expected_with_tz_string = "Timestamp(ns, \"UTC\")";
+        assert_eq!(timestamp_with_tz_string, expected_with_tz_string);
     }
 }

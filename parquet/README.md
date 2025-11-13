@@ -73,23 +73,10 @@ The `parquet` crate provides the following features which may be enabled in your
 
 ## Parquet Feature Status
 
-- [x] All encodings supported
-- [x] All compression codecs supported
-- [x] Read support
-  - [x] Primitive column value readers
-  - [x] Row record reader
-  - [x] Arrow record reader
-  - [x] Async support (to Arrow)
-  - [x] Encrypted files
-- [x] Statistics support
-- [x] Write support
-  - [x] Primitive column value writers
-  - [ ] Row record writer
-  - [x] Arrow record writer
-  - [x] Async support
-  - [x] Encrypted files
-- [x] Predicate pushdown
-- [x] Parquet format 4.0.0 support
+Please see the [Implementation Status Page] on the [Apache Parquet] website for
+information on the status of this implementation.
+
+[implementation status page]: https://parquet.apache.org/docs/file-format/implementationstatus/
 
 ## License
 

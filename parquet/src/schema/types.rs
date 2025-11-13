@@ -211,8 +211,8 @@ impl Type {
     pub(crate) fn is_list(&self) -> bool {
         if self.is_group() {
             let basic_info = self.get_basic_info();
-            if let Some(logical_type) = basic_info.logical_type() {
-                return logical_type == LogicalType::List;
+            if let Some(logical_type) = basic_info.logical_type_ref() {
+                return logical_type == &LogicalType::List;
             }
             return basic_info.converted_type() == ConvertedType::LIST;
         }
@@ -418,6 +418,8 @@ impl<'a> PrimitiveTypeBuilder<'a> {
                         self.name
                     ));
                 }
+                // unknown logical type means just use physical type
+                (LogicalType::_Unknown { .. }, _) => {}
                 (a, b) => {
                     return Err(general_err!(
                         "Cannot annotate {:?} from {} for field '{}'",
@@ -705,9 +707,21 @@ impl BasicTypeInfo {
     }
 
     /// Returns [`LogicalType`] value for the type.
+    ///
+    /// Note that this function will clone the `LogicalType`. If performance is a concern,
+    /// use [`Self::logical_type_ref`] instead.
+    #[deprecated(
+        since = "57.1.0",
+        note = "use `BasicTypeInfo::logical_type_ref` instead (LogicalType cloning is non trivial)"
+    )]
     pub fn logical_type(&self) -> Option<LogicalType> {
         // Unlike ConvertedType, LogicalType cannot implement Copy, thus we clone it
         self.logical_type.clone()
+    }
+
+    /// Return a reference to the [`LogicalType`] value for the type.
+    pub fn logical_type_ref(&self) -> Option<&LogicalType> {
+        self.logical_type.as_ref()
     }
 
     /// Returns `true` if id is set, `false` otherwise.
@@ -845,7 +859,9 @@ pub struct ColumnDescriptor {
 
 impl HeapSize for ColumnDescriptor {
     fn heap_size(&self) -> usize {
-        self.primitive_type.heap_size() + self.path.heap_size()
+        // Don't include the heap size of primitive_type, this is already
+        // accounted for via SchemaDescriptor::schema
+        self.path.heap_size()
     }
 }
 
@@ -904,8 +920,23 @@ impl ColumnDescriptor {
     }
 
     /// Returns [`LogicalType`] for this column.
+    ///
+    /// Note that this function will clone the `LogicalType`. If performance is a concern,
+    /// use [`Self::logical_type_ref`] instead.
+    #[deprecated(
+        since = "57.1.0",
+        note = "use `ColumnDescriptor::logical_type_ref` instead (LogicalType cloning is non trivial)"
+    )]
     pub fn logical_type(&self) -> Option<LogicalType> {
-        self.primitive_type.get_basic_info().logical_type()
+        self.primitive_type
+            .get_basic_info()
+            .logical_type_ref()
+            .cloned()
+    }
+
+    /// Returns a reference to the [`LogicalType`] for this column.
+    pub fn logical_type_ref(&self) -> Option<&LogicalType> {
+        self.primitive_type.get_basic_info().logical_type_ref()
     }
 
     /// Returns physical type for this column.
@@ -946,8 +977,8 @@ impl ColumnDescriptor {
 
     /// Returns the sort order for this column
     pub fn sort_order(&self) -> SortOrder {
-        ColumnOrder::get_sort_order(
-            self.logical_type(),
+        ColumnOrder::sort_order_for_type(
+            self.logical_type_ref(),
             self.converted_type(),
             self.physical_type(),
         )
@@ -1348,19 +1379,23 @@ fn schema_from_array_helper<'a>(
                 .with_logical_type(logical_type)
                 .with_fields(fields)
                 .with_id(field_id);
-            if let Some(rep) = repetition {
-                // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
-                // REPEATED for root node.
-                //
-                // We only set repetition for group types that are not top-level message
-                // type. According to parquet-format:
-                //   Root of the schema does not have a repetition_type.
-                //   All other types must have one.
-                if !is_root_node {
-                    builder = builder.with_repetition(rep);
-                }
+
+            // Sometimes parquet-cpp and parquet-mr set repetition level REQUIRED or
+            // REPEATED for root node.
+            //
+            // We only set repetition for group types that are not top-level message
+            // type. According to parquet-format:
+            //   Root of the schema does not have a repetition_type.
+            //   All other types must have one.
+            if !is_root_node {
+                let Some(rep) = repetition else {
+                    return Err(general_err!(
+                        "Repetition level must be defined for non-root types"
+                    ));
+                };
+                builder = builder.with_repetition(rep);
             }
-            Ok((next_index, Arc::new(builder.build().unwrap())))
+            Ok((next_index, Arc::new(builder.build()?)))
         }
     }
 }
@@ -1393,8 +1428,8 @@ mod tests {
             let basic_info = tp.get_basic_info();
             assert_eq!(basic_info.repetition(), Repetition::OPTIONAL);
             assert_eq!(
-                basic_info.logical_type(),
-                Some(LogicalType::Integer {
+                basic_info.logical_type_ref(),
+                Some(&LogicalType::Integer {
                     bit_width: 32,
                     is_signed: true
                 })
@@ -1708,6 +1743,12 @@ mod tests {
                 "Parquet error: UUID cannot annotate field 'foo' because it is not a FIXED_LEN_BYTE_ARRAY(16) field"
             );
         }
+
+        // test unknown logical types are ok
+        result = Type::primitive_type_builder("foo", PhysicalType::BYTE_ARRAY)
+            .with_logical_type(Some(LogicalType::_Unknown { field_id: 100 }))
+            .build();
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -1738,7 +1779,7 @@ mod tests {
         assert!(tp.is_group());
         assert!(!tp.is_primitive());
         assert_eq!(basic_info.repetition(), Repetition::REPEATED);
-        assert_eq!(basic_info.logical_type(), Some(LogicalType::List));
+        assert_eq!(basic_info.logical_type_ref(), Some(&LogicalType::List));
         assert_eq!(basic_info.converted_type(), ConvertedType::LIST);
         assert_eq!(basic_info.id(), 1);
         assert_eq!(tp.get_fields().len(), 2);
