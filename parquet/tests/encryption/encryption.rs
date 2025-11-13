@@ -34,7 +34,7 @@ use parquet::data_type::{ByteArray, ByteArrayType};
 use parquet::encryption::decrypt::FileDecryptionProperties;
 use parquet::encryption::encrypt::FileEncryptionProperties;
 use parquet::errors::ParquetError;
-use parquet::file::metadata::ParquetMetaData;
+use parquet::file::metadata::{ColumnChunkMetaData, ParquetMetaData};
 use parquet::file::properties::WriterProperties;
 use parquet::file::writer::SerializedFileWriter;
 use parquet::schema::parser::parse_message_type;
@@ -717,6 +717,94 @@ fn test_write_uniform_encryption_plaintext_footer() {
             .to_string()
             .starts_with("Parquet error: Footer signature verification failed. Computed: [")
     );
+}
+
+#[test]
+pub fn test_non_uniform_plaintext_encryption_behaviour() {
+    let footer_key = b"0123456789012345".to_vec(); // 128bit/16
+    let column_key = b"1234567890123450".to_vec();
+
+    let encryption_properties = FileEncryptionProperties::builder(footer_key.clone())
+        .with_plaintext_footer(true)
+        .with_column_key("x", column_key.clone())
+        .with_column_key("y", column_key.clone())
+        .build()
+        .unwrap();
+
+    let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
+        .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
+
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(encryption_properties)
+        .build();
+
+    // Write partly encrypted data with plaintext footer
+    let values = Int32Array::from(vec![8, 3, 4, 19, 5]);
+    let values = Arc::new(values);
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("x", values.data_type().clone(), true),
+        Field::new("y", values.data_type().clone(), true),
+        Field::new("z", values.data_type().clone(), true),
+    ]));
+    let record_batches = vec![
+        RecordBatch::try_new(
+            schema.clone(),
+            vec![values.clone(), values.clone(), values.clone()],
+        )
+        .unwrap(),
+    ];
+
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, schema, Some(props)).unwrap();
+    for batch in record_batches.clone() {
+        writer.write(&batch).unwrap();
+    }
+    let metadata = writer.close().unwrap();
+
+    let expected_min = 3i32.to_le_bytes();
+    let expected_max = 19i32.to_le_bytes();
+
+    let check_column_stats = |column: &ColumnChunkMetaData, has_stats: bool| {
+        if has_stats {
+            assert!(column.page_encoding_stats().is_some());
+            assert!(column.statistics().is_some());
+            let column_stats = column.statistics().unwrap();
+            assert_eq!(column_stats.min_bytes_opt(), Some(expected_min.as_slice()));
+            assert_eq!(column_stats.max_bytes_opt(), Some(expected_max.as_slice()));
+        } else {
+            assert!(column.statistics().is_none());
+            assert!(column.page_encoding_stats().is_none());
+        }
+    };
+
+    // Check column statistics produced at write time are available in full
+    let row_group = metadata.row_group(0);
+    check_column_stats(row_group.column(0), true);
+    check_column_stats(row_group.column(1), true);
+    check_column_stats(row_group.column(2), true);
+
+    // Check column statistics are read given plaintext footer and available decryption properties
+    let options =
+        ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties);
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options).unwrap();
+    let metadata = reader_metadata.metadata();
+    let row_group = metadata.row_group(0);
+    // Reader can read plaintext from the unencrypted column
+    // and column x for which the key is provided
+    check_column_stats(row_group.column(0), true);
+    check_column_stats(row_group.column(1), false);
+    check_column_stats(row_group.column(2), true);
+
+    let options = ArrowReaderOptions::default();
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options).unwrap();
+    let metadata = reader_metadata.metadata();
+    let row_group = metadata.row_group(0);
+    // Reader can only read plaintext from the unencrypted column if no key is provided
+    check_column_stats(row_group.column(0), false);
+    check_column_stats(row_group.column(1), false);
+    check_column_stats(row_group.column(2), true);
 }
 
 #[test]
