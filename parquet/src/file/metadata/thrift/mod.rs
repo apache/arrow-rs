@@ -43,8 +43,8 @@ use crate::{
     file::{
         metadata::{
             ColumnChunkMetaData, ColumnChunkMetaDataBuilder, KeyValue, LevelHistogram,
-            PageEncodingStats, ParquetMetaData, RowGroupMetaData, RowGroupMetaDataBuilder,
-            SortingColumn,
+            PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
+            RowGroupMetaDataBuilder, SortingColumn,
         },
         statistics::ValueStatistics,
     },
@@ -669,9 +669,37 @@ fn read_row_group(
     Ok(row_group)
 }
 
+/// Create a [`SchemaDescriptor`] from thrift input. The input buffer must contain a complete
+/// Parquet footer.
+pub(crate) fn parquet_schema_from_bytes(buf: &[u8]) -> Result<SchemaDescriptor> {
+    let mut prot = ThriftSliceInputProtocol::new(buf);
+
+    let mut last_field_id = 0i16;
+    loop {
+        let field_ident = prot.read_field_begin(last_field_id)?;
+        if field_ident.field_type == FieldType::Stop {
+            break;
+        }
+        match field_ident.id {
+            2 => {
+                // read schema and convert to SchemaDescriptor for use when reading row groups
+                let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                let val = parquet_schema_from_array(val)?;
+                return Ok(SchemaDescriptor::new(val));
+            }
+            _ => prot.skip(field_ident.field_type)?,
+        }
+        last_field_id = field_ident.id;
+    }
+    Err(general_err!("Input does not contain a schema"))
+}
+
 /// Create [`ParquetMetaData`] from thrift input. Note that this only decodes the file metadata in
 /// the Parquet footer. Page indexes will need to be added later.
-pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData> {
+pub(crate) fn parquet_metadata_from_bytes(
+    buf: &[u8],
+    options: Option<&ParquetMetaDataOptions>,
+) -> Result<ParquetMetaData> {
     let mut prot = ThriftSliceInputProtocol::new(buf);
 
     // begin reading the file metadata
@@ -688,6 +716,11 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
 
     // this will need to be set before parsing row groups
     let mut schema_descr: Option<Arc<SchemaDescriptor>> = None;
+
+    // see if we already have a schema.
+    if let Some(options) = options {
+        schema_descr = options.schema().cloned();
+    }
 
     // struct FileMetaData {
     //   1: required i32 version
@@ -711,10 +744,16 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
                 version = Some(i32::read_thrift(&mut prot)?);
             }
             2 => {
-                // read schema and convert to SchemaDescriptor for use when reading row groups
-                let val = read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
-                let val = parquet_schema_from_array(val)?;
-                schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
+                // If schema was passed in, skip parsing it
+                if schema_descr.is_some() {
+                    prot.skip(field_ident.field_type)?;
+                } else {
+                    // read schema and convert to SchemaDescriptor for use when reading row groups
+                    let val =
+                        read_thrift_vec::<SchemaElement, ThriftSliceInputProtocol>(&mut prot)?;
+                    let val = parquet_schema_from_array(val)?;
+                    schema_descr = Some(Arc::new(SchemaDescriptor::new(val)));
+                }
             }
             3 => {
                 num_rows = Some(i64::read_thrift(&mut prot)?);
@@ -784,8 +823,8 @@ pub(crate) fn parquet_metadata_from_bytes(buf: &[u8]) -> Result<ParquetMetaData>
     let column_orders = column_orders.map(|mut cos| {
         for (i, column) in schema_descr.columns().iter().enumerate() {
             if let ColumnOrder::TYPE_DEFINED_ORDER(_) = cos[i] {
-                let sort_order = ColumnOrder::get_sort_order(
-                    column.logical_type(),
+                let sort_order = ColumnOrder::sort_order_for_type(
+                    column.logical_type_ref(),
                     column.converted_type(),
                     column.physical_type(),
                 );
@@ -1357,7 +1396,7 @@ fn write_schema_helper<W: Write>(
                 } else {
                     None
                 },
-                logical_type: basic_info.logical_type(),
+                logical_type: basic_info.logical_type_ref().cloned(),
             };
             element.write_thrift(writer)
         }
@@ -1385,7 +1424,7 @@ fn write_schema_helper<W: Write>(
                 } else {
                     None
                 },
-                logical_type: basic_info.logical_type(),
+                logical_type: basic_info.logical_type_ref().cloned(),
             };
 
             element.write_thrift(writer)?;

@@ -276,8 +276,13 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
 
     /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
-        let mut in_progress = 0;
-        let mut shift = 0;
+        // try the happy path first
+        let byte = self.read_byte()?;
+        if byte & 0x80 == 0 {
+            return Ok(byte as u64);
+        }
+        let mut in_progress = (byte & 0x7f) as u64;
+        let mut shift = 7;
         loop {
             let byte = self.read_byte()?;
             in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);

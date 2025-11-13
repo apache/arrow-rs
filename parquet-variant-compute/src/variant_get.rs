@@ -309,9 +309,10 @@ mod test {
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
     use crate::{VariantArray, VariantArrayBuilder, json_to_variant};
     use arrow::array::{
-        Array, ArrayRef, AsArray, BinaryViewArray, BooleanArray, Date32Array, Decimal32Array,
-        Decimal64Array, Decimal128Array, Decimal256Array, Float32Array, Float64Array, Int8Array,
-        Int16Array, Int32Array, Int64Array, NullBuilder, StringArray, StructArray,
+        Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
+        Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, Float32Array,
+        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
+        LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
         Time64MicrosecondArray,
     };
     use arrow::buffer::NullBuffer;
@@ -778,6 +779,27 @@ mod test {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_large_utf8_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_large_utf8_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_utf8_view_as_utf8,
+        DataType::Utf8,
+        perfectly_shredded_utf8_view_variant_array,
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    );
+
     macro_rules! perfectly_shredded_variant_array_fn {
         ($func:ident, $typed_value_gen:expr) => {
             fn $func() -> ArrayRef {
@@ -800,6 +822,18 @@ mod test {
             }
         };
     }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_variant_array, || {
+        StringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_large_utf8_variant_array, || {
+        LargeStringArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_utf8_view_variant_array, || {
+        StringViewArray::from(vec![Some("foo"), Some("bar"), Some("baz")])
+    });
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_bool_variant_array, || {
         BooleanArray::from(vec![Some(true), Some(false), Some(true)])
@@ -1282,6 +1316,63 @@ mod test {
             ]
         )
     }
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_binary_variant_array, || {
+        BinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_binary_as_binary,
+        DataType::Binary,
+        perfectly_shredded_binary_variant_array,
+        BinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_large_binary_variant_array, || {
+        LargeBinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_large_binary_as_large_binary,
+        DataType::LargeBinary,
+        perfectly_shredded_large_binary_variant_array,
+        LargeBinaryArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_binary_view_variant_array, || {
+        BinaryViewArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_binary_view_as_binary_view,
+        DataType::BinaryView,
+        perfectly_shredded_binary_view_variant_array,
+        BinaryViewArray::from(vec![
+            Some(b"Apache" as &[u8]),
+            Some(b"Arrow-rs" as &[u8]),
+            Some(b"Parquet-variant" as &[u8]),
+        ])
+    );
 
     /// Return a VariantArray that represents a normal "shredded" variant
     /// for the following example

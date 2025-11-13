@@ -88,6 +88,7 @@
 //! ```
 mod footer_tail;
 mod memory;
+mod options;
 mod parser;
 mod push_decoder;
 pub(crate) mod reader;
@@ -127,6 +128,7 @@ use crate::{
 };
 
 pub use footer_tail::FooterTail;
+pub use options::ParquetMetaDataOptions;
 pub use push_decoder::ParquetMetaDataPushDecoder;
 pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
 use std::io::Write;
