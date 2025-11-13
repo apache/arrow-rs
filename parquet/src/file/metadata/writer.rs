@@ -114,37 +114,94 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             for (column_idx, column_metadata) in row_group.columns.iter_mut().enumerate() {
                 if let Some(column_index) = &column_indexes[row_group_idx][column_idx] {
                     let start_offset = self.buf.bytes_written();
-                    self.object_writer.write_column_index(
+                    // only update column_metadata if the write succeeds
+                    if self.object_writer.write_column_index(
                         column_index,
                         column_metadata,
                         row_group_idx,
                         column_idx,
                         &mut self.buf,
-                    )?;
-                    let end_offset = self.buf.bytes_written();
-                    // set offset and index for offset index
-                    column_metadata.column_index_offset = Some(start_offset as i64);
-                    column_metadata.column_index_length = Some((end_offset - start_offset) as i32);
+                    )? {
+                        let end_offset = self.buf.bytes_written();
+                        // set offset and index for offset index
+                        column_metadata.column_index_offset = Some(start_offset as i64);
+                        column_metadata.column_index_length =
+                            Some((end_offset - start_offset) as i32);
+                    }
                 }
             }
         }
         Ok(())
     }
 
+    /// Serialize the column indexes and transform to `Option<ParquetColumnIndex>`
+    fn finalize_column_indexes(&mut self) -> Result<Option<ParquetColumnIndex>> {
+        let column_indexes = std::mem::take(&mut self.column_indexes);
+
+        // Write column indexes to file
+        if let Some(column_indexes) = column_indexes.as_ref() {
+            self.write_column_indexes(column_indexes)?;
+        }
+
+        // check to see if the index is `None` for every row group and column chunk
+        let all_none = column_indexes
+            .as_ref()
+            .is_some_and(|ci| ci.iter().all(|cii| cii.iter().all(|idx| idx.is_none())));
+
+        // transform from Option<Vec<Vec<Option<ColumnIndexMetaData>>>> to
+        // Option<Vec<Vec<ColumnIndexMetaData>>>
+        let column_indexes: Option<ParquetColumnIndex> = if all_none {
+            None
+        } else {
+            column_indexes.map(|ovvi| {
+                ovvi.into_iter()
+                    .map(|vi| {
+                        vi.into_iter()
+                            .map(|ci| ci.unwrap_or(ColumnIndexMetaData::NONE))
+                            .collect()
+                    })
+                    .collect()
+            })
+        };
+
+        Ok(column_indexes)
+    }
+
+    /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
+    fn finalize_offset_indexes(&mut self) -> Result<Option<ParquetOffsetIndex>> {
+        let offset_indexes = std::mem::take(&mut self.offset_indexes);
+
+        // Write offset indexes to file
+        if let Some(offset_indexes) = offset_indexes.as_ref() {
+            self.write_offset_indexes(offset_indexes)?;
+        }
+
+        // check to see if the index is `None` for every row group and column chunk
+        let all_none = offset_indexes
+            .as_ref()
+            .is_some_and(|oi| oi.iter().all(|oii| oii.iter().all(|idx| idx.is_none())));
+
+        let offset_indexes: Option<ParquetOffsetIndex> = if all_none {
+            None
+        } else {
+            // FIXME(ets): this will panic if there's a missing index.
+            offset_indexes.map(|ovvi| {
+                ovvi.into_iter()
+                    .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
+                    .collect()
+            })
+        };
+
+        Ok(offset_indexes)
+    }
+
     /// Assembles and writes the final metadata to self.buf
     pub fn finish(mut self) -> Result<ParquetMetaData> {
         let num_rows = self.row_groups.iter().map(|x| x.num_rows).sum();
 
-        let column_indexes = std::mem::take(&mut self.column_indexes);
-        let offset_indexes = std::mem::take(&mut self.offset_indexes);
-
-        // Write column indexes and offset indexes
-        if let Some(column_indexes) = column_indexes.as_ref() {
-            self.write_column_indexes(column_indexes)?;
-        }
-        if let Some(offset_indexes) = offset_indexes.as_ref() {
-            self.write_offset_indexes(offset_indexes)?;
-        }
+        // serialize page indexes and transform to the proper form for use in ParquetMetaData
+        let column_indexes = self.finalize_column_indexes()?;
+        let offset_indexes = self.finalize_offset_indexes()?;
 
         // We only include ColumnOrder for leaf nodes.
         // Currently only supported ColumnOrder is TypeDefinedOrder so we set this
@@ -220,34 +277,14 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
         // unencrypted metadata before it is returned to users. This allows the metadata
         // to be usable for retrieving the row group statistics for example, without users
         // needing to decrypt the metadata.
-        let mut builder = ParquetMetaDataBuilder::new(file_metadata);
+        let builder = ParquetMetaDataBuilder::new(file_metadata)
+            .set_column_index(column_indexes)
+            .set_offset_index(offset_indexes);
 
-        builder = match unencrypted_row_groups {
-            Some(rg) => builder.set_row_groups(rg),
-            None => builder.set_row_groups(row_groups),
-        };
-
-        let column_indexes: Option<ParquetColumnIndex> = column_indexes.map(|ovvi| {
-            ovvi.into_iter()
-                .map(|vi| {
-                    vi.into_iter()
-                        .map(|oi| oi.unwrap_or(ColumnIndexMetaData::NONE))
-                        .collect()
-                })
-                .collect()
-        });
-
-        // FIXME(ets): this will panic if there's a missing index.
-        let offset_indexes: Option<ParquetOffsetIndex> = offset_indexes.map(|ovvi| {
-            ovvi.into_iter()
-                .map(|vi| vi.into_iter().map(|oi| oi.unwrap()).collect())
-                .collect()
-        });
-
-        builder = builder.set_column_index(column_indexes);
-        builder = builder.set_offset_index(offset_indexes);
-
-        Ok(builder.build())
+        Ok(match unencrypted_row_groups {
+            Some(rg) => builder.set_row_groups(rg).build(),
+            None => builder.set_row_groups(row_groups).build(),
+        })
     }
 
     pub fn new(
@@ -495,11 +532,15 @@ impl MetadataObjectWriter {
 #[cfg(not(feature = "encryption"))]
 impl MetadataObjectWriter {
     /// Write [`FileMetaData`] in Thrift format
+    ///
+    /// [`FileMetaData`]: https://github.com/apache/parquet-format/tree/master?tab=readme-ov-file#metadata
     fn write_file_metadata(&self, file_metadata: &FileMeta, sink: impl Write) -> Result<()> {
         Self::write_thrift_object(file_metadata, sink)
     }
 
     /// Write a column [`OffsetIndex`] in Thrift format
+    ///
+    /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_offset_index(
         &self,
         offset_index: &OffsetIndexMetaData,
@@ -512,6 +553,11 @@ impl MetadataObjectWriter {
     }
 
     /// Write a column [`ColumnIndex`] in Thrift format
+    ///
+    /// If `column_index` is [`ColumnIndexMetaData::NONE`] the index will not be written and
+    /// this will return `false`. Returns `true` otherwise.
+    ///
+    /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
         column_index: &ColumnIndexMetaData,
@@ -519,8 +565,15 @@ impl MetadataObjectWriter {
         _row_group_idx: usize,
         _column_idx: usize,
         sink: impl Write,
-    ) -> Result<()> {
-        Self::write_thrift_object(column_index, sink)
+    ) -> Result<bool> {
+        match column_index {
+            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
+            ColumnIndexMetaData::NONE => Ok(false),
+            _ => {
+                Self::write_thrift_object(column_index, sink)?;
+                Ok(true)
+            }
+        }
     }
 
     /// No-op implementation of row-group metadata encryption
@@ -598,6 +651,9 @@ impl MetadataObjectWriter {
 
     /// Write a column [`ColumnIndex`] in Thrift format, possibly encrypting it if required
     ///
+    /// If `column_index` is [`ColumnIndexMetaData::NONE`] the index will not be written and
+    /// this will return `false`. Returns `true` otherwise.
+    ///
     /// [`ColumnIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
     fn write_column_index(
         &self,
@@ -606,18 +662,25 @@ impl MetadataObjectWriter {
         row_group_idx: usize,
         column_idx: usize,
         sink: impl Write,
-    ) -> Result<()> {
-        match &self.file_encryptor {
-            Some(file_encryptor) => Self::write_thrift_object_with_encryption(
-                column_index,
-                sink,
-                file_encryptor,
-                column_chunk,
-                ModuleType::ColumnIndex,
-                row_group_idx,
-                column_idx,
-            ),
-            None => Self::write_thrift_object(column_index, sink),
+    ) -> Result<bool> {
+        match column_index {
+            // Missing indexes may also have the placeholder ColumnIndexMetaData::NONE
+            ColumnIndexMetaData::NONE => Ok(false),
+            _ => {
+                match &self.file_encryptor {
+                    Some(file_encryptor) => Self::write_thrift_object_with_encryption(
+                        column_index,
+                        sink,
+                        file_encryptor,
+                        column_chunk,
+                        ModuleType::ColumnIndex,
+                        row_group_idx,
+                        column_idx,
+                    )?,
+                    None => Self::write_thrift_object(column_index, sink)?,
+                }
+                Ok(true)
+            }
         }
     }
 
