@@ -456,6 +456,14 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                 let c_child = c_schema.child(0);
                 DataType::LargeList(Arc::new(Field::try_from(c_child)?))
             }
+            "+vl" => {
+                let c_child = c_schema.child(0);
+                DataType::ListView(Arc::new(Field::try_from(c_child)?))
+            }
+            "+vL" => {
+                let c_child = c_schema.child(0);
+                DataType::LargeListView(Arc::new(Field::try_from(c_child)?))
+            }
             "+s" => {
                 let fields = c_schema.children().map(Field::try_from);
                 DataType::Struct(fields.collect::<Result<_, ArrowError>>()?)
@@ -657,6 +665,8 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
         let children = match dtype {
             DataType::List(child)
             | DataType::LargeList(child)
+            | DataType::ListView(child)
+            | DataType::LargeListView(child)
             | DataType::FixedSizeList(child, _)
             | DataType::Map(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
@@ -746,6 +756,8 @@ fn get_format_string(dtype: &DataType) -> Result<Cow<'static, str>, ArrowError> 
         DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".into()),
         DataType::List(_) => Ok("+l".into()),
         DataType::LargeList(_) => Ok("+L".into()),
+        DataType::ListView(_) => Ok("+vl".into()),
+        DataType::LargeListView(_) => Ok("+vL".into()),
         DataType::Struct(_) => Ok("+s".into()),
         DataType::Map(_, _) => Ok("+m".into()),
         DataType::RunEndEncoded(_, _) => Ok("+r".into()),
@@ -870,6 +882,16 @@ mod tests {
         round_trip_type(DataType::Binary);
         round_trip_type(DataType::LargeBinary);
         round_trip_type(DataType::List(Arc::new(Field::new(
+            "a",
+            DataType::Int16,
+            false,
+        ))));
+        round_trip_type(DataType::ListView(Arc::new(Field::new(
+            "a",
+            DataType::Int16,
+            false,
+        ))));
+        round_trip_type(DataType::LargeListView(Arc::new(Field::new(
             "a",
             DataType::Int16,
             false,
