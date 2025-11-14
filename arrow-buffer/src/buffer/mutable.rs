@@ -581,7 +581,9 @@ impl MutableBuffer {
             buffer.push(packed)
         }
 
-        buffer.into()
+        let mut buffer: MutableBuffer = buffer.into();
+        buffer.truncate(bit_util::ceil(len, 8));
+        buffer
     }
 
     /// Register this [`MutableBuffer`] with the provided [`MemoryPool`]
