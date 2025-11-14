@@ -210,7 +210,11 @@ fn create_table(
 
         // Could be a custom schema that was provided.
         if batch.columns().len() != schema.fields().len() {
-            return Err(ArrowError::InvalidArgumentError("Expected the same number of columns in a record batch as the number of fields in the schema".to_owned()));
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "Expected the same number of columns in a record batch ({}) as the number of fields ({}) in the schema",
+                batch.columns().len(),
+                schema.fields.len()
+            )));
         }
 
         let formatters = batch
@@ -1538,10 +1542,12 @@ mod tests {
         )
         .unwrap();
 
-        let result = pretty_format_batches_with_schema(schema_a, &[batch]);
-        assert!(
-            matches!(result, Err(ArrowError::InvalidArgumentError(_))),
-            "Error expected"
+        let error = pretty_format_batches_with_schema(schema_a, &[batch])
+            .err()
+            .unwrap();
+        assert_eq!(
+            &error.to_string(),
+            "Invalid argument error: Expected the same number of columns in a record batch (1) as the number of fields (2) in the schema"
         );
     }
 }
