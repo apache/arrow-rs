@@ -43,8 +43,8 @@ use crate::{
     file::{
         metadata::{
             ColumnChunkMetaData, ColumnChunkMetaDataBuilder, KeyValue, LevelHistogram,
-            PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData,
-            RowGroupMetaDataBuilder, SortingColumn,
+            PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions, ParquetPageEncodingStats,
+            RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
         },
         statistics::ValueStatistics,
     },
@@ -490,11 +490,11 @@ fn read_column_metadata<'a>(
             13 if !skip_pes => {
                 if pes_mask {
                     let val = read_encoding_stats_as_mask(&mut *prot)?;
-                    column.encoding_stats_mask = Some(val);
+                    column.encoding_stats = Some(ParquetPageEncodingStats::Mask(val));
                 } else {
                     let val =
                         read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
-                    column.encoding_stats = Some(val);
+                    column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
                 }
             }
             14 => {

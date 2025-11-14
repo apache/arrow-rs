@@ -470,6 +470,16 @@ pub struct PageEncodingStats {
 }
 );
 
+/// Internal representation of the page encoding stats in the [`ColumnChunkMetaData`].
+/// This is not publicly exposed, with different getters defined for each variant.
+#[derive(Debug, Clone, PartialEq)]
+enum ParquetPageEncodingStats {
+    /// The full array of stats as defined in the Parquet spec.
+    Full(Vec<PageEncodingStats>),
+    /// A condensed version of only page encodings seen.
+    Mask(EncodingMask),
+}
+
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
 
@@ -812,8 +822,7 @@ pub struct ColumnChunkMetaData {
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
     geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
-    encoding_stats: Option<Vec<PageEncodingStats>>,
-    encoding_stats_mask: Option<EncodingMask>,
+    encoding_stats: Option<ParquetPageEncodingStats>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
@@ -1052,13 +1061,16 @@ impl ColumnChunkMetaData {
     }
 
     /// Returns the page encoding statistics, or `None` if no page encoding statistics
-    /// are available.
+    /// are available (or they were converted to a mask).
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
-        self.encoding_stats.as_ref()
+        match self.encoding_stats.as_ref() {
+            Some(ParquetPageEncodingStats::Full(stats)) => Some(stats),
+            _ => None,
+        }
     }
 
     /// Returns the page encoding statistics reduced to a bitmask, or `None` if statistics are
-    /// not available.
+    /// not available (or they were left in their original form).
     ///
     /// The [`PageEncodingStats`] struct was added to the Parquet specification specifically to
     /// enable fast determination of whether all pages in a column chunk are dictionary encoded
@@ -1085,7 +1097,10 @@ impl ColumnChunkMetaData {
     /// }
     /// ```
     pub fn page_encoding_stats_mask(&self) -> Option<&EncodingMask> {
-        self.encoding_stats_mask.as_ref()
+        match self.encoding_stats.as_ref() {
+            Some(ParquetPageEncodingStats::Mask(stats)) => Some(stats),
+            _ => None,
+        }
     }
 
     /// Returns the offset for the bloom filter.
@@ -1210,7 +1225,6 @@ impl ColumnChunkMetaDataBuilder {
             statistics: None,
             geo_statistics: None,
             encoding_stats: None,
-            encoding_stats_mask: None,
             bloom_filter_offset: None,
             bloom_filter_length: None,
             offset_index_offset: None,
@@ -1307,13 +1321,13 @@ impl ColumnChunkMetaDataBuilder {
 
     /// Sets page encoding stats for this column chunk.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
-        self.0.encoding_stats = Some(value);
+        self.0.encoding_stats = Some(ParquetPageEncodingStats::Full(value));
         self
     }
 
     /// Sets page encoding stats mask for this column chunk.
     pub fn set_page_encoding_stats_mask(mut self, value: EncodingMask) -> Self {
-        self.0.encoding_stats_mask = Some(value);
+        self.0.encoding_stats = Some(ParquetPageEncodingStats::Mask(value));
         self
     }
 
@@ -1921,9 +1935,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2798;
+        let base_expected_size = 2762;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2966;
+        let base_expected_size = 2934;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1952,9 +1966,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 3224;
+        let bigger_expected_size = 3192;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 3392;
+        let bigger_expected_size = 3360;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
