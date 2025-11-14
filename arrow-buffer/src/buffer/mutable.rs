@@ -557,7 +557,7 @@ impl MutableBuffer {
     /// as it eliminates the conditional `Iterator::next`
     #[inline]
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer: Vec<u64> = Vec::with_capacity(bit_util::ceil(len, 64) * 8);
+        let mut buffer: Vec<u64> = Vec::with_capacity(bit_util::ceil(len, 64));
 
         let chunks = len / 64;
         let remainder = len % 64;
