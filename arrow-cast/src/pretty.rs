@@ -23,7 +23,7 @@
 //! [`Array`]: arrow_array::Array
 
 use comfy_table::{Cell, Table};
-use std::fmt::{Display};
+use std::fmt::Display;
 
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{ArrowError, Field, SchemaRef};
@@ -309,7 +309,7 @@ fn create_table(
     if let Some(schema) = &schema_opt {
         let mut header = Vec::new();
         for field in schema.fields() {
-            if options.types_info {
+            if options.types_info() {
                 header.push(Cell::new(format!(
                     "{}\n{}",
                     field.name(),
@@ -1447,14 +1447,14 @@ mod tests {
                 // We assume that my_money always is an Int32.
                 let array = array.as_primitive();
                 let display_index = Box::new(MyMoneyFormatter { array, options });
-                return Ok(Some(ArrayFormatter::new(display_index, options.safe)));
+                return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
             }
 
             if array.data_type() == &DataType::Int32 {
                 // We assume that my_money always is an Int32.
                 let array = array.as_primitive();
                 let display_index = Box::new(MyInt32Formatter { array, options });
-                return Ok(Some(ArrayFormatter::new(display_index, options.safe)));
+                return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
             }
 
             Ok(None)
@@ -1471,7 +1471,7 @@ mod tests {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} €", self.array.value(idx))?,
-                false => write!(f, "{}", self.options.null)?,
+                false => write!(f, "{}", self.options.null())?,
             }
 
             Ok(())
@@ -1488,7 +1488,7 @@ mod tests {
         fn write(&self, idx: usize, f: &mut dyn Write) -> crate::display::FormatResult {
             match self.array.is_valid(idx) {
                 true => write!(f, "{} (32-Bit)", self.array.value(idx))?,
-                false => write!(f, "{}", self.options.null)?,
+                false => write!(f, "{}", self.options.null())?,
             }
 
             Ok(())

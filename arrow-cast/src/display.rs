@@ -57,23 +57,23 @@ pub enum DurationFormat {
 pub struct FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
-    pub safe: bool,
+    safe: bool,
     /// Format string for nulls
-    pub null: &'a str,
+    null: &'a str,
     /// Date format for date arrays
-    pub date_format: TimeFormat<'a>,
+    date_format: TimeFormat<'a>,
     /// Format for DateTime arrays
-    pub datetime_format: TimeFormat<'a>,
+    datetime_format: TimeFormat<'a>,
     /// Timestamp format for timestamp arrays
-    pub timestamp_format: TimeFormat<'a>,
+    timestamp_format: TimeFormat<'a>,
     /// Timestamp format for timestamp with timezone arrays
-    pub timestamp_tz_format: TimeFormat<'a>,
+    timestamp_tz_format: TimeFormat<'a>,
     /// Time format for time arrays
-    pub time_format: TimeFormat<'a>,
+    time_format: TimeFormat<'a>,
     /// Duration format
-    pub duration_format: DurationFormat,
+    duration_format: DurationFormat,
     /// Show types in visual representation batches
-    pub types_info: bool,
+    types_info: bool,
 }
 
 impl Default for FormatOptions<'_> {
@@ -169,11 +169,48 @@ impl<'a> FormatOptions<'a> {
         Self { types_info, ..self }
     }
 
-    /// Returns true if type info should be included in visual representation of batches
-    #[deprecated(
-        since = "58.0.0",
-        note = "Directly access the `types_info` field instead.`"
-    )]
+    /// Returns whether formatting errors should be written to the output instead of being converted
+    /// into a [`std::fmt::Error`].
+    pub const fn safe(&self) -> bool {
+        self.safe
+    }
+
+    /// Returns the string used for displaying nulls.
+    pub const fn null(&self) -> &'a str {
+        self.null
+    }
+
+    /// Returns the [`TimeFormat`] for date arrays.
+    pub const fn date_format(&self) -> TimeFormat<'a> {
+        self.date_format
+    }
+
+    /// Returns the [`TimeFormat`] for datetime arrays.
+    pub const fn datetime_format(&self) -> TimeFormat<'a> {
+        self.datetime_format
+    }
+
+    /// Returns the [`TimeFormat`] for timestamp arrays.
+    pub const fn timestamp_format(&self) -> TimeFormat<'a> {
+        self.timestamp_format
+    }
+
+    /// Returns the [`TimeFormat`] for timezone arrays.
+    pub const fn timestamp_tz_format(&self) -> TimeFormat<'a> {
+        self.timestamp_tz_format
+    }
+
+    /// Returns the [`TimeFormat`] for time arrays.
+    pub const fn time_format(&self) -> TimeFormat<'a> {
+        self.time_format
+    }
+
+    /// Returns the [`DurationFormat`].
+    pub const fn duration_format(&self) -> DurationFormat {
+        self.duration_format
+    }
+
+    /// Returns true if type info should be included in a visual representation of batches.
     pub const fn types_info(&self) -> bool {
         self.types_info
     }
