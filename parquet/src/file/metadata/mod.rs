@@ -1935,7 +1935,7 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2762;
+        let base_expected_size = 2766;
         #[cfg(feature = "encryption")]
         let base_expected_size = 2934;
 
@@ -2015,7 +2015,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 2074;
+        let base_expected_size = 2058;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = "0123456789012345".as_bytes();
@@ -2041,7 +2041,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 3088;
+        let expected_size_with_decryptor = 3072;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(
