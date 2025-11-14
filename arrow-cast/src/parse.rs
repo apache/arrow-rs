@@ -875,13 +875,13 @@ pub fn parse_decimal<T: DecimalType>(
     }
 
     // Iterate over the raw input bytes, skipping the sign if any
-    let mut bs = bs.iter().enumerate().skip(signed as usize);
+    let mut bs_iter = bs.iter().enumerate().skip(signed as usize);
 
     let mut is_e_notation = false;
 
     // Overflow checks are not required if 10^(precision - 1) <= T::MAX holds.
     // Thus, if we validate the precision correctly, we can skip overflow checks.
-    while let Some((index, b)) = bs.next() {
+    while let Some((index, b)) = bs_iter.next() {
         match b {
             b'0'..=b'9' => {
                 if digits == 0 && *b == b'0' {
@@ -895,7 +895,7 @@ pub fn parse_decimal<T: DecimalType>(
             b'.' => {
                 let point_index = index;
 
-                for (_, b) in bs.by_ref() {
+                for (_, b) in bs_iter.by_ref() {
                     if !b.is_ascii_digit() {
                         if *b == b'e' || *b == b'E' {
                             result = parse_e_notation::<T>(
@@ -963,6 +963,21 @@ pub fn parse_decimal<T: DecimalType>(
     }
 
     if !is_e_notation {
+        if scale == 0 && fractionals > 0 {
+            // The input string contained some fractional digits after the decimal point despite
+            // the scale being zero. Only accept the string if there was exactly one fractional digit,
+            // and it is equal to zero.
+            if fractionals == 1 && bs.ends_with(b".0") {
+                result = result.div_wrapping(base);
+                digits -= 1;
+                fractionals = 0;
+            } else {
+                return Err(ArrowError::ParseError(format!(
+                    "can't parse the string value {s} to decimal with scale 0"
+                )));
+            }
+        }
+
         if fractionals < scale {
             let exp = scale - fractionals;
             if exp as u8 + digits > precision {
@@ -2636,6 +2651,7 @@ mod tests {
             ("12345678908765.123456", 3),
             ("123456789087651234.56e-4", 3),
             ("1234560000000", 0),
+            ("12345678900.0", 0),
             ("1.23456e12", 0),
         ];
         for (s, scale) in overflow_parse_tests {
@@ -2751,6 +2767,25 @@ mod tests {
         for (s, i, scale) in edge_tests_256 {
             let result = parse_decimal::<Decimal256Type>(s, 76, scale);
             assert_eq!(i, result.unwrap());
+        }
+
+        let zero_scale_ok = [("1.0", 1), ("123.0", 123)];
+        for (s, i) in zero_scale_ok {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 3, 0).unwrap();
+            assert_eq!(i, result_128);
+        }
+
+        let zero_scale_err = [
+            "1.2", "1.00", "1.23", "1.000", "1.123", "123.4", "123.00", "123.45",
+        ];
+        for s in zero_scale_err {
+            let err = parse_decimal::<Decimal128Type>(s, 3, 0)
+                .unwrap_err()
+                .to_string();
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal with scale 0"),
+                err,
+            );
         }
     }
 
