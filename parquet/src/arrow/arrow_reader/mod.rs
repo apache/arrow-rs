@@ -1406,10 +1406,6 @@ pub(crate) mod tests {
     use rand::{Rng, RngCore, SeedableRng, random, rng};
     use tempfile::tempfile;
 
-    use rand::rngs::StdRng;
-    use rand::{Rng, RngCore, SeedableRng, random, rng};
-    use tempfile::tempfile;
-
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
         ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
@@ -1448,8 +1444,6 @@ pub(crate) mod tests {
     use bytes::Bytes;
     use half::f16;
     use num_traits::PrimInt;
-    use rand::{Rng, RngCore, rng};
-    use tempfile::tempfile;
 
     #[test]
     fn test_arrow_reader_all_columns() {
