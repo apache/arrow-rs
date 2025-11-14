@@ -23,11 +23,10 @@
 //! record batch pretty printing.
 //!
 //! [`pretty`]: crate::pretty
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Debug, Display, Formatter, Write};
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
-use crate::pretty::ArrayFormatterFactory;
 use arrow_array::cast::*;
 use arrow_array::temporal_conversions::*;
 use arrow_array::timezone::Tz;
@@ -83,7 +82,6 @@ pub struct FormatOptions<'a> {
     types_info: bool,
     /// Formatter factory used to instantiate custom [`ArrayFormatter`]s. This allows users to
     /// provide custom formatters.
-    #[cfg(feature = "prettyprint")]
     formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
 }
 
@@ -288,6 +286,91 @@ impl<'a> FormatOptions<'a> {
     pub const fn formatter_factory(&self) -> Option<&'a dyn ArrayFormatterFactory> {
         self.formatter_factory
     }
+}
+
+/// Allows creating a new [`ArrayFormatter`] for a given [`Array`] and an optional [`Field`].
+///
+/// # Example
+///
+/// The example below shows how to create a custom formatter for a custom type `my_money`. Note that
+/// this example requires the `prettyprint` feature.
+///
+/// ```rust
+/// use std::fmt::Write;
+/// use arrow_array::{cast::AsArray, Array, Int32Array};
+/// use arrow_cast::display::{ArrayFormatter, ArrayFormatterFactory, DisplayIndex, FormatOptions, FormatResult};
+/// use arrow_cast::pretty::pretty_format_batches_with_options;
+/// use arrow_schema::{ArrowError, Field};
+///
+/// /// A custom formatter factory that can create a formatter for the special type `my_money`.
+/// ///
+/// /// This struct could have access to some kind of extension type registry that can lookup the
+/// /// correct formatter for an extension type on-demand.
+/// #[derive(Debug)]
+/// struct MyFormatters {}
+///
+/// impl ArrayFormatterFactory for MyFormatters {
+///     fn create_display_index<'formatter>(
+///         &self,
+///         array: &'formatter dyn Array,
+///         options: &'formatter FormatOptions<'formatter>,
+///         field: Option<&'formatter Field>,
+///     ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError> {
+///         // check if this is the money type
+///         if field
+///             .map(|f| f.extension_type_name() == Some("my_money"))
+///             .unwrap_or(false)
+///         {
+///             // We assume that my_money always is an Int32.
+///             let array = array.as_primitive();
+///             let display_index = Box::new(MyMoneyFormatter { array, options });
+///             return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
+///         }
+///
+///         Ok(None) // None indicates that the default formatter should be used.
+///     }
+/// }
+///
+/// /// A formatter for the type `my_money` that wraps a specific array and has access to the
+/// /// formatting options.
+/// struct MyMoneyFormatter<'a> {
+///     array: &'a Int32Array,
+///     options: &'a FormatOptions<'a>,
+/// }
+///
+/// impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
+///     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+///         match self.array.is_valid(idx) {
+///             true => write!(f, "{} €", self.array.value(idx))?,
+///             false => write!(f, "{}", self.options.null())?,
+///         }
+///
+///         Ok(())
+///     }
+/// }
+///
+/// // Usually, here you would provide your record batches.
+/// let my_batches = vec![];
+///
+/// // Call the pretty printer with the custom formatter factory.
+/// pretty_format_batches_with_options(
+///        &my_batches,
+///        &FormatOptions::new().with_formatter_factory(&MyFormatters {})
+/// );
+/// ```
+pub trait ArrayFormatterFactory: Debug {
+    /// Creates a new [`ArrayFormatter`] for the given [`Array`] and an optional [`Field`]. If the
+    /// default implementation should be used, return [`None`].
+    ///
+    /// The field shall be used to look up metadata about the `array` while `options` provide
+    /// information on formatting, for example, dates and times which should be considered by an
+    /// implementor.
+    fn create_display_index<'formatter>(
+        &self,
+        array: &'formatter dyn Array,
+        options: &'formatter FormatOptions<'formatter>,
+        field: Option<&'formatter Field>,
+    ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError>;
 }
 
 /// Implements [`Display`] for a specific array value
