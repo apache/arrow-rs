@@ -529,7 +529,7 @@ impl Codec {
             }
             DataType::Union(fields, mode) => {
                 // similar to dictionaries and lists, we set descending to false and negate nulls_first
-                // since the encodedc ontents will be inverted if descending is set
+                // since the encoded contents will be inverted if descending is set
                 let options = SortOptions {
                     descending: false,
                     nulls_first: sort_field.options.nulls_first != sort_field.options.descending,
@@ -1739,14 +1739,20 @@ fn encode_column(
             offsets: offsets_buf,
             mode,
         } => {
-            let _union_array = column.as_any().downcast_ref::<UnionArray>().unwrap();
-            let null_sentinel = if opts.descending { 0x00 } else { 0x01 };
+            let union_array = as_union_array(column);
+            let null_sentinel = null_sentinel(opts);
 
             offsets
                 .iter_mut()
                 .skip(1)
                 .enumerate()
                 .for_each(|(i, offset)| {
+                    let sentinel = if union_array.is_valid(i) {
+                        0x01
+                    } else {
+                        null_sentinel
+                    };
+
                     let type_id = type_ids[i];
 
                     let child_row_idx = match (mode, offsets_buf) {
@@ -1760,7 +1766,7 @@ fn encode_column(
                     let child_row = child_rows[type_id as usize].row(child_row_idx);
                     let child_bytes = child_row.as_ref();
 
-                    data[*offset] = null_sentinel;
+                    data[*offset] = sentinel;
 
                     let type_id_byte = if opts.descending {
                         !(type_id as u8)
