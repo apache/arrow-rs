@@ -1129,7 +1129,7 @@ mod tests {
     fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
         match stats.min_opt() {
             Some(s) => format!("min: {}", s),
-            None => format!("min: NA"),
+            None => "min: NA".to_string(),
         }
     }
 
