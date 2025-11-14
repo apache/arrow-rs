@@ -320,7 +320,7 @@ mod test {
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
     use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
-    use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
+    use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{
         EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
@@ -3683,6 +3683,34 @@ mod test {
         assert!(err.to_string().contains(
             "Failed to cast to Decimal256(precision=76, scale=39) from variant Decimal16"
         ));
+    }
+
+    #[test]
+    fn get_non_supported_temporal_types_error() {
+        let values = vec![None, Some(Variant::Null), Some(Variant::BooleanFalse)];
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(values));
+
+        let test_cases = vec![
+            FieldRef::from(Field::new(
+                "result",
+                DataType::Duration(TimeUnit::Microsecond),
+                true,
+            )),
+            FieldRef::from(Field::new(
+                "result",
+                DataType::Interval(IntervalUnit::YearMonth),
+                true,
+            )),
+        ];
+
+        for field in test_cases {
+            let options = GetOptions::new().with_as_type(Some(field));
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Casting Variant to duration/interval types is not supported")
+            );
+        }
     }
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_invalid_time_variant_array, || {
