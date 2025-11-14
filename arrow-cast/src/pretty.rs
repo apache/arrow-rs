@@ -22,11 +22,10 @@
 //! [`RecordBatch`]: arrow_array::RecordBatch
 //! [`Array`]: arrow_array::Array
 
-use comfy_table::{Cell, Table};
-use std::fmt::Display;
-
 use arrow_array::{Array, ArrayRef, RecordBatch};
 use arrow_schema::{ArrowError, Field, SchemaRef};
+use comfy_table::{Cell, Table};
+use std::fmt::{Debug, Display};
 
 use crate::display::{ArrayFormatter, FormatOptions};
 
@@ -38,15 +37,16 @@ use crate::display::{ArrayFormatter, FormatOptions};
 ///
 /// ```rust
 /// use std::fmt::Write;
-/// use arrow_array::{Array, Int32Array, cast::AsArray};
+/// use arrow_array::{cast::AsArray, Array, Int32Array};
 /// use arrow_cast::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
-/// use arrow_cast::pretty::{pretty_format_batches_with_options_and_formatters, ArrayFormatterFactory};
+/// use arrow_cast::pretty::{pretty_format_batches_with_options, ArrayFormatterFactory};
 /// use arrow_schema::{ArrowError, Field};
 ///
 /// /// A custom formatter factory that can create a formatter for the special type `my_money`.
 /// ///
 /// /// This struct could have access to some kind of extension type registry that can lookup the
 /// /// correct formatter for an extension type on-demand.
+/// #[derive(Debug)]
 /// struct MyFormatters {}
 ///
 /// impl ArrayFormatterFactory for MyFormatters {
@@ -64,7 +64,7 @@ use crate::display::{ArrayFormatter, FormatOptions};
 ///             // We assume that my_money always is an Int32.
 ///             let array = array.as_primitive();
 ///             let display_index = Box::new(MyMoneyFormatter { array, options });
-///             return Ok(Some(ArrayFormatter::new(display_index, options.safe)));
+///             return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
 ///         }
 ///
 ///         Ok(None) // None indicates that the default formatter should be used.
@@ -82,7 +82,7 @@ use crate::display::{ArrayFormatter, FormatOptions};
 ///     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
 ///         match self.array.is_valid(idx) {
 ///             true => write!(f, "{} €", self.array.value(idx))?,
-///             false => write!(f, "{}", self.options.null)?,
+///             false => write!(f, "{}", self.options.null())?,
 ///         }
 ///
 ///         Ok(())
@@ -93,13 +93,12 @@ use crate::display::{ArrayFormatter, FormatOptions};
 /// let my_batches = vec![];
 ///
 /// // Call the pretty printer with the custom formatter factory.
-/// pretty_format_batches_with_options_and_formatters(
+/// pretty_format_batches_with_options(
 ///        &my_batches,
-///        &FormatOptions::new(),
-///        Some(&MyFormatters {})
+///        &FormatOptions::new().with_formatter_factory(&MyFormatters {})
 /// );
 /// ```
-pub trait ArrayFormatterFactory {
+pub trait ArrayFormatterFactory: Debug {
     /// Creates a new [`ArrayFormatter`] for the given [`Array`] and an optional [`Field`]. If the
     /// default implementation should be used, return [`None`].
     ///
@@ -177,7 +176,7 @@ pub fn pretty_format_batches_with_schema(
     results: &[RecordBatch],
 ) -> Result<impl Display + use<>, ArrowError> {
     let options = FormatOptions::default().with_display_error(true);
-    create_table(Some(schema), results, &options, None)
+    create_table(Some(schema), results, &options)
 }
 
 /// Create a visual representation of [`RecordBatch`]es with formatting options.
@@ -214,27 +213,7 @@ pub fn pretty_format_batches_with_options(
     results: &[RecordBatch],
     options: &FormatOptions,
 ) -> Result<impl Display + use<>, ArrowError> {
-    create_table(None, results, options, None)
-}
-
-/// Create a visual representation of [`RecordBatch`]es with formatting options.
-///
-/// # Arguments
-/// * `results` - A slice of record batches to display
-/// * `options` - [`FormatOptions`] that control the resulting display
-/// * `formatters` - A slice of [`ArrayFormatter`]s that control the formatting of each column. If
-///   a formatter is [`None`], the default formatter will be used. Must be exactly as long as the
-///   number of fields in the record batches.
-///
-/// # Example
-///
-/// For an example, see [`ArrayFormatterFactory`].
-pub fn pretty_format_batches_with_options_and_formatters(
-    results: &[RecordBatch],
-    options: &FormatOptions,
-    formatters: Option<&dyn ArrayFormatterFactory>,
-) -> Result<impl Display + use<>, ArrowError> {
-    create_table(None, results, options, formatters)
+    create_table(None, results, options)
 }
 
 /// Create a visual representation of [`ArrayRef`]
@@ -258,22 +237,7 @@ pub fn pretty_format_columns_with_options(
     results: &[ArrayRef],
     options: &FormatOptions,
 ) -> Result<impl Display + use<>, ArrowError> {
-    create_column(col_name, results, options, None)
-}
-
-/// Create a visual representation of [`ArrayRef`] with formatting options and possibly custom
-/// [`ArrayFormatter`]s.
-///
-/// Returns an error if `formatters` has a different length as `results`.
-///
-/// See [`pretty_format_batches_with_options_and_formatters`] for an example
-pub fn pretty_format_columns_with_options_and_formatters(
-    col_name: &str,
-    results: &[ArrayRef],
-    options: &FormatOptions,
-    formatters: Option<&dyn ArrayFormatterFactory>,
-) -> Result<impl Display + use<>, ArrowError> {
-    create_column(col_name, results, options, formatters)
+    create_column(col_name, results, options)
 }
 
 /// Prints a visual representation of record batches to stdout
@@ -293,7 +257,6 @@ fn create_table(
     schema_opt: Option<SchemaRef>,
     results: &[RecordBatch],
     options: &FormatOptions,
-    formatters: Option<&dyn ArrayFormatterFactory>,
 ) -> Result<Table, ArrowError> {
     let mut table = Table::new();
     table.load_preset("||--+-++|    ++++++");
@@ -338,7 +301,7 @@ fn create_table(
             .columns()
             .iter()
             .zip(schema.fields().iter())
-            .map(|(c, field)| match formatters {
+            .map(|(c, field)| match options.formatter_factory() {
                 None => ArrayFormatter::try_new(c.as_ref(), options),
                 Some(formatters) => formatters
                     .create_display_index(c.as_ref(), options, Some(field))
@@ -363,7 +326,6 @@ fn create_column(
     field: &str,
     columns: &[ArrayRef],
     options: &FormatOptions,
-    formatters: Option<&dyn ArrayFormatterFactory>,
 ) -> Result<Table, ArrowError> {
     let mut table = Table::new();
     table.load_preset("||--+-++|    ++++++");
@@ -376,7 +338,7 @@ fn create_column(
     table.set_header(header);
 
     for col in columns {
-        let formatter = match formatters {
+        let formatter = match options.formatter_factory() {
             None => ArrayFormatter::try_new(col.as_ref(), options)?,
             Some(formatters) => formatters
                 .create_display_index(col.as_ref(), options, None)
@@ -1431,6 +1393,7 @@ mod tests {
     //
 
     /// The factory that will create the [`ArrayFormatter`]s.
+    #[derive(Debug)]
     struct TestFormatters {}
 
     impl ArrayFormatterFactory for TestFormatters {
@@ -1498,7 +1461,9 @@ mod tests {
     #[test]
     fn test_format_batches_with_custom_formatters() {
         // define a schema.
-        let options = FormatOptions::new().with_null("<NULL>");
+        let options = FormatOptions::new()
+            .with_null("<NULL>")
+            .with_formatter_factory(&TestFormatters {});
         let money_metadata = HashMap::from([(
             extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
             "my_money".to_owned(),
@@ -1523,12 +1488,7 @@ mod tests {
         write!(
             &mut buf,
             "{}",
-            pretty_format_batches_with_options_and_formatters(
-                &[batch],
-                &options,
-                Some(&TestFormatters {})
-            )
-            .unwrap()
+            pretty_format_batches_with_options(&[batch], &options).unwrap()
         )
         .unwrap();
 
@@ -1549,7 +1509,7 @@ mod tests {
     #[test]
     fn test_format_batches_with_custom_formatters_custom_schema_overrules_batch_schema() {
         // define a schema.
-        let options = FormatOptions::new();
+        let options = FormatOptions::new().with_formatter_factory(&TestFormatters {});
         let money_metadata = HashMap::from([(
             extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
             "my_money".to_owned(),
@@ -1583,7 +1543,6 @@ mod tests {
                 ),]))),
                 &[batch],
                 &options,
-                Some(&TestFormatters {})
             )
             .unwrap()
         )
@@ -1618,11 +1577,10 @@ mod tests {
         write!(
             &mut buf,
             "{}",
-            pretty_format_columns_with_options_and_formatters(
+            pretty_format_columns_with_options(
                 "income",
                 &[array],
-                &FormatOptions::default(),
-                Some(&TestFormatters {})
+                &FormatOptions::default().with_formatter_factory(&TestFormatters {})
             )
             .unwrap()
         )

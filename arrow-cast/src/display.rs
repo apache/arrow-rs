@@ -24,8 +24,10 @@
 //!
 //! [`pretty`]: crate::pretty
 use std::fmt::{Display, Formatter, Write};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
+use crate::pretty::ArrayFormatterFactory;
 use arrow_array::cast::*;
 use arrow_array::temporal_conversions::*;
 use arrow_array::timezone::Tz;
@@ -53,7 +55,12 @@ pub enum DurationFormat {
 /// By default nulls are formatted as `""` and temporal types formatted
 /// according to RFC3339
 ///
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// # Equality
+///
+/// Most fields in [`FormatOptions`] are compared by value, except `formatter_factory`. As the trait
+/// does not require an [`Eq`] and [`Hash`] implementation, this struct only compares the pointer of
+/// the factories.
+#[derive(Debug, Clone)]
 pub struct FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
@@ -74,11 +81,52 @@ pub struct FormatOptions<'a> {
     duration_format: DurationFormat,
     /// Show types in visual representation batches
     types_info: bool,
+    /// Formatter factory used to instantiate custom [`ArrayFormatter`]s. This allows users to
+    /// provide custom formatters.
+    #[cfg(feature = "prettyprint")]
+    formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
 }
 
 impl Default for FormatOptions<'_> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl PartialEq for FormatOptions<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.safe == other.safe
+            && self.null == other.null
+            && self.date_format == other.date_format
+            && self.datetime_format == other.datetime_format
+            && self.timestamp_format == other.timestamp_format
+            && self.timestamp_tz_format == other.timestamp_tz_format
+            && self.time_format == other.time_format
+            && self.duration_format == other.duration_format
+            && match (self.formatter_factory, other.formatter_factory) {
+                (Some(f1), Some(f2)) => std::ptr::eq(f1, f2),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for FormatOptions<'_> {}
+
+impl Hash for FormatOptions<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.safe.hash(state);
+        self.null.hash(state);
+        self.date_format.hash(state);
+        self.datetime_format.hash(state);
+        self.timestamp_format.hash(state);
+        self.timestamp_tz_format.hash(state);
+        self.time_format.hash(state);
+        self.duration_format.hash(state);
+        self.types_info.hash(state);
+        self.formatter_factory
+            .map(|f| f as *const dyn ArrayFormatterFactory)
+            .hash(state);
     }
 }
 
@@ -95,6 +143,7 @@ impl<'a> FormatOptions<'a> {
             time_format: None,
             duration_format: DurationFormat::ISO8601,
             types_info: false,
+            formatter_factory: None,
         }
     }
 
@@ -169,6 +218,26 @@ impl<'a> FormatOptions<'a> {
         Self { types_info, ..self }
     }
 
+    /// Overrides the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
+    pub const fn with_formatter_factory(
+        self,
+        formatter_factory: &'a dyn ArrayFormatterFactory,
+    ) -> Self {
+        Self {
+            formatter_factory: Some(formatter_factory),
+            ..self
+        }
+    }
+
+    /// Removes the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s. This
+    /// will cause pretty-printers to use the default [`ArrayFormatter`]s.
+    pub const fn without_formatter_factory(self) -> Self {
+        Self {
+            formatter_factory: None,
+            ..self
+        }
+    }
+
     /// Returns whether formatting errors should be written to the output instead of being converted
     /// into a [`std::fmt::Error`].
     pub const fn safe(&self) -> bool {
@@ -180,32 +249,32 @@ impl<'a> FormatOptions<'a> {
         self.null
     }
 
-    /// Returns the [`TimeFormat`] for date arrays.
+    /// Returns the format used for [`DataType::Date32`] columns.
     pub const fn date_format(&self) -> TimeFormat<'a> {
         self.date_format
     }
 
-    /// Returns the [`TimeFormat`] for datetime arrays.
+    /// Returns the format used for [`DataType::Date64`] columns.
     pub const fn datetime_format(&self) -> TimeFormat<'a> {
         self.datetime_format
     }
 
-    /// Returns the [`TimeFormat`] for timestamp arrays.
+    /// Returns the format used for [`DataType::Timestamp`] columns without a timezone.
     pub const fn timestamp_format(&self) -> TimeFormat<'a> {
         self.timestamp_format
     }
 
-    /// Returns the [`TimeFormat`] for timezone arrays.
+    /// Returns the format used for [`DataType::Timestamp`] columns with a timezone.
     pub const fn timestamp_tz_format(&self) -> TimeFormat<'a> {
         self.timestamp_tz_format
     }
 
-    /// Returns the [`TimeFormat`] for time arrays.
+    /// Returns the format used for [`DataType::Time32`] and [`DataType::Time64`] columns.
     pub const fn time_format(&self) -> TimeFormat<'a> {
         self.time_format
     }
 
-    /// Returns the [`DurationFormat`].
+    /// Returns the [`DurationFormat`] used for duration columns.
     pub const fn duration_format(&self) -> DurationFormat {
         self.duration_format
     }
@@ -213,6 +282,11 @@ impl<'a> FormatOptions<'a> {
     /// Returns true if type info should be included in a visual representation of batches.
     pub const fn types_info(&self) -> bool {
         self.types_info
+    }
+
+    /// Returns the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
+    pub const fn formatter_factory(&self) -> Option<&'a dyn ArrayFormatterFactory> {
+        self.formatter_factory
     }
 }
 
