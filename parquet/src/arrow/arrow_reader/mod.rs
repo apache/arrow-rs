@@ -1407,8 +1407,9 @@ pub(crate) mod tests {
     use tempfile::tempfile;
 
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
+        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+        RowSelectionPolicy, RowSelector,
     };
     use crate::arrow::schema::{add_encoded_arrow_schema_to_metadata, virtual_type::RowNumber};
     use crate::arrow::{ArrowWriter, ProjectionMask};
