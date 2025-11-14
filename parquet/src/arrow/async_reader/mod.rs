@@ -489,6 +489,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection,
             filter,
             selection,
+            row_selection_policy: selection_strategy,
             limit,
             offset,
             metrics,
@@ -510,6 +511,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection,
             filter,
             selection,
+            row_selection_policy: selection_strategy,
             batch_size,
             row_groups,
             limit,
@@ -764,6 +766,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::RowSelectionPolicy;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
@@ -772,15 +775,17 @@ mod tests {
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
+    use arrow::compute::or;
     use arrow::error::Result as ArrowResult;
     use arrow_array::builder::{ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Int8Array, Int32Array, RecordBatchReader, Scalar, StringArray,
+        Array, ArrayRef, Int8Array, Int32Array, Int64Array, RecordBatchReader, Scalar, StringArray,
         StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
+    use arrow_select::concat::concat_batches;
     use futures::{StreamExt, TryStreamExt};
     use rand::{Rng, rng};
     use std::collections::HashMap;
@@ -1204,6 +1209,82 @@ mod tests {
         let actual_rows: usize = async_batches.into_iter().map(|b| b.num_rows()).sum();
 
         assert_eq!(actual_rows, expected_rows);
+    }
+
+    #[tokio::test]
+    async fn test_row_filter_full_page_skip_is_handled_async() {
+        let first_value: i64 = 1111;
+        let last_value: i64 = 9999;
+        let num_rows: usize = 12;
+
+        // build data with row selection average length 4
+        // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
+        // The Row Selection would be [1111, (skip 10), 9999]
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+
+        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
+        int_values[0] = first_value;
+        int_values[num_rows - 1] = last_value;
+        let keys = Int64Array::from(int_values.clone());
+        let values = Int64Array::from(int_values.clone());
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(2)
+            .set_data_page_row_count_limit(2)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buffer);
+
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index(true),
+        )
+        .await
+        .unwrap();
+        let schema = builder.parquet_schema().clone();
+        let filter_mask = ProjectionMask::leaves(&schema, [0]);
+
+        let make_predicate = |mask: ProjectionMask| {
+            ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
+                let column = batch.column(0);
+                let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
+                let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
+                or(&match_first, &match_second)
+            })
+        };
+
+        let predicate = make_predicate(filter_mask.clone());
+
+        // The batch size is set to 12 to read all rows in one go after filtering
+        // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
+        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index(true),
+        )
+        .await
+        .unwrap()
+        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+        .with_batch_size(12)
+        .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+        .build()
+        .unwrap();
+
+        let schema = stream.schema().clone();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        let result = concat_batches(&schema, &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
     }
 
     #[tokio::test]
