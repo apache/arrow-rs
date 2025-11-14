@@ -581,7 +581,6 @@ impl MutableBuffer {
             buffer.push(packed)
         }
 
-        buffer.truncate(bit_util::ceil(len, 8));
         buffer.into()
     }
 
