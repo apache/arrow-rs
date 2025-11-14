@@ -575,7 +575,11 @@ impl ArrowReaderOptions {
         self
     }
 
-    /// Provide a list of column indices for which to decode `encoding_stats`.
+    /// Provide a list of column indices for which to decode the [`encoding_stats`] field of the
+    /// Parquet `ColumnMetaData`.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn with_keep_encoding_stats(mut self, keep: &[usize]) -> Self {
         self.metadata_options.set_keep_encoding_stats(keep);
         self
