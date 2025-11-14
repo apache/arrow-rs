@@ -390,7 +390,7 @@ fn take_bits(v: &dyn AnyDictionaryArray, buffer: BooleanBuffer) -> BooleanBuffer
 
 /// Invokes `f` with values `0..len` collecting the boolean results into a new `BooleanBuffer`
 ///
-/// This is similar to [`MutableBuffer::collect_bool`] but with
+/// This is similar to [`arrow_buffer::MutableBuffer::collect_bool`] but with
 /// the option to efficiently negate the result
 fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuffer {
     let mut buffer = Vec::with_capacity(ceil(len, 64));
