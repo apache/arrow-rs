@@ -30,7 +30,7 @@ use arrow_array::{
     GenericByteArray, GenericByteViewArray, downcast_primitive_array,
 };
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -393,11 +393,11 @@ fn take_bits(v: &dyn AnyDictionaryArray, buffer: BooleanBuffer) -> BooleanBuffer
 /// This is similar to [`MutableBuffer::collect_bool`] but with
 /// the option to efficiently negate the result
 fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuffer {
-    let mut buffer = MutableBuffer::new(ceil(len, 64) * 8);
+    let mut buffer = Vec::with_capacity(ceil(len, 64) * 8);
 
     let chunks = len / 64;
     let remainder = len % 64;
-    for chunk in 0..chunks {
+    buffer.extend((0..chunks).map(|chunk| {
         let mut packed = 0;
         for bit_idx in 0..64 {
             let i = bit_idx + chunk * 64;
@@ -407,9 +407,8 @@ fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuff
             packed = !packed
         }
 
-        // SAFETY: Already allocated sufficient capacity
-        unsafe { buffer.push_unchecked(packed) }
-    }
+        packed
+    }));
 
     if remainder != 0 {
         let mut packed = 0;
@@ -421,8 +420,7 @@ fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuff
             packed = !packed
         }
 
-        // SAFETY: Already allocated sufficient capacity
-        unsafe { buffer.push_unchecked(packed) }
+        buffer.push(packed);
     }
     BooleanBuffer::new(buffer.into(), 0, len)
 }
