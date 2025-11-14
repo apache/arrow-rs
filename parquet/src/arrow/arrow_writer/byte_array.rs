@@ -30,7 +30,7 @@ use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
 use arrow_array::{
     Array, ArrayAccessor, BinaryArray, BinaryViewArray, DictionaryArray, FixedSizeBinaryArray,
-    LargeBinaryArray, LargeStringArray, StringArray, StringViewArray,
+    LargeBinaryArray, LargeStringArray, RunArray, StringArray, StringViewArray,
 };
 use arrow_schema::DataType;
 
@@ -56,6 +56,28 @@ macro_rules! downcast_dict_op {
             DataType::Int16 => downcast_dict_impl!($array, Int16Type, $val, $op$(, $arg)*),
             DataType::Int32 => downcast_dict_impl!($array, Int32Type, $val, $op$(, $arg)*),
             DataType::Int64 => downcast_dict_impl!($array, Int64Type, $val, $op$(, $arg)*),
+            _ => unreachable!(),
+        }
+    };
+}
+
+macro_rules! downcast_ree_impl {
+    ($array:ident, $key:ident, $val:ident, $op:expr $(, $arg:expr)*) => {{
+        $op($array
+            .as_any()
+            .downcast_ref::<RunArray<arrow_array::types::$key>>()
+            .unwrap()
+            .downcast::<$val>()
+            .unwrap()$(, $arg)*)
+    }};
+}
+
+macro_rules! downcast_ree_op {
+    ($run_end_field:expr, $val:ident, $array:ident, $op:expr $(, $arg:expr)*) => {
+        match $run_end_field.data_type() {
+            DataType::Int16 => downcast_ree_impl!($array, Int16Type, $val, $op$(, $arg)*),
+            DataType::Int32 => downcast_ree_impl!($array, Int32Type, $val, $op$(, $arg)*),
+            DataType::Int64 => downcast_ree_impl!($array, Int64Type, $val, $op$(, $arg)*),
             _ => unreachable!(),
         }
     };
@@ -91,6 +113,20 @@ macro_rules! downcast_op {
                     downcast_dict_op!(key, FixedSizeBinaryArray, $array, $op$(, $arg)*)
                 }
                 d => unreachable!("cannot downcast {} dictionary value to byte array", d),
+            },
+            DataType::RunEndEncoded(run_end, value) => match value.data_type() {
+                DataType::Utf8 => downcast_ree_op!(run_end, StringArray, $array, $op$(, $arg)*),
+                DataType::LargeUtf8 => {
+                    downcast_ree_op!(run_end, LargeStringArray, $array, $op$(, $arg)*)
+                }
+                DataType::Binary => downcast_ree_op!(run_end, BinaryArray, $array, $op$(, $arg)*),
+                DataType::LargeBinary => {
+                    downcast_ree_op!(run_end, LargeBinaryArray, $array, $op$(, $arg)*)
+                }
+                DataType::FixedSizeBinary(_) => {
+                    downcast_ree_op!(run_end, FixedSizeBinaryArray, $array, $op$(, $arg)*)
+                }
+                d => unreachable!("cannot downcast {} run end encoded value to byte array", d),
             },
             d => unreachable!("cannot downcast {} to byte array", d),
         }
