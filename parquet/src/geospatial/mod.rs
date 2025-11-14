@@ -62,6 +62,7 @@ mod tests {
 
     use crate::{
         arrow::{ArrowWriter, arrow_reader::ArrowReaderBuilder},
+        basic::EdgeInterpolationAlgorithm,
         file::{
             metadata::{ParquetMetaData, ParquetMetaDataReader},
             reader::ChunkReader,
@@ -78,7 +79,7 @@ mod tests {
         let geom_column = batch
             .column_by_name("geometry")
             .expect("expected geometry column");
-        let wkb_array = WkbArray::try_new(geom_column, wkb_type.metadata().clone())
+        let wkb_array = WkbArray::try_new_geometry(geom_column, wkb_type.metadata().clone())
             .expect("expected geometry column to be a WkbArray");
 
         // verify the value
@@ -98,8 +99,8 @@ mod tests {
         let geom_column = batch
             .column_by_name("geography")
             .expect("expected geography column");
-        let wkb_array = WkbArray::try_new(geom_column, wkb_type.metadata().clone())
-            .expect("expected geometry column to be a WkbArray");
+        let wkb_array = WkbArray::try_new_geography(geom_column, wkb_type.metadata().clone())
+            .expect("expected geography column to be a WkbArray");
 
         // verify the value
         assert_eq!(wkb_array.len(), 1);
@@ -108,11 +109,11 @@ mod tests {
         assert_eq!(wkb_value.len(), 3549);
     }
 
-    /// Writes a wkb array to a parquet file and ensures the parquet logical type
+    /// Writes a wkb (geometry) array to a parquet file and ensures the parquet logical type
     /// annotation is correct
     #[test]
     fn write_geometry_logical_type() {
-        let (array, md) = geometry_array();
+        let array = geometry_array();
         let batch = wkb_array_to_batch(array);
         let buffer = write_to_buffer(&batch);
 
@@ -127,21 +128,52 @@ mod tests {
         assert_eq!(
             field.get_basic_info().logical_type(),
             Some(crate::basic::LogicalType::Geometry {
-                crs: Some(serde_json::to_string(&md).unwrap())
+                crs: Some(String::from("test crs"))
+            })
+        );
+    }
+
+    /// Writes a wkb (geography) array to a parquet file and ensures the parquet logical type
+    /// annotation is correct
+    #[test]
+    fn write_geography_logical_type() {
+        let array = geography_array();
+        let batch = wkb_array_to_batch(array);
+        let buffer = write_to_buffer(&batch);
+
+        // read the parquet file's metadata and verify the logical type
+        let metadata = read_metadata(&Bytes::from(buffer));
+        let schema = metadata.file_metadata().schema_descr();
+        let fields = schema.root_schema().get_fields();
+        assert_eq!(fields.len(), 1);
+        let field = &fields[0];
+        assert_eq!(field.name(), "data");
+        // data should have been written with the Variant logical type
+        assert_eq!(
+            field.get_basic_info().logical_type(),
+            Some(crate::basic::LogicalType::Geography {
+                crs: Some(String::from("test crs")),
+                algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
             })
         );
     }
 
     /// Return a WkbArray with 3 rows:
-    fn geometry_array() -> (WkbArray, WkbMetadata) {
+    fn geometry_array() -> WkbArray {
         let values: Vec<&[u8]> = vec![b"not", b"actually", b"wkb"];
         let inner = BinaryArray::from_vec(values);
-        let md = WkbMetadata {
-            crs: Some(String::from("test crs")),
-            algorithm: None,
-        };
+        let md = WkbMetadata::new(Some(String::from("test crs")), None);
 
-        (WkbArray::try_new(&inner, Some(md.clone())).unwrap(), md)
+        WkbArray::try_new_geometry(&inner, md.clone()).unwrap()
+    }
+
+    /// Return a WkbArray with 3 rows:
+    fn geography_array() -> WkbArray {
+        let values: Vec<&[u8]> = vec![b"not", b"actually", b"wkb"];
+        let inner = BinaryArray::from_vec(values);
+        let md = WkbMetadata::new(Some(String::from("test crs")), None);
+
+        WkbArray::try_new_geography(&inner, md.clone()).unwrap()
     }
 
     /// creates a RecordBatch with a single column "data" from a WkbArray,

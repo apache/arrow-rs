@@ -77,13 +77,13 @@ pub(crate) fn parquet_to_arrow_schema_and_fields(
     key_value_metadata: Option<&Vec<KeyValue>>,
 ) -> Result<(Schema, Option<ParquetField>)> {
     let mut metadata = parse_key_value_metadata(key_value_metadata).unwrap_or_default();
-    let mut maybe_schema = metadata
+    let maybe_schema = metadata
         .remove(super::ARROW_SCHEMA_META_KEY)
         .map(|value| get_arrow_schema_from_metadata(&value))
         .transpose()?;
 
     // Add the Arrow metadata to the Parquet metadata skipping keys that collide
-    if let Some(arrow_schema) = maybe_schema.as_mut() {
+    if let Some(arrow_schema) = &maybe_schema {
         arrow_schema.metadata().iter().for_each(|(k, v)| {
             metadata.entry(k.clone()).or_insert_with(|| v.clone());
         });

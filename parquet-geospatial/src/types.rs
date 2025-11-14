@@ -7,13 +7,10 @@ use arrow_schema::Field;
 use arrow_schema::{ArrowError, DataType, extension::ExtensionType};
 use serde::{Deserialize, Serialize};
 
-#[derive(Default)]
-pub struct WkbType(Option<Metadata>);
-
-impl WkbType {
-    pub fn new(metadata: Option<Metadata>) -> Self {
-        Self(metadata)
-    }
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+pub enum Hint {
+    Geometry,
+    Geography,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -22,23 +19,73 @@ pub struct Metadata {
     pub crs: Option<String>, // TODO: explore when this is valid JSON to avoid double escaping
     #[serde(skip_serializing_if = "Option::is_none")]
     pub algorithm: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    type_hint: Option<Hint>,
+}
+
+impl Metadata {
+    pub fn new(crs: Option<String>, algorithm: Option<String>) -> Self {
+        Self {
+            crs,
+            algorithm,
+            type_hint: None,
+        }
+    }
+
+    pub fn with_type_hint(mut self, type_hint: Hint) -> Self {
+        self.type_hint = Some(type_hint);
+        self
+    }
+
+    pub fn set_type_hint(&mut self, type_hint: Hint) {
+        self.type_hint = Some(type_hint)
+    }
+
+    pub fn type_hint(&self) -> Option<Hint> {
+        if self.type_hint.is_some() {
+            return self.type_hint;
+        }
+
+        match &self.algorithm {
+            Some(s) if s.to_lowercase() == "planar" => Some(Hint::Geometry),
+            Some(_) => Some(Hint::Geography),
+            None => None,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct WkbType(Metadata);
+
+impl WkbType {
+    pub fn new_geometry(metadata: Option<Metadata>) -> Self {
+        Self(metadata.unwrap_or_default().with_type_hint(Hint::Geometry))
+    }
+
+    pub fn new_geography(metadata: Option<Metadata>) -> Self {
+        Self(metadata.unwrap_or_default().with_type_hint(Hint::Geography))
+    }
 }
 
 impl ExtensionType for WkbType {
     const NAME: &'static str = "geoarrow.wkb";
 
-    type Metadata = Option<Metadata>;
+    type Metadata = Metadata;
 
     fn metadata(&self) -> &Self::Metadata {
         &self.0
     }
 
     fn serialize_metadata(&self) -> Option<String> {
-        self.0.clone().map(|md| serde_json::to_string(&md).unwrap())
+        serde_json::to_string(&self.0).ok()
     }
 
     fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata> {
-        Ok(metadata.map(|md| serde_json::from_str(md).unwrap()))
+        let Some(metadata) = metadata else {
+            return Ok(Self::Metadata::default());
+        };
+
+        serde_json::from_str(metadata).map_err(|e| ArrowError::JsonError(e.to_string()))
     }
 
     fn supports_data_type(&self, data_type: &arrow_schema::DataType) -> Result<()> {
@@ -57,15 +104,24 @@ impl ExtensionType for WkbType {
     }
 }
 
+#[derive(Debug)]
 pub struct WkbArray {
     inner: ArrayRef,
-    metadata: Option<Metadata>,
+    metadata: Metadata,
 }
 
 impl WkbArray {
-    pub fn try_new(inner: &dyn Array, metadata: Option<Metadata>) -> Result<Self> {
-        // TODO: validate the input array is one of our expected binary types
+    pub fn try_new_geometry(inner: &dyn Array, metadata: Metadata) -> Result<Self> {
         let inner = make_array(inner.to_data());
+        let metadata = metadata.with_type_hint(Hint::Geometry);
+
+        Ok(Self { inner, metadata })
+    }
+
+    pub fn try_new_geography(inner: &dyn Array, metadata: Metadata) -> Result<Self> {
+        let inner = make_array(inner.to_data());
+        let metadata = metadata.with_type_hint(Hint::Geography);
+
         Ok(Self { inner, metadata })
     }
 
@@ -80,7 +136,7 @@ impl WkbArray {
     }
 
     /// Returns a reference to the [`Metadata`] associated with this [`WkbArray`]
-    pub fn metadata(&self) -> &Option<Metadata> {
+    pub fn metadata(&self) -> &Metadata {
         &self.metadata
     }
 

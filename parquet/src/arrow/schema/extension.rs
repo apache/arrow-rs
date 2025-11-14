@@ -57,23 +57,22 @@ pub(crate) fn try_add_extension_type(
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geometry { crs } => {
-            let md = crs.map(|c| parquet_geospatial::WkbMetadata {
-                crs: Some(c),
-                algorithm: None,
-            });
-            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(md))?;
+            use parquet_geospatial::WkbTypeHint;
+
+            let md = parquet_geospatial::WkbMetadata::new(crs, None)
+                .with_type_hint(WkbTypeHint::Geometry);
+            arrow_field
+                .try_with_extension_type(parquet_geospatial::WkbType::new_geometry(Some(md)))?;
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geography { crs, algorithm } => {
-            let md = if crs.is_some() || algorithm.is_some() {
-                Some(parquet_geospatial::WkbMetadata {
-                    crs,
-                    algorithm: algorithm.map(|a| a.to_string()),
-                })
-            } else {
-                None
-            };
-            arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(md))?;
+            use parquet_geospatial::WkbTypeHint;
+
+            let algorithm = algorithm.map(|a| a.to_string());
+            let md = parquet_geospatial::WkbMetadata::new(crs, algorithm)
+                .with_type_hint(WkbTypeHint::Geography);
+            arrow_field
+                .try_with_extension_type(parquet_geospatial::WkbType::new_geography(Some(md)))?;
         }
         _ => {}
     };
@@ -161,13 +160,24 @@ pub(crate) fn logical_type_for_string(_field: &Field) -> Option<LogicalType> {
 #[cfg(feature = "geospatial")]
 pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
     use parquet_geospatial::WkbType;
+    use parquet_geospatial::WkbTypeHint;
 
     match field.extension_type_name() {
         Some(n) if n == WkbType::NAME => match field.try_extension_type::<WkbType>() {
-            // TODO: detect and differentiate between Geometry and Geography
-            Ok(wkb_type) => Some(LogicalType::Geometry {
-                crs: wkb_type.serialize_metadata(),
-            }),
+            Ok(wkb_type) => match wkb_type.metadata().type_hint() {
+                Some(WkbTypeHint::Geometry) => Some(LogicalType::Geometry {
+                    crs: wkb_type.metadata().crs.clone(),
+                }),
+                Some(WkbTypeHint::Geography) => Some(LogicalType::Geography {
+                    crs: wkb_type.metadata().crs.clone(),
+                    algorithm: wkb_type
+                        .metadata()
+                        .algorithm
+                        .clone()
+                        .and_then(|a| a.parse().ok()),
+                }),
+                _ => None,
+            },
             Err(_e) => None,
         },
         _ => None,
