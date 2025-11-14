@@ -23,7 +23,8 @@
 //! record batch pretty printing.
 //!
 //! [`pretty`]: crate::pretty
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Debug, Display, Formatter, Write};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use arrow_array::cast::*;
@@ -53,7 +54,12 @@ pub enum DurationFormat {
 /// By default nulls are formatted as `""` and temporal types formatted
 /// according to RFC3339
 ///
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// # Equality
+///
+/// Most fields in [`FormatOptions`] are compared by value, except `formatter_factory`. As the trait
+/// does not require an [`Eq`] and [`Hash`] implementation, this struct only compares the pointer of
+/// the factories.
+#[derive(Debug, Clone)]
 pub struct FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
@@ -74,11 +80,52 @@ pub struct FormatOptions<'a> {
     duration_format: DurationFormat,
     /// Show types in visual representation batches
     types_info: bool,
+    /// Formatter factory used to instantiate custom [`ArrayFormatter`]s. This allows users to
+    /// provide custom formatters.
+    formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
 }
 
 impl Default for FormatOptions<'_> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl PartialEq for FormatOptions<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.safe == other.safe
+            && self.null == other.null
+            && self.date_format == other.date_format
+            && self.datetime_format == other.datetime_format
+            && self.timestamp_format == other.timestamp_format
+            && self.timestamp_tz_format == other.timestamp_tz_format
+            && self.time_format == other.time_format
+            && self.duration_format == other.duration_format
+            && self.types_info == other.types_info
+            && match (self.formatter_factory, other.formatter_factory) {
+                (Some(f1), Some(f2)) => std::ptr::eq(f1, f2),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for FormatOptions<'_> {}
+
+impl Hash for FormatOptions<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.safe.hash(state);
+        self.null.hash(state);
+        self.date_format.hash(state);
+        self.datetime_format.hash(state);
+        self.timestamp_format.hash(state);
+        self.timestamp_tz_format.hash(state);
+        self.time_format.hash(state);
+        self.duration_format.hash(state);
+        self.types_info.hash(state);
+        self.formatter_factory
+            .map(|f| f as *const dyn ArrayFormatterFactory)
+            .hash(state);
     }
 }
 
@@ -95,6 +142,7 @@ impl<'a> FormatOptions<'a> {
             time_format: None,
             duration_format: DurationFormat::ISO8601,
             types_info: false,
+            formatter_factory: None,
         }
     }
 
@@ -169,10 +217,161 @@ impl<'a> FormatOptions<'a> {
         Self { types_info, ..self }
     }
 
-    /// Returns true if type info should be included in visual representation of batches
+    /// Overrides the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
+    pub const fn with_formatter_factory(
+        self,
+        formatter_factory: &'a dyn ArrayFormatterFactory,
+    ) -> Self {
+        Self {
+            formatter_factory: Some(formatter_factory),
+            ..self
+        }
+    }
+
+    /// Removes the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s. This
+    /// will cause pretty-printers to use the default [`ArrayFormatter`]s.
+    pub const fn without_formatter_factory(self) -> Self {
+        Self {
+            formatter_factory: None,
+            ..self
+        }
+    }
+
+    /// Returns whether formatting errors should be written to the output instead of being converted
+    /// into a [`std::fmt::Error`].
+    pub const fn safe(&self) -> bool {
+        self.safe
+    }
+
+    /// Returns the string used for displaying nulls.
+    pub const fn null(&self) -> &'a str {
+        self.null
+    }
+
+    /// Returns the format used for [`DataType::Date32`] columns.
+    pub const fn date_format(&self) -> TimeFormat<'a> {
+        self.date_format
+    }
+
+    /// Returns the format used for [`DataType::Date64`] columns.
+    pub const fn datetime_format(&self) -> TimeFormat<'a> {
+        self.datetime_format
+    }
+
+    /// Returns the format used for [`DataType::Timestamp`] columns without a timezone.
+    pub const fn timestamp_format(&self) -> TimeFormat<'a> {
+        self.timestamp_format
+    }
+
+    /// Returns the format used for [`DataType::Timestamp`] columns with a timezone.
+    pub const fn timestamp_tz_format(&self) -> TimeFormat<'a> {
+        self.timestamp_tz_format
+    }
+
+    /// Returns the format used for [`DataType::Time32`] and [`DataType::Time64`] columns.
+    pub const fn time_format(&self) -> TimeFormat<'a> {
+        self.time_format
+    }
+
+    /// Returns the [`DurationFormat`] used for duration columns.
+    pub const fn duration_format(&self) -> DurationFormat {
+        self.duration_format
+    }
+
+    /// Returns true if type info should be included in a visual representation of batches.
     pub const fn types_info(&self) -> bool {
         self.types_info
     }
+
+    /// Returns the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
+    pub const fn formatter_factory(&self) -> Option<&'a dyn ArrayFormatterFactory> {
+        self.formatter_factory
+    }
+}
+
+/// Allows creating a new [`ArrayFormatter`] for a given [`Array`] and an optional [`Field`].
+///
+/// # Example
+///
+/// The example below shows how to create a custom formatter for a custom type `my_money`. Note that
+/// this example requires the `prettyprint` feature.
+///
+/// ```rust
+/// use std::fmt::Write;
+/// use arrow_array::{cast::AsArray, Array, Int32Array};
+/// use arrow_cast::display::{ArrayFormatter, ArrayFormatterFactory, DisplayIndex, FormatOptions, FormatResult};
+/// use arrow_cast::pretty::pretty_format_batches_with_options;
+/// use arrow_schema::{ArrowError, Field};
+///
+/// /// A custom formatter factory that can create a formatter for the special type `my_money`.
+/// ///
+/// /// This struct could have access to some kind of extension type registry that can lookup the
+/// /// correct formatter for an extension type on-demand.
+/// #[derive(Debug)]
+/// struct MyFormatters {}
+///
+/// impl ArrayFormatterFactory for MyFormatters {
+///     fn create_display_index<'formatter>(
+///         &self,
+///         array: &'formatter dyn Array,
+///         options: &'formatter FormatOptions<'formatter>,
+///         field: Option<&'formatter Field>,
+///     ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError> {
+///         // check if this is the money type
+///         if field
+///             .map(|f| f.extension_type_name() == Some("my_money"))
+///             .unwrap_or(false)
+///         {
+///             // We assume that my_money always is an Int32.
+///             let array = array.as_primitive();
+///             let display_index = Box::new(MyMoneyFormatter { array, options });
+///             return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
+///         }
+///
+///         Ok(None) // None indicates that the default formatter should be used.
+///     }
+/// }
+///
+/// /// A formatter for the type `my_money` that wraps a specific array and has access to the
+/// /// formatting options.
+/// struct MyMoneyFormatter<'a> {
+///     array: &'a Int32Array,
+///     options: &'a FormatOptions<'a>,
+/// }
+///
+/// impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
+///     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+///         match self.array.is_valid(idx) {
+///             true => write!(f, "{} €", self.array.value(idx))?,
+///             false => write!(f, "{}", self.options.null())?,
+///         }
+///
+///         Ok(())
+///     }
+/// }
+///
+/// // Usually, here you would provide your record batches.
+/// let my_batches = vec![];
+///
+/// // Call the pretty printer with the custom formatter factory.
+/// pretty_format_batches_with_options(
+///        &my_batches,
+///        &FormatOptions::new().with_formatter_factory(&MyFormatters {})
+/// );
+/// ```
+pub trait ArrayFormatterFactory: Debug {
+    /// Creates a new [`ArrayFormatter`] for the given [`Array`] and an optional [`Field`]. If the
+    /// default implementation should be used, return [`None`].
+    ///
+    /// The field shall be used to look up metadata about the `array` while `options` provide
+    /// information on formatting, for example, dates and times which should be considered by an
+    /// implementor.
+    fn create_display_index<'formatter>(
+        &self,
+        array: &'formatter dyn Array,
+        options: &'formatter FormatOptions<'formatter>,
+        field: Option<&'formatter Field>,
+    ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError>;
 }
 
 /// Implements [`Display`] for a specific array value
@@ -272,14 +471,16 @@ pub struct ArrayFormatter<'a> {
 }
 
 impl<'a> ArrayFormatter<'a> {
+    /// Returns an [`ArrayFormatter`] using the provided formatter.
+    pub fn new(format: Box<dyn DisplayIndex + 'a>, safe: bool) -> Self {
+        Self { format, safe }
+    }
+
     /// Returns an [`ArrayFormatter`] that can be used to format `array`
     ///
     /// This returns an error if an array of the given data type cannot be formatted
     pub fn try_new(array: &'a dyn Array, options: &FormatOptions<'a>) -> Result<Self, ArrowError> {
-        Ok(Self {
-            format: make_formatter(array, options)?,
-            safe: options.safe,
-        })
+        Ok(Self::new(make_formatter(array, options)?, options.safe))
     }
 
     /// Returns a [`ValueFormatter`] that implements [`Display`] for
@@ -332,12 +533,15 @@ fn make_formatter<'a>(
 }
 
 /// Either an [`ArrowError`] or [`std::fmt::Error`]
-enum FormatError {
+pub enum FormatError {
+    /// An error occurred while formatting the array
     Format(std::fmt::Error),
+    /// An Arrow error occurred while formatting the array.
     Arrow(ArrowError),
 }
 
-type FormatResult = Result<(), FormatError>;
+/// The result of formatting an array element via [`DisplayIndex::write`].
+pub type FormatResult = Result<(), FormatError>;
 
 impl From<std::fmt::Error> for FormatError {
     fn from(value: std::fmt::Error) -> Self {
@@ -352,7 +556,8 @@ impl From<ArrowError> for FormatError {
 }
 
 /// [`Display`] but accepting an index
-trait DisplayIndex {
+pub trait DisplayIndex {
+    /// Write the value of the underlying array at `idx` to `f`.
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult;
 }
 
