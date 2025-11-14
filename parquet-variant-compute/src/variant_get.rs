@@ -1039,6 +1039,29 @@ mod test {
         arrow::array::NullArray::new(3)
     );
 
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_null_variant_array_with_int, || {
+        Int32Array::from(vec![Some(32), Some(64), Some(48)])
+    });
+
+    #[test]
+    fn get_variant_perfectly_shredded_null_as_null_with_type_missmatch() {
+        let array = perfectly_shredded_null_variant_array_with_int();
+        let field = Field::new("typed_value", DataType::Null, true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+
+        let result = variant_get(&array, options);
+
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        assert!(
+            error_msg
+                .contains("Failed to extract Null from variant Int32(32) at path VariantPath([])"),
+            "Expected=[Failed to extract Null from variant Int32(32) at path VariantPath([])],\
+                Got error message=[{}]",
+            error_msg
+        );
+    }
+
     perfectly_shredded_variant_array_fn!(perfectly_shredded_decimal4_variant_array, || {
         Decimal32Array::from(vec![Some(12345), Some(23400), Some(-12342)])
             .with_precision_and_scale(5, 2)
