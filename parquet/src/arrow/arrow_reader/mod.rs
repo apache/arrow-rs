@@ -19,7 +19,7 @@
 
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, RecordBatch, RecordBatchReader};
-use arrow_schema::{ArrowError, DataType as ArrowType, Schema, SchemaRef};
+use arrow_schema::{ArrowError, DataType as ArrowType, FieldRef, Schema, SchemaRef};
 use arrow_select::filter::filter_record_batch;
 pub use filter::{ArrowPredicate, ArrowPredicateFn, RowFilter};
 pub use selection::{RowSelection, RowSelectionCursor, RowSelectionPolicy, RowSelector};
@@ -28,8 +28,10 @@ use std::sync::Arc;
 
 pub use crate::arrow::array_reader::RowGroups;
 use crate::arrow::array_reader::{ArrayReader, ArrayReaderBuilder};
-use crate::arrow::schema::{ParquetField, parquet_to_arrow_schema_and_fields};
-use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels};
+use crate::arrow::schema::{
+    ParquetField, parquet_to_arrow_schema_and_fields, virtual_type::is_virtual_column,
+};
+use crate::arrow::{FieldLevels, ProjectionMask, parquet_to_arrow_field_levels_with_virtual};
 use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
@@ -40,6 +42,7 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
+    RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
@@ -426,6 +429,8 @@ pub struct ArrowReaderOptions {
     /// If encryption is enabled, the file decryption properties can be provided
     #[cfg(feature = "encryption")]
     pub(crate) file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+
+    virtual_columns: Vec<FieldRef>,
 }
 
 impl ArrowReaderOptions {
@@ -599,6 +604,73 @@ impl ArrowReaderOptions {
         }
     }
 
+    /// Include virtual columns in the output.
+    ///
+    /// Virtual columns are columns that are not part of the Parquet schema, but are added to the output by the reader such as row numbers.
+    ///
+    /// # Example
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::{ArrowWriter, RowNumber};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// # use tempfile::tempfile;
+    /// #
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// // Create a simple record batch with some data
+    /// let values = Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef;
+    /// let batch = RecordBatch::try_from_iter(vec![("value", values)])?;
+    ///
+    /// // Write the batch to a temporary parquet file
+    /// let file = tempfile()?;
+    /// let mut writer = ArrowWriter::try_new(
+    ///     file.try_clone()?,
+    ///     batch.schema(),
+    ///     None
+    /// )?;
+    /// writer.write(&batch)?;
+    /// writer.close()?;
+    ///
+    /// // Create a virtual column for row numbers
+    /// let row_number_field = Arc::new(Field::new("row_number", DataType::Int64, false)
+    ///     .with_extension_type(RowNumber));
+    ///
+    /// // Configure options with virtual columns
+    /// let options = ArrowReaderOptions::new()
+    ///     .with_virtual_columns(vec![row_number_field]);
+    ///
+    /// // Create a reader with the options
+    /// let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+    ///     file,
+    ///     options
+    /// )?
+    /// .build()?;
+    ///
+    /// // Read the batch - it will include both the original column and the virtual row_number column
+    /// let result_batch = reader.next().unwrap()?;
+    /// assert_eq!(result_batch.num_columns(), 2); // "value" + "row_number"
+    /// assert_eq!(result_batch.num_rows(), 3);
+    /// #
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn with_virtual_columns(self, virtual_columns: Vec<FieldRef>) -> Self {
+        // Validate that all fields are virtual columns
+        for field in &virtual_columns {
+            if !is_virtual_column(field) {
+                panic!(
+                    "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                    field.name()
+                );
+            }
+        }
+        Self {
+            virtual_columns,
+            ..self
+        }
+    }
+
     /// Retrieve the currently set page index behavior.
     ///
     /// This can be set via [`with_page_index`][Self::with_page_index].
@@ -678,7 +750,11 @@ impl ArrowReaderMetadata {
     /// of the settings in `options`. See [`Self::load`] to load metadata including the page index if needed.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
         match options.supplied_schema {
-            Some(supplied_schema) => Self::with_supplied_schema(metadata, supplied_schema.clone()),
+            Some(supplied_schema) => Self::with_supplied_schema(
+                metadata,
+                supplied_schema.clone(),
+                &options.virtual_columns,
+            ),
             None => {
                 let kv_metadata = match options.skip_arrow_metadata {
                     true => None,
@@ -689,6 +765,7 @@ impl ArrowReaderMetadata {
                     metadata.file_metadata().schema_descr(),
                     ProjectionMask::all(),
                     kv_metadata,
+                    &options.virtual_columns,
                 )?;
 
                 Ok(Self {
@@ -703,16 +780,18 @@ impl ArrowReaderMetadata {
     fn with_supplied_schema(
         metadata: Arc<ParquetMetaData>,
         supplied_schema: SchemaRef,
+        virtual_columns: &[FieldRef],
     ) -> Result<Self> {
         let parquet_schema = metadata.file_metadata().schema_descr();
-        let field_levels = parquet_to_arrow_field_levels(
+        let field_levels = parquet_to_arrow_field_levels_with_virtual(
             parquet_schema,
             ProjectionMask::all(),
             Some(supplied_schema.fields()),
+            virtual_columns,
         )?;
         let fields = field_levels.fields;
         let inferred_len = fields.len();
-        let supplied_len = supplied_schema.fields().len();
+        let supplied_len = supplied_schema.fields().len() + virtual_columns.len();
         // Ensure the supplied schema has the same number of columns as the parquet schema.
         // parquet_to_arrow_field_levels is expected to throw an error if the schemas have
         // different lengths, but we check here to be safe.
@@ -995,6 +1074,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 cache_projection.intersect(&projection);
 
                 let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                    .with_parquet_metadata(&reader.metadata)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
                 plan_builder = plan_builder.with_predicate(array_reader, predicate.as_mut())?;
@@ -1002,6 +1082,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
         }
 
         let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+            .with_parquet_metadata(&reader.metadata)
             .build_array_reader(fields.as_deref(), &projection)?;
 
         let read_plan = plan_builder
@@ -1039,6 +1120,18 @@ impl<T: ChunkReader + 'static> RowGroups for ReaderRowGroups<T> {
             metadata: self.metadata.clone(),
             row_groups: self.row_groups.clone().into_iter(),
         }))
+    }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(
+            self.row_groups
+                .iter()
+                .map(move |i| self.metadata.row_group(*i)),
+        )
+    }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        self.metadata.as_ref()
     }
 }
 
@@ -1296,6 +1389,7 @@ impl ParquetRecordBatchReader {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
         let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
+            .with_parquet_metadata(row_groups.metadata())
             .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 
         let read_plan = ReadPlanBuilder::new(batch_size)
@@ -1332,7 +1426,7 @@ impl ParquetRecordBatchReader {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cmp::min;
     use std::collections::{HashMap, VecDeque};
     use std::fmt::Formatter;
@@ -1341,11 +1435,16 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Arc;
 
+    use rand::rngs::StdRng;
+    use rand::{Rng, RngCore, SeedableRng, random, rng};
+    use tempfile::tempfile;
+
     use crate::arrow::arrow_reader::{
-        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
-        ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelectionPolicy, RowSelector,
+        ArrowPredicateFn, ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions,
+        ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
+        RowSelectionPolicy, RowSelector,
     };
-    use crate::arrow::schema::add_encoded_arrow_schema_to_metadata;
+    use crate::arrow::schema::{add_encoded_arrow_schema_to_metadata, virtual_type::RowNumber};
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
@@ -1379,8 +1478,6 @@ mod tests {
     use bytes::Bytes;
     use half::f16;
     use num_traits::PrimInt;
-    use rand::{Rng, RngCore, rng};
-    use tempfile::tempfile;
 
     #[test]
     fn test_arrow_reader_all_columns() {
@@ -3195,7 +3292,7 @@ mod tests {
                 assert_eq!(end - total_read, batch.num_rows());
 
                 let a = converter(&expected_data[total_read..end]);
-                let b = Arc::clone(batch.column(0));
+                let b = batch.column(0);
 
                 assert_eq!(a.data_type(), b.data_type());
                 assert_eq!(a.to_data(), b.to_data());
@@ -5454,5 +5551,259 @@ mod tests {
         let out = reader.next().unwrap().unwrap();
         assert_eq!(out.num_rows(), 3);
         assert_eq!(out.num_columns(), 2);
+    }
+
+    #[test]
+    fn test_read_row_numbers() {
+        let file = write_parquet_from_iter(vec![(
+            "value",
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        )]);
+        let supplied_fields = Fields::from(vec![Field::new("value", ArrowDataType::Int64, false)]);
+
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+
+        let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
+        let options = options.with_virtual_columns(vec![row_number_field.clone()]);
+        let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.try_clone().unwrap(),
+            options,
+        )
+        .expect("reader builder with schema")
+        .build()
+        .expect("reader with schema");
+
+        let batch = arrow_reader.next().unwrap().unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", ArrowDataType::Int64, false),
+            (*row_number_field).clone(),
+        ]));
+
+        assert_eq!(batch.schema(), schema);
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+        assert_eq!(
+            batch
+                .column(1)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    fn test_read_only_row_numbers() {
+        let file = write_parquet_from_iter(vec![(
+            "value",
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+        )]);
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+        let options =
+            ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()]);
+        let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+        let num_columns = metadata
+            .metadata
+            .file_metadata()
+            .schema_descr()
+            .num_columns();
+
+        let mut arrow_reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
+            .with_projection(ProjectionMask::none(num_columns))
+            .build()
+            .expect("reader with schema");
+
+        let batch = arrow_reader.next().unwrap().unwrap();
+        let schema = Arc::new(Schema::new(vec![row_number_field]));
+
+        assert_eq!(batch.schema(), schema);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 3);
+        assert_eq!(
+            batch
+                .column(0)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(1), Some(2)]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is not a virtual column")]
+    fn test_with_virtual_columns_rejects_non_virtual_fields() {
+        // Try to pass a regular field (not a virtual column) to with_virtual_columns
+        let regular_field = Arc::new(Field::new("regular_column", ArrowDataType::Int64, false));
+        let _options = ArrowReaderOptions::new().with_virtual_columns(vec![regular_field]);
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            false,
+            |path, selection, _row_filter, batch_size| {
+                let file = File::open(path).unwrap();
+                let row_number_field = Arc::new(
+                    Field::new("row_number", ArrowDataType::Int64, false)
+                        .with_extension_type(RowNumber),
+                );
+                let options =
+                    ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+                    .unwrap()
+                    .with_row_selection(selection)
+                    .with_batch_size(batch_size)
+                    .build()
+                    .expect("Could not create reader");
+                reader
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("Could not read")
+            },
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups_and_filter() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            true,
+            |path, selection, row_filter, batch_size| {
+                let file = File::open(path).unwrap();
+                let row_number_field = Arc::new(
+                    Field::new("row_number", ArrowDataType::Int64, false)
+                        .with_extension_type(RowNumber),
+                );
+                let options =
+                    ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
+                    .unwrap()
+                    .with_row_selection(selection)
+                    .with_batch_size(batch_size)
+                    .with_row_filter(row_filter.expect("No filter"))
+                    .build()
+                    .expect("Could not create reader");
+                reader
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("Could not read")
+            },
+        );
+    }
+
+    pub(crate) fn test_row_numbers_with_multiple_row_groups_helper<F>(
+        use_filter: bool,
+        test_case: F,
+    ) where
+        F: FnOnce(PathBuf, RowSelection, Option<RowFilter>, usize) -> Vec<RecordBatch>,
+    {
+        let seed: u64 = random();
+        println!("test_row_numbers_with_multiple_row_groups seed: {}", seed);
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        use tempfile::TempDir;
+        let tempdir = TempDir::new().expect("Could not create temp dir");
+
+        let (bytes, metadata) = generate_file_with_row_numbers(&mut rng);
+
+        let path = tempdir.path().join("test.parquet");
+        std::fs::write(&path, bytes).expect("Could not write file");
+
+        let mut case = vec![];
+        let mut remaining = metadata.file_metadata().num_rows();
+        while remaining > 0 {
+            let row_count = rng.random_range(1..=remaining);
+            remaining -= row_count;
+            case.push(RowSelector {
+                row_count: row_count as usize,
+                skip: rng.random_bool(0.5),
+            });
+        }
+
+        let filter = use_filter.then(|| {
+            let filter = (0..metadata.file_metadata().num_rows())
+                .map(|_| rng.random_bool(0.99))
+                .collect::<Vec<_>>();
+            let mut filter_offset = 0;
+            RowFilter::new(vec![Box::new(ArrowPredicateFn::new(
+                ProjectionMask::all(),
+                move |b| {
+                    let array = BooleanArray::from_iter(
+                        filter
+                            .iter()
+                            .skip(filter_offset)
+                            .take(b.num_rows())
+                            .map(|x| Some(*x)),
+                    );
+                    filter_offset += b.num_rows();
+                    Ok(array)
+                },
+            ))])
+        });
+
+        let selection = RowSelection::from(case);
+        let batches = test_case(path, selection.clone(), filter, rng.random_range(1..4096));
+
+        if selection.skipped_row_count() == metadata.file_metadata().num_rows() as usize {
+            assert!(batches.into_iter().all(|batch| batch.num_rows() == 0));
+            return;
+        }
+        let actual = concat_batches(batches.first().expect("No batches").schema_ref(), &batches)
+            .expect("Failed to concatenate");
+        // assert_eq!(selection.row_count(), actual.num_rows());
+        let values = actual
+            .column(0)
+            .as_primitive::<types::Int64Type>()
+            .iter()
+            .collect::<Vec<_>>();
+        let row_numbers = actual
+            .column(1)
+            .as_primitive::<types::Int64Type>()
+            .iter()
+            .collect::<Vec<_>>();
+        assert_eq!(
+            row_numbers
+                .into_iter()
+                .map(|number| number.map(|number| number + 1))
+                .collect::<Vec<_>>(),
+            values
+        );
+    }
+
+    fn generate_file_with_row_numbers(rng: &mut impl Rng) -> (Bytes, ParquetMetaData) {
+        let schema = Arc::new(Schema::new(Fields::from(vec![Field::new(
+            "value",
+            ArrowDataType::Int64,
+            false,
+        )])));
+
+        let mut buf = Vec::with_capacity(1024);
+        let mut writer =
+            ArrowWriter::try_new(&mut buf, schema.clone(), None).expect("Could not create writer");
+
+        let mut values = 1..=rng.random_range(1..4096);
+        while !values.is_empty() {
+            let batch_values = values
+                .by_ref()
+                .take(rng.random_range(1..4096))
+                .collect::<Vec<_>>();
+            let array = Arc::new(Int64Array::from(batch_values)) as ArrayRef;
+            let batch =
+                RecordBatch::try_from_iter([("value", array)]).expect("Could not create batch");
+            writer.write(&batch).expect("Could not write batch");
+            writer.flush().expect("Could not flush");
+        }
+        let metadata = writer.close().expect("Could not close writer");
+
+        (Bytes::from(buf), metadata)
     }
 }

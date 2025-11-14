@@ -498,9 +498,10 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
+        let projection_len = projection.mask.as_ref().map_or(usize::MAX, |m| m.len());
         let projected_fields = schema
             .fields
-            .filter_leaves(|idx, _| projection.leaf_included(idx));
+            .filter_leaves(|idx, _| idx < projection_len && projection.leaf_included(idx));
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         let decoder = ParquetPushDecoderBuilder {
@@ -767,10 +768,12 @@ where
 mod tests {
     use super::*;
     use crate::arrow::arrow_reader::RowSelectionPolicy;
+    use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+    use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
@@ -2181,6 +2184,67 @@ mod tests {
                 .map(|r| r.len())
                 .sum::<usize>(),
             92
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            false,
+            |path, selection, _row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let row_number_field = Arc::new(
+                        Field::new("row_number", DataType::Int64, false)
+                            .with_extension_type(RowNumber),
+                    );
+                    let options =
+                        ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_batch_size(batch_size)
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups_and_filter() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            true,
+            |path, selection, row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let row_number_field = Arc::new(
+                        Field::new("row_number", DataType::Int64, false)
+                            .with_extension_type(RowNumber),
+                    );
+                    let options =
+                        ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_row_filter(row_filter.expect("No row filter"))
+                        .with_batch_size(batch_size)
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
         );
     }
 }
