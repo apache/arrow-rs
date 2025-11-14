@@ -1017,6 +1017,24 @@ impl fmt::Display for EdgeInterpolationAlgorithm {
     }
 }
 
+impl FromStr for EdgeInterpolationAlgorithm {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "SPHERICAL" => Ok(EdgeInterpolationAlgorithm::SPHERICAL),
+            "VINCENTY" => Ok(EdgeInterpolationAlgorithm::VINCENTY),
+            "THOMAS" => Ok(EdgeInterpolationAlgorithm::THOMAS),
+            "ANDOYER" => Ok(EdgeInterpolationAlgorithm::ANDOYER),
+            "KARNEY" => Ok(EdgeInterpolationAlgorithm::KARNEY),
+            unknown => Err(general_err!(
+                "Unknown edge interpolation algorithm: {}",
+                unknown
+            )),
+        }
+    }
+}
+
 impl<'a, R: ThriftCompactInputProtocol<'a>> ReadThrift<'a, R> for EdgeInterpolationAlgorithm {
     fn read_thrift(prot: &mut R) -> Result<Self> {
         let val = prot.read_i32()?;
