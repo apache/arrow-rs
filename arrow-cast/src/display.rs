@@ -101,6 +101,7 @@ impl PartialEq for FormatOptions<'_> {
             && self.timestamp_tz_format == other.timestamp_tz_format
             && self.time_format == other.time_format
             && self.duration_format == other.duration_format
+            && self.types_info == other.types_info
             && match (self.formatter_factory, other.formatter_factory) {
                 (Some(f1), Some(f2)) => std::ptr::eq(f1, f2),
                 (None, None) => true,
