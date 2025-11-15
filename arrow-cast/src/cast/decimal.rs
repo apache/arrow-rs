@@ -882,6 +882,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::parse::parse_decimal;
 
     #[test]
     fn test_parse_string_to_decimal_native() -> Result<(), ArrowError> {
@@ -890,7 +891,20 @@ mod tests {
             0_i128
         );
         assert_eq!(
+            parse_decimal::<Decimal128Type>("0", 38, 0)?,
+            parse_string_to_decimal_native::<Decimal128Type>("0", 0)?,
+            "value is {}",
+            0_i128
+        );
+
+        assert_eq!(
             parse_string_to_decimal_native::<Decimal128Type>("0", 5)?,
+            0_i128
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("0", 38, 5)?,
+            parse_string_to_decimal_native::<Decimal128Type>("0", 5)?,
+            "value is {}",
             0_i128
         );
 
@@ -899,7 +913,20 @@ mod tests {
             123_i128
         );
         assert_eq!(
+            parse_decimal::<Decimal128Type>("123", 38, 0)?,
+            parse_string_to_decimal_native::<Decimal128Type>("123", 0)?,
+            "value is {}",
+            123_i128
+        );
+
+        assert_eq!(
             parse_string_to_decimal_native::<Decimal128Type>("123", 5)?,
+            12300000_i128
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("123", 38, 5)?,
+            parse_string_to_decimal_native::<Decimal128Type>("123", 5)?,
+            "value is {}",
             12300000_i128
         );
 
@@ -908,7 +935,20 @@ mod tests {
             123_i128
         );
         assert_eq!(
+            parse_decimal::<Decimal128Type>("123.45", 38, 0)?,
+            parse_string_to_decimal_native::<Decimal128Type>("123.45", 0)?,
+            "value is {}",
+            123_i128
+        );
+
+        assert_eq!(
             parse_string_to_decimal_native::<Decimal128Type>("123.45", 5)?,
+            12345000_i128
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("123.45", 38, 5)?,
+            parse_string_to_decimal_native::<Decimal128Type>("123.45", 5)?,
+            "value is {}",
             12345000_i128
         );
 
@@ -917,7 +957,20 @@ mod tests {
             123_i128
         );
         assert_eq!(
+            parse_decimal::<Decimal128Type>("123.4567891", 38, 0)?,
+            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 0)?,
+            "value is {}",
+            123_i128
+        );
+
+        assert_eq!(
             parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 5)?,
+            12345679_i128
+        );
+        assert_eq!(
+            parse_decimal::<Decimal128Type>("123.4567891", 38, 5)?,
+            parse_string_to_decimal_native::<Decimal128Type>("123.4567891", 5)?,
+            "value is {}",
             12345679_i128
         );
         Ok(())
