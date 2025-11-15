@@ -145,6 +145,7 @@ fn round_trip_table(obj: PyArrowType<Table>) -> PyResult<PyArrowType<Table>> {
     Ok(obj)
 }
 
+/// Builds a Table from a list of RecordBatches and a Schema.
 #[pyfunction]
 pub fn build_table(
     record_batches: Vec<PyArrowType<RecordBatch>>,
