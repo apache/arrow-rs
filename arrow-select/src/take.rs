@@ -424,8 +424,8 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
                 Some(v) => *v,
                 // SAFETY: idx<indices.len()
                 None => match unsafe { n.inner().value_unchecked(idx) } {
-                    true => T::default(),
-                    false => panic!("Out-of-bounds index {index:?}"),
+                    false => T::default(),
+                    true => panic!("Out-of-bounds index {index:?}"),
                 },
             })
             .collect(),
