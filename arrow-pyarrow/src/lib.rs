@@ -515,34 +515,14 @@ impl Table {
         record_batches: Vec<RecordBatch>,
         schema: SchemaRef,
     ) -> Result<Self, ArrowError> {
-        /// This function was copied from `pyo3_arrow/utils.rs` for now. I don't understand yet why
-        /// this is required instead of a "normal" `schema == record_batch.schema()` check.
-        ///
-        /// TODO: Either remove this check, replace it with something already existing in `arrow-rs`
-        ///     or move it to a central `utils` location.
-        fn schema_equals(left: &SchemaRef, right: &SchemaRef) -> bool {
-            left.fields
-                .iter()
-                .zip(right.fields.iter())
-                .all(|(left_field, right_field)| {
-                    left_field.name() == right_field.name()
-                        && left_field
-                            .data_type()
-                            .equals_datatype(right_field.data_type())
-                })
-        }
-
         for record_batch in &record_batches {
-            if !schema_equals(&schema, &record_batch.schema()) {
-                return Err(ArrowError::SchemaError(
-                    //"All record batches must have the same schema.".to_owned(),
-                    format!(
-                        "All record batches must have the same schema. \
+            if schema != record_batch.schema() {
+                return Err(ArrowError::SchemaError(format!(
+                    "All record batches must have the same schema. \
                          Expected schema: {:?}, got schema: {:?}",
-                        schema,
-                        record_batch.schema()
-                    ),
-                ));
+                    schema,
+                    record_batch.schema()
+                )));
             }
         }
         Ok(Self {
@@ -577,6 +557,26 @@ impl TryFrom<Box<dyn RecordBatchReader>> for Table {
 /// Convert a `pyarrow.Table` (or any other ArrowArrayStream compliant object) into [`Table`]
 impl FromPyArrow for Table {
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
+        // Try to use to_batches() method if available (e.g., for `pyarrow.Table`)
+        if ob.hasattr("to_batches")? {
+            let batches_list = ob.call_method0("to_batches")?;
+
+            // Convert Python list of `pyarrow.RecordBatches` to `Vec<RecordBatch>`
+            if let Ok(list) = batches_list.downcast::<PyList>() {
+                let batches = list
+                    .iter()
+                    .map(|value| RecordBatch::from_pyarrow_bound(&value))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                // Extract schema from the table
+                let py_schema = ob.getattr("schema")?;
+                let schema = Arc::new(Schema::from_pyarrow_bound(&py_schema)?);
+
+                return Self::try_new(batches, schema)
+                    .map_err(|err| PyErr::new::<PyValueError, _>(err.to_string()));
+            }
+        }
+
         let reader: Box<dyn RecordBatchReader> =
             Box::new(ArrowArrayStreamReader::from_pyarrow_bound(ob)?);
         Self::try_from(reader).map_err(|err| PyErr::new::<PyValueError, _>(err.to_string()))
