@@ -833,7 +833,7 @@ impl Field {
                     nested_fields
                         .iter()
                         .chain(from_nested_fields)
-                        .try_for_each(|f| builder.try_merge(f))?;
+                        .try_for_each(|f| builder.try_merge(f, true))?;
                     *nested_fields = builder.finish().fields;
                 }
                 _ => {
