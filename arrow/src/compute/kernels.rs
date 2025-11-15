@@ -22,7 +22,7 @@ pub use arrow_cast::cast;
 pub use arrow_cast::parse as cast_utils;
 pub use arrow_ord::{cmp, partition, rank, sort};
 pub use arrow_select::{
-    coalesce, concat, filter, interleave, nullif, take, union_extract, window, zip,
+    coalesce, concat, filter, interleave, merge, nullif, take, union_extract, window, zip,
 };
 pub use arrow_string::{concat_elements, length, regexp, substring};
 

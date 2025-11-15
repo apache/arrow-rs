@@ -184,6 +184,11 @@ harness = false
 required-features = ["test_utils"]
 
 [[bench]]
+name = "merge_kernels"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
 name = "zip_kernels"
 harness = false
 required-features = ["test_utils"]
