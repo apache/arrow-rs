@@ -19,8 +19,8 @@
 extern crate criterion;
 use criterion::Criterion;
 
-use arrow::util::bench_util::*;
 use arrow::datatypes::{ArrowNativeType, ArrowPrimitiveType, Float64Type, Int32Type, UInt32Type};
+use arrow::util::bench_util::*;
 use arrow_array::*;
 use arrow_ord::ord::Comparator;
 use arrow_schema::SortOptions;
@@ -145,7 +145,9 @@ fn create_list_array<T: ArrowPrimitiveType>(
         } else {
             let list_len = rng.random_range(0..avg_list_len * 2);
             for _ in 0..list_len {
-                builder.values().append_value(T::Native::from_usize(i).unwrap());
+                builder
+                    .values()
+                    .append_value(T::Native::from_usize(i).unwrap());
             }
             builder.append(true);
         }
