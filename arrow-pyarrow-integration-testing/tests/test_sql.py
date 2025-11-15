@@ -20,7 +20,7 @@ import contextlib
 import datetime
 import decimal
 import string
-from typing import Tuple, Protocol
+from typing import Union, Tuple, Protocol
 
 import pytest
 import pyarrow as pa
@@ -130,7 +130,7 @@ class ArrowSchemaExportable(Protocol):
 class ArrowArrayExportable(Protocol):
     def __arrow_c_array__(
         self,
-        requested_schema: object | None = None
+        requested_schema: Union[object, None] = None
     ) -> Tuple[object, object]:
         ...
 
@@ -138,7 +138,7 @@ class ArrowArrayExportable(Protocol):
 class ArrowStreamExportable(Protocol):
     def __arrow_c_stream__(
         self,
-        requested_schema: object | None = None
+        requested_schema: Union[object, None] = None
     ) -> object:
         ...
 
@@ -155,7 +155,7 @@ class ArrayWrapper(ArrowArrayExportable):
     def __init__(self, array: ArrowArrayExportable) -> None:
         self.array = array
 
-    def __arrow_c_array__(self, requested_schema: object | None = None) -> Tuple[object, object]:
+    def __arrow_c_array__(self, requested_schema: Union[object, None] = None) -> Tuple[object, object]:
         return self.array.__arrow_c_array__(requested_schema=requested_schema)
 
 
@@ -163,7 +163,7 @@ class StreamWrapper(ArrowStreamExportable):
     def __init__(self, stream: ArrowStreamExportable) -> None:
         self.stream = stream
 
-    def __arrow_c_stream__(self, requested_schema: object | None = None) -> object:
+    def __arrow_c_stream__(self, requested_schema: Union[object, None] = None) -> object:
         return self.stream.__arrow_c_stream__(requested_schema=requested_schema)
 
 
