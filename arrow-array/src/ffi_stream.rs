@@ -364,7 +364,13 @@ impl Iterator for ArrowArrayStreamReader {
             let result = unsafe {
                 from_ffi_and_data_type(array, DataType::Struct(self.schema().fields().clone()))
             };
-            Some(result.map(|data| RecordBatch::from(StructArray::from(data))))
+            Some(result.map(|data| {
+                let struct_array = StructArray::from(data);
+                let row_count = struct_array.len();
+                let (_, arrays, _) = struct_array.into_parts();
+
+                unsafe { RecordBatch::new_unchecked(self.schema.clone(), arrays, row_count) }
+            }))
         } else {
             let last_error = self.get_stream_last_error();
             let err = ArrowError::CDataInterface(last_error.unwrap());

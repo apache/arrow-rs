@@ -557,26 +557,6 @@ impl TryFrom<Box<dyn RecordBatchReader>> for Table {
 /// Convert a `pyarrow.Table` (or any other ArrowArrayStream compliant object) into [`Table`]
 impl FromPyArrow for Table {
     fn from_pyarrow_bound(ob: &Bound<PyAny>) -> PyResult<Self> {
-        // Try to use to_batches() method if available (e.g., for `pyarrow.Table`)
-        if ob.hasattr("to_batches")? {
-            let batches_list = ob.call_method0("to_batches")?;
-
-            // Convert Python list of `pyarrow.RecordBatches` to `Vec<RecordBatch>`
-            if let Ok(list) = batches_list.downcast::<PyList>() {
-                let batches = list
-                    .iter()
-                    .map(|value| RecordBatch::from_pyarrow_bound(&value))
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                // Extract schema from the table
-                let py_schema = ob.getattr("schema")?;
-                let schema = Arc::new(Schema::from_pyarrow_bound(&py_schema)?);
-
-                return Self::try_new(batches, schema)
-                    .map_err(|err| PyErr::new::<PyValueError, _>(err.to_string()));
-            }
-        }
-
         let reader: Box<dyn RecordBatchReader> =
             Box::new(ArrowArrayStreamReader::from_pyarrow_bound(ob)?);
         Self::try_from(reader).map_err(|err| PyErr::new::<PyValueError, _>(err.to_string()))
