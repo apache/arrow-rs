@@ -422,7 +422,8 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
             .enumerate()
             .map(|(idx, index)| match values.get(index.as_usize()) {
                 Some(v) => *v,
-                None => match n.is_null(idx) {
+                // SAFETY: idx<indices.len()
+                None => match unsafe { n.inner().value_unchecked(idx) } {
                     true => T::default(),
                     false => panic!("Out-of-bounds index {index:?}"),
                 },
