@@ -449,7 +449,7 @@ fn take_bits<I: ArrowPrimitiveType>(
             let mut output_buffer = MutableBuffer::new_null(len);
             let output_slice = output_buffer.as_slice_mut();
             nulls.valid_indices().for_each(|idx| {
-                // SAFETY: idx<indices.len()
+                // SAFETY: idx is a valid index in indices.nulls() --> idx<indices.len()
                 if values.value(unsafe { indices.value_unchecked(idx).as_usize() }) {
                     // SAFETY: MutableBuffer was created with space for indices.len() bit, and idx < indices.len()
                     unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
