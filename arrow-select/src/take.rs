@@ -451,7 +451,7 @@ fn take_bits<I: ArrowPrimitiveType>(
             nulls.valid_indices().for_each(|idx| {
                 // SAFETY: idx<indices.len()
                 if values.value(unsafe { indices.value_unchecked(idx).as_usize() }) {
-                    // SAFETY: idx < indices.len()
+                    // SAFETY: MutableBuffer was created with space for indices.len() bit, and idx < indices.len()
                     unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
                 }
             });
