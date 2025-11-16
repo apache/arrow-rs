@@ -195,6 +195,9 @@ pub mod compression;
 /// Avro data types and Arrow data types.
 pub mod codec;
 
+/// AvroError variants
+pub mod errors;
+
 /// Extension trait for AvroField to add Utf8View support
 ///
 /// This trait adds methods for working with Utf8View support to the AvroField struct.
