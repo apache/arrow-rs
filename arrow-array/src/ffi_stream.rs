@@ -388,6 +388,7 @@ impl RecordBatchReader for ArrowArrayStreamReader {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     use arrow_schema::Field;
 
@@ -423,11 +424,14 @@ mod tests {
     }
 
     fn _test_round_trip_export(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", arrays[0].data_type().clone(), true),
-            Field::new("b", arrays[1].data_type().clone(), true),
-            Field::new("c", arrays[2].data_type().clone(), true),
-        ]));
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("a", arrays[0].data_type().clone(), true),
+                Field::new("b", arrays[1].data_type().clone(), true),
+                Field::new("c", arrays[2].data_type().clone(), true),
+            ],
+            HashMap::from([("foo".to_owned(), "bar".to_owned())]),
+        ));
         let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
@@ -458,7 +462,19 @@ mod tests {
 
             let array = unsafe { from_ffi(ffi_array, &ffi_schema) }.unwrap();
 
-            let record_batch = RecordBatch::from(StructArray::from(array));
+            let record_batch = {
+                let struct_array = StructArray::from(array);
+                let row_count = struct_array.len();
+                let (_, arrays, _) = struct_array.into_parts();
+
+                unsafe {
+                    RecordBatch::new_unchecked(
+                        SchemaRef::from(exported_schema.clone()),
+                        arrays,
+                        row_count,
+                    )
+                }
+            };
             produced_batches.push(record_batch);
         }
 
@@ -468,11 +484,14 @@ mod tests {
     }
 
     fn _test_round_trip_import(arrays: Vec<Arc<dyn Array>>) -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("a", arrays[0].data_type().clone(), true),
-            Field::new("b", arrays[1].data_type().clone(), true),
-            Field::new("c", arrays[2].data_type().clone(), true),
-        ]));
+        let schema = Arc::new(Schema::new_with_metadata(
+            vec![
+                Field::new("a", arrays[0].data_type().clone(), true),
+                Field::new("b", arrays[1].data_type().clone(), true),
+                Field::new("c", arrays[2].data_type().clone(), true),
+            ],
+            HashMap::from([("foo".to_owned(), "bar".to_owned())]),
+        ));
         let batch = RecordBatch::try_new(schema.clone(), arrays).unwrap();
         let iter = Box::new(vec![batch.clone(), batch.clone()].into_iter().map(Ok)) as _;
 
