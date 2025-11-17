@@ -18,6 +18,7 @@
 //! Module for unshredding VariantArray by folding typed_value columns back into the value column.
 
 use crate::arrow_to_variant::ListLikeArray;
+use crate::variant_array::BorrowedTypedArrayRef;
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
     Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
@@ -169,17 +170,22 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             return Ok(value.map(|v| Self::ValueOnly(ValueOnlyUnshredVariantBuilder::new(v))));
         };
 
+        let BorrowedTypedArrayRef {
+            inner: typed_value_array,
+            field: _typed_value_field,
+        } = typed_value;
+
         // Has typed_value -> determine type and create appropriate builder
         macro_rules! primitive_builder {
             ($enum_variant:ident, $cast_fn:ident) => {
                 Self::$enum_variant(UnshredPrimitiveRowBuilder::new(
                     value,
-                    typed_value.$cast_fn(),
+                    typed_value_array.$cast_fn(),
                 ))
             };
         }
 
-        let builder = match typed_value.data_type() {
+        let builder = match typed_value_array.data_type() {
             DataType::Int8 => primitive_builder!(PrimitiveInt8, as_primitive),
             DataType::Int16 => primitive_builder!(PrimitiveInt16, as_primitive),
             DataType::Int32 => primitive_builder!(PrimitiveInt32, as_primitive),
@@ -187,13 +193,25 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             DataType::Float32 => primitive_builder!(PrimitiveFloat32, as_primitive),
             DataType::Float64 => primitive_builder!(PrimitiveFloat64, as_primitive),
             DataType::Decimal32(p, s) if VariantDecimal4::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal32(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal32(DecimalUnshredRowBuilder::new(
+                    value,
+                    typed_value_array,
+                    *s as _,
+                ))
             }
             DataType::Decimal64(p, s) if VariantDecimal8::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal64(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal64(DecimalUnshredRowBuilder::new(
+                    value,
+                    typed_value_array,
+                    *s as _,
+                ))
             }
             DataType::Decimal128(p, s) if VariantDecimal16::is_valid_precision_and_scale(p, s) => {
-                Self::Decimal128(DecimalUnshredRowBuilder::new(value, typed_value, *s as _))
+                Self::Decimal128(DecimalUnshredRowBuilder::new(
+                    value,
+                    typed_value_array,
+                    *s as _,
+                ))
             }
             DataType::Decimal32(_, _)
             | DataType::Decimal64(_, _)
@@ -201,7 +219,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             | DataType::Decimal256(_, _) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "{} is not a valid variant shredding type",
-                    typed_value.data_type()
+                    typed_value_array.data_type()
                 )));
             }
             DataType::Date32 => primitive_builder!(PrimitiveDate32, as_primitive),
@@ -214,10 +232,10 @@ impl<'a> UnshredVariantRowBuilder<'a> {
                 )));
             }
             DataType::Timestamp(TimeUnit::Microsecond, timezone) => Self::TimestampMicrosecond(
-                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
+                TimestampUnshredRowBuilder::new(value, typed_value_array, timezone.is_some()),
             ),
             DataType::Timestamp(TimeUnit::Nanosecond, timezone) => Self::TimestampNanosecond(
-                TimestampUnshredRowBuilder::new(value, typed_value, timezone.is_some()),
+                TimestampUnshredRowBuilder::new(value, typed_value_array, timezone.is_some()),
             ),
             DataType::Timestamp(time_unit, _) => {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -237,31 +255,31 @@ impl<'a> UnshredVariantRowBuilder<'a> {
             }
             DataType::Struct(_) => Self::Struct(StructUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_struct(),
+                typed_value_array.as_struct(),
             )?),
             DataType::List(_) => Self::List(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list(),
+                typed_value_array.as_list(),
             )?),
             DataType::LargeList(_) => Self::LargeList(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list(),
+                typed_value_array.as_list(),
             )?),
             DataType::ListView(_) => Self::ListView(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list_view(),
+                typed_value_array.as_list_view(),
             )?),
             DataType::LargeListView(_) => Self::LargeListView(ListUnshredVariantBuilder::try_new(
                 value,
-                typed_value.as_list_view(),
+                typed_value_array.as_list_view(),
             )?),
             DataType::FixedSizeList(_, _) => Self::FixedSizeList(
-                ListUnshredVariantBuilder::try_new(value, typed_value.as_fixed_size_list())?,
+                ListUnshredVariantBuilder::try_new(value, typed_value_array.as_fixed_size_list())?,
             ),
             _ => {
                 return Err(ArrowError::NotYetImplemented(format!(
                     "Unshredding not yet supported for type: {}",
-                    typed_value.data_type()
+                    typed_value_array.data_type()
                 )));
             }
         };
