@@ -29,6 +29,8 @@ use crate::schema::types::SchemaDescPtr;
 #[derive(Default, Debug, Clone)]
 pub struct ParquetMetaDataOptions {
     schema_descr: Option<SchemaDescPtr>,
+    /// Mode for decoding page encoding statistics. Defaults to `Mask` for compact representation.
+    page_encoding_stats_mode: super::PageEncodingStatsMode,
 }
 
 impl ParquetMetaDataOptions {
@@ -51,6 +53,17 @@ impl ParquetMetaDataOptions {
     /// Provide a schema to use when decoding the metadata. Returns `Self` for chaining.
     pub fn with_schema(mut self, val: SchemaDescPtr) -> Self {
         self.schema_descr = Some(val);
+        self
+    }
+
+    /// Returns the mode for decoding page encoding statistics.
+    pub fn page_encoding_stats_mode(&self) -> super::PageEncodingStatsMode {
+        self.page_encoding_stats_mode
+    }
+
+    /// Set the mode for decoding page encoding statistics. Returns `Self` for chaining.
+    pub fn with_page_encoding_stats_mode(mut self, mode: super::PageEncodingStatsMode) -> Self {
+        self.page_encoding_stats_mode = mode;
         self
     }
 }

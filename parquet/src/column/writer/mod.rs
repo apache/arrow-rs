@@ -40,7 +40,7 @@ use crate::encryption::encrypt::get_column_crypto_metadata;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
     ColumnChunkMetaData, ColumnChunkMetaDataBuilder, ColumnIndexBuilder, LevelHistogram,
-    OffsetIndexBuilder, PageEncodingStats,
+    OffsetIndexBuilder, PageEncodingStats, ParquetPageEncodingStats,
 };
 use crate::file::properties::{
     EnabledStatistics, WriterProperties, WriterPropertiesPtr, WriterVersion,
@@ -1191,7 +1191,7 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
         let mut builder = ColumnChunkMetaData::builder(self.descr.clone())
             .set_compression(self.codec)
             .set_encodings_mask(EncodingMask::new_from_encodings(self.encodings.iter()))
-            .set_page_encoding_stats(self.encoding_stats.clone())
+            .set_page_encoding_stats_full(self.encoding_stats.clone())
             .set_total_compressed_size(total_compressed_size)
             .set_total_uncompressed_size(total_uncompressed_size)
             .set_num_values(num_values)
@@ -2485,21 +2485,24 @@ mod tests {
                 (PageType::DATA_PAGE, 1, 3),
             ]
         );
-        assert_eq!(
-            r.metadata.page_encoding_stats(),
-            Some(&vec![
-                PageEncodingStats {
-                    page_type: PageType::DICTIONARY_PAGE,
-                    encoding: Encoding::PLAIN,
-                    count: 1
-                },
-                PageEncodingStats {
-                    page_type: PageType::DATA_PAGE,
-                    encoding: Encoding::RLE_DICTIONARY,
-                    count: 2,
-                }
-            ])
-        );
+        match r.metadata.page_encoding_stats() {
+            Some(ParquetPageEncodingStats::Full(stats)) => assert_eq!(
+                stats,
+                &vec![
+                    PageEncodingStats {
+                        page_type: PageType::DICTIONARY_PAGE,
+                        encoding: Encoding::PLAIN,
+                        count: 1
+                    },
+                    PageEncodingStats {
+                        page_type: PageType::DATA_PAGE,
+                        encoding: Encoding::RLE_DICTIONARY,
+                        count: 2,
+                    }
+                ]
+            ),
+            _ => panic!("Expected full page encoding stats"),
+        }
     }
 
     #[test]
@@ -4104,7 +4107,10 @@ mod tests {
         let meta = column_write_and_get_metadata::<T>(props, data);
         assert_eq!(meta.dictionary_page_offset(), dictionary_page_offset);
         assert_eq!(meta.encodings().collect::<Vec<_>>(), encodings);
-        assert_eq!(meta.page_encoding_stats().unwrap(), page_encoding_stats);
+        match meta.page_encoding_stats().unwrap() {
+            ParquetPageEncodingStats::Full(stats) => assert_eq!(stats, page_encoding_stats),
+            _ => panic!("Expected full page encoding stats"),
+        }
     }
 
     /// Returns column writer.

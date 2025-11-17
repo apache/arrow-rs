@@ -160,6 +160,12 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Set the metadata options for reading Parquet metadata.
+    pub fn with_metadata_options(mut self, options: ParquetMetaDataOptions) -> Self {
+        self.metadata_options = options;
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -1842,7 +1848,7 @@ mod tests {
         assert_eq!(col0_metadata.bloom_filter_offset().unwrap(), 192);
 
         // test page encoding stats
-        let page_encoding_stats = &col0_metadata.page_encoding_stats().unwrap()[0];
+        let page_encoding_stats = &col0_metadata.page_encoding_stats_full().unwrap()[0];
 
         assert_eq!(page_encoding_stats.page_type, basic::PageType::DATA_PAGE);
         assert_eq!(page_encoding_stats.encoding, Encoding::PLAIN);

@@ -470,6 +470,34 @@ pub struct PageEncodingStats {
 }
 );
 
+/// Mode for decoding page encoding statistics in Parquet metadata.
+///
+/// This enum controls how page encoding statistics are represented in memory.
+/// The default mode is `Mask`, which uses a compact bitmask representation.
+/// `Full` mode retains the full vector of statistics, and `Skip` mode omits them entirely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageEncodingStatsMode {
+    /// Use a compact bitmask representation for page encoding statistics.
+    #[default]
+    Mask,
+    /// Retain the full vector of page encoding statistics.
+    Full,
+    /// Skip decoding page encoding statistics entirely.
+    Skip,
+}
+
+/// In-memory representation of page encoding statistics for a column chunk.
+///
+/// This enum allows storing page encoding stats either as a compact mask
+/// or as the full vector of statistics, depending on the decoding mode.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParquetPageEncodingStats {
+    /// Compact representation using a bitmask.
+    Mask(EncodingMask),
+    /// Full representation with detailed statistics per page.
+    Full(Vec<PageEncodingStats>),
+}
+
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
 
@@ -812,7 +840,7 @@ pub struct ColumnChunkMetaData {
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
     geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
-    encoding_stats: Option<Vec<PageEncodingStats>>,
+    encoding_stats: Option<ParquetPageEncodingStats>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
@@ -1050,10 +1078,28 @@ impl ColumnChunkMetaData {
         self.geo_statistics.as_deref()
     }
 
-    /// Returns the offset for the page encoding stats,
+    /// Returns the page encoding stats for this column chunk,
     /// or `None` if no page encoding stats are available.
-    pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
+    pub fn page_encoding_stats(&self) -> Option<&ParquetPageEncodingStats> {
         self.encoding_stats.as_ref()
+    }
+
+    /// Returns the page encoding stats mask if available and stored as a mask,
+    /// or `None` otherwise.
+    pub fn page_encoding_stats_mask(&self) -> Option<&EncodingMask> {
+        match self.encoding_stats.as_ref()? {
+            ParquetPageEncodingStats::Mask(mask) => Some(mask),
+            _ => None,
+        }
+    }
+
+    /// Returns the full page encoding stats if available and stored as full stats,
+    /// or `None` otherwise.
+    pub fn page_encoding_stats_full(&self) -> Option<&Vec<PageEncodingStats>> {
+        match self.encoding_stats.as_ref()? {
+            ParquetPageEncodingStats::Full(stats) => Some(stats),
+            _ => None,
+        }
     }
 
     /// Returns the offset for the bloom filter.
@@ -1273,8 +1319,14 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets page encoding stats for this column chunk.
-    pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
+    pub fn set_page_encoding_stats(mut self, value: ParquetPageEncodingStats) -> Self {
         self.0.encoding_stats = Some(value);
+        self
+    }
+
+    /// Sets page encoding stats as full stats for this column chunk.
+    pub fn set_page_encoding_stats_full(mut self, value: Vec<PageEncodingStats>) -> Self {
+        self.0.encoding_stats = Some(ParquetPageEncodingStats::Full(value));
         self
     }
 
@@ -1633,7 +1685,7 @@ mod tests {
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         row_group_meta.write_thrift(&mut writer).unwrap();
 
-        let row_group_res = read_row_group(&mut buf, schema_descr).unwrap();
+        let row_group_res = read_row_group(&mut buf, schema_descr, None).unwrap();
 
         assert_eq!(row_group_res, row_group_meta);
     }
@@ -1715,7 +1767,7 @@ mod tests {
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         row_group_meta_2cols.write_thrift(&mut writer).unwrap();
 
-        let err = read_row_group(&mut buf, schema_descr_3cols)
+        let err = read_row_group(&mut buf, schema_descr_3cols, None)
             .unwrap_err()
             .to_string();
         assert_eq!(
@@ -1738,7 +1790,7 @@ mod tests {
             .set_total_uncompressed_size(3000)
             .set_data_page_offset(4000)
             .set_dictionary_page_offset(Some(5000))
-            .set_page_encoding_stats(vec![
+            .set_page_encoding_stats_full(vec![
                 PageEncodingStats {
                     page_type: PageType::DATA_PAGE,
                     encoding: Encoding::PLAIN,
@@ -1765,7 +1817,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         col_metadata.write_thrift(&mut writer).unwrap();
-        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
+        let col_chunk_res = read_column_chunk(&mut buf, column_descr, None).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -1781,7 +1833,7 @@ mod tests {
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         col_metadata.write_thrift(&mut writer).unwrap();
-        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
+        let col_chunk_res = read_column_chunk(&mut buf, column_descr, None).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }
@@ -2016,5 +2068,293 @@ mod tests {
             .unwrap();
 
         Arc::new(SchemaDescriptor::new(Arc::new(schema)))
+    }
+
+    #[test]
+    fn test_page_encoding_stats_mode_mask() {
+        // Test that default options use Mask mode
+        let options = ParquetMetaDataOptions::new();
+        assert_eq!(
+            options.page_encoding_stats_mode(),
+            PageEncodingStatsMode::Mask
+        );
+
+        // Test that Mask mode decodes to Mask variant
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_page_encoding_stats_full(vec![PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 3,
+            }])
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Mask);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        match decoded.page_encoding_stats() {
+            Some(ParquetPageEncodingStats::Mask(mask)) => {
+                // Should have PLAIN encoding in mask
+                assert!(mask.is_set(Encoding::PLAIN));
+            }
+            _ => panic!("Expected Mask variant"),
+        }
+    }
+
+    #[test]
+    fn test_page_encoding_stats_mode_full() {
+        // Test that Full mode decodes to Full variant
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_page_encoding_stats_full(vec![PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 3,
+            }])
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Full);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        match decoded.page_encoding_stats() {
+            Some(ParquetPageEncodingStats::Full(stats)) => {
+                assert_eq!(stats.len(), 1);
+                assert_eq!(stats[0].encoding, Encoding::PLAIN);
+                assert_eq!(stats[0].count, 3);
+            }
+            _ => panic!("Expected Full variant"),
+        }
+    }
+
+    #[test]
+    fn test_page_encoding_stats_mode_skip() {
+        // Test that Skip mode results in None
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_page_encoding_stats_full(vec![PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 3,
+            }])
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Skip);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        assert!(decoded.page_encoding_stats().is_none());
+    }
+
+    #[test]
+    fn test_mask_mode_handles_missing_encoding_stats_field() {
+        // Test that Mask mode handles missing encoding_stats field gracefully (returns None)
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .build()
+            .unwrap(); // No encoding stats set
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Mask);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        assert!(decoded.page_encoding_stats().is_none());
+    }
+
+    #[test]
+    fn test_full_mode_handles_missing_encoding_stats_field() {
+        // Test that Full mode handles missing encoding_stats field gracefully (returns None)
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .build()
+            .unwrap(); // No encoding stats set
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Full);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        assert!(decoded.page_encoding_stats().is_none());
+    }
+
+    #[test]
+    fn test_skip_mode_handles_missing_encoding_stats_field() {
+        // Test that Skip mode handles missing encoding_stats field (returns None, as expected)
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .build()
+            .unwrap(); // No encoding stats set
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Skip);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        assert!(decoded.page_encoding_stats().is_none());
+    }
+
+    #[test]
+    fn test_mask_mode_with_empty_encoding_stats() {
+        // Test Mask mode with empty encoding stats list (should produce empty mask)
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_page_encoding_stats_full(vec![]) // Empty list
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Mask);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        match decoded.page_encoding_stats().unwrap() {
+            ParquetPageEncodingStats::Mask(mask) => assert!(mask.as_i32() == 0), // Empty mask
+            _ => panic!("Expected Mask variant"),
+        }
+    }
+
+    #[test]
+    fn test_full_mode_with_empty_encoding_stats() {
+        // Test Full mode with empty encoding stats list (should preserve empty vec)
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_page_encoding_stats_full(vec![]) // Empty list
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Full);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        match decoded.page_encoding_stats().unwrap() {
+            ParquetPageEncodingStats::Full(stats) => assert!(stats.is_empty()),
+            _ => panic!("Expected Full variant"),
+        }
+    }
+
+    #[test]
+    fn test_mask_mode_with_duplicate_encodings() {
+        // Test Mask mode deduplicates encodings in stats (mask should reflect unique encodings)
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_page_encoding_stats_full(vec![
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::PLAIN,
+                    count: 1,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::PLAIN, // Duplicate
+                    count: 2,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DICTIONARY_PAGE,
+                    encoding: Encoding::RLE_DICTIONARY,
+                    count: 1,
+                },
+            ])
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Mask);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        match decoded.page_encoding_stats().unwrap() {
+            ParquetPageEncodingStats::Mask(mask) => {
+                // Mask should contain PLAIN and RLE_DICTIONARY
+                assert!(mask.is_set(Encoding::PLAIN));
+                assert!(mask.is_set(Encoding::RLE_DICTIONARY));
+                assert!(!mask.is_set(Encoding::DELTA_BINARY_PACKED)); // Not present
+            }
+            _ => panic!("Expected Mask variant"),
+        }
+    }
+
+    #[test]
+    fn test_mask_mode_with_various_encodings() {
+        // Test Mask mode with a variety of encodings to ensure comprehensive coverage
+        let column_descr = get_test_schema_descr().column(0);
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_page_encoding_stats_full(vec![
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::PLAIN,
+                    count: 1,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DICTIONARY_PAGE,
+                    encoding: Encoding::RLE_DICTIONARY,
+                    count: 1,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::DELTA_BINARY_PACKED,
+                    count: 1,
+                },
+                PageEncodingStats {
+                    page_type: PageType::DATA_PAGE,
+                    encoding: Encoding::BYTE_STREAM_SPLIT,
+                    count: 1,
+                },
+            ])
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new()
+            .with_page_encoding_stats_mode(PageEncodingStatsMode::Mask);
+        let decoded = read_column_chunk(&mut buf, column_descr, Some(&options)).unwrap();
+
+        match decoded.page_encoding_stats().unwrap() {
+            ParquetPageEncodingStats::Mask(mask) => {
+                assert!(mask.is_set(Encoding::PLAIN));
+                assert!(mask.is_set(Encoding::RLE_DICTIONARY));
+                assert!(mask.is_set(Encoding::DELTA_BINARY_PACKED));
+                assert!(mask.is_set(Encoding::BYTE_STREAM_SPLIT));
+            }
+            _ => panic!("Expected Mask variant"),
+        }
     }
 }

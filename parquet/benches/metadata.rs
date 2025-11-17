@@ -78,7 +78,7 @@ fn encoded_meta() -> Vec<u8> {
                         .set_data_page_offset(rng.random_range(4..2000000000))
                         .set_dictionary_page_offset(Some(rng.random_range(4..2000000000)))
                         .set_statistics(stats.clone())
-                        .set_page_encoding_stats(vec![
+                        .set_page_encoding_stats_full(vec![
                             PageEncodingStats {
                                 page_type: PageType::DICTIONARY_PAGE,
                                 encoding: Encoding::PLAIN,
@@ -165,10 +165,41 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let schema = ParquetMetaDataReader::decode_schema(&meta_data).unwrap();
-    let options = ParquetMetaDataOptions::new().with_schema(schema);
+    let options = ParquetMetaDataOptions::new().with_schema(schema.clone());
     c.bench_function("decode metadata with schema", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
+        })
+    });
+
+    // Benchmark different page encoding stats modes
+    let options_mask = ParquetMetaDataOptions::new()
+        .with_schema(schema.clone())
+        .with_page_encoding_stats_mode(parquet::file::metadata::PageEncodingStatsMode::Mask);
+    c.bench_function("decode metadata (mask mode)", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options_mask))
+                .unwrap();
+        })
+    });
+
+    let options_full = ParquetMetaDataOptions::new()
+        .with_schema(schema.clone())
+        .with_page_encoding_stats_mode(parquet::file::metadata::PageEncodingStatsMode::Full);
+    c.bench_function("decode metadata (full mode)", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options_full))
+                .unwrap();
+        })
+    });
+
+    let options_skip = ParquetMetaDataOptions::new()
+        .with_schema(schema.clone())
+        .with_page_encoding_stats_mode(parquet::file::metadata::PageEncodingStatsMode::Skip);
+    c.bench_function("decode metadata (skip mode)", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options_skip))
                 .unwrap();
         })
     });

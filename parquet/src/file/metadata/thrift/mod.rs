@@ -387,6 +387,7 @@ fn validate_column_metadata(mask: u16) -> Result<()> {
 fn read_column_metadata<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column: &mut ColumnChunkMetaData,
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<u16> {
     // mask for seen required fields in ColumnMetaData
     let mut seen_mask = 0u16;
@@ -462,9 +463,26 @@ fn read_column_metadata<'a>(
                     convert_stats(column_descr, Some(Statistics::read_thrift(&mut *prot)?))?;
             }
             13 => {
-                let val =
-                    read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(&mut *prot)?;
-                column.encoding_stats = Some(val);
+                use crate::file::metadata::{PageEncodingStatsMode, ParquetPageEncodingStats};
+                match options.map(|o| o.page_encoding_stats_mode()) {
+                    Some(PageEncodingStatsMode::Skip) => {
+                        // Skip reading encoding_stats entirely
+                        prot.skip(field_ident.field_type)?;
+                    }
+                    Some(PageEncodingStatsMode::Mask) => {
+                        let val = read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(
+                            &mut *prot,
+                        )?;
+                        let mask = EncodingMask::new_from_encodings(val.iter().map(|s| &s.encoding));
+                        column.encoding_stats = Some(ParquetPageEncodingStats::Mask(mask));
+                    }
+                    Some(PageEncodingStatsMode::Full) | None => {
+                        let val = read_thrift_vec::<PageEncodingStats, ThriftSliceInputProtocol>(
+                            &mut *prot,
+                        )?;
+                        column.encoding_stats = Some(ParquetPageEncodingStats::Full(val));
+                    }
+                }
             }
             14 => {
                 column.bloom_filter_offset = Some(i64::read_thrift(&mut *prot)?);
@@ -499,6 +517,7 @@ fn read_column_metadata<'a>(
 fn read_column_chunk<'a>(
     prot: &mut ThriftSliceInputProtocol<'a>,
     column_descr: &Arc<ColumnDescriptor>,
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<ColumnChunkMetaData> {
     // create a default initialized ColumnMetaData
     let mut col = ColumnChunkMetaDataBuilder::new(column_descr.clone()).build()?;
@@ -535,7 +554,7 @@ fn read_column_chunk<'a>(
                 has_file_offset = true;
             }
             3 => {
-                col_meta_mask = read_column_metadata(&mut *prot, &mut col)?;
+                col_meta_mask = read_column_metadata(&mut *prot, &mut col, options)?;
             }
             4 => {
                 col.offset_index_offset = Some(i64::read_thrift(&mut *prot)?);
@@ -585,6 +604,7 @@ fn read_column_chunk<'a>(
 fn read_row_group(
     prot: &mut ThriftSliceInputProtocol,
     schema_descr: &Arc<SchemaDescriptor>,
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<RowGroupMetaData> {
     // create default initialized RowGroupMetaData
     let mut row_group = RowGroupMetaDataBuilder::new(schema_descr.clone()).build_unchecked();
@@ -623,7 +643,7 @@ fn read_row_group(
                     ));
                 }
                 for i in 0..list_ident.size as usize {
-                    let col = read_column_chunk(prot, &schema_descr.columns()[i])?;
+                    let col = read_column_chunk(prot, &schema_descr.columns()[i], options)?;
                     row_group.columns.push(col);
                 }
                 mask |= RG_COLUMNS;
@@ -774,7 +794,7 @@ pub(crate) fn parquet_metadata_from_bytes(
                             "Row group ordinal {ordinal} exceeds i16 max value",
                         ))
                     })?;
-                    let rg = read_row_group(&mut prot, schema_descr)?;
+                    let rg = read_row_group(&mut prot, schema_descr, options)?;
                     rg_vec.push(assigner.ensure(ordinal, rg)?);
                 }
                 row_groups = Some(rg_vec);
@@ -1302,7 +1322,7 @@ pub(super) fn serialize_column_meta_data<W: Write>(
     if let Some(stats) = stats {
         last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
     }
-    if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
+    if let Some(page_encoding_stats) = column_chunk.page_encoding_stats_full() {
         last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
     }
     if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
@@ -1670,7 +1690,7 @@ write_thrift_field!(RustBoundingBox, FieldType::Struct);
 pub(crate) mod tests {
     use crate::errors::Result;
     use crate::file::metadata::thrift::{BoundingBox, SchemaElement, write_schema};
-    use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaDataOptions, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
     use crate::parquet_thrift::{
         ElementType, ThriftCompactOutputProtocol, ThriftSliceInputProtocol, read_thrift_vec,
@@ -1684,17 +1704,19 @@ pub(crate) mod tests {
     pub(crate) fn read_row_group(
         buf: &mut [u8],
         schema_descr: Arc<SchemaDescriptor>,
+        options: Option<&ParquetMetaDataOptions>,
     ) -> Result<RowGroupMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr)
+        crate::file::metadata::thrift::read_row_group(&mut reader, &schema_descr, options)
     }
 
     pub(crate) fn read_column_chunk(
         buf: &mut [u8],
         column_descr: Arc<ColumnDescriptor>,
+        options: Option<&ParquetMetaDataOptions>,
     ) -> Result<ColumnChunkMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr)
+        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, options)
     }
 
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {

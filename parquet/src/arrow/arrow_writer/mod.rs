@@ -43,7 +43,7 @@ use crate::data_type::{ByteArray, FixedLenByteArray};
 #[cfg(feature = "encryption")]
 use crate::encryption::encrypt::FileEncryptor;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{KeyValue, ParquetMetaData, RowGroupMetaData};
+use crate::file::metadata::{KeyValue, PageEncodingStatsMode, ParquetMetaData, ParquetMetaDataOptions, RowGroupMetaData};
 use crate::file::properties::{WriterProperties, WriterPropertiesPtr};
 use crate::file::reader::{ChunkReader, Length};
 use crate::file::writer::{SerializedFileWriter, SerializedRowGroupWriter};
@@ -4433,7 +4433,10 @@ mod tests {
             .unwrap();
 
         // check that the read metadata is also correct
-        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let options = ReadOptionsBuilder::new()
+            .with_page_index()
+            .with_metadata_options(ParquetMetaDataOptions::new().with_page_encoding_stats_mode(PageEncodingStatsMode::Full))
+            .build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rowgroup = reader.get_row_group(0).expect("row group missing");
