@@ -72,7 +72,7 @@ use super::Buffer;
 ///    }
 /// };
 /// mutable_buffer.push(5u8);
-/// let buffer: Buffer = mutable_buffer.into();
+/// let buffer = Buffer::from(mutable_buffer);
 /// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
 /// ```
 #[derive(Debug)]
