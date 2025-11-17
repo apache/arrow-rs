@@ -359,7 +359,14 @@ mod tests {
         let a1 = StringArray::from(vec![Some("A"), Some("B"), Some("E"), None]);
         let a2 = StringArray::from(vec![Some("C"), Some("D")]);
 
-        let indices = BooleanArray::from(vec![Some(true), None, Some(true), None, Some(true), Some(true)]);
+        let indices = BooleanArray::from(vec![
+            Some(true),
+            None,
+            Some(true),
+            None,
+            Some(true),
+            Some(true),
+        ]);
 
         let merged = merge(&indices, &a1, &a2).unwrap();
         let merged = merged.as_string::<i32>();
@@ -493,7 +500,9 @@ mod tests {
 
     #[test]
     fn test_merge_invalid_truthy_scalar() {
-        let truthy = UnsafeScalar { 0: StringArray::from(vec![Some("A"), Some("C")]) };
+        let truthy = UnsafeScalar {
+            0: StringArray::from(vec![Some("A"), Some("C")]),
+        };
         let falsy = StringArray::from(vec![Some("B"), Some("D")]);
         let mask = BooleanArray::from(vec![true, false, true, false]);
         let merged = merge(&mask, &truthy, &falsy);
@@ -503,7 +512,9 @@ mod tests {
     #[test]
     fn test_merge_invalid_falsy_scalar() {
         let truthy = StringArray::from(vec![Some("A"), Some("C")]);
-        let falsy = UnsafeScalar { 0: StringArray::from(vec![Some("B"), Some("D")]) };
+        let falsy = UnsafeScalar {
+            0: StringArray::from(vec![Some("B"), Some("D")]),
+        };
         let mask = vec![true, false, true, false];
         let mask = BooleanArray::from(mask);
         let merged = merge(&mask, &truthy, &falsy);
@@ -561,9 +572,7 @@ mod tests {
     fn test_merge_n_invalid_indices() {
         let a1 = StringArray::from(vec![Some("A")]);
 
-        let indices = vec![
-            CompactMergeIndex { index: 99 },
-        ];
+        let indices = vec![CompactMergeIndex { index: 99 }];
 
         let arrays = [a1];
         let array_refs = arrays.iter().map(|a| a as &dyn Array).collect::<Vec<_>>();
