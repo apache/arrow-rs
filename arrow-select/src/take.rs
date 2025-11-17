@@ -419,16 +419,19 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
         Some(n) => indices
             .values()
             .iter()
-            .enumerate()
-            .map(|(idx, index)| match values.get(index.as_usize()) {
-                Some(v) => *v,
-                // SAFETY: idx<indices.len()
-                None => match unsafe { n.inner().value_unchecked(idx) } {
-                    false => T::default(),
-                    true => panic!("Out-of-bounds index {index:?}"),
-                },
+            .zip((0..n.len()).map(|i| {
+                // SAFETY: i < n.len()
+                unsafe { n.inner().value_unchecked(i) }
+            }))
+            .map(|(index, valid)| {
+                if valid {
+                    values[index.as_usize()]
+                } else {
+                    T::default()
+                }
             })
             .collect(),
+
         None => indices
             .values()
             .iter()
