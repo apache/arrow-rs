@@ -34,10 +34,10 @@ use std::sync::Mutex;
 use super::Buffer;
 
 /// A [`MutableBuffer`] is a wrapper over memory regions, used to build
-/// [`Buffer`] out of items or slices of items.
+/// [`Buffer`]s out of items or slices of items.
 ///
 /// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to be
-/// aligned along cache lines and in multiple of 64 bytes.
+/// aligned along cache lines and in multiples of 64 bytes.
 ///
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
 /// to insert many items, and `into` to convert it to [`Buffer`]. For typed data,
