@@ -219,8 +219,7 @@ impl AsyncFileReader for ParquetObjectReader {
             // to ensure the specified policy takes precedence.
             if let Some(options) = options {
                 if options.page_index_policy != PageIndexPolicy::Skip {
-                    metadata = metadata
-                        .with_page_index_policy(options.page_index_policy);
+                    metadata = metadata.with_page_index_policy(options.page_index_policy);
                 }
             }
 
