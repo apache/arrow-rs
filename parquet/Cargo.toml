@@ -260,5 +260,10 @@ name = "row_selector"
 harness = false
 required-features = ["arrow"]
 
+[[bench]]
+name = "row_selection_cursor"
+harness = false
+required-features = ["arrow"]
+
 [lib]
 bench = false
