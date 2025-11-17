@@ -220,8 +220,7 @@ impl AsyncFileReader for ParquetObjectReader {
             if let Some(options) = options {
                 if options.page_index_policy != PageIndexPolicy::Skip {
                     metadata = metadata
-                        .with_column_index_policy(options.page_index_policy)
-                        .with_offset_index_policy(options.page_index_policy);
+                        .with_page_index_policy(options.page_index_policy);
                 }
             }
 
