@@ -20,7 +20,6 @@ use std::{ops::Range, sync::Arc};
 use crate::arrow::arrow_reader::ArrowReaderOptions;
 use crate::arrow::async_reader::{AsyncFileReader, MetadataSuffixFetch};
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::PageIndexPolicy::Skip;
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use bytes::Bytes;
 use futures::{FutureExt, TryFutureExt, future::BoxFuture};
@@ -222,8 +221,8 @@ impl AsyncFileReader for ParquetObjectReader {
             if let Some(options) = options {
                 if options.page_index_policy != PageIndexPolicy::Skip {
                     metadata = metadata
-                        .with_column_index_policy(&options.page_index_policy)
-                        .with_offset_index_policy(&options.page_index_policy);
+                        .with_column_index_policy(options.page_index_policy)
+                        .with_offset_index_policy(options.page_index_policy);
                 }
             }
 
@@ -241,6 +240,7 @@ impl AsyncFileReader for ParquetObjectReader {
 #[cfg(test)]
 mod tests {
     use crate::arrow::async_reader::ArrowReaderOptions;
+    use crate::file::metadata::PageIndexPolicy;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_page_index_policy_not_skip_overrides() {
+    async fn test_page_index_policy_skip_uses_preload_true() {
         let (meta, store) = get_meta_store().await;
 
         // Create reader with preload flags set to true
@@ -408,66 +408,21 @@ mod tests {
             .with_preload_column_index(true)
             .with_preload_offset_index(true);
 
-        // Create options with page_index_policy set to None (don't load indexes)
-        let mut options = ArrowReaderOptions::new();
-        options.page_index_policy = PageIndexPolicy::None;
-
-        // Get metadata with options - should respect the policy from options (None != Skip)
-        let metadata = reader.get_metadata(Some(&options)).await.unwrap();
-
-        // Verify that column and offset indexes were NOT loaded
-        // (None policy overrides preload flags because None != Skip)
-        assert!(metadata.column_index().is_none() || metadata.column_index().unwrap().is_empty());
-        assert!(metadata.offset_index().is_none() || metadata.offset_index().unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_page_index_policy_skip_uses_preload_flags() {
-        let (meta, store) = get_meta_store().await;
-
-        // Create reader with preload flags set to true
-        let mut reader = ParquetObjectReader::new(store.clone(), meta.location.clone())
-            .with_file_size(meta.size)
-            .with_preload_column_index(true)
-            .with_preload_offset_index(true);
-
-        // Create options with page_index_policy set to Skip
+        // Create options with page_index_policy set to Skip (default)
         let mut options = ArrowReaderOptions::new();
         options.page_index_policy = PageIndexPolicy::Skip;
 
-        // Get metadata with options - should use reader's preload flags (Skip doesn't override)
+        // Get metadata - Skip means use reader's preload flags (true)
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
 
-        // Verify that indexes WERE loaded because preload flags are true and Skip doesn't override
+        // Since preload flags are true and policy is Skip, indexes should be loaded
+        // Note: This depends on the test file having page indexes
         assert!(metadata.column_index().is_some());
         assert!(metadata.offset_index().is_some());
     }
 
     #[tokio::test]
-    async fn test_page_index_policy_override_preload_flags() {
-        let (meta, store) = get_meta_store().await;
-
-        // Create reader with preload flags set to false
-        let mut reader = ParquetObjectReader::new(store.clone(), meta.location.clone())
-            .with_file_size(meta.size)
-            .with_preload_column_index(false)
-            .with_preload_offset_index(false);
-
-        // Create options with page_index_policy set to All (load all indexes)
-        let mut options = ArrowReaderOptions::new();
-        options.page_index_policy = PageIndexPolicy::All;
-
-        // Get metadata with options - should respect the policy from options
-        let metadata = reader.get_metadata(Some(&options)).await.unwrap();
-
-        // Verify that column and offset indexes WERE loaded (All policy overrides preload flags)
-        // Note: Actual assertions depend on whether the test file contains page indexes
-        assert!(metadata.column_index().is_some());
-        assert!(metadata.offset_index().is_some());
-    }
-
-    #[tokio::test]
-    async fn test_page_index_policy_skip_with_preload_false() {
+    async fn test_page_index_policy_skip_uses_preload_false() {
         let (meta, store) = get_meta_store().await;
 
         // Create reader with preload flags set to false
@@ -480,44 +435,110 @@ mod tests {
         let mut options = ArrowReaderOptions::new();
         options.page_index_policy = PageIndexPolicy::Skip;
 
-        // Get metadata with options - should use reader's preload flags (false)
+        // Get metadata - Skip means use reader's preload flags (false)
         let metadata = reader.get_metadata(Some(&options)).await.unwrap();
 
-        // Verify that indexes were NOT loaded (preload flags are false, Skip doesn't override)
+        // Since preload flags are false and policy is Skip, indexes should NOT be loaded
         assert!(metadata.column_index().is_none() || metadata.column_index().unwrap().is_empty());
         assert!(metadata.offset_index().is_none() || metadata.offset_index().unwrap().is_empty());
     }
 
     #[tokio::test]
-    async fn test_page_index_policy_comparison_skip_vs_none() {
+    async fn test_page_index_policy_optional_overrides_preload_false() {
         let (meta, store) = get_meta_store().await;
 
-        // Test 1: With preload flags true and Skip policy (should load indexes)
+        // Create reader with preload flags set to false
+        let mut reader = ParquetObjectReader::new(store.clone(), meta.location.clone())
+            .with_file_size(meta.size)
+            .with_preload_column_index(false)
+            .with_preload_offset_index(false);
+
+        // Create options with page_index_policy set to Optional
+        let mut options = ArrowReaderOptions::new();
+        options.page_index_policy = PageIndexPolicy::Optional;
+
+        // Get metadata - Optional overrides preload flags and attempts to load indexes
+        let metadata = reader.get_metadata(Some(&options)).await.unwrap();
+
+        // With Optional policy, indexes should be loaded if they exist in the file
+        // (overriding the preload=false setting)
+        assert!(metadata.column_index().is_some());
+        assert!(metadata.offset_index().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_page_index_policy_required_overrides_preload_false() {
+        let (meta, store) = get_meta_store().await;
+
+        // Create reader with preload flags set to false
+        let mut reader = ParquetObjectReader::new(store.clone(), meta.location.clone())
+            .with_file_size(meta.size)
+            .with_preload_column_index(false)
+            .with_preload_offset_index(false);
+
+        // Create options with page_index_policy set to Required
+        let mut options = ArrowReaderOptions::new();
+        options.page_index_policy = PageIndexPolicy::Required;
+
+        // Get metadata - Required overrides preload flags and MUST load indexes
+        let result = reader.get_metadata(Some(&options)).await;
+
+        // If the file has page indexes, this should succeed
+        // If not, it should error (Required means must exist)
+        // This test assumes the test file has page indexes
+        assert!(result.is_ok());
+        let metadata = result.unwrap();
+        assert!(metadata.column_index().is_some());
+        assert!(metadata.offset_index().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_page_index_policy_optional_vs_skip() {
+        let (meta, store) = get_meta_store().await;
+
+        // Test 1: preload=false + Skip policy -> no indexes loaded
         let mut reader1 = ParquetObjectReader::new(store.clone(), meta.location.clone())
             .with_file_size(meta.size)
-            .with_preload_column_index(true)
-            .with_preload_offset_index(true);
+            .with_preload_column_index(false)
+            .with_preload_offset_index(false);
 
         let mut options1 = ArrowReaderOptions::new();
         options1.page_index_policy = PageIndexPolicy::Skip;
-
         let metadata1 = reader1.get_metadata(Some(&options1)).await.unwrap();
 
-        // Test 2: With preload flags true but None policy (should NOT load indexes)
-        let mut reader2 = ParquetObjectReader::new(store, meta.location)
+        // Test 2: preload=false + Optional policy -> indexes loaded (policy overrides)
+        let mut reader2 = ParquetObjectReader::new(store.clone(), meta.location.clone())
+            .with_file_size(meta.size)
+            .with_preload_column_index(false)
+            .with_preload_offset_index(false);
+
+        let mut options2 = ArrowReaderOptions::new();
+        options2.page_index_policy = PageIndexPolicy::Optional;
+        let metadata2 = reader2.get_metadata(Some(&options2)).await.unwrap();
+
+        // metadata1 (Skip) should respect preload=false -> no indexes
+        // metadata2 (Optional) should override preload=false -> has indexes
+        assert!(metadata1.column_index().is_none() || metadata1.column_index().unwrap().is_empty());
+        assert!(
+            metadata2.column_index().is_some() && !metadata2.column_index().unwrap().is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_page_index_policy_no_options_uses_preload() {
+        let (meta, store) = get_meta_store().await;
+
+        // Create reader with preload flags set to true
+        let mut reader = ParquetObjectReader::new(store, meta.location)
             .with_file_size(meta.size)
             .with_preload_column_index(true)
             .with_preload_offset_index(true);
 
-        let mut options2 = ArrowReaderOptions::new();
-        options2.page_index_policy = PageIndexPolicy::None;
+        // Get metadata without options - should use reader's preload flags
+        let metadata = reader.get_metadata(None).await.unwrap();
 
-        let metadata2 = reader2.get_metadata(Some(&options2)).await.unwrap();
-
-        // Metadata1 (Skip) should respect preload flags and have indexes
-        // Metadata2 (None) should override and NOT have indexes
-        // This demonstrates that Skip != None in terms of override behavior
-        assert!(metadata1.column_index().is_some());
-        assert!(metadata2.column_index().is_none() || metadata2.column_index().unwrap().is_empty());
+        // With no options provided, preload flags should be respected
+        assert!(metadata.column_index().is_some());
+        assert!(metadata.offset_index().is_some());
     }
 }
