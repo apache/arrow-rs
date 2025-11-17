@@ -500,9 +500,7 @@ mod tests {
 
     #[test]
     fn test_merge_invalid_truthy_scalar() {
-        let truthy = UnsafeScalar {
-            0: StringArray::from(vec![Some("A"), Some("C")]),
-        };
+        let truthy = UnsafeScalar(StringArray::from(vec![Some("A"), Some("C")]));
         let falsy = StringArray::from(vec![Some("B"), Some("D")]);
         let mask = BooleanArray::from(vec![true, false, true, false]);
         let merged = merge(&mask, &truthy, &falsy);
@@ -512,9 +510,7 @@ mod tests {
     #[test]
     fn test_merge_invalid_falsy_scalar() {
         let truthy = StringArray::from(vec![Some("A"), Some("C")]);
-        let falsy = UnsafeScalar {
-            0: StringArray::from(vec![Some("B"), Some("D")]),
-        };
+        let falsy = UnsafeScalar(StringArray::from(vec![Some("B"), Some("D")]));
         let mask = vec![true, false, true, false];
         let mask = BooleanArray::from(mask);
         let merged = merge(&mask, &truthy, &falsy);
