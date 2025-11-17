@@ -37,7 +37,7 @@ use std::sync::Arc;
 /// `VariantToArrowRowBuilder` (below) and `VariantToShreddedPrimitiveVariantRowBuilder` (in
 /// `shred_variant.rs`).
 pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
-    Null(VariantToNullArrowRowBuilder),
+    Null(VariantToNullArrowRowBuilder<'a>),
     Boolean(VariantToBooleanArrowRowBuilder<'a>),
     Int8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int8Type>),
     Int16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int16Type>),
@@ -232,7 +232,7 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
 
     let builder =
         match data_type {
-            DataType::Null => Null(VariantToNullArrowRowBuilder::new(capacity)),
+            DataType::Null => Null(VariantToNullArrowRowBuilder::new(cast_options)),
             DataType::Boolean => {
                 Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity))
             }
@@ -696,10 +696,43 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 }
 
-pub(crate) struct VariantToNullArrowRowBuilder {
-    capacity: usize,
+pub(crate) struct VariantToNullArrowRowBuilder<'a> {
+    cast_option: &'a CastOptions<'a>,
+    item_count: usize,
 }
 
+impl<'a> VariantToNullArrowRowBuilder<'a> {
+    fn new(cast_option: &'a CastOptions<'a>) -> Self {
+        Self {
+            cast_option,
+            item_count: 0,
+        }
+    }
+
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+        if value.as_null().is_some() {
+            self.item_count += 1;
+            Ok(true)
+        } else if self.cast_option.safe {
+            self.append_null()?;
+            Ok(false)
+        } else {
+            Err(ArrowError::CastError(format!(
+                "Failed to extract Null from variant {:?} at path VariantPath([])",
+                value
+            )))
+        }
+    }
+
+    fn append_null(&mut self) -> Result<()> {
+        self.item_count += 1;
+        Ok(())
+    }
+
+    fn finish(self) -> Result<ArrayRef> {
+        Ok(Arc::new(NullArray::new(self.item_count)))
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -754,30 +787,5 @@ mod tests {
                 other => panic!("expected InvalidArgumentError, got {other:?}"),
             }
         }
-    }
-}
-impl VariantToNullArrowRowBuilder {
-    fn new(capacity: usize) -> Self {
-        Self { capacity }
-    }
-
-    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if value.as_null().is_some() {
-            Ok(true)
-        } else {
-            // Null type only accepts nulls
-            Err(ArrowError::CastError(format!(
-                "Failed to extract Null from variant {:?} at path VariantPath([])",
-                value
-            )))
-        }
-    }
-
-    fn append_null(&mut self) -> Result<()> {
-        Ok(())
-    }
-
-    fn finish(self) -> Result<ArrayRef> {
-        Ok(Arc::new(NullArray::new(self.capacity)))
     }
 }
