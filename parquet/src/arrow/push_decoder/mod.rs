@@ -174,6 +174,7 @@ impl ParquetPushDecoderBuilder {
             limit,
             offset,
             metrics,
+            row_selection_policy,
             max_predicate_cache_size,
         } = self;
 
@@ -195,6 +196,7 @@ impl ParquetPushDecoderBuilder {
             metrics,
             max_predicate_cache_size,
             buffers,
+            row_selection_policy,
         );
 
         // Initialize the decoder with the configured options
