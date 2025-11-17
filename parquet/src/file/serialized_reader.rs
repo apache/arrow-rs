@@ -172,22 +172,12 @@ impl ReadOptionsBuilder {
         self
     }
 
-    /// Set whether to skip decoding the [`encoding_stats`] field of the Parquet `ColumnMetaData`.
+    /// Sets the decoding policy for [`encoding_stats`] in the Parquet `ColumnMetaData`.
     ///
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
-    pub fn with_skip_encoding_stats(mut self, val: bool) -> Self {
-        self.metadata_options.set_skip_encoding_stats(val);
-        self
-    }
-
-    /// Provide a list of column indices for which to decode the [`encoding_stats`] field of the
-    /// Parquet `ColumnMetaData`.
-    ///
-    /// [`encoding_stats`]:
-    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
-    pub fn with_keep_encoding_stats(mut self, keep: &[usize]) -> Self {
-        self.metadata_options.set_keep_encoding_stats(keep);
+    pub fn with_encoding_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_encoding_stats_policy(policy);
         self
     }
 
@@ -1917,7 +1907,7 @@ mod tests {
 
         // test skipping all
         let options = ReadOptionsBuilder::new()
-            .with_skip_encoding_stats(true)
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
             .build();
         let file_reader = Arc::new(
             SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
@@ -1932,7 +1922,7 @@ mod tests {
         // test skipping all but one column
         let options = ReadOptionsBuilder::new()
             .with_encoding_stats_as_mask(true)
-            .with_keep_encoding_stats(&[0])
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
             .build();
         let file_reader = Arc::new(
             SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
 use parquet::file::metadata::{
     ColumnChunkMetaData, FileMetaData, PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions,
-    ParquetMetaDataReader, ParquetMetaDataWriter, RowGroupMetaData,
+    ParquetMetaDataReader, ParquetMetaDataWriter, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::TrackedWrite;
@@ -181,7 +181,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let options = ParquetMetaDataOptions::new().with_skip_encoding_stats(true);
+    let options =
+        ParquetMetaDataOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
     c.bench_function("decode metadata with skip PES", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
@@ -211,7 +212,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let options = ParquetMetaDataOptions::new().with_skip_encoding_stats(true);
+    let options =
+        ParquetMetaDataOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
     c.bench_function("decode metadata (wide) with skip PES", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();

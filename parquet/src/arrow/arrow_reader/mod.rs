@@ -42,7 +42,7 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
-    RowGroupMetaData,
+    ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
@@ -571,22 +571,12 @@ impl ArrowReaderOptions {
         self
     }
 
-    /// Set whether to skip decoding the [`encoding_stats`] field of the Parquet `ColumnMetaData`.
+    /// Sets the decoding policy for [`encoding_stats`] in the Parquet `ColumnMetaData`.
     ///
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
-    pub fn with_skip_encoding_stats(mut self, val: bool) -> Self {
-        self.metadata_options.set_skip_encoding_stats(val);
-        self
-    }
-
-    /// Provide a list of column indices for which to decode the [`encoding_stats`] field of the
-    /// Parquet `ColumnMetaData`.
-    ///
-    /// [`encoding_stats`]:
-    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
-    pub fn with_keep_encoding_stats(mut self, keep: &[usize]) -> Self {
-        self.metadata_options.set_keep_encoding_stats(keep);
+    pub fn with_encoding_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_encoding_stats_policy(policy);
         self
     }
 
@@ -1453,7 +1443,7 @@ pub(crate) mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::ParquetMetaData;
+    use crate::file::metadata::{ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -1539,7 +1529,8 @@ pub(crate) mod tests {
         let file = File::open(path).unwrap();
 
         // test skipping all
-        let arrow_options = ArrowReaderOptions::new().with_skip_encoding_stats(true);
+        let arrow_options =
+            ArrowReaderOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,
@@ -1555,7 +1546,7 @@ pub(crate) mod tests {
         // test skipping all but one column and converting to mask
         let arrow_options = ArrowReaderOptions::new()
             .with_encoding_stats_as_mask(true)
-            .with_keep_encoding_stats(&[0]);
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]));
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,

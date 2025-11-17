@@ -128,7 +128,7 @@ use crate::{
 };
 
 pub use footer_tail::FooterTail;
-pub use options::ParquetMetaDataOptions;
+pub use options::{ParquetMetaDataOptions, ParquetStatisticsPolicy};
 pub use push_decoder::ParquetMetaDataPushDecoder;
 pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
 use std::io::Write;
