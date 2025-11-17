@@ -1320,12 +1320,16 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets page encoding stats for this column chunk.
+    ///
+    /// This will overwrite any existing stats, either `Vec` based or bitmask.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
         self.0.encoding_stats = Some(ParquetPageEncodingStats::Full(value));
         self
     }
 
     /// Sets page encoding stats mask for this column chunk.
+    ///
+    /// This will overwrite any existing stats, either `Vec` based or bitmask.
     pub fn set_page_encoding_stats_mask(mut self, value: EncodingMask) -> Self {
         self.0.encoding_stats = Some(ParquetPageEncodingStats::Mask(value));
         self

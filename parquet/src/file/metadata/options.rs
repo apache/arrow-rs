@@ -90,6 +90,9 @@ impl ParquetMetaDataOptions {
     /// Convert [`encoding_stats`] from a vector of [`PageEncodingStats`] to a bitmask. This can
     /// speed up metadata decoding while still enabling some use cases served by the full stats.
     ///
+    /// Note that if for a given column both this option and `skip_encoding_stats` are `true`, the
+    /// stats will be skipped and not be returned as a mask.
+    ///
     /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for more information.
     ///
     /// [`PageEncodingStats`]: crate::file::metadata::PageEncodingStats
@@ -116,7 +119,8 @@ impl ParquetMetaDataOptions {
     }
 
     /// Sets whether to skip decoding of all [`encoding_stats`] in the Parquet `ColumnMetaData`.
-    /// Takes precedence over [`Self::encoding_stats_as_mask`].
+    ///
+    /// This option takes precedence over [`Self::encoding_stats_as_mask`].
     ///
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
@@ -132,6 +136,9 @@ impl ParquetMetaDataOptions {
     ///
     /// This allows for optimizations such as only decoding the page encoding statistics
     /// for columns present in a predicate.
+    ///
+    /// If a column index is in `keep`, the form of the statistics for that column will be
+    /// determined by [`Self::encoding_stats_as_mask`].
     ///
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
