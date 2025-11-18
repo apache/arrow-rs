@@ -124,6 +124,12 @@ name = "array_from"
 harness = false
 
 [[bench]]
+name = "array_iter"
+harness = false
+required-features = ["test_utils"]
+
+
+[[bench]]
 name = "builder"
 harness = false
 required-features = ["test_utils"]
