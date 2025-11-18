@@ -103,7 +103,7 @@ impl ParquetObjectReader {
 
     /// Whether to load the Column Index as part of [`Self::get_metadata`]
     ///
-    /// Note: This setting may be overridden by [`ArrowReaderOptions::page_index_policy`].
+    /// Note: This setting may be overridden by [`ArrowReaderOptions`] `page_index_policy`.
     /// If `page_index_policy` is `Optional` or `Required`, it will take precedence
     /// over this preload flag. When it is `Skip` (default), this flag is used.
     pub fn with_preload_column_index(self, preload_column_index: bool) -> Self {
@@ -115,7 +115,7 @@ impl ParquetObjectReader {
 
     /// Whether to load the Offset Index as part of [`Self::get_metadata`]
     ///
-    /// Note: This setting may be overridden by [`ArrowReaderOptions::page_index_policy`].
+    /// Note: This setting may be overridden by [`ArrowReaderOptions`] `page_index_policy`.
     /// If `page_index_policy` is `Optional` or `Required`, it will take precedence
     /// over this preload flag. When it is `Skip` (default), this flag is used.
     pub fn with_preload_offset_index(self, preload_offset_index: bool) -> Self {
