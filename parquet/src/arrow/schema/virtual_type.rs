@@ -77,8 +77,7 @@ impl ExtensionType for RowNumber {
 pub fn is_virtual_column(field: &Field) -> bool {
     field
         .extension_type_name()
-        .map(|name| name.starts_with(VIRTUAL_PREFIX!()))
-        .unwrap_or(false)
+        .map_or(false, |name| name.starts_with(VIRTUAL_PREFIX!()))
 }
 
 #[cfg(test)]
