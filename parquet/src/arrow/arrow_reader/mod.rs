@@ -5550,11 +5550,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is not a virtual column")]
     fn test_with_virtual_columns_rejects_non_virtual_fields() {
         // Try to pass a regular field (not a virtual column) to with_virtual_columns
         let regular_field = Arc::new(Field::new("regular_column", ArrowDataType::Int64, false));
-        let _options = ArrowReaderOptions::new().with_virtual_columns(vec![regular_field]);
+        assert_eq!(
+            ArrowReaderOptions::new()
+                .with_virtual_columns(vec![regular_field])
+                .unwrap_err()
+                .to_string(),
+            "Parquet error: Field 'regular_column' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'"
+        );
     }
 
     #[test]
