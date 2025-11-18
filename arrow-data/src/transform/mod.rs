@@ -670,7 +670,7 @@ impl<'a> MutableArrayData<'a> {
                             next_offset += dict_len;
                         }
 
-                        // -1 since offset is exclusive 
+                        // -1 since offset is exclusive
                         build_extend_dictionary(array, offset, 1.max(offset + dict_len) - 1)
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
