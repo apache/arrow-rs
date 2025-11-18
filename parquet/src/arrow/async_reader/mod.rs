@@ -2301,7 +2301,7 @@ mod tests {
             .build()?;
 
         while let Some(batch) = stream.next().await {
-            let batch = batch?;
+            let _ = batch.unwrap(); // ensure there is no panic
         }
 
         Ok(())
