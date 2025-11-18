@@ -390,3 +390,244 @@ mod tests {
         assert_eq!(expected, result);
     }
 }
+
+// Helper functions for reference implementations
+fn ref_bitwise_and<T: std::ops::BitAnd<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a & b),
+        _ => None,
+    }
+}
+
+fn ref_bitwise_or<T: std::ops::BitOr<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a | b),
+        _ => None,
+    }
+}
+
+fn ref_bitwise_xor<T: std::ops::BitXor<Output = T>>(a: Option<T>, b: Option<T>) -> Option<T> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a ^ b),
+        _ => None,
+    }
+}
+
+fn ref_bitwise_shift_left<T>(a: Option<T>, b: Option<T>) -> Option<T>
+where
+    T: num_traits::WrappingShl<Output = T> + num_traits::AsPrimitive<usize>,
+{
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let b = b.as_();
+            Some(a.wrapping_shl(b as u32))
+        }
+        _ => None,
+    }
+}
+
+fn ref_bitwise_shift_right<T>(a: Option<T>, b: Option<T>) -> Option<T>
+where
+    T: num_traits::WrappingShr<Output = T> + num_traits::AsPrimitive<usize>,
+{
+    match (a, b) {
+        (Some(a), Some(b)) => {
+            let b = b.as_();
+            Some(a.wrapping_shr(b as u32))
+        }
+        _ => None,
+    }
+}
+
+fn ref_bitwise_and_not<T>(a: Option<T>, b: Option<T>) -> Option<T>
+where
+    T: std::ops::BitAnd<Output = T> + std::ops::Not<Output = T>,
+{
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a & !b),
+        _ => None,
+    }
+}
+
+fn ref_bitwise_not<T: std::ops::Not<Output = T>>(a: Option<T>) -> Option<T> {
+    a.map(|x| !x)
+}
+
+#[test]
+fn test_primitive_bitwise_binary_random_equivalence() {
+    use rand::{Rng, SeedableRng};
+
+    // Use a fixed seed for reproducible tests
+    let mut rng = rand::rngs::StdRng::from_seed([42u8; 32]);
+
+    for _ in 0..10 { // 10 iterations
+        let len = rng.random_range(1..=64);
+
+        // Generate for i32
+        let mut left_vec_i32 = Vec::with_capacity(len);
+        let mut right_vec_i32 = Vec::with_capacity(len);
+        for _ in 0..len {
+            let is_null = rng.random_bool(0.2);
+            let val = if is_null { None } else { Some(rng.random::<i32>()) };
+            left_vec_i32.push(val);
+            let is_null = rng.random_bool(0.2);
+            let val = if is_null { None } else { Some(rng.random::<i32>()) };
+            right_vec_i32.push(val);
+        }
+        let left_i32 = Int32Array::from(left_vec_i32.clone());
+        let right_i32 = Int32Array::from(right_vec_i32.clone());
+        let (left_slice_i32, right_slice_i32) = if len > 1 {
+            let slice_len = len - 1;
+            (left_i32.slice(1, slice_len), right_i32.slice(1, slice_len))
+        } else {
+            (left_i32.clone(), right_i32.clone())
+        };
+
+        // Test bitwise_and for i32
+        let result = bitwise_and(&left_i32, &right_i32).unwrap();
+        let expected: Vec<Option<i32>> = left_vec_i32.iter().zip(&right_vec_i32).map(|(a, b)| ref_bitwise_and(*a, *b)).collect();
+        let result_vec: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_and full i32 mismatch");
+
+        if len > 1 {
+            let result_slice = bitwise_and(&left_slice_i32, &right_slice_i32).unwrap();
+            let expected_slice: Vec<Option<i32>> = left_vec_i32[1..].iter().zip(&right_vec_i32[1..]).map(|(a, b)| ref_bitwise_and(*a, *b)).collect();
+            let result_slice_vec: Vec<Option<i32>> = result_slice.iter().collect();
+            assert_eq!(result_slice_vec, expected_slice, "bitwise_and sliced i32 mismatch");
+        }
+
+        // Test bitwise_or for i32
+        let result = bitwise_or(&left_i32, &right_i32).unwrap();
+        let expected: Vec<Option<i32>> = left_vec_i32.iter().zip(&right_vec_i32).map(|(a, b)| ref_bitwise_or(*a, *b)).collect();
+        let result_vec: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_or full i32 mismatch");
+
+        // Test bitwise_xor for i32
+        let result = bitwise_xor(&left_i32, &right_i32).unwrap();
+        let expected: Vec<Option<i32>> = left_vec_i32.iter().zip(&right_vec_i32).map(|(a, b)| ref_bitwise_xor(*a, *b)).collect();
+        let result_vec: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_xor full i32 mismatch");
+
+        // Test bitwise_shift_left for i32
+        let result = bitwise_shift_left(&left_i32, &right_i32).unwrap();
+        let expected: Vec<Option<i32>> = left_vec_i32.iter().zip(&right_vec_i32).map(|(a, b)| ref_bitwise_shift_left(*a, *b)).collect();
+        let result_vec: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_shift_left full i32 mismatch");
+
+        // Test bitwise_shift_right for i32
+        let result = bitwise_shift_right(&left_i32, &right_i32).unwrap();
+        let expected: Vec<Option<i32>> = left_vec_i32.iter().zip(&right_vec_i32).map(|(a, b)| ref_bitwise_shift_right(*a, *b)).collect();
+        let result_vec: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_shift_right full i32 mismatch");
+
+        // Test bitwise_and_not for i32
+        let result = bitwise_and_not(&left_i32, &right_i32).unwrap();
+        let expected: Vec<Option<i32>> = left_vec_i32.iter().zip(&right_vec_i32).map(|(a, b)| ref_bitwise_and_not(*a, *b)).collect();
+        let result_vec: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_and_not full i32 mismatch");
+
+        // Generate for u32
+        let mut left_vec_u32 = Vec::with_capacity(len);
+        let mut right_vec_u32 = Vec::with_capacity(len);
+        for _ in 0..len {
+            let is_null = rng.random_bool(0.2);
+            let val = if is_null { None } else { Some(rng.random::<u32>()) };
+            left_vec_u32.push(val);
+            let is_null = rng.random_bool(0.2);
+            let val = if is_null { None } else { Some(rng.random::<u32>()) };
+            right_vec_u32.push(val);
+        }
+        let left_u32 = UInt32Array::from(left_vec_u32.clone());
+        let right_u32 = UInt32Array::from(right_vec_u32.clone());
+
+        // Test bitwise_and for u32
+        let result = bitwise_and(&left_u32, &right_u32).unwrap();
+        let expected: Vec<Option<u32>> = left_vec_u32.iter().zip(&right_vec_u32).map(|(a, b)| ref_bitwise_and(*a, *b)).collect();
+        let result_vec: Vec<Option<u32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_and full u32 mismatch");
+
+        // Test bitwise_or for u32
+        let result = bitwise_or(&left_u32, &right_u32).unwrap();
+        let expected: Vec<Option<u32>> = left_vec_u32.iter().zip(&right_vec_u32).map(|(a, b)| ref_bitwise_or(*a, *b)).collect();
+        let result_vec: Vec<Option<u32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_or full u32 mismatch");
+
+        // Test bitwise_xor for u32
+        let result = bitwise_xor(&left_u32, &right_u32).unwrap();
+        let expected: Vec<Option<u32>> = left_vec_u32.iter().zip(&right_vec_u32).map(|(a, b)| ref_bitwise_xor(*a, *b)).collect();
+        let result_vec: Vec<Option<u32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_xor full u32 mismatch");
+
+        // Test bitwise_shift_left for u32
+        let result = bitwise_shift_left(&left_u32, &right_u32).unwrap();
+        let expected: Vec<Option<u32>> = left_vec_u32.iter().zip(&right_vec_u32).map(|(a, b)| ref_bitwise_shift_left(*a, *b)).collect();
+        let result_vec: Vec<Option<u32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_shift_left full u32 mismatch");
+
+        // Test bitwise_shift_right for u32
+        let result = bitwise_shift_right(&left_u32, &right_u32).unwrap();
+        let expected: Vec<Option<u32>> = left_vec_u32.iter().zip(&right_vec_u32).map(|(a, b)| ref_bitwise_shift_right(*a, *b)).collect();
+        let result_vec: Vec<Option<u32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_shift_right full u32 mismatch");
+
+        // Test bitwise_and_not for u32
+        let result = bitwise_and_not(&left_u32, &right_u32).unwrap();
+        let expected: Vec<Option<u32>> = left_vec_u32.iter().zip(&right_vec_u32).map(|(a, b)| ref_bitwise_and_not(*a, *b)).collect();
+        let result_vec: Vec<Option<u32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_and_not full u32 mismatch");
+    }
+}
+
+#[test]
+fn test_primitive_bitwise_unary_random_equivalence() {
+    use rand::{Rng, SeedableRng};
+
+    // Use a fixed seed for reproducible tests
+    let mut rng = rand::rngs::StdRng::from_seed([43u8; 32]);
+
+    for _ in 0..10 { // 10 iterations
+        let len = rng.random_range(1..=64);
+
+        // Generate for i32
+        let mut vec_i32 = Vec::with_capacity(len);
+        for _ in 0..len {
+            let is_null = rng.random_bool(0.2);
+            let val = if is_null { None } else { Some(rng.random::<i32>()) };
+            vec_i32.push(val);
+        }
+        let array_i32 = Int32Array::from(vec_i32.clone());
+        let array_slice_i32 = if len > 1 {
+            array_i32.slice(1, len - 1)
+        } else {
+            array_i32.clone()
+        };
+
+        // Test bitwise_not for i32
+        let result = bitwise_not(&array_i32).unwrap();
+        let expected: Vec<Option<i32>> = vec_i32.iter().map(|a| ref_bitwise_not(*a)).collect();
+        let result_vec: Vec<Option<i32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_not full i32 mismatch");
+
+        if len > 1 {
+            let result_slice = bitwise_not(&array_slice_i32).unwrap();
+            let expected_slice: Vec<Option<i32>> = vec_i32[1..].iter().map(|a| ref_bitwise_not(*a)).collect();
+            let result_slice_vec: Vec<Option<i32>> = result_slice.iter().collect();
+            assert_eq!(result_slice_vec, expected_slice, "bitwise_not sliced i32 mismatch");
+        }
+
+        // Generate for u32
+        let mut vec_u32 = Vec::with_capacity(len);
+        for _ in 0..len {
+            let is_null = rng.random_bool(0.2);
+            let val = if is_null { None } else { Some(rng.random::<u32>()) };
+            vec_u32.push(val);
+        }
+        let array_u32 = UInt32Array::from(vec_u32.clone());
+
+        // Test bitwise_not for u32
+        let result = bitwise_not(&array_u32).unwrap();
+        let expected: Vec<Option<u32>> = vec_u32.iter().map(|a| ref_bitwise_not(*a)).collect();
+        let result_vec: Vec<Option<u32>> = result.iter().collect();
+        assert_eq!(result_vec, expected, "bitwise_not full u32 mismatch");
+    }
+}

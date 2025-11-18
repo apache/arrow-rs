@@ -28,7 +28,6 @@ use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 #[cfg(feature = "pool")]
 use crate::pool::MemoryPool;
 
-use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
 /// A contiguous memory region that can be shared with other buffers and across
@@ -344,7 +343,7 @@ impl Buffer {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
-        bitwise_unary_op_helper(self, offset, len, |a| a)
+        self.bitwise_unary(offset, len, |a| a)
     }
 
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
@@ -443,6 +442,77 @@ impl Buffer {
     #[cfg(feature = "pool")]
     pub fn claim(&self, pool: &dyn MemoryPool) {
         self.data.claim(pool)
+    }
+
+    /// Apply a bitwise unary operation to this buffer, returning a new buffer.
+    ///
+    /// The operation is applied to `len` bits starting at `offset` bits.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The bit offset to start the operation.
+    /// * `len` - The number of bits to process.
+    /// * `op` - The unary operation to apply.
+    pub fn bitwise_unary<F>(&self, offset: usize, len: usize, op: F) -> Buffer
+    where
+        F: Fn(u64) -> u64,
+    {
+        // reserve capacity and set length so we can get a typed view of u64 chunks
+        let mut result =
+            MutableBuffer::new(crate::util::bit_util::ceil(len, 8)).with_bitset(len / 64 * 8, false);
+
+        let left_chunks = self.bit_chunks(offset, len);
+
+        let result_chunks = result.typed_data_mut::<u64>().iter_mut();
+
+        result_chunks
+            .zip(left_chunks.iter())
+            .for_each(|(res, left)| {
+                *res = op(left);
+            });
+
+        let remainder_bytes = crate::util::bit_util::ceil(left_chunks.remainder_len(), 8);
+        let rem = op(left_chunks.remainder_bits());
+        // we are counting its starting from the least significant bit, to to_le_bytes should be correct
+        let rem = &rem.to_le_bytes()[0..remainder_bytes];
+        result.extend_from_slice(rem);
+
+        result.into()
+    }
+
+    /// Apply a bitwise binary operation between this buffer and another, returning a new buffer.
+    ///
+    /// The operation is applied to `len` bits starting at `self_offset` in self and `other_offset` in other.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other buffer.
+    /// * `self_offset` - The bit offset in self.
+    /// * `other_offset` - The bit offset in other.
+    /// * `len` - The number of bits to process.
+    /// * `op` - The binary operation to apply.
+    pub fn bitwise_binary<F>(&self, other: &Buffer, self_offset: usize, other_offset: usize, len: usize, op: F) -> Buffer
+    where
+        F: Fn(u64, u64) -> u64,
+    {
+        let left_chunks = self.bit_chunks(self_offset, len);
+        let right_chunks = other.bit_chunks(other_offset, len);
+
+        let chunks = left_chunks
+            .iter()
+            .zip(right_chunks.iter())
+            .map(|(left, right)| op(left, right));
+        // Soundness: `BitChunks` is a `BitChunks` iterator which
+        // correctly reports its upper bound
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+
+        let remainder_bytes = crate::util::bit_util::ceil(left_chunks.remainder_len(), 8);
+        let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
+        // we are counting its starting from the least significant bit, to to_le_bytes should be correct
+        let rem = &rem.to_le_bytes()[0..remainder_bytes];
+        buffer.extend_from_slice(rem);
+
+        buffer.into()
     }
 }
 
@@ -598,6 +668,7 @@ impl<T: ArrowNativeType> FromIterator<T> for Buffer {
 #[cfg(test)]
 mod tests {
     use crate::i256;
+    use rand::{Rng, SeedableRng};
     use std::panic::{RefUnwindSafe, UnwindSafe};
     use std::thread;
 
@@ -1064,5 +1135,253 @@ mod tests {
 
         drop(capture);
         assert_eq!(buffer2.strong_count(), 1);
+    }
+
+    #[test]
+    fn test_buffer_bitwise_binary_offsets() {
+        use crate::buffer::ops::{buffer_bin_and, buffer_bin_or};
+
+        let left = Buffer::from(vec![0b10101010u8, 0b01010101u8]);
+        let right = Buffer::from(vec![0b11110000u8, 0b00001111u8]);
+
+        // Test with offset 0, len full (16 bits)
+        let new_result = left.bitwise_binary(&right, 0, 0, 16, |a, b| a & b);
+        let old_result = buffer_bin_and(&left, 0, &right, 0, 16);
+        assert_eq!(new_result, old_result);
+
+        // Test with offset 1, len 7 (crosses byte boundary)
+        let new_result = left.bitwise_binary(&right, 1, 1, 7, |a, b| a & b);
+        let old_result = buffer_bin_and(&left, 1, &right, 1, 7);
+        assert_eq!(new_result, old_result);
+
+        // Test tail bits, len not multiple of 8 (10 bits)
+        let new_result = left.bitwise_binary(&right, 0, 0, 10, |a, b| a & b);
+        let old_result = buffer_bin_and(&left, 0, &right, 0, 10);
+        assert_eq!(new_result, old_result);
+
+        // Test or operation
+        let new_result = left.bitwise_binary(&right, 0, 0, 16, |a, b| a | b);
+        let old_result = buffer_bin_or(&left, 0, &right, 0, 16);
+        assert_eq!(new_result, old_result);
+    }
+
+    #[test]
+    fn test_buffer_bitwise_unary_offsets() {
+        use crate::buffer::ops::buffer_unary_not;
+
+        let buffer = Buffer::from(vec![0b10101010u8, 0b01010101u8]);
+
+        // Test with offset 0, len full
+        let new_result = buffer.bitwise_unary(0, 16, |a| !a);
+        let old_result = buffer_unary_not(&buffer, 0, 16);
+        assert_eq!(new_result, old_result);
+
+        // Test with offset 2, len 10 (crosses byte, tail bits)
+        let new_result = buffer.bitwise_unary(2, 10, |a| !a);
+        let old_result = buffer_unary_not(&buffer, 2, 10);
+        assert_eq!(new_result, old_result);
+    }
+
+    #[test]
+    fn test_buffer_bitwise_binary_random_equivalence() {
+        use crate::buffer::ops::{buffer_bin_and, buffer_bin_or, buffer_bin_xor};
+
+        // Use a fixed seed for reproducible tests
+        let mut rng = rand::rngs::StdRng::from_seed([42u8; 32]);
+
+        let buffer_sizes = [8, 16, 32, 64];
+        let offsets = [0, 1, 3, 7, 8, 13];
+        let lengths = [1, 2, 7, 8, 9, 15, 16];
+
+        for &size in &buffer_sizes {
+            for _ in 0..5 { // Generate 5 random pairs per size
+                let left_vec: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+                let right_vec: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+                let left = Buffer::from(left_vec);
+                let right = Buffer::from(right_vec);
+                let buffer_bits = left.len() * 8;
+
+                for &offset in &offsets {
+                    if offset >= buffer_bits { continue; }
+                    for &len in &lengths {
+                        if offset + len > buffer_bits { continue; }
+
+                        // Test AND
+                        let new_and = left.bitwise_binary(&right, offset, offset, len, |a, b| a & b);
+                        let old_and = buffer_bin_and(&left, offset, &right, offset, len);
+                        assert_eq!(new_and, old_and, "AND failed for offset={}, len={}", offset, len);
+
+                        // Test OR
+                        let new_or = left.bitwise_binary(&right, offset, offset, len, |a, b| a | b);
+                        let old_or = buffer_bin_or(&left, offset, &right, offset, len);
+                        assert_eq!(new_or, old_or, "OR failed for offset={}, len={}", offset, len);
+
+                        // Test XOR
+                        let new_xor = left.bitwise_binary(&right, offset, offset, len, |a, b| a ^ b);
+                        let old_xor = buffer_bin_xor(&left, offset, &right, offset, len);
+                        assert_eq!(new_xor, old_xor, "XOR failed for offset={}, len={}", offset, len);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_buffer_bitwise_unary_random_equivalence() {
+        use crate::buffer::ops::buffer_unary_not;
+
+        // Use a fixed seed for reproducible tests
+        let mut rng = rand::rngs::StdRng::from_seed([43u8; 32]);
+
+        let buffer_sizes = [8, 16, 32, 64];
+        let offsets = [0, 1, 3, 7, 8, 13];
+        let lengths = [1, 2, 7, 8, 9, 15, 16];
+
+        for &size in &buffer_sizes {
+            for _ in 0..5 { // Generate 5 random buffers per size
+                let vec: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+                let buffer = Buffer::from(vec);
+                let buffer_bits = buffer.len() * 8;
+
+                for &offset in &offsets {
+                    if offset >= buffer_bits { continue; }
+                    for &len in &lengths {
+                        if offset + len > buffer_bits { continue; }
+
+                        let new_not = buffer.bitwise_unary(offset, len, |a| !a);
+                        let old_not = buffer_unary_not(&buffer, offset, len);
+                        assert_eq!(new_not, old_not, "NOT failed for offset={}, len={}", offset, len);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_buffer_bitwise_boundaries() {
+        // Use a fixed seed for reproducible tests
+        let mut rng = rand::rngs::StdRng::from_seed([45u8; 32]);
+
+        // Create a large buffer: 1024 bytes
+        let data: Vec<u8> = (0..1024).map(|_| rng.random::<u8>()).collect();
+        let buffer = Buffer::from(data);
+        let total_bits = buffer.len() * 8;
+
+        // Boundary configurations for unary
+        let boundary_configs = vec![
+            (0, 0), // zero length
+            (0, total_bits), // full length
+            (1, total_bits - 1), // offset 1, to end
+            (7, total_bits - 7), // offset 7, crosses byte
+            (8, total_bits - 8), // offset at byte boundary
+            (total_bits - 1, 1), // last bit
+            (total_bits - 8, 8), // last byte
+            (total_bits - 9, 9), // last byte plus one
+        ];
+
+        for (offset, len) in boundary_configs {
+            if offset + len > total_bits {
+                continue; // skip invalid
+            }
+
+            // Test bitwise_unary
+            let result = buffer.bitwise_unary(offset, len, |a| !a);
+            let expected_len = (len + 7) / 8;
+            assert_eq!(result.len(), expected_len, "Wrong length for offset={}, len={}", offset, len);
+
+            // Idempotence: NOT twice should be identity, but since result is packed, compare lengths
+            let result_twice = Buffer::from(result.clone()).bitwise_unary(0, len, |a| !a);
+            assert_eq!(result_twice.len(), expected_len, "NOT twice length mismatch for offset={}, len={}", offset, len);
+        }
+    }
+
+    #[test]
+    fn test_buffer_bitwise_binary_boundaries() {
+        use crate::buffer::ops::{buffer_bin_and, buffer_bin_or};
+
+        // Use a fixed seed for reproducible tests
+        let mut rng = rand::rngs::StdRng::from_seed([46u8; 32]);
+
+        // Create two large buffers: 1024 bytes each
+        let data_left: Vec<u8> = (0..1024).map(|_| rng.random::<u8>()).collect();
+        let data_right: Vec<u8> = (0..1024).map(|_| rng.random::<u8>()).collect();
+        let left = Buffer::from(data_left);
+        let right = Buffer::from(data_right);
+        let total_bits = left.len() * 8;
+
+        // Boundary configurations for binary
+        let boundary_configs = vec![
+            (0, 0), // zero length
+            (0, total_bits), // full length
+            (1, total_bits - 1), // offset 1, to end
+            (7, total_bits - 7), // offset 7, crosses byte
+            (8, total_bits - 8), // offset at byte boundary
+            (total_bits - 1, 1), // last bit
+            (total_bits - 8, 8), // last byte
+            (total_bits - 9, 9), // last byte plus one
+        ];
+
+        for (offset, len) in boundary_configs {
+            if offset + len > total_bits {
+                continue; // skip invalid
+            }
+
+            // Test bitwise_binary AND
+            let result_and = left.bitwise_binary(&right, offset, offset, len, |a, b| a & b);
+            let expected_len = (len + 7) / 8;
+            assert_eq!(result_and.len(), expected_len, "AND wrong length for offset={}, len={}", offset, len);
+
+            // Compare with legacy for a few cases
+            if len <= 64 { // to keep test fast
+                let old_and = buffer_bin_and(&left, offset, &right, offset, len);
+                assert_eq!(result_and, old_and, "AND mismatch with legacy for offset={}, len={}", offset, len);
+            }
+
+            // Test bitwise_binary OR
+            let result_or = left.bitwise_binary(&right, offset, offset, len, |a, b| a | b);
+            assert_eq!(result_or.len(), expected_len, "OR wrong length for offset={}, len={}", offset, len);
+
+            // Compare with legacy for a few cases
+            if len <= 64 {
+                let old_or = buffer_bin_or(&left, offset, &right, offset, len);
+                assert_eq!(result_or, old_or, "OR mismatch with legacy for offset={}, len={}", offset, len);
+            }
+        }
+    }
+
+
+
+    #[test]
+    fn test_buffer_bitwise_byte_boundary_regressions() {
+        use crate::buffer::ops::{buffer_bin_and, buffer_bin_or, buffer_unary_not};
+
+        // Construct small buffers
+        let left = Buffer::from(vec![0b11110000u8, 0b00001111u8]);   // 240, 15
+        let right = Buffer::from(vec![0b10101010u8, 0b01010101u8]);  // 170, 85
+
+        // (offset, len, description)
+        let cases: &[(usize, usize, &str)] = &[
+            (0, 8, "(offset=0, len=8) exact byte"),
+            (1, 7, "(offset=1, len=7) (offset+len)%8 == 0"),
+            (3, 5, "(offset=3, len=5) partial byte"),
+            (4, 8, "(offset=4, len=8) cross-byte"),
+        ];
+
+        for &(offset, len, desc) in cases {
+            // New AND vs legacy AND
+            let result_and = left.bitwise_binary(&right, offset, offset, len, |a, b| a & b);
+            let legacy_and = buffer_bin_and(&left, offset, &right, offset, len);
+            assert_eq!(result_and.as_slice(), &legacy_and[..], "AND {}", desc);
+
+            // New OR vs legacy OR
+            let result_or = left.bitwise_binary(&right, offset, offset, len, |a, b| a | b);
+            let legacy_or = buffer_bin_or(&left, offset, &right, offset, len);
+            assert_eq!(result_or.as_slice(), &legacy_or[..], "OR {}", desc);
+
+            // New NOT vs legacy NOT (unary, using only `left`)
+            let result_not = left.bitwise_unary(offset, len, |a| !a);
+            let legacy_not = buffer_unary_not(&left, offset, len);
+            assert_eq!(result_not.as_slice(), &legacy_not[..], "NOT {}", desc);
+        }
     }
 }
