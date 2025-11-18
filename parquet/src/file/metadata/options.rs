@@ -52,15 +52,36 @@ pub enum ParquetStatisticsPolicy {
     SkipAll,
     /// Skip decoding the relevant statistics for all columns not in the provided set
     /// of column indices.
-    SkipExcept(HashSet<usize>),
+    SkipExcept(Arc<HashSet<usize>>),
 }
 
 impl ParquetStatisticsPolicy {
     /// Create a `ParquetStatisticsPolicy` to skip all columns except those in `keep`.
+    ///
+    /// If `keep` is empty, then this returns [`Self::SkipAll`]
     pub fn skip_except(keep: &[usize]) -> Self {
-        let mut keep_set = HashSet::<usize>::with_capacity(keep.len());
-        keep_set.extend(keep.iter());
-        Self::SkipExcept(keep_set)
+        if keep.is_empty() {
+            Self::SkipAll
+        } else {
+            let mut keep_set = HashSet::<usize>::with_capacity(keep.len());
+            keep_set.extend(keep.iter());
+            Self::SkipExcept(Arc::new(keep_set))
+        }
+    }
+
+    /// Returns whether the policy for the given column index is to skip the statistics.
+    pub(crate) fn is_skip(&self, col_index: usize) -> bool {
+        match self {
+            Self::KeepAll => false,
+            Self::SkipAll => true,
+            Self::SkipExcept(keep) => !keep.contains(&col_index),
+        }
+    }
+}
+
+impl Default for ParquetStatisticsPolicy {
+    fn default() -> Self {
+        Self::KeepAll
     }
 }
 
@@ -75,10 +96,7 @@ impl ParquetStatisticsPolicy {
 pub struct ParquetMetaDataOptions {
     schema_descr: Option<SchemaDescPtr>,
     encoding_stats_as_mask: bool,
-    // The outer option acts as a global boolean, so if `skip_encoding_stats.is_some()`
-    // is `true` then we're at least skipping some stats. The inner `Option` is a keep
-    // list of column indices to decode.
-    skip_encoding_stats: Option<Option<Arc<HashSet<usize>>>>,
+    skip_encoding_stats: ParquetStatisticsPolicy,
 }
 
 impl ParquetMetaDataOptions {
@@ -147,9 +165,7 @@ impl ParquetMetaDataOptions {
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn skip_encoding_stats(&self, col_index: usize) -> bool {
-        self.skip_encoding_stats
-            .as_ref()
-            .is_some_and(|oset| oset.as_ref().is_none_or(|keep| !keep.contains(&col_index)))
+        self.skip_encoding_stats.is_skip(col_index)
     }
 
     /// Sets the decoding policy for [`encoding_stats`] in the Parquet `ColumnMetaData`.
@@ -159,13 +175,7 @@ impl ParquetMetaDataOptions {
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn set_encoding_stats_policy(&mut self, policy: ParquetStatisticsPolicy) {
-        match policy {
-            ParquetStatisticsPolicy::KeepAll => self.skip_encoding_stats = None,
-            ParquetStatisticsPolicy::SkipAll => self.skip_encoding_stats = Some(None),
-            ParquetStatisticsPolicy::SkipExcept(keep_set) => {
-                self.skip_encoding_stats = Some(Some(Arc::new(keep_set)))
-            }
-        }
+        self.skip_encoding_stats = policy;
     }
 
     /// Call [`Self::set_encoding_stats_policy`] and return `Self` for chaining.
