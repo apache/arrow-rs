@@ -593,7 +593,7 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 // SAFETY: indices were derived from the filter predicate
-                buffer.extend_from_slice(unsafe { &values.get_unchecked(start..end) });
+                buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
             }
             buffer.into()
         }
@@ -601,7 +601,7 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in slices {
                 // SAFETY: indices were derived from the filter predicate
-                buffer.extend_from_slice(unsafe { &values.get_unchecked(*start..*end) });
+                buffer.extend_from_slice(unsafe { values.get_unchecked(*start..*end) });
             }
             buffer.into()
         }
