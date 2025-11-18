@@ -364,6 +364,23 @@ impl Buffer {
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
     ///
+    /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+    /// ```
+    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
+    /// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
+    /// // Only possible to convert a Buffer into a MutableBuffer if uniquely owned
+    /// // (i.e., there are no other references to it).
+    /// let mut mutable_buffer = match buffer.into_mutable() {
+    ///    Ok(mutable) => mutable,
+    ///    Err(orig_buffer) => {
+    ///      panic!("buffer was not uniquely owned");
+    ///    }
+    /// };
+    /// mutable_buffer.push(5u8);
+    /// let buffer = Buffer::from(mutable_buffer);
+    /// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
+    /// ```
+    ///
     /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
@@ -521,6 +538,12 @@ impl std::ops::Deref for Buffer {
 
     fn deref(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.as_ptr(), self.len()) }
+    }
+}
+
+impl AsRef<[u8]> for &Buffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
     }
 }
 
