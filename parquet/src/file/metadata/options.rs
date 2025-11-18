@@ -44,9 +44,10 @@ use crate::schema::types::SchemaDescPtr;
 /// let options = ArrowReaderOptions::new()
 ///     .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0, 1]));
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub enum ParquetStatisticsPolicy {
     /// Decode the relevant statistics for all columns.
+    #[default]
     KeepAll,
     /// Skip decoding the relevant statistics for all columns.
     SkipAll,
@@ -76,12 +77,6 @@ impl ParquetStatisticsPolicy {
             Self::SkipAll => true,
             Self::SkipExcept(keep) => !keep.contains(&col_index),
         }
-    }
-}
-
-impl Default for ParquetStatisticsPolicy {
-    fn default() -> Self {
-        Self::KeepAll
     }
 }
 
