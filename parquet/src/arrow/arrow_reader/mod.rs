@@ -5550,6 +5550,97 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_read_row_numbers_row_group_order() -> Result<()> {
+        // Make a parquet file with 100 rows split across 2 row groups
+        let array = Int64Array::from_iter_values(5000..5100);
+        let batch = RecordBatch::try_from_iter([("col", Arc::new(array) as ArrayRef)])?;
+        let mut buffer = Vec::new();
+        let options = WriterProperties::builder()
+            .set_max_row_group_size(50)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch.schema().clone(), Some(options))?;
+        // write in 10 row batches as the size limits are enforced after each batch
+        for batch_chunk in (0..10).map(|i| batch.slice(i * 10, 10)) {
+            writer.write(&batch_chunk)?;
+        }
+        writer.close()?;
+
+        let row_number_field = Arc::new(
+            Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
+        );
+
+        let buffer = Bytes::from(buffer);
+
+        let options =
+            ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()])?;
+
+        // read out with normal options
+        let arrow_reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(buffer.clone(), options.clone())?
+                .build()?;
+
+        assert_eq!(
+            ValuesAndRowNumbers {
+                values: (5000..5100).collect(),
+                row_numbers: (0..100).collect()
+            },
+            ValuesAndRowNumbers::new_from_reader(arrow_reader)
+        );
+
+        // Now read, out of order row groups
+        let arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(buffer, options)?
+            .with_row_groups(vec![1, 0])
+            .build()?;
+
+        assert_eq!(
+            ValuesAndRowNumbers {
+                values: (5050..5100).chain(5000..5050).collect(),
+                row_numbers: (50..100).chain(0..50).collect(),
+            },
+            ValuesAndRowNumbers::new_from_reader(arrow_reader)
+        );
+
+        Ok(())
+    }
+
+    #[derive(Debug, PartialEq)]
+    struct ValuesAndRowNumbers {
+        values: Vec<i64>,
+        row_numbers: Vec<i64>,
+    }
+    impl ValuesAndRowNumbers {
+        fn new_from_reader(reader: ParquetRecordBatchReader) -> Self {
+            let mut values = vec![];
+            let mut row_numbers = vec![];
+            for batch in reader {
+                let batch = batch.expect("Could not read batch");
+                values.extend(
+                    batch
+                        .column_by_name("col")
+                        .expect("Could not get col column")
+                        .as_primitive::<arrow::datatypes::Int64Type>()
+                        .iter()
+                        .map(|v| v.expect("Could not get value")),
+                );
+
+                row_numbers.extend(
+                    batch
+                        .column_by_name("row_number")
+                        .expect("Could not get row_number column")
+                        .as_primitive::<arrow::datatypes::Int64Type>()
+                        .iter()
+                        .map(|v| v.expect("Could not get row number"))
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Self {
+                values,
+                row_numbers,
+            }
+        }
+    }
+
+    #[test]
     fn test_with_virtual_columns_rejects_non_virtual_fields() {
         // Try to pass a regular field (not a virtual column) to with_virtual_columns
         let regular_field = Arc::new(Field::new("regular_column", ArrowDataType::Int64, false));
