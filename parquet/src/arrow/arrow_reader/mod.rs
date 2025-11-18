@@ -625,12 +625,11 @@ impl ArrowReaderOptions {
     pub fn with_virtual_columns(self, virtual_columns: Vec<FieldRef>) -> Self {
         // Validate that all fields are virtual columns
         for field in &virtual_columns {
-            if !is_virtual_column(field) {
-                panic!(
-                    "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
-                    field.name()
-                );
-            }
+            assert!(
+                is_virtual_column(field),
+                "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                field.name()
+            );
         }
         Self {
             virtual_columns,
