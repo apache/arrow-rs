@@ -91,7 +91,7 @@ impl ParquetStatisticsPolicy {
 pub struct ParquetMetaDataOptions {
     schema_descr: Option<SchemaDescPtr>,
     encoding_stats_as_mask: bool,
-    skip_encoding_stats: ParquetStatisticsPolicy,
+    encoding_stats_policy: ParquetStatisticsPolicy,
 }
 
 impl ParquetMetaDataOptions {
@@ -160,7 +160,7 @@ impl ParquetMetaDataOptions {
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn skip_encoding_stats(&self, col_index: usize) -> bool {
-        self.skip_encoding_stats.is_skip(col_index)
+        self.encoding_stats_policy.is_skip(col_index)
     }
 
     /// Sets the decoding policy for [`encoding_stats`] in the Parquet `ColumnMetaData`.
@@ -172,7 +172,7 @@ impl ParquetMetaDataOptions {
     /// [`encoding_stats`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn set_encoding_stats_policy(&mut self, policy: ParquetStatisticsPolicy) {
-        self.skip_encoding_stats = policy;
+        self.encoding_stats_policy = policy;
     }
 
     /// Call [`Self::set_encoding_stats_policy`] and return `Self` for chaining.
