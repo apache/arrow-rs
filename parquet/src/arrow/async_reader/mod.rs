@@ -774,18 +774,18 @@ mod tests {
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
-    use crate::arrow::{ArrowWriter, ProjectionMask};
+    use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
     use arrow::compute::or;
     use arrow::error::Result as ArrowResult;
-    use arrow_array::builder::{ListBuilder, StringBuilder};
+    use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Int8Array, Int32Array, Int64Array, RecordBatchReader, Scalar, StringArray,
-        StructArray, UInt64Array,
+        Array, ArrayRef, BooleanArray, Int8Array, Int32Array, Int64Array, RecordBatchReader,
+        Scalar, StringArray, StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
     use arrow_select::concat::concat_batches;
@@ -2246,5 +2246,67 @@ mod tests {
                 })
             },
         );
+    }
+
+    #[tokio::test]
+    async fn test_nested_lists() -> Result<()> {
+        // Test case for https://github.com/apache/arrow-rs/issues/8657
+        let list_inner_field = Arc::new(Field::new("item", DataType::Float32, true));
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("vector", DataType::List(list_inner_field.clone()), true),
+        ]));
+
+        let mut list_builder =
+            ListBuilder::new(Float32Builder::new()).with_field(list_inner_field.clone());
+        list_builder.values().append_slice(&[10.0, 10.0, 10.0]);
+        list_builder.append(true);
+        list_builder.values().append_slice(&[20.0, 20.0, 20.0]);
+        list_builder.append(true);
+        list_builder.values().append_slice(&[30.0, 30.0, 30.0]);
+        list_builder.append(true);
+        list_builder.values().append_slice(&[40.0, 40.0, 40.0]);
+        list_builder.append(true);
+        let list_array = list_builder.finish();
+
+        let data = vec![RecordBatch::try_new(
+            table_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(list_array),
+            ],
+        )?];
+
+        let mut buffer = Vec::new();
+        let mut writer = AsyncArrowWriter::try_new(&mut buffer, table_schema, None)?;
+
+        for batch in data {
+            writer.write(&batch).await?;
+        }
+
+        writer.close().await?;
+
+        println!("Parquet file written successfully!");
+
+        let reader = TestReader::new(Bytes::from(buffer));
+        let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+
+        let predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        });
+
+        let projection_mask = ProjectionMask::all();
+
+        let mut stream = builder
+            .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+            .with_projection(projection_mask)
+            .build()?;
+
+        while let Some(batch) = stream.next().await {
+            let batch = batch?;
+            println!("Read batch {batch:?}");
+        }
+
+        Ok(())
     }
 }
