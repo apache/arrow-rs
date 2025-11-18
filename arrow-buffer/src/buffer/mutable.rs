@@ -58,6 +58,23 @@ use super::Buffer;
 /// let buffer: Buffer = buffer.into();
 /// assert_eq!(buffer.as_slice(), &[0u8, 1, 0, 0, 1, 0, 0, 0])
 /// ```
+///
+/// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+/// ```
+/// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
+/// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
+/// // Only possible to convert a Buffer into a MutableBuffer if uniquely owned
+/// // (i.e., there are no other references to it).
+/// let mut mutable_buffer = match buffer.into_mutable() {
+///    Ok(mutable) => mutable,
+///    Err(orig_buffer) => {
+///      panic!("buffer was not uniquely owned");
+///    }
+/// };
+/// mutable_buffer.push(5u8);
+/// let buffer = Buffer::from(mutable_buffer);
+/// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
+/// ```
 #[derive(Debug)]
 pub struct MutableBuffer {
     // dangling iff capacity = 0
