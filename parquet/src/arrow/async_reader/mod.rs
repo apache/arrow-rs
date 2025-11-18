@@ -2286,8 +2286,6 @@ mod tests {
 
         writer.close().await?;
 
-        println!("Parquet file written successfully!");
-
         let reader = TestReader::new(Bytes::from(buffer));
         let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
 
@@ -2304,7 +2302,6 @@ mod tests {
 
         while let Some(batch) = stream.next().await {
             let batch = batch?;
-            println!("Read batch {batch:?}");
         }
 
         Ok(())
