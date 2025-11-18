@@ -116,7 +116,9 @@ impl ArrayReader for RowNumberReader {
 mod tests {
     use super::*;
     use crate::basic::Type as PhysicalType;
-    use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
+    use crate::file::metadata::{
+        ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
+    };
     use crate::schema::types::{SchemaDescriptor, Type as SchemaType};
     use std::sync::Arc;
 
@@ -155,12 +157,12 @@ mod tests {
 
         let total_rows: i64 = row_group_metas.iter().map(|rg| rg.num_rows()).sum();
         let file_metadata = FileMetaData::new(
-            1,             // version
-            total_rows,    // num_rows
-            None,          // created_by
-            None,          // key_value_metadata
-            schema_descr,  // schema_descr
-            None,          // column_orders
+            1,            // version
+            total_rows,   // num_rows
+            None,         // created_by
+            None,         // key_value_metadata
+            schema_descr, // schema_descr
+            None,         // column_orders
         );
 
         ParquetMetaData::new(file_metadata, row_group_metas)
