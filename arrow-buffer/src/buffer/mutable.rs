@@ -78,7 +78,23 @@ use super::Buffer;
 /// let mutable_buffer = MutableBuffer::from(vec); // reuses the allocation from vec
 /// assert_eq!(mutable_buffer.len(), 12); // 3 * 4 bytes
 /// ```
-
+///
+/// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+/// ```
+/// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
+/// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
+/// // Only possible to convert a Buffer into a MutableBuffer if uniquely owned
+/// // (i.e., there are no other references to it).
+/// let mut mutable_buffer = match buffer.into_mutable() {
+///    Ok(mutable) => mutable,
+///    Err(orig_buffer) => {
+///      panic!("buffer was not uniquely owned");
+///    }
+/// };
+/// mutable_buffer.push(5u8);
+/// let buffer = Buffer::from(mutable_buffer);
+/// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
+/// ```
 #[derive(Debug)]
 pub struct MutableBuffer {
     // dangling iff capacity = 0
@@ -578,20 +594,19 @@ impl MutableBuffer {
     /// as it eliminates the conditional `Iterator::next`
     #[inline]
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer = Self::new(bit_util::ceil(len, 64) * 8);
+        let mut buffer: Vec<u64> = Vec::with_capacity(bit_util::ceil(len, 64));
 
         let chunks = len / 64;
         let remainder = len % 64;
-        for chunk in 0..chunks {
+        buffer.extend((0..chunks).map(|chunk| {
             let mut packed = 0;
             for bit_idx in 0..64 {
                 let i = bit_idx + chunk * 64;
                 packed |= (f(i) as u64) << bit_idx;
             }
 
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
-        }
+            packed
+        }));
 
         if remainder != 0 {
             let mut packed = 0;
@@ -600,10 +615,10 @@ impl MutableBuffer {
                 packed |= (f(i) as u64) << bit_idx;
             }
 
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
+            buffer.push(packed)
         }
 
+        let mut buffer: MutableBuffer = buffer.into();
         buffer.truncate(bit_util::ceil(len, 8));
         buffer
     }
