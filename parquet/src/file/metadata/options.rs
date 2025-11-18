@@ -123,7 +123,7 @@ impl ParquetMetaDataOptions {
     }
 
     /// Returns whether to present the [`encoding_stats`] field of the Parquet `ColumnMetaData`
-    /// as a bitmask.
+    /// as a bitmask (defaults to `false`).
     ///
     /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for an explanation of why this
     /// might be desirable.
@@ -169,6 +169,8 @@ impl ParquetMetaDataOptions {
     }
 
     /// Sets the decoding policy for [`encoding_stats`] in the Parquet `ColumnMetaData`.
+    ///
+    /// The default policy is to decode all `encoding_stats`.
     ///
     /// This option takes precedence over [`Self::encoding_stats_as_mask`].
     ///

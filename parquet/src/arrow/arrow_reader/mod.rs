@@ -557,7 +557,8 @@ impl ArrowReaderOptions {
         self
     }
 
-    /// Set whether to convert the [`encoding_stats`] in the Parquet `ColumnMetaData` to a bitmask.
+    /// Set whether to convert the [`encoding_stats`] in the Parquet `ColumnMetaData` to a bitmask
+    /// (defaults to `false`).
     ///
     /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for an explanation of why this
     /// might be desirable.
