@@ -1070,8 +1070,8 @@ mod test {
         let error_msg = format!("{}", result.unwrap_err());
         assert!(
             error_msg
-                .contains("Failed to extract Null from variant Int32(32) at path VariantPath([])"),
-            "Expected=[Failed to extract Null from variant Int32(32) at path VariantPath([])],\
+                .contains("Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])"),
+            "Expected=[Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])],\
                 Got error message=[{}]",
             error_msg
         );

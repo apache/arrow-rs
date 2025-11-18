@@ -232,7 +232,7 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
 
     let builder =
         match data_type {
-            DataType::Null => Null(VariantToNullArrowRowBuilder::new(cast_options)),
+            DataType::Null => Null(VariantToNullArrowRowBuilder::new(cast_options, capacity)),
             DataType::Boolean => {
                 Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity))
             }
@@ -696,43 +696,34 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 }
 
-pub(crate) struct VariantToNullArrowRowBuilder<'a> {
-    cast_option: &'a CastOptions<'a>,
+struct FakeNullBuilder {
     item_count: usize,
 }
 
-impl<'a> VariantToNullArrowRowBuilder<'a> {
-    fn new(cast_option: &'a CastOptions<'a>) -> Self {
-        Self {
-            cast_option,
-            item_count: 0,
-        }
+impl FakeNullBuilder {
+    fn new() -> Self {
+        Self { item_count: 0 }
     }
 
-    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
-        if value.as_null().is_some() {
-            self.item_count += 1;
-            Ok(true)
-        } else if self.cast_option.safe {
-            self.append_null()?;
-            Ok(false)
-        } else {
-            Err(ArrowError::CastError(format!(
-                "Failed to extract Null from variant {:?} at path VariantPath([])",
-                value
-            )))
-        }
-    }
-
-    fn append_null(&mut self) -> Result<()> {
+    fn append_value(&mut self, _: ()) {
         self.item_count += 1;
-        Ok(())
     }
 
-    fn finish(self) -> Result<ArrayRef> {
-        Ok(Arc::new(NullArray::new(self.item_count)))
+    fn append_null(&mut self) {
+        self.item_count += 1;
+    }
+
+    fn finish(self) -> NullArray {
+        NullArray::new(self.item_count)
     }
 }
+
+define_variant_to_primitive_builder!(
+    struct VariantToNullArrowRowBuilder<'a>
+    |_capacity| -> FakeNullBuilder { FakeNullBuilder::new() },
+    |value| value.as_null(),
+    type_name: "Null"
+);
 
 #[cfg(test)]
 mod tests {
