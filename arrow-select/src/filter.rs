@@ -2255,4 +2255,19 @@ mod tests {
         // The filtered batch should have 2 rows (the 1st and 3rd)
         assert_eq!(filtered_batch.num_rows(), 2);
     }
+
+    #[test]
+    #[should_panic]
+    fn test_filter_bits_too_large() {
+        let buffer = BooleanBuffer::from(vec![false; 8]);
+        let predicate = BooleanArray::from(vec![true; 9]);
+        filter_bits(
+            &&buffer,
+            &FilterPredicate {
+                filter: predicate,
+                count: 9,
+                strategy: IterationStrategy::SlicesIterator {},
+            },
+        );
+    }
 }
