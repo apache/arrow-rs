@@ -731,8 +731,17 @@ pub fn test_non_uniform_plaintext_encryption_behaviour() {
         .build()
         .unwrap();
 
+    let encryption_properties_footer_key = FileEncryptionProperties::builder(footer_key.clone())
+        .with_plaintext_footer(true)
+        .build()
+        .unwrap();
+
     let decryption_properties = FileDecryptionProperties::builder(footer_key.clone())
         .with_column_key("x", column_key.clone())
+        .build()
+        .unwrap();
+
+    let decryption_properties_footer_key = FileDecryptionProperties::builder(footer_key.clone())
         .build()
         .unwrap();
 
@@ -757,7 +766,7 @@ pub fn test_non_uniform_plaintext_encryption_behaviour() {
     ];
 
     let temp_file = tempfile::tempfile().unwrap();
-    let mut writer = ArrowWriter::try_new(&temp_file, schema, Some(props)).unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, schema.clone(), Some(props)).unwrap();
     for batch in record_batches.clone() {
         writer.write(&batch).unwrap();
     }
@@ -805,6 +814,34 @@ pub fn test_non_uniform_plaintext_encryption_behaviour() {
     check_column_stats(row_group.column(0), false);
     check_column_stats(row_group.column(1), false);
     check_column_stats(row_group.column(2), true);
+
+    // Check for the uniform encryption case
+    let props = WriterProperties::builder()
+        .with_file_encryption_properties(encryption_properties_footer_key)
+        .build();
+
+    let temp_file = tempfile::tempfile().unwrap();
+    let mut writer = ArrowWriter::try_new(&temp_file, schema, Some(props)).unwrap();
+    for batch in record_batches.clone() {
+        writer.write(&batch).unwrap();
+    }
+    let metadata = writer.close().unwrap();
+
+    // Check column statistics produced at write time are available in full
+    check_column_stats(metadata.row_group(0).column(0), true);
+
+    let options = ArrowReaderOptions::default()
+        .with_file_decryption_properties(decryption_properties_footer_key);
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options).unwrap();
+    let metadata = reader_metadata.metadata();
+    // Reader can read stats from plaintext footer metadata if a footer key is provided
+    check_column_stats(metadata.row_group(0).column(0), true);
+
+    let options = ArrowReaderOptions::default();
+    let reader_metadata = ArrowReaderMetadata::load(&temp_file, options).unwrap();
+    let metadata = reader_metadata.metadata();
+    // Reader can read stats from plaintext footer metadata if no key is provided
+    check_column_stats(metadata.row_group(0).column(0), false);
 }
 
 #[test]
