@@ -696,24 +696,29 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 }
 
-struct FakeNullBuilder(NullArray);
+#[derive(Default)]
+struct FakeNullBuilder {
+    item_count: usize,
+}
 
 impl FakeNullBuilder {
-    fn new(capacity: usize) -> Self {
-        Self(NullArray::new(capacity))
+    fn append_value(&mut self, _: ()) {
+        self.item_count += 1;
     }
-    fn append_value<T>(&mut self, _: T) {}
-    fn append_null(&mut self) {}
+
+    fn append_null(&mut self) {
+        self.item_count += 1;
+    }
 
     fn finish(self) -> NullArray {
-        self.0
+        NullArray::new(self.item_count)
     }
 }
 
 define_variant_to_primitive_builder!(
     struct VariantToNullArrowRowBuilder<'a>
-    |capacity| -> FakeNullBuilder { FakeNullBuilder::new(capacity) },
-    |_value|  Some(Variant::Null),
+    |_capacity| -> FakeNullBuilder { FakeNullBuilder::default() },
+    |value| value.as_null(),
     type_name: "Null"
 );
 
