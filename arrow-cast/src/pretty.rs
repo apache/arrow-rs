@@ -27,7 +27,7 @@ use arrow_schema::{ArrowError, SchemaRef};
 use comfy_table::{Cell, Table};
 use std::fmt::Display;
 
-use crate::display::{ArrayFormatter, FormatOptions};
+use crate::display::{ArrayFormatter, FormatOptions, make_array_formatter};
 
 /// Create a visual representation of [`RecordBatch`]es
 ///
@@ -221,13 +221,7 @@ fn create_table(
             .columns()
             .iter()
             .zip(schema.fields().iter())
-            .map(|(c, field)| match options.formatter_factory() {
-                None => ArrayFormatter::try_new(c.as_ref(), options),
-                Some(formatters) => formatters
-                    .create_display_index(c.as_ref(), options, Some(field))
-                    .transpose()
-                    .unwrap_or_else(|| ArrayFormatter::try_new(c.as_ref(), options)),
-            })
+            .map(|(c, field)| make_array_formatter(c, options, Some(field)))
             .collect::<Result<Vec<_>, ArrowError>>()?;
 
         for row in 0..batch.num_rows() {
@@ -261,7 +255,7 @@ fn create_column(
         let formatter = match options.formatter_factory() {
             None => ArrayFormatter::try_new(col.as_ref(), options)?,
             Some(formatters) => formatters
-                .create_display_index(col.as_ref(), options, None)
+                .create_array_formatter(col.as_ref(), options, None)
                 .transpose()
                 .unwrap_or_else(|| ArrayFormatter::try_new(col.as_ref(), options))?,
         };
@@ -280,14 +274,13 @@ mod tests {
     use std::fmt::Write;
     use std::sync::Arc;
 
-    use half::f16;
-
     use arrow_array::builder::*;
     use arrow_array::cast::AsArray;
     use arrow_array::types::*;
     use arrow_array::*;
     use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
     use arrow_schema::*;
+    use half::f16;
 
     use crate::display::{
         ArrayFormatterFactory, DisplayIndex, DurationFormat, array_value_to_string,
@@ -1319,10 +1312,10 @@ mod tests {
     struct TestFormatters {}
 
     impl ArrayFormatterFactory for TestFormatters {
-        fn create_display_index<'formatter>(
+        fn create_array_formatter<'formatter>(
             &self,
             array: &'formatter dyn Array,
-            options: &'formatter FormatOptions<'formatter>,
+            options: &FormatOptions<'formatter>,
             field: Option<&'formatter Field>,
         ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError> {
             if field
@@ -1331,14 +1324,19 @@ mod tests {
             {
                 // We assume that my_money always is an Int32.
                 let array = array.as_primitive();
-                let display_index = Box::new(MyMoneyFormatter { array, options });
+                let display_index = Box::new(MyMoneyFormatter {
+                    array,
+                    options: options.clone(),
+                });
                 return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
             }
 
             if array.data_type() == &DataType::Int32 {
-                // We assume that my_money always is an Int32.
                 let array = array.as_primitive();
-                let display_index = Box::new(MyInt32Formatter { array, options });
+                let display_index = Box::new(MyInt32Formatter {
+                    array,
+                    options: options.clone(),
+                });
                 return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
             }
 
@@ -1346,10 +1344,10 @@ mod tests {
         }
     }
 
-    /// The actual formatter
+    /// A format that will append a "€" sign to the end of the Int32 values.
     struct MyMoneyFormatter<'a> {
         array: &'a Int32Array,
-        options: &'a FormatOptions<'a>,
+        options: FormatOptions<'a>,
     }
 
     impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
@@ -1366,7 +1364,7 @@ mod tests {
     /// The actual formatter
     struct MyInt32Formatter<'a> {
         array: &'a Int32Array,
-        options: &'a FormatOptions<'a>,
+        options: FormatOptions<'a>,
     }
 
     impl<'a> DisplayIndex for MyInt32Formatter<'a> {
@@ -1423,6 +1421,229 @@ mod tests {
             "| 10 €   |",
             "| 100 €  |",
             "+--------+",
+        ];
+        let expected = s.join("\n");
+        assert_eq!(expected, buf);
+    }
+
+    #[test]
+    fn test_format_batches_with_custom_formatters_multi_nested_list() {
+        // define a schema.
+        let options = FormatOptions::new()
+            .with_null("<NULL>")
+            .with_formatter_factory(Some(&TestFormatters {}));
+        let money_metadata = HashMap::from([(
+            extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
+            "my_money".to_owned(),
+        )]);
+        let nested_field = Arc::new(
+            Field::new_list_field(DataType::Int32, true).with_metadata(money_metadata.clone()),
+        );
+
+        // Create nested data
+        let inner_list = ListBuilder::new(Int32Builder::new()).with_field(nested_field);
+        let mut outer_list = FixedSizeListBuilder::new(inner_list, 2);
+        outer_list.values().append_value([Some(1)]);
+        outer_list.values().append_null();
+        outer_list.append(true);
+        outer_list.values().append_value([Some(2), Some(8)]);
+        outer_list
+            .values()
+            .append_value([Some(50), Some(25), Some(25)]);
+        outer_list.append(true);
+        let outer_list = outer_list.finish();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "income",
+            outer_list.data_type().clone(),
+            true,
+        )]));
+
+        // define data.
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(outer_list)]).unwrap();
+
+        let mut buf = String::new();
+        write!(
+            &mut buf,
+            "{}",
+            pretty_format_batches_with_options(&[batch], &options).unwrap()
+        )
+        .unwrap();
+
+        let s = [
+            "+----------------------------------+",
+            "| income                           |",
+            "+----------------------------------+",
+            "| [[1 €], <NULL>]                  |",
+            "| [[2 €, 8 €], [50 €, 25 €, 25 €]] |",
+            "+----------------------------------+",
+        ];
+        let expected = s.join("\n");
+        assert_eq!(expected, buf);
+    }
+
+    #[test]
+    fn test_format_batches_with_custom_formatters_nested_struct() {
+        // define a schema.
+        let options = FormatOptions::new()
+            .with_null("<NULL>")
+            .with_formatter_factory(Some(&TestFormatters {}));
+        let money_metadata = HashMap::from([(
+            extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
+            "my_money".to_owned(),
+        )]);
+        let fields = Fields::from(vec![
+            Field::new("name", DataType::Utf8, true),
+            Field::new("income", DataType::Int32, true).with_metadata(money_metadata.clone()),
+        ]);
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "income",
+            DataType::Struct(fields.clone()),
+            true,
+        )]));
+
+        // Create nested data
+        let mut nested_data = StructBuilder::new(
+            fields,
+            vec![
+                Box::new(StringBuilder::new()),
+                Box::new(Int32Builder::new()),
+            ],
+        );
+        nested_data
+            .field_builder::<StringBuilder>(0)
+            .unwrap()
+            .extend([Some("Gimli"), Some("Legolas"), Some("Aragorn")]);
+        nested_data
+            .field_builder::<Int32Builder>(1)
+            .unwrap()
+            .extend([Some(10), None, Some(30)]);
+        nested_data.append(true);
+        nested_data.append(true);
+        nested_data.append(true);
+
+        // define data.
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(nested_data.finish())]).unwrap();
+
+        let mut buf = String::new();
+        write!(
+            &mut buf,
+            "{}",
+            pretty_format_batches_with_options(&[batch], &options).unwrap()
+        )
+        .unwrap();
+
+        let s = [
+            "+---------------------------------+",
+            "| income                          |",
+            "+---------------------------------+",
+            "| {name: Gimli, income: 10 €}     |",
+            "| {name: Legolas, income: <NULL>} |",
+            "| {name: Aragorn, income: 30 €}   |",
+            "+---------------------------------+",
+        ];
+        let expected = s.join("\n");
+        assert_eq!(expected, buf);
+    }
+
+    #[test]
+    fn test_format_batches_with_custom_formatters_nested_map() {
+        // define a schema.
+        let options = FormatOptions::new()
+            .with_null("<NULL>")
+            .with_formatter_factory(Some(&TestFormatters {}));
+        let money_metadata = HashMap::from([(
+            extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
+            "my_money".to_owned(),
+        )]);
+
+        let mut array = MapBuilder::<StringBuilder, Int32Builder>::new(
+            None,
+            StringBuilder::new(),
+            Int32Builder::new(),
+        )
+        .with_values_field(
+            Field::new("values", DataType::Int32, true).with_metadata(money_metadata.clone()),
+        );
+        array
+            .keys()
+            .extend([Some("Gimli"), Some("Legolas"), Some("Aragorn")]);
+        array.values().extend([Some(10), None, Some(30)]);
+        array.append(true).unwrap();
+        let array = array.finish();
+
+        // define data.
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "income",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+        let mut buf = String::new();
+        write!(
+            &mut buf,
+            "{}",
+            pretty_format_batches_with_options(&[batch], &options).unwrap()
+        )
+        .unwrap();
+
+        let s = [
+            "+-----------------------------------------------+",
+            "| income                                        |",
+            "+-----------------------------------------------+",
+            "| {Gimli: 10 €, Legolas: <NULL>, Aragorn: 30 €} |",
+            "+-----------------------------------------------+",
+        ];
+        let expected = s.join("\n");
+        assert_eq!(expected, buf);
+    }
+
+    #[test]
+    fn test_format_batches_with_custom_formatters_nested_union() {
+        // define a schema.
+        let options = FormatOptions::new()
+            .with_null("<NULL>")
+            .with_formatter_factory(Some(&TestFormatters {}));
+        let money_metadata = HashMap::from([(
+            extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
+            "my_money".to_owned(),
+        )]);
+        let fields = UnionFields::new(
+            vec![0],
+            vec![Field::new("income", DataType::Int32, true).with_metadata(money_metadata.clone())],
+        );
+
+        // Create nested data and construct it with the correct metadata
+        let mut array_builder = UnionBuilder::new_dense();
+        array_builder.append::<Int32Type>("income", 1).unwrap();
+        let (_, type_ids, offsets, children) = array_builder.build().unwrap().into_parts();
+        let array = UnionArray::try_new(fields, type_ids, offsets, children).unwrap();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "income",
+            array.data_type().clone(),
+            true,
+        )]));
+
+        // define data.
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(array)]).unwrap();
+
+        let mut buf = String::new();
+        write!(
+            &mut buf,
+            "{}",
+            pretty_format_batches_with_options(&[batch], &options).unwrap()
+        )
+        .unwrap();
+
+        let s = [
+            "+--------------+",
+            "| income       |",
+            "+--------------+",
+            "| {income=1 €} |",
+            "+--------------+",
         ];
         let expected = s.join("\n");
         assert_eq!(expected, buf);

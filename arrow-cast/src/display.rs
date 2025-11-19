@@ -359,12 +359,28 @@ pub trait ArrayFormatterFactory: Debug {
     /// The field shall be used to look up metadata about the `array` while `options` provide
     /// information on formatting, for example, dates and times which should be considered by an
     /// implementor.
-    fn create_display_index<'formatter>(
+    fn create_array_formatter<'formatter>(
         &self,
         array: &'formatter dyn Array,
-        options: &'formatter FormatOptions<'formatter>,
+        options: &FormatOptions<'formatter>,
         field: Option<&'formatter Field>,
     ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError>;
+}
+
+/// Used to create a new [`ArrayFormatter`] from the given `array`, while also checking whether
+/// there is an override available in the [`ArrayFormatterFactory`].
+pub(crate) fn make_array_formatter<'a>(
+    array: &'a dyn Array,
+    options: &FormatOptions<'a>,
+    field: Option<&'a Field>,
+) -> Result<ArrayFormatter<'a>, ArrowError> {
+    match options.formatter_factory() {
+        None => ArrayFormatter::try_new(array, options),
+        Some(formatters) => formatters
+            .create_array_formatter(array, options, field)
+            .transpose()
+            .unwrap_or_else(|| ArrayFormatter::try_new(array, options)),
+    }
 }
 
 /// Implements [`Display`] for a specific array value
@@ -473,7 +489,10 @@ impl<'a> ArrayFormatter<'a> {
     ///
     /// This returns an error if an array of the given data type cannot be formatted
     pub fn try_new(array: &'a dyn Array, options: &FormatOptions<'a>) -> Result<Self, ArrowError> {
-        Ok(Self::new(make_formatter(array, options)?, options.safe))
+        Ok(Self::new(
+            make_default_display_index(array, options)?,
+            options.safe,
+        ))
     }
 
     /// Returns a [`ValueFormatter`] that implements [`Display`] for
@@ -486,7 +505,7 @@ impl<'a> ArrayFormatter<'a> {
     }
 }
 
-fn make_formatter<'a>(
+fn make_default_display_index<'a>(
     array: &'a dyn Array,
     options: &FormatOptions<'a>,
 ) -> Result<Box<dyn DisplayIndex + 'a>, ArrowError> {
@@ -1094,7 +1113,7 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
     type State = Box<dyn DisplayIndex + 'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        make_default_display_index(self.values().as_ref(), options)
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -1104,68 +1123,82 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
 }
 
 impl<'a, K: RunEndIndexType> DisplayIndexState<'a> for &'a RunArray<K> {
-    type State = Box<dyn DisplayIndex + 'a>;
+    type State = ArrayFormatter<'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        let field = match (*self).data_type() {
+            DataType::RunEndEncoded(_, values_field) => values_field,
+            _ => unreachable!(),
+        };
+        make_array_formatter(self.values().as_ref(), options, Some(field))
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value_idx = self.get_physical_index(idx);
-        s.as_ref().write(value_idx, f)
+        write!(f, "{}", s.value(value_idx))?;
+        Ok(())
     }
 }
 
 fn write_list(
     f: &mut dyn Write,
     mut range: Range<usize>,
-    values: &dyn DisplayIndex,
+    values: &ArrayFormatter<'_>,
 ) -> FormatResult {
     f.write_char('[')?;
     if let Some(idx) = range.next() {
-        values.write(idx, f)?;
+        write!(f, "{}", values.value(idx))?;
     }
     for idx in range {
-        write!(f, ", ")?;
-        values.write(idx, f)?;
+        write!(f, ", {}", values.value(idx))?;
     }
     f.write_char(']')?;
     Ok(())
 }
 
 impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListArray<O> {
-    type State = Box<dyn DisplayIndex + 'a>;
+    type State = ArrayFormatter<'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        let field = match (*self).data_type() {
+            DataType::List(f) => f,
+            DataType::LargeList(f) => f,
+            _ => unreachable!(),
+        };
+        make_array_formatter(self.values().as_ref(), options, Some(field.as_ref()))
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let offsets = self.value_offsets();
         let end = offsets[idx + 1].as_usize();
         let start = offsets[idx].as_usize();
-        write_list(f, start..end, s.as_ref())
+        write_list(f, start..end, s)
     }
 }
 
 impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
-    type State = (usize, Box<dyn DisplayIndex + 'a>);
+    type State = (usize, ArrayFormatter<'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let values = make_formatter(self.values().as_ref(), options)?;
+        let field = match (*self).data_type() {
+            DataType::FixedSizeList(f, _) => f,
+            _ => unreachable!(),
+        };
+        let formatter =
+            make_array_formatter(self.values().as_ref(), options, Some(field.as_ref()))?;
         let length = self.value_length();
-        Ok((length as usize, values))
+        Ok((length as usize, formatter))
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let start = idx * s.0;
         let end = start + s.0;
-        write_list(f, start..end, s.1.as_ref())
+        write_list(f, start..end, &s.1)
     }
 }
 
-/// Pairs a boxed [`DisplayIndex`] with its field name
-type FieldDisplay<'a> = (&'a str, Box<dyn DisplayIndex + 'a>);
+/// Pairs an [`ArrayFormatter`] with its field name
+type FieldDisplay<'a> = (&'a str, ArrayFormatter<'a>);
 
 impl<'a> DisplayIndexState<'a> for &'a StructArray {
     type State = Vec<FieldDisplay<'a>>;
@@ -1180,7 +1213,7 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
             .iter()
             .zip(fields)
             .map(|(a, f)| {
-                let format = make_formatter(a.as_ref(), options)?;
+                let format = make_array_formatter(a.as_ref(), options, Some(f))?;
                 Ok((f.name().as_str(), format))
             })
             .collect()
@@ -1190,12 +1223,10 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
         let mut iter = s.iter();
         f.write_char('{')?;
         if let Some((name, display)) = iter.next() {
-            write!(f, "{name}: ")?;
-            display.as_ref().write(idx, f)?;
+            write!(f, "{name}: {}", display.value(idx))?;
         }
         for (name, display) in iter {
-            write!(f, ", {name}: ")?;
-            display.as_ref().write(idx, f)?;
+            write!(f, ", {name}: {}", display.value(idx))?;
         }
         f.write_char('}')?;
         Ok(())
@@ -1203,11 +1234,13 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
 }
 
 impl<'a> DisplayIndexState<'a> for &'a MapArray {
-    type State = (Box<dyn DisplayIndex + 'a>, Box<dyn DisplayIndex + 'a>);
+    type State = (ArrayFormatter<'a>, ArrayFormatter<'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let keys = make_formatter(self.keys().as_ref(), options)?;
-        let values = make_formatter(self.values().as_ref(), options)?;
+        let (key_field, value_field) = (*self).entries_fields();
+
+        let keys = make_array_formatter(self.keys().as_ref(), options, Some(key_field))?;
+        let values = make_array_formatter(self.values().as_ref(), options, Some(value_field))?;
         Ok((keys, values))
     }
 
@@ -1219,16 +1252,12 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
 
         f.write_char('{')?;
         if let Some(idx) = iter.next() {
-            s.0.write(idx, f)?;
-            write!(f, ": ")?;
-            s.1.write(idx, f)?;
+            write!(f, "{}: {}", s.0.value(idx), s.1.value(idx))?;
         }
 
         for idx in iter {
-            write!(f, ", ")?;
-            s.0.write(idx, f)?;
-            write!(f, ": ")?;
-            s.1.write(idx, f)?;
+            write!(f, ", {}", s.0.value(idx))?;
+            write!(f, ": {}", s.1.value(idx))?;
         }
 
         f.write_char('}')?;
@@ -1237,10 +1266,7 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
 }
 
 impl<'a> DisplayIndexState<'a> for &'a UnionArray {
-    type State = (
-        Vec<Option<(&'a str, Box<dyn DisplayIndex + 'a>)>>,
-        UnionMode,
-    );
+    type State = (Vec<Option<FieldDisplay<'a>>>, UnionMode);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         let (fields, mode) = match (*self).data_type() {
@@ -1251,7 +1277,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
         let max_id = fields.iter().map(|(id, _)| id).max().unwrap_or_default() as usize;
         let mut out: Vec<Option<FieldDisplay>> = (0..max_id + 1).map(|_| None).collect();
         for (i, field) in fields.iter() {
-            let formatter = make_formatter(self.child(i).as_ref(), options)?;
+            let formatter = make_array_formatter(self.child(i).as_ref(), options, Some(field))?;
             out[i as usize] = Some((field.name().as_str(), formatter))
         }
         Ok((out, *mode))
@@ -1265,9 +1291,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
         };
         let (name, field) = s.0[id as usize].as_ref().unwrap();
 
-        write!(f, "{{{name}=")?;
-        field.write(idx, f)?;
-        f.write_char('}')?;
+        write!(f, "{{{name}={}}}", field.value(idx))?;
         Ok(())
     }
 }
