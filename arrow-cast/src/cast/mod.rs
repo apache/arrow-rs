@@ -221,12 +221,34 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         (Struct(from_fields), Struct(to_fields)) => {
-            from_fields.len() == to_fields.len()
-                && from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+            if from_fields.len() != to_fields.len() {
+                return false;
+            }
+
+            // fast path, all field names are in the same order and same number of fields
+            if from_fields
+                .iter()
+                .zip(to_fields.iter())
+                .all(|(f1, f2)| f1.name() == f2.name())
+            {
+                return from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
                     // Assume that nullability between two structs are compatible, if not,
                     // cast kernel will return error.
                     can_cast_types(f1.data_type(), f2.data_type())
-                })
+                });
+            }
+
+            // slow path, we match the fields by name
+            to_fields.iter().all(|to_field| {
+                from_fields
+                    .iter()
+                    .find(|from_field| from_field.name() == to_field.name())
+                    .is_some_and(|from_field| {
+                        // Assume that nullability between two structs are compatible, if not,
+                        // cast kernel will return error.
+                        can_cast_types(from_field.data_type(), to_field.data_type())
+                    })
+            })
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
@@ -1169,14 +1191,46 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Struct(_), Struct(to_fields)) => {
+        (Struct(from_fields), Struct(to_fields)) => {
             let array = array.as_struct();
-            let fields = array
-                .columns()
-                .iter()
-                .zip(to_fields.iter())
-                .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
-                .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+
+            // Fast path: if field names are in the same order, we can just zip and cast
+            let fields_match_order = from_fields.len() == to_fields.len()
+                && from_fields
+                    .iter()
+                    .zip(to_fields.iter())
+                    .all(|(f1, f2)| f1.name() == f2.name());
+
+            let fields = if fields_match_order {
+                // Fast path: cast columns in order
+                array
+                    .columns()
+                    .iter()
+                    .zip(to_fields.iter())
+                    .map(|(column, field)| {
+                        cast_with_options(column, field.data_type(), cast_options)
+                    })
+                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+            } else {
+                // Slow path: match fields by name and reorder
+                to_fields
+                    .iter()
+                    .map(|to_field| {
+                        let from_field_idx = from_fields
+                            .iter()
+                            .position(|from_field| from_field.name() == to_field.name())
+                            .ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "Field '{}' not found in source struct",
+                                    to_field.name()
+                                ))
+                            })?;
+                        let column = array.column(from_field_idx);
+                        cast_with_options(column, to_field.data_type(), cast_options)
+                    })
+                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+            };
+
             let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
             Ok(Arc::new(array) as ArrayRef)
         }
