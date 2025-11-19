@@ -826,9 +826,7 @@ impl MetadataObjectWriter {
                 // so the column chunk does not need additional encryption.
                 // Except if we're in plaintext footer mode, then we need to encrypt
                 // the column metadata here.
-                let is_footer_encrypted = file_encryptor
-                    .properties()
-                    .encrypt_footer();
+                let is_footer_encrypted = file_encryptor.properties().encrypt_footer();
 
                 if !is_footer_encrypted {
                     // Temporarily clear crypto_metadata so statistics get included in encrypted blob
