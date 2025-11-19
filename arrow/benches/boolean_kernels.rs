@@ -27,44 +27,48 @@ use arrow::array::*;
 use arrow::compute::kernels::boolean as boolean_kernels;
 use std::hint;
 
+const ARRAY_LEN: usize = 8_192;
+// These bitwise kernels are very cheap, so run them many times per Criterion iteration to
+// try and reduce noise in the benchmarks.
+const RUNS_PER_SAMPLE: usize = 100;
+
 fn bench_and(lhs: &BooleanArray, rhs: &BooleanArray) {
-    hint::black_box(boolean_kernels::and(lhs, rhs).unwrap());
+    for _ in 0..RUNS_PER_SAMPLE {
+        hint::black_box(boolean_kernels::and(lhs, rhs).unwrap());
+    }
 }
 
 fn bench_or(lhs: &BooleanArray, rhs: &BooleanArray) {
-    hint::black_box(boolean_kernels::or(lhs, rhs).unwrap());
+    for _ in 0..RUNS_PER_SAMPLE {
+        hint::black_box(boolean_kernels::or(lhs, rhs).unwrap());
+    }
 }
 
 fn bench_not(array: &BooleanArray) {
-    hint::black_box(boolean_kernels::not(array).unwrap());
+    for _ in 0..RUNS_PER_SAMPLE {
+        hint::black_box(boolean_kernels::not(array).unwrap());
+    }
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let size = 2usize.pow(15);
-    let array1 = create_boolean_array(size, 0.0, 0.5);
-    let array2 = create_boolean_array(size, 0.0, 0.5);
+    let array1_full = create_boolean_array(ARRAY_LEN + 1, 0.0, 0.5);
+    let array2_full = create_boolean_array(ARRAY_LEN + 1, 0.0, 0.5);
+    let array1 = array1_full.slice(0, ARRAY_LEN);
+    let array2 = array2_full.slice(0, ARRAY_LEN);
     c.bench_function("and", |b| b.iter(|| bench_and(&array1, &array2)));
     c.bench_function("or", |b| b.iter(|| bench_or(&array1, &array2)));
     c.bench_function("not", |b| b.iter(|| bench_not(&array1)));
 
-    let array1_slice = array1.slice(1, size - 1);
-    let array1_slice = array1_slice
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap();
-    let array2_slice = array2.slice(1, size - 1);
-    let array2_slice = array2_slice
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap();
+    let array1_slice = array1_full.slice(1, ARRAY_LEN);
+    let array2_slice = array2_full.slice(1, ARRAY_LEN);
 
     c.bench_function("and_sliced", |b| {
-        b.iter(|| bench_and(array1_slice, array2_slice))
+        b.iter(|| bench_and(&array1_slice, &array2_slice))
     });
     c.bench_function("or_sliced", |b| {
-        b.iter(|| bench_or(array1_slice, array2_slice))
+        b.iter(|| bench_or(&array1_slice, &array2_slice))
     });
-    c.bench_function("not_sliced", |b| b.iter(|| bench_not(array1_slice)));
+    c.bench_function("not_sliced", |b| b.iter(|| bench_not(&array1_slice)));
 }
 
 criterion_group!(benches, add_benchmark);
