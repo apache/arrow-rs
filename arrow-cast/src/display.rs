@@ -304,10 +304,10 @@ impl<'a> FormatOptions<'a> {
 /// struct MyFormatters {}
 ///
 /// impl ArrayFormatterFactory for MyFormatters {
-///     fn create_display_index<'formatter>(
+///     fn create_array_formatter<'formatter>(
 ///         &self,
 ///         array: &'formatter dyn Array,
-///         options: &'formatter FormatOptions<'formatter>,
+///         options: &FormatOptions<'formatter>,
 ///         field: Option<&'formatter Field>,
 ///     ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError> {
 ///         // check if this is the money type
@@ -317,7 +317,7 @@ impl<'a> FormatOptions<'a> {
 ///         {
 ///             // We assume that my_money always is an Int32.
 ///             let array = array.as_primitive();
-///             let display_index = Box::new(MyMoneyFormatter { array, options });
+///             let display_index = Box::new(MyMoneyFormatter { array, options: options.clone() });
 ///             return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
 ///         }
 ///
@@ -329,7 +329,7 @@ impl<'a> FormatOptions<'a> {
 /// /// formatting options.
 /// struct MyMoneyFormatter<'a> {
 ///     array: &'a Int32Array,
-///     options: &'a FormatOptions<'a>,
+///     options: FormatOptions<'a>,
 /// }
 ///
 /// impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
@@ -349,7 +349,7 @@ impl<'a> FormatOptions<'a> {
 /// // Call the pretty printer with the custom formatter factory.
 /// pretty_format_batches_with_options(
 ///        &my_batches,
-///        &FormatOptions::new().with_formatter_factory(&MyFormatters {})
+///        &FormatOptions::new().with_formatter_factory(Some(&MyFormatters {}))
 /// );
 /// ```
 pub trait ArrayFormatterFactory: Debug {
