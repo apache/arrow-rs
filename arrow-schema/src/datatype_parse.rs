@@ -116,13 +116,15 @@ impl<'a> Parser<'a> {
     ///
     /// TODO: support metadata: `nullable Int64, metadata: {"foo2": "value"}`
     fn parse_list_field(&mut self, context: &str) -> ArrowResult<Field> {
+        let mut nullable = self.parse_opt_nullable();
         // Introduction of the "nullable" token led to a breaking API change. As a temporary
         // workaround we'll always treat lists as nullable to match past behavior.
         // This should be reverted for 58.0.0.
         //
         // See https://github.com/apache/arrow-rs/issues/8883
-        let _nullable = self.parse_opt_nullable();
-        let nullable = true;
+        if !context.contains("Fixed") {
+            nullable = true;
+        }
         let data_type = self.parse_next_type()?;
 
         // the field name (if exists) must be after a comma
@@ -1039,36 +1041,36 @@ mod test {
             DataType::Struct(Fields::from(vec![Field::new("f1", DataType::Int64, true)])),
             DataType::Struct(Fields::empty()),
             DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
-            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
             DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
-            DataType::List(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
             DataType::List(Arc::new(Field::new(
                 "nested_list",
                 DataType::List(Arc::new(Field::new("Int64", DataType::Int64, true))),
                 true,
             ))),
             DataType::ListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
-            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::ListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
             DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
-            DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
             DataType::ListView(Arc::new(Field::new(
                 "nested_list_view",
                 DataType::ListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
                 true,
             ))),
             DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
-            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int64, true))),
             DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, true))),
-            DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, true))),
             DataType::LargeList(Arc::new(Field::new(
                 "nested_large_list",
                 DataType::LargeList(Arc::new(Field::new("Int64", DataType::Int64, true))),
                 true,
             ))),
             DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
-            DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, false))),
+            DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int64, true))),
             DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
-            DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, false))),
+            DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
             DataType::LargeListView(Arc::new(Field::new(
                 "nested_large_list_view",
                 DataType::LargeListView(Arc::new(Field::new("Int64", DataType::Int64, true))),
