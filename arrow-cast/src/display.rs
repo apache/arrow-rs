@@ -352,7 +352,7 @@ impl<'a> FormatOptions<'a> {
 ///        &FormatOptions::new().with_formatter_factory(Some(&MyFormatters {}))
 /// );
 /// ```
-pub trait ArrayFormatterFactory: Debug {
+pub trait ArrayFormatterFactory: Debug + Send + Sync {
     /// Creates a new [`ArrayFormatter`] for the given [`Array`] and an optional [`Field`]. If the
     /// default implementation should be used, return [`None`].
     ///
@@ -1338,6 +1338,19 @@ mod tests {
     #[test]
     fn test_const_options() {
         assert_eq!(TEST_CONST_OPTIONS.date_format, Some("foo"));
+    }
+
+    /// See https://github.com/apache/arrow-rs/issues/8875
+    #[test]
+    fn test_options_send_sync() {
+        fn assert_send_sync<T>()
+        where
+            T: Send + Sync,
+        {
+            // nothing – the compiler does the work
+        }
+
+        assert_send_sync::<FormatOptions<'static>>();
     }
 
     #[test]
