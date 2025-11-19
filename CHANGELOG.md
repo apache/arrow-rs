@@ -25,50 +25,51 @@
 
 **Implemented enhancements:**
 
-- Eliminate bound checks in filter kernels [\#8865](https://github.com/apache/arrow-rs/issues/8865)
-- Respect page index policy option for ParquetObjectReader when it's not skip [\#8856](https://github.com/apache/arrow-rs/issues/8856)
-- Speed up collect\_bool and remove `unsafe` [\#8848](https://github.com/apache/arrow-rs/issues/8848)
-- Error reading parquet FileMetaData with empty lists encoded as element-type=0 [\#8826](https://github.com/apache/arrow-rs/issues/8826)
-- ValueStatistics methods can't be used from generic context in external crate [\#8823](https://github.com/apache/arrow-rs/issues/8823)
-- Custom Pretty-Printing Implementation for Column when Formatting Record Batches [\#8821](https://github.com/apache/arrow-rs/issues/8821)
-- Parquet-concat: supports bloom filter and page index [\#8804](https://github.com/apache/arrow-rs/issues/8804)
+- Eliminate bound checks in filter kernels [\#8865](https://github.com/apache/arrow-rs/issues/8865) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Respect page index policy option for ParquetObjectReader when it's not skip [\#8856](https://github.com/apache/arrow-rs/issues/8856) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Speed up collect\_bool and remove `unsafe` [\#8848](https://github.com/apache/arrow-rs/issues/8848) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Error reading parquet FileMetaData with empty lists encoded as element-type=0 [\#8826](https://github.com/apache/arrow-rs/issues/8826) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- ValueStatistics methods can't be used from generic context in external crate [\#8823](https://github.com/apache/arrow-rs/issues/8823) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Custom Pretty-Printing Implementation for Column when Formatting Record Batches [\#8821](https://github.com/apache/arrow-rs/issues/8821) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Parquet-concat: supports bloom filter and page index [\#8804](https://github.com/apache/arrow-rs/issues/8804) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[Parquet\] virtual row group number support [\#8800](https://github.com/apache/arrow-rs/issues/8800)
-- \[Variant\] Enforce shredded-type validation in `shred_variant` [\#8795](https://github.com/apache/arrow-rs/issues/8795)
-- Simplify decision logic to call `FilterBuilder::optimize` or not [\#8781](https://github.com/apache/arrow-rs/issues/8781)
-- \[Variant\] Add variant to arrow for DataType::{Binary, LargeBinary, BinaryView} [\#8767](https://github.com/apache/arrow-rs/issues/8767)
-- Provide algorithm that allows zipping arrays whose values are not prealigned [\#8752](https://github.com/apache/arrow-rs/issues/8752)
+- \[Variant\] Enforce shredded-type validation in `shred_variant` [\#8795](https://github.com/apache/arrow-rs/issues/8795) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Simplify decision logic to call `FilterBuilder::optimize` or not [\#8781](https://github.com/apache/arrow-rs/issues/8781) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Variant\] Add variant to arrow for DataType::{Binary, LargeBinary, BinaryView} [\#8767](https://github.com/apache/arrow-rs/issues/8767) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Provide algorithm that allows zipping arrays whose values are not prealigned [\#8752](https://github.com/apache/arrow-rs/issues/8752) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Parquet\] ParquetMetadataReader decodes too much metadata under point-get scenerio [\#8751](https://github.com/apache/arrow-rs/issues/8751) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- `arrow-json` supports encoding binary arrays, but not decoding [\#8736](https://github.com/apache/arrow-rs/issues/8736)
-- Allow `FilterPredicate` instances to be reused for RecordBatches [\#8692](https://github.com/apache/arrow-rs/issues/8692)
-- ArrowJsonBatch::from\_batch is incomplete [\#8684](https://github.com/apache/arrow-rs/issues/8684)
-- parquet-layout: More info about layout including footer size, page index, bloom filter? [\#8682](https://github.com/apache/arrow-rs/issues/8682)
-- Rewrite `ParquetRecordBatchStream` \(async API\) in terms of the PushDecoder [\#8677](https://github.com/apache/arrow-rs/issues/8677)
+- `arrow-json` supports encoding binary arrays, but not decoding [\#8736](https://github.com/apache/arrow-rs/issues/8736) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Allow `FilterPredicate` instances to be reused for RecordBatches [\#8692](https://github.com/apache/arrow-rs/issues/8692) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- ArrowJsonBatch::from\_batch is incomplete [\#8684](https://github.com/apache/arrow-rs/issues/8684) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- parquet-layout: More info about layout including footer size, page index, bloom filter? [\#8682](https://github.com/apache/arrow-rs/issues/8682) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Rewrite `ParquetRecordBatchStream` \(async API\) in terms of the PushDecoder [\#8677](https://github.com/apache/arrow-rs/issues/8677) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - \[JSON\] Add encoding for binary view [\#8674](https://github.com/apache/arrow-rs/issues/8674) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Refactor arrow-cast decimal casting to unify the rescale logic used in Parquet variant casts [\#8670](https://github.com/apache/arrow-rs/issues/8670)
+- Refactor arrow-cast decimal casting to unify the rescale logic used in Parquet variant casts [\#8670](https://github.com/apache/arrow-rs/issues/8670) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Variant\] Support Uuid/`FixedSizeBinary(16)` shredding [\#8665](https://github.com/apache/arrow-rs/issues/8665)
-- \[Parquet\]There should be an encoding counter to know how many encodings the repo supports in total [\#8662](https://github.com/apache/arrow-rs/issues/8662)
-- Improve `parse_data_type` for `List`, `ListView`, `LargeList`, `LargeListView`, `FixedSizeList`, `Union`, `Map`, `RunEndCoded`. [\#8648](https://github.com/apache/arrow-rs/issues/8648)
+- \[Parquet\]There should be an encoding counter to know how many encodings the repo supports in total [\#8662](https://github.com/apache/arrow-rs/issues/8662) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Improve `parse_data_type` for `List`, `ListView`, `LargeList`, `LargeListView`, `FixedSizeList`, `Union`, `Map`, `RunEndCoded`. [\#8648](https://github.com/apache/arrow-rs/issues/8648) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Variant\] Support variant to arrow primitive support null/time/decimal\_\* [\#8637](https://github.com/apache/arrow-rs/issues/8637)
-- Return error from `RleDecoder::reset` rather than panic [\#8632](https://github.com/apache/arrow-rs/issues/8632)
-- Add bitwise ops on `BooleanBufferBuilder` and `MutableBuffer` that mutate directly the buffer [\#8618](https://github.com/apache/arrow-rs/issues/8618)
-- \[Variant\] Add variant\_to\_arrow Utf-8, LargeUtf8, Utf8View types support [\#8567](https://github.com/apache/arrow-rs/issues/8567)
+- Return error from `RleDecoder::reset` rather than panic [\#8632](https://github.com/apache/arrow-rs/issues/8632) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Add bitwise ops on `BooleanBufferBuilder` and `MutableBuffer` that mutate directly the buffer [\#8618](https://github.com/apache/arrow-rs/issues/8618) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Variant\] Add variant\_to\_arrow Utf-8, LargeUtf8, Utf8View types support [\#8567](https://github.com/apache/arrow-rs/issues/8567) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Blog post about new rust Metadata Parser [\#8537](https://github.com/apache/arrow-rs/issues/8537)
-- Blog post for arrow 57 [\#8463](https://github.com/apache/arrow-rs/issues/8463)
+- Blog post for arrow 57 [\#8463](https://github.com/apache/arrow-rs/issues/8463) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Fixed bugs:**
 
-- RowNumber reader has wrong row group ordering [\#8864](https://github.com/apache/arrow-rs/issues/8864)
-- `ThriftMetadataWriter::write_column_indexes` cannot handle a `ColumnIndexMetaData::NONE` [\#8815](https://github.com/apache/arrow-rs/issues/8815)
-- "Archery test With other arrows" Integration test failing on main: [\#8813](https://github.com/apache/arrow-rs/issues/8813)
-- \[Parquet\] Writing in 57.0.0 seems 10% slower than 56.0.0 [\#8783](https://github.com/apache/arrow-rs/issues/8783)
-- Parquet reader cannot handle files with unknown logical types [\#8776](https://github.com/apache/arrow-rs/issues/8776)
-- zip now treats nulls as false in provided mask regardless of the underlying bit value [\#8721](https://github.com/apache/arrow-rs/issues/8721)
-- \[avro\] Incorrect version in crate.io landing page [\#8691](https://github.com/apache/arrow-rs/issues/8691)
+- \(dyn ArrayFormatterFactory + 'static\) can't be safely shared between threads [\#8875](https://github.com/apache/arrow-rs/issues/8875)
+- RowNumber reader has wrong row group ordering [\#8864](https://github.com/apache/arrow-rs/issues/8864) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- `ThriftMetadataWriter::write_column_indexes` cannot handle a `ColumnIndexMetaData::NONE` [\#8815](https://github.com/apache/arrow-rs/issues/8815) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- "Archery test With other arrows" Integration test failing on main: [\#8813](https://github.com/apache/arrow-rs/issues/8813) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Parquet\] Writing in 57.0.0 seems 10% slower than 56.0.0 [\#8783](https://github.com/apache/arrow-rs/issues/8783) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- Parquet reader cannot handle files with unknown logical types [\#8776](https://github.com/apache/arrow-rs/issues/8776) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- zip now treats nulls as false in provided mask regardless of the underlying bit value [\#8721](https://github.com/apache/arrow-rs/issues/8721) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[avro\] Incorrect version in crate.io landing page [\#8691](https://github.com/apache/arrow-rs/issues/8691) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Array: ViewType gc\(\) has bug when array sum length exceed i32::MAX [\#8681](https://github.com/apache/arrow-rs/issues/8681) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Parquet 56: encounter `error: item_reader def levels are None` when reading nested field with row filter [\#8657](https://github.com/apache/arrow-rs/issues/8657) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- Degnerate and non-nullable `FixedSizeListArray`s are not handled [\#8623](https://github.com/apache/arrow-rs/issues/8623)
-- \[Parquet\]Performance Degradation with RowFilter on Unsorted Columns due to Fragmented ReadPlan [\#8565](https://github.com/apache/arrow-rs/issues/8565)
-- ParquetMetaData memory size is not reported accurately when `encryption` is enabled [\#8472](https://github.com/apache/arrow-rs/issues/8472)
+- Degnerate and non-nullable `FixedSizeListArray`s are not handled [\#8623](https://github.com/apache/arrow-rs/issues/8623) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- \[Parquet\]Performance Degradation with RowFilter on Unsorted Columns due to Fragmented ReadPlan [\#8565](https://github.com/apache/arrow-rs/issues/8565) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
+- ParquetMetaData memory size is not reported accurately when `encryption` is enabled [\#8472](https://github.com/apache/arrow-rs/issues/8472) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
 
@@ -85,6 +86,7 @@
 
 **Performance improvements:**
 
+- `RowConverter::from_binary` should opportunistically take ownership of the buffer [\#8685](https://github.com/apache/arrow-rs/issues/8685) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Speed up `collect_bool` and remove `unsafe`, optimize `take_bits`, `take_native` for null values [\#8849](https://github.com/apache/arrow-rs/pull/8849) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Change `BooleanBuffer::append_packed_range` to use `apply_bitwise_binary_op` [\#8812](https://github.com/apache/arrow-rs/pull/8812) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - \[Parquet\] Avoid copying `LogicalType` in `ColumnOrder::get_sort_order`, deprecate `get_logical_type` [\#8789](https://github.com/apache/arrow-rs/pull/8789) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
@@ -103,14 +105,14 @@
 
 - Unify display representation for `Field` [\#8784](https://github.com/apache/arrow-rs/issues/8784)
 - Misleading configuration name: skip\_arrow\_metadata [\#8780](https://github.com/apache/arrow-rs/issues/8780)
-- Inconsistent display for types with Metadata [\#8761](https://github.com/apache/arrow-rs/issues/8761)
-- Internal `arrow-integration-test` crate is linked from `arrow` docs [\#8739](https://github.com/apache/arrow-rs/issues/8739)
-- Add benchmark for RunEndEncoded casting [\#8709](https://github.com/apache/arrow-rs/issues/8709)
-- `RowConverter::from_binary` should opportunistically take ownership of the buffer [\#8685](https://github.com/apache/arrow-rs/issues/8685)
+- Inconsistent display for types with Metadata [\#8761](https://github.com/apache/arrow-rs/issues/8761) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Internal `arrow-integration-test` crate is linked from `arrow` docs [\#8739](https://github.com/apache/arrow-rs/issues/8739) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Add benchmark for RunEndEncoded casting [\#8709](https://github.com/apache/arrow-rs/issues/8709) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Varaint\] Support `VariantArray::value` to return a `Result<Variant>` [\#8672](https://github.com/apache/arrow-rs/issues/8672)
 
 **Merged pull requests:**
 
+- Make ArrayFormatterFactory Send + Sync and add a test [\#8878](https://github.com/apache/arrow-rs/pull/8878) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tobixdev](https://github.com/tobixdev))
 - Speed up filter some more \(up to 2x\) [\#8868](https://github.com/apache/arrow-rs/pull/8868) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Make `ArrowReaderOptions::with_virtual_columns` error rather than panic on invalid input [\#8867](https://github.com/apache/arrow-rs/pull/8867) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Fix errors when reading nested Lists with pushdown predicates. [\#8866](https://github.com/apache/arrow-rs/pull/8866) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
