@@ -116,7 +116,13 @@ impl<'a> Parser<'a> {
     ///
     /// TODO: support metadata: `nullable Int64, metadata: {"foo2": "value"}`
     fn parse_list_field(&mut self, context: &str) -> ArrowResult<Field> {
-        let nullable = self.parse_opt_nullable();
+        // Introduction of the "nullable" token led to a breaking API change. As a temporary
+        // workaround we'll always treat lists as nullable to match past behavior.
+        // This should be reverted for 58.0.0.
+        //
+        // See https://github.com/apache/arrow-rs/issues/8883
+        let _nullable = self.parse_opt_nullable();
+        let nullable = true;
         let data_type = self.parse_next_type()?;
 
         // the field name (if exists) must be after a comma
@@ -1360,13 +1366,29 @@ mod test {
                 ])),
             ),
             (r#"Struct()"#, Struct(Fields::empty())),
+            (
+                "List(Int64)",
+                List(Arc::new(Field::new_list_field(Int64, true))),
+            ),
+            (
+                "LargeList(Int64)",
+                LargeList(Arc::new(Field::new_list_field(Int64, true))),
+            ),
+            (
+                "ListView(Int64)",
+                ListView(Arc::new(Field::new_list_field(Int64, true))),
+            ),
+            (
+                "LargeListView(Int64)",
+                LargeListView(Arc::new(Field::new_list_field(Int64, true))),
+            ),
         ];
 
         for (data_type_string, expected_data_type) in cases {
             let parsed_data_type = parse_data_type(data_type_string).unwrap();
             assert_eq!(
                 parsed_data_type, expected_data_type,
-                "Parsing '{data_type_string}', expecting '{expected_data_type}'"
+                "Parsing '{data_type_string}', expecting '{expected_data_type}', got '{parsed_data_type}'"
             );
         }
     }
