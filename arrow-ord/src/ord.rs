@@ -313,10 +313,18 @@ fn compare_union(
         _ => unreachable!(),
     };
 
-    if left_fields != right_fields || left_mode != right_mode {
-        return Err(ArrowError::InvalidArgumentError(
-            "Cannot compare UnionArrays with different fields or modes".to_string(),
-        ));
+    if left_fields != right_fields {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot compare UnionArrays with different fields: left={:?}, right={:?}",
+            left_fields, right_fields
+        )));
+    }
+
+    if left_mode != right_mode {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot compare UnionArrays with different modes: left={:?}, right={:?}",
+            left_mode, right_mode
+        )));
     }
 
     let c_opts = child_opts(opts);
@@ -1395,7 +1403,7 @@ mod tests {
     }
 
     #[test]
-    fn test_union_incompatible_types() {
+    fn test_union_incompatible_fields() {
         // create first union with Int32 and Utf8
         let int_array1 = Int32Array::from(vec![1, 2]);
         let str_array1 = StringArray::from(vec!["a", "b"]);
@@ -1444,7 +1452,53 @@ mod tests {
 
         assert_eq!(
             &out,
-            "Cannot compare UnionArrays with different fields or modes"
+            "Cannot compare UnionArrays with different fields: left=[(0, Field { name: \"A\", data_type: Int32 }), (1, Field { name: \"B\", data_type: Utf8 })], right=[(0, Field { name: \"A\", data_type: Int32 }), (1, Field { name: \"C\", data_type: Float64 })]"
+        );
+    }
+
+    #[test]
+    fn test_union_incompatible_modes() {
+        // create first union as Dense with Int32 and Utf8
+        let int_array1 = Int32Array::from(vec![1, 2]);
+        let str_array1 = StringArray::from(vec!["a", "b"]);
+
+        let type_ids1 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets1 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields1 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children1 = vec![Arc::new(int_array1) as ArrayRef, Arc::new(str_array1)];
+
+        let array1 =
+            UnionArray::try_new(union_fields1.clone(), type_ids1, Some(offsets1), children1)
+                .unwrap();
+
+        // create second union as Sparse with same fields (Int32 and Utf8)
+        let int_array2 = Int32Array::from(vec![Some(3), None]);
+        let str_array2 = StringArray::from(vec![None, Some("c")]);
+
+        let type_ids2 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(str_array2)];
+
+        let array2 = UnionArray::try_new(union_fields1, type_ids2, None, children2).unwrap();
+
+        let opts = SortOptions::default();
+
+        let Result::Err(ArrowError::InvalidArgumentError(out)) =
+            make_comparator(&array1, &array2, opts)
+        else {
+            panic!("expected error when making comparator of union arrays with different modes");
+        };
+
+        assert_eq!(
+            &out,
+            "Cannot compare UnionArrays with different modes: left=Dense, right=Sparse"
         );
     }
 }
