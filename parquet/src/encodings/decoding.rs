@@ -380,21 +380,23 @@ impl<T: DataType> DictDecoder<T> {
 
 impl<T: DataType> Decoder<T> for DictDecoder<T> {
     fn set_data(&mut self, data: Bytes, num_values: usize) -> Result<()> {
-        // First byte in `data` is bit width
-        if data.is_empty() {
-            return Err(eof_err!("Not enough bytes to decode bit_width"));
-        }
-
-        let bit_width = data.as_ref()[0];
-        if bit_width > 32 {
-            return Err(general_err!(
-                "Invalid or corrupted RLE bit width {}. Max allowed is 32",
-                bit_width
-            ));
-        }
+        let (bit_width, data_to_set, num_values_to_set) = if data.is_empty() {
+            // Initialize dummy decoder to avoid crashes later on.
+            (1, data.slice(0..), 0)
+        } else {
+            // Data is present. Use original logic.
+            let bit_width = data.as_ref()[0];
+            if bit_width > 32 {
+                return Err(general_err!(
+                    "Invalid or corrupted Bit width {}. Max allowed is 32",
+                    bit_width
+                ));
+            }
+            (bit_width, data.slice(1..), num_values)
+        };
         let mut rle_decoder = RleDecoder::new(bit_width);
-        rle_decoder.set_data(data.slice(1..))?;
-        self.num_values = num_values;
+        rle_decoder.set_data(data_to_set);
+        self.num_values = num_values_to_set;
         self.rle_decoder = Some(rle_decoder);
         Ok(())
     }
@@ -1473,6 +1475,13 @@ mod tests {
         assert_eq!(num_values + num_nulls, result.unwrap());
         assert_eq!(decoder.values_left(), 0);
         assert_eq!(buffer, expected);
+    }
+    
+    #[test]
+    fn test_dict_decode_doesnt_panic_on_empty() {
+        let mut decoder = DictDecoder::<Int32Type>::new();
+        let result = decoder.set_data(Bytes::from(vec![]), 0);
+        assert!(result.is_ok());
     }
 
     #[test]
