@@ -533,11 +533,8 @@ fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
 
     match &predicate.strategy {
         IterationStrategy::IndexIterator => {
-            let bits =
-                // SAFETY: IndexIterator uses the filter predicate to derive indices
-                IndexIterator::new(&predicate.filter, predicate.count).map(|src_idx| unsafe {
-                    bit_util::get_bit_raw(buffer.values().as_ptr(), src_idx + offset)
-                });
+            let bits = IndexIterator::new(&predicate.filter, predicate.count)
+                .map(|src_idx| bit_util::get_bit(buffer.values(), src_idx + offset));
 
             // SAFETY: `IndexIterator` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
@@ -592,8 +589,7 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
         IterationStrategy::SlicesIterator => {
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
-                // SAFETY: indices were derived from the filter predicate
-                buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
+                buffer.extend_from_slice(&values[start..end]);
             }
             buffer.into()
         }
@@ -606,9 +602,7 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
             buffer.into()
         }
         IterationStrategy::IndexIterator => {
-            // SAFETY: indices were derived from the filter predicate
-            let iter = IndexIterator::new(&predicate.filter, predicate.count)
-                .map(|x| unsafe { *values.get_unchecked(x) });
+            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
 
             // SAFETY: IndexIterator is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }.into()
