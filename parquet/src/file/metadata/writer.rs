@@ -824,28 +824,41 @@ impl MetadataObjectWriter {
                 use crate::file::metadata::thrift::serialize_column_meta_data;
                 // When uniform encryption is used the footer is already encrypted,
                 // so the column chunk does not need additional encryption.
-                let mut encryptor = file_encryptor.get_footer_encryptor()?;
-                let aad = create_module_aad(
-                    file_encryptor.file_aad(),
-                    ModuleType::ColumnMetaData,
-                    row_group_index,
-                    column_index,
-                    None,
-                )?;
-                // create temp ColumnMetaData that we can encrypt
-                let mut buffer: Vec<u8> = vec![];
-                {
-                    let mut prot = ThriftCompactOutputProtocol::new(&mut buffer);
-                    serialize_column_meta_data(&column_chunk, &mut prot)?;
-                }
-                let ciphertext = encryptor.encrypt(&buffer, &aad)?;
+                // Except if we're in plaintext footer mode, then we need to encrypt
+                // the column metadata here.
+                let is_footer_encrypted = file_encryptor
+                    .properties()
+                    .encrypt_footer();
 
-                column_chunk.encrypted_column_metadata = Some(ciphertext);
+                if !is_footer_encrypted {
+                    // Temporarily clear crypto_metadata so statistics get included in encrypted blob
+                    let crypto_metadata = column_chunk.column_crypto_metadata.take();
+                    let mut encryptor = file_encryptor.get_footer_encryptor()?;
+                    let aad = create_module_aad(
+                        file_encryptor.file_aad(),
+                        ModuleType::ColumnMetaData,
+                        row_group_index,
+                        column_index,
+                        None,
+                    )?;
+                    // create temp ColumnMetaData that we can encrypt
+                    let mut buffer: Vec<u8> = vec![];
+                    {
+                        let mut prot = ThriftCompactOutputProtocol::new(&mut buffer);
+                        serialize_column_meta_data(&column_chunk, &mut prot)?;
+                    }
+                    let ciphertext = encryptor.encrypt(&buffer, &aad)?;
+
+                    column_chunk.column_crypto_metadata = crypto_metadata;
+                    column_chunk.encrypted_column_metadata = Some(ciphertext);
+                }
             }
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(col_key)) => {
                 use crate::file::metadata::thrift::serialize_column_meta_data;
 
                 let column_path = col_key.path_in_schema.join(".");
+                // Temporarily clear crypto_metadata so statistics get included in encrypted blob
+                let crypto_metadata = column_chunk.column_crypto_metadata.take();
                 let mut column_encryptor = file_encryptor.get_column_encryptor(&column_path)?;
                 let aad = create_module_aad(
                     file_encryptor.file_aad(),
@@ -862,6 +875,7 @@ impl MetadataObjectWriter {
                 }
                 let ciphertext = column_encryptor.encrypt(&buffer, &aad)?;
 
+                column_chunk.column_crypto_metadata = crypto_metadata;
                 column_chunk.encrypted_column_metadata = Some(ciphertext);
             }
         }

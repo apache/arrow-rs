@@ -801,7 +801,8 @@ pub fn test_non_uniform_plaintext_encryption_behaviour() {
     let metadata = reader_metadata.metadata();
     let row_group = metadata.row_group(0);
     // Reader can read plaintext from the unencrypted column
-    // and column x for which the key is provided
+    // and column x for which the key is provided, but not column y
+    // for which no key is provided.
     check_column_stats(row_group.column(0), true);
     check_column_stats(row_group.column(1), false);
     check_column_stats(row_group.column(2), true);
@@ -840,7 +841,7 @@ pub fn test_non_uniform_plaintext_encryption_behaviour() {
     let options = ArrowReaderOptions::default();
     let reader_metadata = ArrowReaderMetadata::load(&temp_file, options).unwrap();
     let metadata = reader_metadata.metadata();
-    // Reader can read stats from plaintext footer metadata if no key is provided
+    // Reader can not read stats from plaintext footer metadata if no key is provided
     check_column_stats(metadata.row_group(0).column(0), false);
 }
 

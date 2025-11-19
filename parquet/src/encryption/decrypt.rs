@@ -614,11 +614,6 @@ impl FileDecryptor {
         Ok(self.footer_decryptor.clone())
     }
 
-    /// Returns true if the column is encrypted with a column key.
-    pub(crate) fn is_column_encrypted(&self, column_name: &str) -> bool {
-        self.decryption_properties.column_keys().0.contains(&column_name.to_string())
-    }
-
     /// Verify the signature of the footer
     pub(crate) fn verify_plaintext_footer_signature(&self, plaintext_footer: &[u8]) -> Result<()> {
         // Plaintext footer format is: [plaintext metadata, nonce, authentication tag]
