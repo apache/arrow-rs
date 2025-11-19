@@ -2202,8 +2202,9 @@ mod tests {
                         Field::new("row_number", DataType::Int64, false)
                             .with_extension_type(RowNumber),
                     );
-                    let options =
-                        ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let options = ArrowReaderOptions::new()
+                        .with_virtual_columns(vec![row_number_field])
+                        .unwrap();
                     let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
                         .await
                         .unwrap()
@@ -2232,8 +2233,9 @@ mod tests {
                         Field::new("row_number", DataType::Int64, false)
                             .with_extension_type(RowNumber),
                     );
-                    let options =
-                        ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                    let options = ArrowReaderOptions::new()
+                        .with_virtual_columns(vec![row_number_field])
+                        .unwrap();
                     let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
                         .await
                         .unwrap()
