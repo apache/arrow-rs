@@ -141,9 +141,8 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
 
 /// Creates a `VariantArray` where the values are already shredded as UTF8.
 fn create_shredded_utf8_variant_array(size: usize) -> VariantArray {
-    let metadata = BinaryViewArray::from_iter_values(
-        std::iter::repeat(EMPTY_VARIANT_METADATA_BYTES).take(size),
-    );
+    let metadata =
+        BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, size));
     let typed_value = StringArray::from_iter_values((0..size).map(|i| format!("value_{i}")));
 
     let metadata_ref: ArrayRef = Arc::new(metadata);
