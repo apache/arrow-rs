@@ -218,21 +218,14 @@ impl<'a> FormatOptions<'a> {
     }
 
     /// Overrides the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
+    ///
+    /// Using [`None`] causes pretty-printers to use the default [`ArrayFormatter`]s.
     pub const fn with_formatter_factory(
         self,
-        formatter_factory: &'a dyn ArrayFormatterFactory,
+        formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
     ) -> Self {
         Self {
-            formatter_factory: Some(formatter_factory),
-            ..self
-        }
-    }
-
-    /// Removes the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s. This
-    /// will cause pretty-printers to use the default [`ArrayFormatter`]s.
-    pub const fn without_formatter_factory(self) -> Self {
-        Self {
-            formatter_factory: None,
+            formatter_factory,
             ..self
         }
     }

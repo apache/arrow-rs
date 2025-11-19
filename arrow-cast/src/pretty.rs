@@ -1385,7 +1385,7 @@ mod tests {
         // define a schema.
         let options = FormatOptions::new()
             .with_null("<NULL>")
-            .with_formatter_factory(&TestFormatters {});
+            .with_formatter_factory(Some(&TestFormatters {}));
         let money_metadata = HashMap::from([(
             extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
             "my_money".to_owned(),
@@ -1431,7 +1431,7 @@ mod tests {
     #[test]
     fn test_format_batches_with_custom_formatters_custom_schema_overrules_batch_schema() {
         // define a schema.
-        let options = FormatOptions::new().with_formatter_factory(&TestFormatters {});
+        let options = FormatOptions::new().with_formatter_factory(Some(&TestFormatters {}));
         let money_metadata = HashMap::from([(
             extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
             "my_money".to_owned(),
@@ -1502,7 +1502,7 @@ mod tests {
             pretty_format_columns_with_options(
                 "income",
                 &[array],
-                &FormatOptions::default().with_formatter_factory(&TestFormatters {})
+                &FormatOptions::default().with_formatter_factory(Some(&TestFormatters {}))
             )
             .unwrap()
         )
