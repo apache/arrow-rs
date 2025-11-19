@@ -1365,4 +1365,86 @@ mod tests {
         // array[0] = (type_id=0, value=1), array[1] = (type_id=1, value="b")
         assert_eq!(cmp(0, 1), Ordering::Less); // type_id 0 < 1
     }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_union_out_of_bounds() {
+        // create a dense union array with 3 elements
+        let int_array = Int32Array::from(vec![1, 2]);
+        let str_array = StringArray::from(vec!["a"]);
+
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        let array = UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+
+        let opts = SortOptions::default();
+        let cmp = make_comparator(&array, &array, opts).unwrap();
+
+        // oob
+        cmp(0, 3);
+    }
+
+    #[test]
+    fn test_union_incompatible_types() {
+        // create first union with Int32 and Utf8
+        let int_array1 = Int32Array::from(vec![1, 2]);
+        let str_array1 = StringArray::from(vec!["a", "b"]);
+
+        let type_ids1 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets1 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields1 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children1 = vec![Arc::new(int_array1) as ArrayRef, Arc::new(str_array1)];
+
+        let array1 =
+            UnionArray::try_new(union_fields1, type_ids1, Some(offsets1), children1).unwrap();
+
+        // create second union with Int32 and Float64 (incompatible with first)
+        let int_array2 = Int32Array::from(vec![3, 4]);
+        let float_array2 = Float64Array::from(vec![1.0, 2.0]);
+
+        let type_ids2 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets2 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields2 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("C", DataType::Float64, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(float_array2)];
+
+        let array2 =
+            UnionArray::try_new(union_fields2, type_ids2, Some(offsets2), children2).unwrap();
+
+        let opts = SortOptions::default();
+
+        let Result::Err(ArrowError::InvalidArgumentError(out)) =
+            make_comparator(&array1, &array2, opts)
+        else {
+            panic!("expected error when making comparator of incompatible union arrays");
+        };
+
+        assert_eq!(
+            &out,
+            "Cannot compare UnionArrays with different fields or modes"
+        );
+    }
 }
