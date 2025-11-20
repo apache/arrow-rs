@@ -1882,9 +1882,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let base_expected_size = 2246;
+        let base_expected_size = 2670;
         #[cfg(feature = "encryption")]
-        let base_expected_size = 2414;
+        let base_expected_size = 2838;
 
         assert_eq!(parquet_meta.memory_size(), base_expected_size);
 
@@ -1913,9 +1913,9 @@ mod tests {
             .build();
 
         #[cfg(not(feature = "encryption"))]
-        let bigger_expected_size = 2672;
+        let bigger_expected_size = 3096;
         #[cfg(feature = "encryption")]
-        let bigger_expected_size = 2840;
+        let bigger_expected_size = 3264;
 
         // more set fields means more memory usage
         assert!(bigger_expected_size > base_expected_size);
@@ -1962,7 +1962,7 @@ mod tests {
             .set_row_groups(row_group_meta.clone())
             .build();
 
-        let base_expected_size = 1538;
+        let base_expected_size = 1962;
         assert_eq!(parquet_meta_data.memory_size(), base_expected_size);
 
         let footer_key = "0123456789012345".as_bytes();
@@ -1988,7 +1988,7 @@ mod tests {
             .set_file_decryptor(Some(decryptor))
             .build();
 
-        let expected_size_with_decryptor = 1872;
+        let expected_size_with_decryptor = 2400;
         assert!(expected_size_with_decryptor > base_expected_size);
 
         assert_eq!(

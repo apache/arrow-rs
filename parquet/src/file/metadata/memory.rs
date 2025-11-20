@@ -95,9 +95,9 @@ impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
 
 impl<T: HeapSize> HeapSize for Arc<T> {
     fn heap_size(&self) -> usize {
-        // Do not count the size of the Arc as that is accounted for by the
+        // Do not count the size of the Arc itself that is accounted for by the
         // caller (the object that contains the Arc).
-        self.as_ref().heap_size()
+        std::mem::size_of::<T>() + self.as_ref().heap_size()
     }
 }
 
