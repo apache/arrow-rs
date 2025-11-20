@@ -1389,6 +1389,14 @@ mod test {
                 "FixedSizeList(4, Int64)",
                 FixedSizeList(Arc::new(Field::new_list_field(Int64, true)), 4),
             ),
+            (
+                "List(Int64)",
+                List(Arc::new(Field::new_list_field(Int64, true))),
+            ),
+            (
+                "LargeList(Int64)",
+                LargeList(Arc::new(Field::new_list_field(Int64, true))),
+            ),
         ];
 
         for (data_type_string, expected_data_type) in cases {
