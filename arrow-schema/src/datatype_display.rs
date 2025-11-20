@@ -25,13 +25,9 @@ impl fmt::Display for DataType {
             format!("{}", FormatMetadata(metadata))
         }
 
-        fn format_nullability(field: &crate::Field) -> &str {
-            if field.is_nullable() { "" } else { "nonnull " }
-        }
-
         fn format_field(field: &crate::Field) -> String {
             let name = field.name();
-            let maybe_nullable = format_nullability(field);
+            let maybe_nullable = if field.is_nullable() { "" } else { "nonnull " };
             let data_type = field.data_type();
             let metadata_str = format_metadata(field.metadata());
             format!("{name:?}: {maybe_nullable}{data_type}{metadata_str}")
@@ -94,7 +90,7 @@ impl fmt::Display for DataType {
                 };
 
                 let name = field.name();
-                let maybe_nullable = format_nullability(field);
+                let maybe_nullable = if field.is_nullable() { "" } else { "nonnull " };
                 let data_type = field.data_type();
                 let field_name_str = if name == "item" {
                     String::default()
@@ -111,7 +107,7 @@ impl fmt::Display for DataType {
             }
             Self::FixedSizeList(field, size) => {
                 let name = field.name();
-                let maybe_nullable = format_nullability(field);
+                let maybe_nullable = if field.is_nullable() { "" } else { "nonnull " };
                 let data_type = field.data_type();
                 let field_name_str = if name == "item" {
                     String::default()
