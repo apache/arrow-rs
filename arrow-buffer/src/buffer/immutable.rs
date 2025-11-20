@@ -363,6 +363,8 @@ impl Buffer {
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
     ///
+    /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+    ///
     /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
@@ -453,9 +455,9 @@ impl Buffer {
     /// * `offset` - The bit offset to start the operation.
     /// * `len` - The number of bits to process.
     /// * `op` - The unary operation to apply.
-    pub fn bitwise_unary<F>(&self, offset: usize, len: usize, op: F) -> Buffer
+    pub fn bitwise_unary<F>(&self, offset: usize, len: usize, mut op: F) -> Buffer
     where
-        F: Fn(u64) -> u64,
+        F: FnMut(u64) -> u64,
     {
         // reserve capacity and set length so we can get a typed view of u64 chunks
         let mut result =
@@ -491,9 +493,9 @@ impl Buffer {
     /// * `other_offset` - The bit offset in other.
     /// * `len` - The number of bits to process.
     /// * `op` - The binary operation to apply.
-    pub fn bitwise_binary<F>(&self, other: &Buffer, self_offset: usize, other_offset: usize, len: usize, op: F) -> Buffer
+    pub fn bitwise_binary<F>(&self, other: &Buffer, self_offset: usize, other_offset: usize, len: usize, mut op: F) -> Buffer
     where
-        F: Fn(u64, u64) -> u64,
+        F: FnMut(u64, u64) -> u64,
     {
         let left_chunks = self.bit_chunks(self_offset, len);
         let right_chunks = other.bit_chunks(other_offset, len);

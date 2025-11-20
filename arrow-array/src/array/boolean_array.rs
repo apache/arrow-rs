@@ -292,9 +292,9 @@ impl BooleanArray {
     /// # Arguments
     ///
     /// * `op` - The unary operation to apply.
-    pub fn unary<F>(&self, op: F) -> Self
+    pub fn unary<F>(&self, mut op: F) -> Self
     where
-        F: Fn(u64) -> u64 + Copy,
+        F: FnMut(u64) -> u64,
     {
         let buffer = self.values().inner().bitwise_unary(self.values().offset(), self.len(), op);
         let values = BooleanBuffer::new(buffer, 0, self.len());
@@ -310,9 +310,9 @@ impl BooleanArray {
     ///
     /// * `other` - The other array.
     /// * `op` - The binary operation to apply.
-    pub fn binary<F>(&self, other: &BooleanArray, op: F) -> Result<Self, ArrowError>
+    pub fn binary<F>(&self, other: &BooleanArray, mut op: F) -> Result<Self, ArrowError>
     where
-        F: Fn(u64, u64) -> u64 + Copy,
+        F: FnMut(u64, u64) -> u64,
     {
         if self.len() != other.len() {
             return Err(ArrowError::ComputeError(
