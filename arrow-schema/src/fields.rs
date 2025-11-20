@@ -441,6 +441,46 @@ impl UnionFields {
         }
     }
 
+    /// Create a new [`UnionFields`] from a collection of fields with automatically
+    /// assigned type IDs starting from 0.
+    ///
+    /// The type IDs are assigned in increasing order: 0, 1, 2, 3, etc.
+    ///
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of fields exceeds 127 (the maximum value for i8 type IDs).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, UnionFields};
+    /// // Create a new UnionFields with automatic type id assignment
+    /// // 0 -> DataType::UInt8
+    /// // 1 -> DataType::Utf8
+    /// let union_fields = UnionFields::from_fields(vec![
+    ///     Field::new("field1", DataType::UInt8, false),
+    ///     Field::new("field2", DataType::Utf8, false),
+    /// ]);
+    /// assert_eq!(union_fields.len(), 2);
+    /// ```
+    pub fn from_fields<F>(fields: F) -> Self
+    where
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+    {
+        fields
+            .into_iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let id = i8::try_from(i).expect("UnionFields cannot contain more than 127 fields");
+
+                (id, field.into())
+            })
+            .collect()
+    }
+
     /// Create a new [`UnionFields`] from a [`Fields`] and array of type_ids
     ///
     /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
