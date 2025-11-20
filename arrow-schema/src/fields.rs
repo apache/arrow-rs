@@ -506,7 +506,7 @@ impl UnionFields {
     /// // Create a new UnionFields with type id mapping
     /// // 1 -> DataType::UInt8
     /// // 3 -> DataType::Utf8
-    /// UnionFields::new(
+    /// UnionFields::try_new(
     ///     vec![1, 3],
     ///     vec![
     ///         Field::new("field1", DataType::UInt8, false),
@@ -687,13 +687,14 @@ mod tests {
             Field::new(
                 "h",
                 DataType::Union(
-                    UnionFields::new(
+                    UnionFields::try_new(
                         vec![1, 3],
                         vec![
                             Field::new("field1", DataType::UInt8, false),
                             Field::new("field3", DataType::Utf8, false),
                         ],
-                    ),
+                    )
+                    .unwrap(),
                     UnionMode::Dense,
                 ),
                 true,
@@ -751,7 +752,8 @@ mod tests {
         assert_eq!(r[0], fields[7]);
 
         let union = DataType::Union(
-            UnionFields::new(vec![1], vec![Field::new("field1", DataType::UInt8, false)]),
+            UnionFields::try_new(vec![1], vec![Field::new("field1", DataType::UInt8, false)])
+                .unwrap(),
             UnionMode::Dense,
         );
 

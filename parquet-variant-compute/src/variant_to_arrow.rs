@@ -798,7 +798,8 @@ mod tests {
             true,
         ));
         let union_fields =
-            UnionFields::new(vec![1], vec![Field::new("child", DataType::Int32, true)]);
+            UnionFields::try_new(vec![1], vec![Field::new("child", DataType::Int32, true)])
+                .unwrap();
         let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
         let ree_values_field = Arc::new(Field::new("values", DataType::Utf8, true));
 
