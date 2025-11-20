@@ -582,7 +582,7 @@ impl PartialEq for FileDecryptor {
 impl HeapSize for FileDecryptor {
     fn heap_size(&self) -> usize {
         self.decryption_properties.heap_size()
-            + (Arc::clone(&self.footer_decryptor) as Arc<dyn HeapSize>).heap_size()
+            + self.footer_decryptor.heap_size()
             + self.file_aad.heap_size()
     }
 }

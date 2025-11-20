@@ -95,21 +95,16 @@ impl<K: HeapSize, V: HeapSize> HeapSize for HashMap<K, V> {
 
 impl<T: HeapSize> HeapSize for Arc<T> {
     fn heap_size(&self) -> usize {
-        // Arc stores weak and strong counts on the heap alongside an instance of T
-        2 * std::mem::size_of::<usize>() + std::mem::size_of::<T>() + self.as_ref().heap_size()
-    }
-}
-
-impl HeapSize for Arc<dyn HeapSize> {
-    fn heap_size(&self) -> usize {
-        2 * std::mem::size_of::<usize>()
-            + std::mem::size_of_val(self.as_ref())
-            + self.as_ref().heap_size()
+        // Do not count the size of the Arc as that is accounted for by the
+        // caller (the object that contains the Arc).
+        self.as_ref().heap_size()
     }
 }
 
 impl<T: HeapSize> HeapSize for Box<T> {
     fn heap_size(&self) -> usize {
+        // Do not count the size of the Box itself as that is accounted for by
+        // the caller (the object that contains the Box).
         std::mem::size_of::<T>() + self.as_ref().heap_size()
     }
 }
