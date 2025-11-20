@@ -681,6 +681,10 @@ where
             .try_into()
             .map_err(|_| general_err!("invalid 'mini_blocks_per_block'"))?;
 
+        if self.mini_blocks_per_block == 0 {
+            return Err(general_err!("cannot have zero miniblock per block"));
+        }
+
         self.values_left = self
             .bit_reader
             .get_vlq_int()
@@ -1686,6 +1690,21 @@ mod tests {
             Int64Type::gen_vec(-1, 64),
         ];
         test_delta_bit_packed_decode::<Int64Type>(data);
+    }
+
+    #[test]
+    fn test_delta_bit_packed_zero_miniblocks() {
+        // It is invalid for mini_blocks_per_block to be 0
+        let data = vec![
+            128, 1, // block_size = 128
+            0,     // mini_blocks_per_block = 0
+        ];
+        let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
+        let err = decoder.set_data(data.into(), 0).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: cannot have zero miniblock per block"
+        );
     }
 
     #[test]
