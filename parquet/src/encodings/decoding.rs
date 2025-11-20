@@ -682,7 +682,7 @@ where
             .map_err(|_| general_err!("invalid 'mini_blocks_per_block'"))?;
 
         if self.mini_blocks_per_block == 0 {
-            return Err(general_err!("cannot have zero miniblock per block"));
+            return Err(general_err!("cannot have zero miniblocks per block"));
         }
 
         self.values_left = self
