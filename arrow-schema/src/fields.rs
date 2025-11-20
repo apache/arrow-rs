@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
 use std::sync::Arc;
+use std::{collections::HashSet, ops::Deref};
 
 use crate::{ArrowError, DataType, Field, FieldRef};
 
@@ -355,6 +355,105 @@ impl UnionFields {
     ///
     /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
     ///
+    /// # Errors
+    ///
+    /// This function returns an error if:
+    /// - Any type_id appears more than once (duplicate type ids)
+    /// - Any field appears more than once (duplicate fields)
+    /// - The number of type_ids doesn't match the number of fields
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, UnionFields};
+    /// // Create a new UnionFields with type id mapping
+    /// // 1 -> DataType::UInt8
+    /// // 3 -> DataType::Utf8
+    /// let result = UnionFields::try_new(
+    ///     vec![1, 3],
+    ///     vec![
+    ///         Field::new("field1", DataType::UInt8, false),
+    ///         Field::new("field3", DataType::Utf8, false),
+    ///     ],
+    /// );
+    /// assert!(result.is_ok());
+    ///
+    /// // This will fail due to duplicate type id
+    /// let result = UnionFields::try_new(
+    ///     vec![1, 1],
+    ///     vec![
+    ///         Field::new("field1", DataType::UInt8, false),
+    ///         Field::new("field2", DataType::Utf8, false),
+    ///     ],
+    /// );
+    /// assert!(result.is_err());
+    /// ```
+    pub fn try_new<F, T>(type_ids: T, fields: F) -> Result<Self, ArrowError>
+    where
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+        T: IntoIterator<Item = i8>,
+    {
+        let mut type_ids_iter = type_ids.into_iter();
+        let mut fields_iter = fields.into_iter().map(Into::into);
+
+        let fields_capacity = fields_iter.size_hint().0;
+
+        let mut seen_type_ids = 0u128;
+        let mut seen_fields = HashSet::with_capacity(fields_capacity);
+
+        let mut out = Vec::new();
+
+        loop {
+            match (type_ids_iter.next(), fields_iter.next()) {
+                (None, None) => return Ok(Self(out.into())),
+                (Some(type_id), Some(field)) => {
+                    // check type id uniqueness
+                    let mask = 1_u128 << type_id;
+                    if (seen_type_ids & mask) != 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "duplicate type id: {type_id}"
+                        )));
+                    }
+
+                    seen_type_ids |= mask;
+
+                    // check field id uniqueness
+                    if !seen_fields.insert(Arc::clone(&field)) {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "duplicate field: {field}"
+                        )));
+                    }
+
+                    out.push((type_id, field));
+                }
+                (None, Some(_)) => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "fields iterator has more elements than type_ids iterator".to_string(),
+                    ));
+                }
+                (Some(_), None) => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "type_ids iterator has more elements than fields iterator".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Create a new [`UnionFields`] from a [`Fields`] and array of type_ids
+    ///
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
+    ///
+    /// # Deprecated
+    ///
+    /// Use [`UnionFields::try_new`] instead. This method panics on invalid input,
+    /// while `try_new` returns a `Result`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any type_id appears more than once (duplicate type ids).
+    ///
     /// ```
     /// use arrow_schema::{DataType, Field, UnionFields};
     /// // Create a new UnionFields with type id mapping
@@ -368,6 +467,7 @@ impl UnionFields {
     ///     ],
     /// );
     /// ```
+    #[deprecated(since = "57.0.0", note = "Use `try_new` instead")]
     pub fn new<F, T>(type_ids: T, fields: F) -> Self
     where
         F: IntoIterator,
