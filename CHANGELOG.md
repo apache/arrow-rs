@@ -19,7 +19,7 @@
 
 # Changelog
 
-## [57.1.0](https://github.com/apache/arrow-rs/tree/57.1.0) (2025-11-19)
+## [57.1.0](https://github.com/apache/arrow-rs/tree/57.1.0) (2025-11-20)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/57.0.0...57.1.0)
 
@@ -53,10 +53,11 @@
 - Add bitwise ops on `BooleanBufferBuilder` and `MutableBuffer` that mutate directly the buffer [\#8618](https://github.com/apache/arrow-rs/issues/8618) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Variant\] Add variant\_to\_arrow Utf-8, LargeUtf8, Utf8View types support [\#8567](https://github.com/apache/arrow-rs/issues/8567) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Blog post about new rust Metadata Parser [\#8537](https://github.com/apache/arrow-rs/issues/8537)
-- Blog post for arrow 57 [\#8463](https://github.com/apache/arrow-rs/issues/8463) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Fixed bugs:**
 
+- Regression: Parsing `List(Int64)` results in nullable list in 57.0.0 and a non-nullable list in 57.1.0 [\#8883](https://github.com/apache/arrow-rs/issues/8883)
+- Regression: FixedSlizeList data type parsing fails on 57.1.0 [\#8880](https://github.com/apache/arrow-rs/issues/8880)
 - \(dyn ArrayFormatterFactory + 'static\) can't be safely shared between threads [\#8875](https://github.com/apache/arrow-rs/issues/8875)
 - RowNumber reader has wrong row group ordering [\#8864](https://github.com/apache/arrow-rs/issues/8864) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - `ThriftMetadataWriter::write_column_indexes` cannot handle a `ColumnIndexMetaData::NONE` [\#8815](https://github.com/apache/arrow-rs/issues/8815) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
@@ -69,7 +70,6 @@
 - Parquet 56: encounter `error: item_reader def levels are None` when reading nested field with row filter [\#8657](https://github.com/apache/arrow-rs/issues/8657) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Degnerate and non-nullable `FixedSizeListArray`s are not handled [\#8623](https://github.com/apache/arrow-rs/issues/8623) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Parquet\]Performance Degradation with RowFilter on Unsorted Columns due to Fragmented ReadPlan [\#8565](https://github.com/apache/arrow-rs/issues/8565) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- ParquetMetaData memory size is not reported accurately when `encryption` is enabled [\#8472](https://github.com/apache/arrow-rs/issues/8472) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 
 **Documentation updates:**
 
@@ -103,6 +103,7 @@
 
 **Closed issues:**
 
+- Variant to NullType conversion ignores strict casting [\#8810](https://github.com/apache/arrow-rs/issues/8810)
 - Unify display representation for `Field` [\#8784](https://github.com/apache/arrow-rs/issues/8784)
 - Misleading configuration name: skip\_arrow\_metadata [\#8780](https://github.com/apache/arrow-rs/issues/8780)
 - Inconsistent display for types with Metadata [\#8761](https://github.com/apache/arrow-rs/issues/8761) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
@@ -112,6 +113,8 @@
 
 **Merged pull requests:**
 
+- Fix regression caused by changes in Display for DataType - display \(`List(non-null Int64)` instead of `List(nullable Int64)` [\#8890](https://github.com/apache/arrow-rs/pull/8890) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([etseidl](https://github.com/etseidl))
+- Support parsing for old style FixedSizeList [\#8882](https://github.com/apache/arrow-rs/pull/8882) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - Make ArrayFormatterFactory Send + Sync and add a test [\#8878](https://github.com/apache/arrow-rs/pull/8878) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tobixdev](https://github.com/tobixdev))
 - Speed up filter some more \(up to 2x\) [\#8868](https://github.com/apache/arrow-rs/pull/8868) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Make `ArrowReaderOptions::with_virtual_columns` error rather than panic on invalid input [\#8867](https://github.com/apache/arrow-rs/pull/8867) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
@@ -121,6 +124,7 @@
 - build\(deps\): update apache-avro requirement from 0.20.0 to 0.21.0 [\#8832](https://github.com/apache/arrow-rs/pull/8832) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
 - Allow Users to Provide Custom `ArrayFormatter`s when Pretty-Printing Record Batches [\#8829](https://github.com/apache/arrow-rs/pull/8829) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tobixdev](https://github.com/tobixdev))
 - Allow reading of improperly constructed empty lists in Parquet metadata [\#8827](https://github.com/apache/arrow-rs/pull/8827) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
+- \[Variant\] Fix cast logic for Variant to Arrow for DataType::Null [\#8825](https://github.com/apache/arrow-rs/pull/8825) ([klion26](https://github.com/klion26))
 - remove T: ParquetValueType bound on ValueStatistics [\#8824](https://github.com/apache/arrow-rs/pull/8824) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([pmarks](https://github.com/pmarks))
 - build\(deps\): update lz4\_flex requirement from 0.11 to 0.12 [\#8820](https://github.com/apache/arrow-rs/pull/8820) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([dependabot[bot]](https://github.com/apps/dependabot))
 - Fix bug in handling of empty Parquet page index structures [\#8817](https://github.com/apache/arrow-rs/pull/8817) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([etseidl](https://github.com/etseidl))
