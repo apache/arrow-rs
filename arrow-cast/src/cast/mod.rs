@@ -8805,7 +8805,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Utf8), unsorted) to Map("entries": Struct("key": Utf8, "value": Utf8), sorted) not supported"#
+            r#"Casting from Map("entries": nonnull Struct("key": nonnull Utf8, "value": Utf8), unsorted) to Map("entries": nonnull Struct("key": nonnull Utf8, "value": nonnull Utf8), sorted) not supported"#
         );
     }
 
@@ -8856,7 +8856,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Interval(DayTime)), unsorted) to Map("entries": Struct("key": Utf8, "value": Duration(s)), sorted) not supported"#
+            r#"Casting from Map("entries": nonnull Struct("key": nonnull Utf8, "value": Interval(DayTime)), unsorted) to Map("entries": nonnull Struct("key": nonnull Utf8, "value": nonnull Duration(s)), sorted) not supported"#
         );
     }
 
@@ -10961,7 +10961,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct("a": Boolean) to Utf8 not supported"#,
+            r#"Cast error: Casting from Struct("a": nonnull Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10972,7 +10972,7 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct("a": Boolean) not supported"#,
+            r#"Cast error: Casting from Utf8 to Struct("a": nonnull Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
     }
