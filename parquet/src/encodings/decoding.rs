@@ -1697,7 +1697,7 @@ mod tests {
         // It is invalid for mini_blocks_per_block to be 0
         let data = vec![
             128, 1, // block_size = 128
-            0,     // mini_blocks_per_block = 0
+            0, // mini_blocks_per_block = 0
         ];
         let mut decoder = DeltaBitPackDecoder::<Int32Type>::new();
         let err = decoder.set_data(data.into(), 0).unwrap_err();
