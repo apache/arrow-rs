@@ -408,6 +408,13 @@ impl UnionFields {
             match (type_ids_iter.next(), fields_iter.next()) {
                 (None, None) => return Ok(Self(out.into())),
                 (Some(type_id), Some(field)) => {
+                    // check type id is non-negative
+                    if type_id < 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "type ids must be non-negative: {type_id}"
+                        )));
+                    }
+
                     // check type id uniqueness
                     let mask = 1_u128 << type_id;
                     if (seen_type_ids & mask) != 0 {
@@ -759,5 +766,151 @@ mod tests {
         // Propagate error
         let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_union_fields_try_new_valid() {
+        let res = UnionFields::try_new(
+            vec![1, 6, 7],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f6", DataType::Utf8, false),
+                Field::new("f7", DataType::Int32, true),
+            ],
+        );
+        assert!(res.is_ok());
+        let union_fields = res.unwrap();
+        assert_eq!(union_fields.len(), 3);
+        assert_eq!(
+            union_fields.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            vec![1, 6, 7]
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_empty() {
+        let res = UnionFields::try_new(Vec::<i8>::new(), Vec::<Field>::new());
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_union_fields_try_new_duplicate_type_id() {
+        let res = UnionFields::try_new(
+            vec![1, 1],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f2", DataType::Utf8, false),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("duplicate type id: 1")
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_duplicate_field() {
+        let field = Field::new("field", DataType::UInt8, false);
+        let res = UnionFields::try_new(vec![1, 2], vec![field.clone(), field]);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("duplicate field"));
+    }
+
+    #[test]
+    fn test_union_fields_try_new_more_type_ids() {
+        let res = UnionFields::try_new(
+            vec![1, 2, 3],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f2", DataType::Utf8, false),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("type_ids iterator has more elements")
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_more_fields() {
+        let res = UnionFields::try_new(
+            vec![1, 2],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f2", DataType::Utf8, false),
+                Field::new("f3", DataType::Int32, true),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("fields iterator has more elements")
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_negative_type_ids() {
+        let res = UnionFields::try_new(
+            vec![-128, -1, 0, 127],
+            vec![
+                Field::new("field_min", DataType::UInt8, false),
+                Field::new("field_neg", DataType::Utf8, false),
+                Field::new("field_zero", DataType::Int32, true),
+                Field::new("field_max", DataType::Boolean, false),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("type ids must be non-negative")
+        )
+    }
+
+    #[test]
+    fn test_union_fields_try_new_complex_types() {
+        let res = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new(
+                    "struct_field",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("a", DataType::Int32, false),
+                        Field::new("b", DataType::Utf8, true),
+                    ])),
+                    false,
+                ),
+                Field::new_list(
+                    "list_field",
+                    Field::new("item", DataType::Float64, true),
+                    true,
+                ),
+                Field::new(
+                    "dict_field",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    false,
+                ),
+            ],
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_union_fields_try_new_single_field() {
+        let res = UnionFields::try_new(
+            vec![42],
+            vec![Field::new("only_field", DataType::Int64, false)],
+        );
+        assert!(res.is_ok());
+        let union_fields = res.unwrap();
+        assert_eq!(union_fields.len(), 1);
+        assert_eq!(union_fields.iter().next().unwrap().0, 42);
     }
 }
