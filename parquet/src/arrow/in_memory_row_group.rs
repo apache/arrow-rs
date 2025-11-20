@@ -30,7 +30,7 @@ use std::sync::Arc;
 /// An in-memory collection of column chunks
 #[derive(Debug)]
 pub(crate) struct InMemoryRowGroup<'a> {
-    pub(crate) offset_index: Option<&'a [OffsetIndexMetaData]>,
+    pub(crate) offset_index: Option<&'a [Option<OffsetIndexMetaData>]>,
     /// Column chunks for this row group
     pub(crate) column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
     pub(crate) row_count: usize,
@@ -85,7 +85,7 @@ impl InMemoryRowGroup<'_> {
                     // then we need to also fetch a dictionary page.
                     let mut ranges: Vec<Range<u64>> = vec![];
                     let (start, _len) = chunk_meta.byte_range();
-                    match offset_index[idx].page_locations.first() {
+                    match offset_index[idx].as_ref().unwrap().page_locations.first() {
                         Some(first) if first.offset as u64 != start => {
                             ranges.push(start..first.offset as u64);
                         }
@@ -97,10 +97,10 @@ impl InMemoryRowGroup<'_> {
                     let use_expanded = cache_mask.map(|m| m.leaf_included(idx)).unwrap_or(false);
                     if use_expanded {
                         ranges.extend(
-                            expanded_selection.scan_ranges(&offset_index[idx].page_locations),
+                            expanded_selection.scan_ranges(&offset_index[idx].as_ref().unwrap().page_locations),
                         );
                     } else {
-                        ranges.extend(selection.scan_ranges(&offset_index[idx].page_locations));
+                        ranges.extend(selection.scan_ranges(&offset_index[idx].as_ref().unwrap().page_locations));
                     }
                     page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
 
@@ -203,7 +203,8 @@ impl RowGroups for InMemoryRowGroup<'_> {
                     .offset_index
                     // filter out empty offset indexes (old versions specified Some(vec![]) when no present)
                     .filter(|index| !index.is_empty())
-                    .map(|index| index[i].page_locations.clone());
+                    .and_then(|index| index[i].as_ref())
+                    .map(|index| index.page_locations.clone());
                 let column_chunk_metadata = self.metadata.row_group(self.row_group_idx).column(i);
                 let page_reader = SerializedPageReader::new(
                     data.clone(),

@@ -94,6 +94,10 @@ impl Args {
                 ParquetError::General(format!(
                     "No offset index for row group {row_group_idx} column chunk {column_idx}"
                 ))
+            })?.as_ref().ok_or_else(|| {
+                ParquetError::General(format!(
+                    "Offset index is None for row group {row_group_idx} column chunk {column_idx}"
+                ))
             })?;
 
             let row_counts =
