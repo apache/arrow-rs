@@ -2065,14 +2065,11 @@ mod tests {
         let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
         let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -2112,14 +2109,11 @@ mod tests {
             .into_iter()
             .collect::<ScalarBuffer<i32>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),

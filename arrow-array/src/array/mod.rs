@@ -1067,13 +1067,14 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![2, 1],
                     vec![
                         Field::new("foo", DataType::Int32, true),
                         Field::new("bar", DataType::Int64, true),
                     ],
-                ),
+                )
+                .unwrap(),
                 mode,
             );
             let array = new_null_array(&data_type, 4);
