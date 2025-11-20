@@ -52,7 +52,6 @@
 - Return error from `RleDecoder::reset` rather than panic [\#8632](https://github.com/apache/arrow-rs/issues/8632) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Add bitwise ops on `BooleanBufferBuilder` and `MutableBuffer` that mutate directly the buffer [\#8618](https://github.com/apache/arrow-rs/issues/8618) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Variant\] Add variant\_to\_arrow Utf-8, LargeUtf8, Utf8View types support [\#8567](https://github.com/apache/arrow-rs/issues/8567) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
-- Blog post about new rust Metadata Parser [\#8537](https://github.com/apache/arrow-rs/issues/8537)
 
 **Fixed bugs:**
 
@@ -87,6 +86,7 @@
 **Performance improvements:**
 
 - `RowConverter::from_binary` should opportunistically take ownership of the buffer [\#8685](https://github.com/apache/arrow-rs/issues/8685) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
+- Speed up filter some more \(up to 2x\) [\#8868](https://github.com/apache/arrow-rs/pull/8868) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Speed up `collect_bool` and remove `unsafe`, optimize `take_bits`, `take_native` for null values [\#8849](https://github.com/apache/arrow-rs/pull/8849) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Change `BooleanBuffer::append_packed_range` to use `apply_bitwise_binary_op` [\#8812](https://github.com/apache/arrow-rs/pull/8812) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - \[Parquet\] Avoid copying `LogicalType` in `ColumnOrder::get_sort_order`, deprecate `get_logical_type` [\#8789](https://github.com/apache/arrow-rs/pull/8789) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
@@ -116,7 +116,6 @@
 - Fix regression caused by changes in Display for DataType - display \(`List(non-null Int64)` instead of `List(nullable Int64)` [\#8890](https://github.com/apache/arrow-rs/pull/8890) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([etseidl](https://github.com/etseidl))
 - Support parsing for old style FixedSizeList [\#8882](https://github.com/apache/arrow-rs/pull/8882) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - Make ArrayFormatterFactory Send + Sync and add a test [\#8878](https://github.com/apache/arrow-rs/pull/8878) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tobixdev](https://github.com/tobixdev))
-- Speed up filter some more \(up to 2x\) [\#8868](https://github.com/apache/arrow-rs/pull/8868) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Dandandan](https://github.com/Dandandan))
 - Make `ArrowReaderOptions::with_virtual_columns` error rather than panic on invalid input [\#8867](https://github.com/apache/arrow-rs/pull/8867) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Fix errors when reading nested Lists with pushdown predicates. [\#8866](https://github.com/apache/arrow-rs/pull/8866) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Fix `RowNumberReader` when not all row groups are selected [\#8863](https://github.com/apache/arrow-rs/pull/8863) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([vustef](https://github.com/vustef))
