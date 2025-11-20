@@ -586,7 +586,6 @@ impl UnionFields {
 
 impl FromIterator<(i8, FieldRef)> for UnionFields {
     fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
-        // TODO: Should this validate type IDs are unique (#3982)
         Self(iter.into_iter().collect())
     }
 }
