@@ -1144,7 +1144,7 @@ where
     I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
 {
     let iter = iterator.flat_map(|(len, index)| match index {
-        None | Some(ColumnIndexMetaData::NONE) => vec![None; len],
+        None => vec![None; len],
         Some(column_index) => column_index.null_counts().map_or(vec![None; len], |v| {
             v.iter().map(|i| Some(*i as u64)).collect::<Vec<_>>()
         }),
