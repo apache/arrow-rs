@@ -552,10 +552,7 @@ impl<'a> Parser<'a> {
         let tok = self
             .tokenizer
             .next_if(|next| matches!(next, Ok(Token::NonNull | Token::Nullable)));
-        match tok {
-            Some(Ok(Token::NonNull)) => false,
-            _ => true,
-        }
+        !matches!(tok, Some(Ok(Token::NonNull)))
     }
 
     /// return the next token, or an error if there are none left
