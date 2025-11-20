@@ -1703,7 +1703,7 @@ mod tests {
         let err = decoder.set_data(data.into(), 0).unwrap_err();
         assert_eq!(
             err.to_string(),
-            "Parquet error: cannot have zero miniblock per block"
+            "Parquet error: cannot have zero miniblocks per block"
         );
     }
 
