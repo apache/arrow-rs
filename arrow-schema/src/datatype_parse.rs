@@ -173,14 +173,35 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the FixedSizeList type (called after `FixedSizeList` has been consumed)
-    /// E.g: FixedSizeList(5 x nullable Int64, field: 'foo')
+    ///
+    /// Examples:
+    /// * `FixedSizeList(5 x nullable Int64, field: 'foo')`
+    /// * `FixedSizeList(4, Int64)`
+    ///
     fn parse_fixed_size_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let length = self.parse_i32("FixedSizeList")?;
-        self.expect_token(Token::X)?;
-        let field = self.parse_list_field("FixedSizeList")?;
-        self.expect_token(Token::RParen)?;
-        Ok(DataType::FixedSizeList(Arc::new(field), length))
+        match self.next_token()? {
+            // `FixedSizeList(5 x nullable Int64, field: 'foo')` format
+            Token::X => {
+                let field = self.parse_list_field("FixedSizeList")?;
+                self.expect_token(Token::RParen)?;
+                Ok(DataType::FixedSizeList(Arc::new(field), length))
+            }
+            // `FixedSizeList(4, Int64)` format
+            Token::Comma => {
+                let data_type = self.parse_next_type()?;
+                self.expect_token(Token::RParen)?;
+                Ok(DataType::FixedSizeList(
+                    Arc::new(Field::new_list_field(data_type, true)),
+                    length,
+                ))
+            }
+            tok => Err(make_error(
+                self.val,
+                &format!("Expected 'x' or ',' after length for FixedSizeList, got '{tok}'"),
+            )),
+        }
     }
 
     /// Parses the next timeunit
@@ -1199,9 +1220,9 @@ mod test {
         use IntervalUnit::*;
         use TimeUnit::*;
         // List below created with:
-        // for t in list_datatypes() {
-        // println!(r#"("{t}", {t:?}),"#)
-        // }
+        for t in list_datatypes() {
+            println!(r#"("{t}", {t:?}),"#);
+        }
         // (string to parse, expected DataType)
         let cases = [
             ("Timestamp(Nanosecond, None)", Timestamp(Nanosecond, None)),
@@ -1360,6 +1381,10 @@ mod test {
                 ])),
             ),
             (r#"Struct()"#, Struct(Fields::empty())),
+            (
+                "FixedSizeList(4, Int64)",
+                FixedSizeList(Arc::new(Field::new_list_field(Int64, true)), 4),
+            ),
         ];
 
         for (data_type_string, expected_data_type) in cases {
