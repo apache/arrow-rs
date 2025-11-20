@@ -99,9 +99,9 @@ impl<'a> Parser<'a> {
     }
 
     /// parses Field, this is the inversion of `format_field` in `datatype_display.rs`.
-    /// E.g: "a": nullable Int64
+    /// E.g: "a": non-null Int64
     ///
-    /// TODO: support metadata: `"a": nullable Int64 metadata: {"foo": "value"}`
+    /// TODO: support metadata: `"a": non-null Int64 metadata: {"foo": "value"}`
     fn parse_field(&mut self) -> ArrowResult<Field> {
         let name = self.parse_double_quoted_string("Field")?;
         self.expect_token(Token::Colon)?;
@@ -112,9 +112,9 @@ impl<'a> Parser<'a> {
 
     /// Parses field inside a list. Use `Field::LIST_FIELD_DEFAULT_NAME`
     /// if no field name is specified.
-    /// E.g: `nullable Int64, field: 'foo'` or `nullable Int64`
+    /// E.g: `non-null Int64, field: 'foo'` or `non-null Int64`
     ///
-    /// TODO: support metadata: `nullable Int64, metadata: {"foo2": "value"}`
+    /// TODO: support metadata: `non-ull Int64, metadata: {"foo2": "value"}`
     fn parse_list_field(&mut self, context: &str) -> ArrowResult<Field> {
         let nullable = self.parse_opt_nullable();
         let data_type = self.parse_next_type()?;
@@ -137,7 +137,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the List type (called after `List` has been consumed)
-    /// E.g: List(nullable Int64, field: 'foo')
+    /// E.g: List(non-null Int64, field: 'foo')
     fn parse_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("List")?;
@@ -146,7 +146,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the ListView type (called after `ListView` has been consumed)
-    /// E.g: ListView(nullable Int64, field: 'foo')
+    /// E.g: ListView(non-null Int64, field: 'foo')
     fn parse_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("ListView")?;
@@ -155,7 +155,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the LargeList type (called after `LargeList` has been consumed)
-    /// E.g: LargeList(nullable Int64, field: 'foo')
+    /// E.g: LargeList(non-null Int64, field: 'foo')
     fn parse_large_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("LargeList")?;
@@ -164,7 +164,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the LargeListView type (called after `LargeListView` has been consumed)
-    /// E.g: LargeListView(nullable Int64, field: 'foo')
+    /// E.g: LargeListView(non-null Int64, field: 'foo')
     fn parse_large_list_view(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_list_field("LargeListView")?;
@@ -175,14 +175,14 @@ impl<'a> Parser<'a> {
     /// Parses the FixedSizeList type (called after `FixedSizeList` has been consumed)
     ///
     /// Examples:
-    /// * `FixedSizeList(5 x nullable Int64, field: 'foo')`
+    /// * `FixedSizeList(5 x non-null Int64, field: 'foo')`
     /// * `FixedSizeList(4, Int64)`
     ///
     fn parse_fixed_size_list(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let length = self.parse_i32("FixedSizeList")?;
         match self.next_token()? {
-            // `FixedSizeList(5 x nullable Int64, field: 'foo')` format
+            // `FixedSizeList(5 x non-null Int64, field: 'foo')` format
             Token::X => {
                 let field = self.parse_list_field("FixedSizeList")?;
                 self.expect_token(Token::RParen)?;
@@ -464,7 +464,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the next Union (called after `Union` has been consumed)
-    /// E.g: Union(Sparse, 0: ("a": Int32), 1: ("b": nullable Utf8))
+    /// E.g: Union(Sparse, 0: ("a": Int32), 1: ("b": non-null Utf8))
     fn parse_union(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let union_mode = self.parse_union_mode()?;
@@ -501,7 +501,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the next UnionField
-    /// 0: ("a": nullable Int32)
+    /// 0: ("a": non-null Int32)
     fn parse_union_field(&mut self) -> ArrowResult<(i8, Field)> {
         let type_id = self.parse_i8("UnionField")?;
         self.expect_token(Token::Colon)?;
@@ -512,7 +512,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the next Map (called after `Map` has been consumed)
-    /// E.g: Map("entries": Struct("key": Utf8, "value": nullable Int32), sorted)
+    /// E.g: Map("entries": Struct("key": Utf8, "value": non-null Int32), sorted)
     fn parse_map(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let field = self.parse_field()?;
@@ -534,7 +534,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parses the next RunEndEncoded (called after `RunEndEncoded` has been consumed)
-    /// E.g: RunEndEncoded("run_ends": UInt32, "values": nullable Int32)
+    /// E.g: RunEndEncoded("run_ends": UInt32, "values": nonnull Int32)
     fn parse_run_end_encoded(&mut self) -> ArrowResult<DataType> {
         self.expect_token(Token::LParen)?;
         let run_ends = self.parse_field()?;
@@ -547,11 +547,12 @@ impl<'a> Parser<'a> {
         ))
     }
 
-    /// return and consume if the next token is `Token::Nullable`
+    /// consume the next token and return `false` if the field is `nonnull`.
     fn parse_opt_nullable(&mut self) -> bool {
-        self.tokenizer
-            .next_if(|next| matches!(next, Ok(Token::Nullable)))
-            .is_some()
+        let tok = self
+            .tokenizer
+            .next_if(|next| matches!(next, Ok(Token::NonNull | Token::Nullable)));
+        !matches!(tok, Some(Ok(Token::NonNull)))
     }
 
     /// return the next token, or an error if there are none left
@@ -705,6 +706,7 @@ impl<'a> Tokenizer<'a> {
             "Some" => Token::Some,
             "None" => Token::None,
 
+            "non-null" => Token::NonNull,
             "nullable" => Token::Nullable,
             "field" => Token::Field,
             "x" => Token::X,
@@ -866,6 +868,7 @@ enum Token {
     Map,
     MapSorted(bool),
     RunEndEncoded,
+    NonNull,
     Nullable,
     Field,
     X,
@@ -910,6 +913,7 @@ impl Display for Token {
                 write!(f, "{}", if *sorted { "sorted" } else { "unsorted" })
             }
             Token::RunEndEncoded => write!(f, "RunEndEncoded"),
+            Token::NonNull => write!(f, "non-null"),
             Token::Nullable => write!(f, "nullable"),
             Token::Field => write!(f, "field"),
             Token::X => write!(f, "x"),
@@ -1384,6 +1388,14 @@ mod test {
             (
                 "FixedSizeList(4, Int64)",
                 FixedSizeList(Arc::new(Field::new_list_field(Int64, true)), 4),
+            ),
+            (
+                "List(Int64)",
+                List(Arc::new(Field::new_list_field(Int64, true))),
+            ),
+            (
+                "LargeList(Int64)",
+                LargeList(Arc::new(Field::new_list_field(Int64, true))),
             ),
         ];
 
