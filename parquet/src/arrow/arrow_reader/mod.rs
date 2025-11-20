@@ -4008,8 +4008,8 @@ pub(crate) mod tests {
                 ),
             ])),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field nested: \
-            requested Struct(\"nested1_valid\": nonnull Utf8, \"nested1_invalid\": nonnull Int32) \
-            but found Struct(\"nested1_valid\": nonnull Utf8, \"nested1_invalid\": nonnull Int64)",
+            requested Struct(\"nested1_valid\": non-null Utf8, \"nested1_invalid\": non-null Int32) \
+            but found Struct(\"nested1_valid\": non-null Utf8, \"nested1_invalid\": non-null Int64)",
         );
     }
 
