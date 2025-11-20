@@ -879,8 +879,8 @@ fn write_and_read_stats(
 
     // Check column statistics produced at write time are available in full
     let row_group = metadata.row_group(0);
-    for column_idx in 0..3 {
-        check_column_stats(row_group.column(column_idx), true);
+    for column in row_group.columns().iter() {
+        check_column_stats(column, true);
     }
 
     // Verify the presence or not of statistics per-column when reading with the provided decryption properties
@@ -892,8 +892,8 @@ fn write_and_read_stats(
     let metadata = reader_metadata.metadata();
     let row_group = metadata.row_group(0);
 
-    for column_idx in 0..3 {
-        check_column_stats(row_group.column(column_idx), expect_stats[column_idx]);
+    for (column, stats_expected) in row_group.columns().iter().zip(expect_stats) {
+        check_column_stats(column, *stats_expected);
     }
 }
 
