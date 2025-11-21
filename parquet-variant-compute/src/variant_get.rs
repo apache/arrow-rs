@@ -16,7 +16,6 @@
 // under the License.
 use arrow::{
     array::{self, Array, ArrayRef, BinaryViewArray, StructArray, make_array},
-    buffer::NullBuffer,
     compute::CastOptions,
     datatypes::Field,
     error::Result,
@@ -108,30 +107,6 @@ pub(crate) fn follow_shredded_path_element<'a>(
             ))
         }
     }
-}
-
-/// Returns a cloned `ArrayRef` whose null mask is the union of the array's existing mask and
-/// `parent_nulls`. If `parent_nulls` is `None` or contains no nulls, the original array is returned.
-///
-/// This necessary because the null of the shredded value is the union of parent null and current nulls.
-fn clone_with_parent_nulls(
-    array: &ArrayRef,
-    parent_nulls: Option<&NullBuffer>,
-) -> Result<ArrayRef> {
-    let Some(parent_nulls) = parent_nulls else {
-        return Ok(array.clone());
-    };
-    if parent_nulls.null_count() == 0 {
-        return Ok(array.clone());
-    }
-
-    let combined_nulls = NullBuffer::union(array.as_ref().nulls(), Some(parent_nulls));
-    let data = array
-        .to_data()
-        .into_builder()
-        .nulls(combined_nulls)
-        .build()?;
-    Ok(make_array(data))
 }
 
 /// Follows the given path as far as possible through shredded variant fields. If the path ends on a
@@ -234,18 +209,8 @@ fn shredded_get_path(
     };
 
     // Try to return the typed value directly when we have a perfect shredding match.
-    if !matches!(as_field.data_type(), DataType::Struct(_)) {
-        if let Some(typed_value) = target.typed_value_field() {
-            let types_match = typed_value.data_type() == as_field.data_type();
-            let value_not_present = target.value_field().is_none();
-            // this is a perfect shredding, where the value is entirely shredded out, so we can just return the typed value
-            // note that we MUST check value_not_present, because some of the `typed_value` might be null but data is present in the `value` column.
-            // an alternative is to count whether typed_value has any non-nulls, or check every row in `value` is null,
-            // but this is too complicated and might be slow.
-            if types_match && value_not_present {
-                return clone_with_parent_nulls(typed_value, target.nulls());
-            }
-        }
+    if let Some(shredded) = try_perfect_shredding(&target, as_field)? {
+        return Ok(shredded);
     }
 
     // Structs are special. Recurse into each field separately, hoping to follow the shredding even
@@ -274,6 +239,35 @@ fn shredded_get_path(
 
     // Not a struct, so directly shred the variant as the requested type
     shred_basic_variant(target, VariantPath::default(), Some(as_field))
+}
+
+fn try_perfect_shredding(
+    variant_array: &VariantArray,
+    as_field: &Field,
+) -> Result<Option<ArrayRef>> {
+    // Try to return the typed value directly when we have a perfect shredding match.
+    if !matches!(as_field.data_type(), DataType::Struct(_))
+        && let Some(typed_value) = variant_array.typed_value_field()
+        && typed_value.data_type() == as_field.data_type()
+        && variant_array
+            .value_field()
+            .is_none_or(|v| v.null_count() == v.len())
+    {
+        // Here we need to gate against the case where the `typed_value` is null but data is in the `value` column.
+        // 1. If the `value` column is null, or
+        // 2. If every row in the `value` column is null
+
+        // This is a perfect shredding, where the value is entirely shredded out,
+        // so we can just return the typed value.
+        // We need to inherit the nulls from the parent array.
+        let data = typed_value
+            .to_data()
+            .into_builder()
+            .nulls(variant_array.nulls().cloned())
+            .build()?;
+        return Ok(Some(make_array(data)));
+    }
+    Ok(None)
 }
 
 /// Returns an array with the specified path extracted from the variant values.
