@@ -47,9 +47,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
                         mutable_buffer.repeat_slice_n_times(slice_to_repeat, repeat_count);
 
-                        let buffer: Buffer = mutable_buffer.into();
-
-                        buffer
+                        Buffer::from(mutable_buffer)
                     })
                 },
             );
@@ -66,9 +64,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                             mutable_buffer.extend_from_slice(slice_to_repeat);
                         }
 
-                        let buffer: Buffer = mutable_buffer.into();
-
-                        buffer
+                        Buffer::from(mutable_buffer)
                     })
                 },
             );

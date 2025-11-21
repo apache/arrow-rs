@@ -84,7 +84,7 @@ python dev/release/label_issues.py
 
 # review change log / edit issues and labels if needed, rerun, repeat as necessary
 # note you need to revert changes to CHANGELOG-old.md if you want to rerun the script
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+./dev/release/update_change_log.sh
 
 # Commit the changes
 git commit -a -m 'Update changelog'

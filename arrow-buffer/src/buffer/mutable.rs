@@ -33,13 +33,16 @@ use std::sync::Mutex;
 
 use super::Buffer;
 
-/// A [`MutableBuffer`] is Arrow's interface to build a [`Buffer`] out of items or slices of items.
+/// A [`MutableBuffer`] is a wrapper over memory regions, used to build
+/// [`Buffer`]s out of items or slices of items.
 ///
-/// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to be aligned
-/// along cache lines and in multiple of 64 bytes.
+/// [`Buffer`]s created from [`MutableBuffer`] (via `into`) are guaranteed to be
+/// aligned along cache lines and in multiples of 64 bytes.
 ///
 /// Use [MutableBuffer::push] to insert an item, [MutableBuffer::extend_from_slice]
-/// to insert many items, and `into` to convert it to [`Buffer`].
+/// to insert many items, and `into` to convert it to [`Buffer`]. For typed data,
+/// it is often more efficient to use [`Vec`] and convert it to [`Buffer`] rather
+/// than using [`MutableBuffer`] (see examples below).
 ///
 /// # See Also
 /// * For a safe, strongly typed API consider using [`Vec`] and [`ScalarBuffer`](crate::ScalarBuffer)
@@ -48,15 +51,49 @@ use super::Buffer;
 /// [`apply_bitwise_binary_op`]: crate::bit_util::apply_bitwise_binary_op
 /// [`apply_bitwise_unary_op`]: crate::bit_util::apply_bitwise_unary_op
 ///
-/// # Example
-///
+/// # Example: Creating a [`Buffer`] from a [`MutableBuffer`]
 /// ```
 /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
 /// let mut buffer = MutableBuffer::new(0);
 /// buffer.push(256u32);
 /// buffer.extend_from_slice(&[1u32]);
-/// let buffer: Buffer = buffer.into();
+/// let buffer = Buffer::from(buffer);
 /// assert_eq!(buffer.as_slice(), &[0u8, 1, 0, 0, 1, 0, 0, 0])
+/// ```
+///
+/// The same can be achieved more efficiently by using a `Vec<u32>`
+/// ```
+/// # use arrow_buffer::buffer::Buffer;
+/// let mut vec = Vec::new();
+/// vec.push(256u32);
+/// vec.extend_from_slice(&[1u32]);
+/// let buffer = Buffer::from(vec);
+/// assert_eq!(buffer.as_slice(), &[0u8, 1, 0, 0, 1, 0, 0, 0]);
+/// ```
+///
+/// # Example: Creating a [`MutableBuffer`] from a `Vec<T>`
+/// ```
+/// # use arrow_buffer::buffer::MutableBuffer;
+/// let vec = vec![1u32, 2, 3];
+/// let mutable_buffer = MutableBuffer::from(vec); // reuses the allocation from vec
+/// assert_eq!(mutable_buffer.len(), 12); // 3 * 4 bytes
+/// ```
+///
+/// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+/// ```
+/// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
+/// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
+/// // Only possible to convert a Buffer into a MutableBuffer if uniquely owned
+/// // (i.e., there are no other references to it).
+/// let mut mutable_buffer = match buffer.into_mutable() {
+///    Ok(mutable) => mutable,
+///    Err(orig_buffer) => {
+///      panic!("buffer was not uniquely owned");
+///    }
+/// };
+/// mutable_buffer.push(5u8);
+/// let buffer = Buffer::from(mutable_buffer);
+/// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
 /// ```
 #[derive(Debug)]
 pub struct MutableBuffer {
@@ -557,20 +594,19 @@ impl MutableBuffer {
     /// as it eliminates the conditional `Iterator::next`
     #[inline]
     pub fn collect_bool<F: FnMut(usize) -> bool>(len: usize, mut f: F) -> Self {
-        let mut buffer = Self::new(bit_util::ceil(len, 64) * 8);
+        let mut buffer: Vec<u64> = Vec::with_capacity(bit_util::ceil(len, 64));
 
         let chunks = len / 64;
         let remainder = len % 64;
-        for chunk in 0..chunks {
+        buffer.extend((0..chunks).map(|chunk| {
             let mut packed = 0;
             for bit_idx in 0..64 {
                 let i = bit_idx + chunk * 64;
                 packed |= (f(i) as u64) << bit_idx;
             }
 
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
-        }
+            packed
+        }));
 
         if remainder != 0 {
             let mut packed = 0;
@@ -579,10 +615,10 @@ impl MutableBuffer {
                 packed |= (f(i) as u64) << bit_idx;
             }
 
-            // SAFETY: Already allocated sufficient capacity
-            unsafe { buffer.push_unchecked(packed) }
+            buffer.push(packed)
         }
 
+        let mut buffer: MutableBuffer = buffer.into();
         buffer.truncate(bit_util::ceil(len, 8));
         buffer
     }
