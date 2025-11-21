@@ -269,6 +269,10 @@ pub fn boolean_buffer_and_then(left: &BooleanBuffer, right: &BooleanBuffer) -> B
     }
 }
 
+fn boolean_buffer_and_then_fallback(left: &BooleanBuffer, right: &BooleanBuffer) -> BooleanBuffer {
+    todo!()
+}
+
 #[cfg(target_arch = "x86_64")]
 #[target_feature(enable = "bmi2")]
 unsafe fn boolean_buffer_and_then_bmi2(
@@ -376,7 +380,7 @@ mod tests {
     use super::*;
 
     fn generate_random_row_selection(total_rows: usize, selection_ratio: f64) -> BooleanArray {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let bools: Vec<bool> = (0..total_rows)
             .map(|_| rng.random_bool(selection_ratio))
             .collect();
