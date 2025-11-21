@@ -84,6 +84,7 @@ use crate::parquet_thrift::{
 use crate::thrift_struct;
 use bytes::Bytes;
 use std::io::Write;
+use std::mem::size_of;
 use twox_hash::XxHash64;
 
 /// Salt as defined in the [spec](https://github.com/apache/parquet-format/blob/master/BloomFilter.md#technical-approach).
@@ -270,17 +271,18 @@ impl Sbbf {
     /// original.write(&mut serialized)?;
     ///
     /// // When reading the filter back, reuse the bitset portion of the buffer.
-    /// let bitset_slice = &serialized[serialized.len() - bitset_bytes.len()..];
-    /// let reconstructed = Sbbf::new(bitset_slice);
+    /// let bitset_len = original.bitset_len();
+    /// let reconstructed = Sbbf::new(&serialized[serialized.len() - bitset_len..]);
     ///
-    /// assert_eq!(reconstructed, original);
+    /// assert_eq!(reconstructed.as_slice(), original.as_slice());
     /// # Ok(())
     /// # }
     /// ```
     ///
     /// A practical way to obtain a correctly sized bitset slice for this constructor is to
     /// serialize an existing filter with [`Sbbf::write`] and reuse the bitset bytes that follow
-    /// the header.
+    /// the header, compute the length with [`Sbbf::bitset_len`], or call [`Sbbf::as_slice`] to
+    /// obtain the bytes directly.
     pub fn new(bitset: &[u8]) -> Self {
         let data = bitset
             .chunks_exact(4 * 8)
@@ -305,6 +307,22 @@ impl Sbbf {
         })?;
         self.write_bitset(&mut writer)?;
         Ok(())
+    }
+
+    /// Returns the raw bitset bytes encoded in little-endian order.
+    pub fn as_slice(&self) -> Vec<u8> {
+        let mut buffer = Vec::with_capacity(self.bitset_len());
+        for block in &self.0 {
+            for word in &block.0 {
+                buffer.extend_from_slice(&word.to_le_bytes());
+            }
+        }
+        buffer
+    }
+
+    /// Returns the size of the bitset in bytes.
+    pub fn bitset_len(&self) -> usize {
+        self.0.len() * size_of::<Block>()
     }
 
     /// Create a new [Sbbf] with given number of distinct values and false positive probability.
@@ -562,6 +580,15 @@ mod tests {
         assert_eq!(header.compression, BloomFilterCompression::UNCOMPRESSED);
 
         assert_eq!(protocol.as_slice(), bitset.as_slice());
+    }
+
+    #[test]
+    fn test_sbbf_as_slice_matches_original_bytes() {
+        let bitset: Vec<u8> = (0u8..64).collect();
+        let sbbf = Sbbf::new(&bitset);
+        let view = sbbf.as_slice();
+        assert_eq!(view, bitset);
+        assert_eq!(sbbf.bitset_len(), view.len());
     }
 
     /// test the assumption that bloom filter header size should not exceed SBBF_HEADER_SIZE_ESTIMATE
