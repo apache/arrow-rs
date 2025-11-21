@@ -712,6 +712,6 @@ mod tests {
     #[test]
     // Verify that the size of RowGroupDecoderState does not grow too large
     fn test_structure_size() {
-        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 200);
+        assert_eq!(std::mem::size_of::<RowGroupDecoderState>(), 224);
     }
 }
