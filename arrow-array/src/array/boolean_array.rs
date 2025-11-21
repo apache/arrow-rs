@@ -21,7 +21,7 @@ use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
 use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::DataType;
+use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -283,6 +283,52 @@ impl BooleanArray {
     /// Deconstruct this array into its constituent parts
     pub fn into_parts(self) -> (BooleanBuffer, Option<NullBuffer>) {
         (self.values, self.nulls)
+    }
+
+    /// Apply a bitwise unary operation to this array, returning a new array.
+    ///
+    /// The operation is applied to the values, and nulls are cloned.
+    ///
+    /// # Arguments
+    ///
+    /// * `op` - The unary operation to apply.
+    pub fn unary<F>(&self, op: F) -> Self
+    where
+        F: Fn(u64) -> u64 + Copy,
+    {
+        let buffer = self.values().inner().bitwise_unary(self.values().offset(), self.len(), op);
+        let values = BooleanBuffer::new(buffer, 0, self.len());
+        let nulls = self.nulls().cloned();
+        Self::new(values, nulls)
+    }
+
+    /// Apply a bitwise binary operation between this array and another, returning a new array.
+    ///
+    /// The operation is applied to the values, and nulls are combined as union.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other array.
+    /// * `op` - The binary operation to apply.
+    pub fn binary<F>(&self, other: &BooleanArray, op: F) -> Result<Self, ArrowError>
+    where
+        F: Fn(u64, u64) -> u64 + Copy,
+    {
+        if self.len() != other.len() {
+            return Err(ArrowError::ComputeError(
+                "Cannot perform bitwise operation on arrays of different length".to_string(),
+            ));
+        }
+        let buffer = self.values().inner().bitwise_binary(
+            other.values().inner(),
+            self.values().offset(),
+            other.values().offset(),
+            self.len(),
+            op,
+        );
+        let values = BooleanBuffer::new(buffer, 0, self.len());
+        let nulls = NullBuffer::union(self.nulls(), other.nulls());
+        Ok(Self::new(values, nulls))
     }
 }
 
@@ -828,5 +874,46 @@ mod tests {
         let (values, nulls) = boolean_array.into_parts();
         assert_eq!(values.values(), &[0b1000_0000]);
         assert!(nulls.is_none());
+    }
+
+    #[test]
+    fn test_boolean_array_binary_nulls() {
+        // Test BooleanArray::binary with nulls
+        let left = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+        let right = BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
+
+        // Test and
+        let result = BooleanArray::binary(&left, &right, |a, b| a & b).unwrap();
+        let expected = BooleanArray::from(vec![Some(false), None, None, Some(false)]);
+        assert_eq!(result.iter().collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
+
+        // Test or
+        let result = BooleanArray::binary(&left, &right, |a, b| a | b).unwrap();
+        let expected = BooleanArray::from(vec![Some(true), None, None, Some(true)]);
+        assert_eq!(result.iter().collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
+
+        // Test with offsets (sliced arrays)
+        let left_sliced = left.slice(1, 3); // [None, false, true]
+        let right_sliced = right.slice(1, 3); // [true, None, false]
+
+        let result = BooleanArray::binary(&left_sliced, &right_sliced, |a, b| a & b).unwrap();
+        let expected = BooleanArray::from(vec![None, None, Some(false)]);
+        assert_eq!(result.iter().collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn test_boolean_array_unary_nulls() {
+        // Test BooleanArray::unary with nulls
+        let array = BooleanArray::from(vec![Some(true), None, Some(false), Some(true)]);
+
+        let result = BooleanArray::unary(&array, |a| !a);
+        let expected = BooleanArray::from(vec![Some(false), None, Some(true), Some(false)]);
+        assert_eq!(result.iter().collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
+
+        // Test with offsets
+        let sliced = array.slice(1, 3); // [None, false, true]
+        let result = BooleanArray::unary(&sliced, |a| !a);
+        let expected = BooleanArray::from(vec![None, Some(true), Some(false)]);
+        assert_eq!(result.iter().collect::<Vec<_>>(), expected.iter().collect::<Vec<_>>());
     }
 }
