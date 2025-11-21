@@ -259,11 +259,14 @@ fn try_perfect_shredding(
 
         // This is a perfect shredding, where the value is entirely shredded out,
         // so we can just return the typed value.
-        // We need to inherit the nulls from the parent array.
+
+        let parent_nulls = variant_array.nulls();
+        let current_nulls = typed_value.nulls();
+        let combined_nulls = arrow::buffer::NullBuffer::union(parent_nulls, current_nulls);
         let data = typed_value
             .to_data()
             .into_builder()
-            .nulls(variant_array.nulls().cloned())
+            .nulls(combined_nulls)
             .build()?;
         return Ok(Some(make_array(data)));
     }
