@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod mask;
+
 use crate::arrow::ProjectionMask;
+use crate::arrow::arrow_reader::selection::mask::BooleanRowSelection;
 use crate::errors::ParquetError;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::{Array, BooleanArray};
@@ -135,12 +138,262 @@ impl RowSelector {
 /// * Consecutive [`RowSelector`]s alternate skipping or selecting rows
 ///
 /// [`PageIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct RowSelection {
-    selectors: Vec<RowSelector>,
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RowSelection {
+    Selectors(RowSelectorRowSelection),
+    Mask(BooleanRowSelection),
+}
+impl Default for RowSelection {
+    fn default() -> Self {
+        Self::Selectors(RowSelectorRowSelection::default())
+    }
 }
 
 impl RowSelection {
+    /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
+    ///
+    /// # Panic
+    ///
+    /// Panics if any of the [`BooleanArray`] contain nulls
+    pub fn from_filters(filters: &[BooleanArray]) -> Self {
+        // TODO decide how to do this based on density or something??
+        Self::Selectors(RowSelectorRowSelection::from_filters(filters))
+    }
+
+    /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
+    pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
+        ranges: I,
+        total_rows: usize,
+    ) -> Self {
+        // todo should this be decided based on density or something??
+        Self::Selectors(RowSelectorRowSelection::from_consecutive_ranges(
+            ranges, total_rows,
+        ))
+    }
+
+    /// Given an offset index, return the byte ranges for all data pages selected by `self`
+    ///
+    /// This is useful for determining what byte ranges to fetch from underlying storage
+    ///
+    /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
+    /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
+    /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
+    pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
+        match self {
+            Self::Selectors(selection) => selection.scan_ranges(page_locations),
+            Self::Mask(_mask) => {}
+        }
+    }
+
+    /// Returns true if selectors should be forced, preventing mask materialisation
+    pub(crate) fn should_force_selectors(
+        &self,
+        projection: &ProjectionMask,
+        offset_index: Option<&[OffsetIndexMetaData]>,
+    ) -> bool {
+        match self {
+            Self::Selectors(selectors) => self.should_force_selectors(projection, offset_index),
+            Self::Mask(_) => {todo!()}
+        }
+    }
+
+    /// Splits off the first `row_count` from this [`RowSelection`]
+    pub fn split_off(&mut self, row_count: usize) -> Self {
+        match self {
+            Self::Selectors(selection) => {
+                Self::Selectors(selection.split_off(row_count))
+            }
+            Self::Mask(mask) => {todo!()}
+        }
+    }
+
+    /// returns a [`RowSelection`] representing rows that are selected in both
+    /// input [`RowSelection`]s.
+    ///
+    /// This is equivalent to the logical `AND` / conjunction of the two
+    /// selections.
+    ///
+    /// # Example
+    /// If `N` means the row is not selected, and `Y` means it is
+    /// selected:
+    ///
+    /// ```text
+    /// self:     NNNNNNNNNNNNYYYYYYYYYYYYYYYYYYYYYYNNNYYYYY
+    /// other:                YYYYYNNNNYYYYYYYYYYYYY   YYNNN
+    ///
+    /// returned: NNNNNNNNNNNNYYYYYNNNNYYYYYYYYYYYYYNNNYYNNN
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` does not have a length equal to the number of rows selected
+    /// by this RowSelection
+    ///
+    pub fn and_then(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::Selectors(left), Self::Selectors(right)) => {
+                Self::Selectors(left.and_then(right))
+            }
+            (Self::Mask(left), Self::Mask(right)) => {
+                Self::Mask(left.and_then(right))
+            }
+            // need to convert one to the other
+            _ => {todo!()}
+
+        }
+    }
+
+    /// Compute the intersection of two [`RowSelection`]
+    /// For example:
+    /// self:      NNYYYYNNYYNYN
+    /// other:     NYNNNNNNY
+    ///
+    /// returned:  NNNNNNNNYYNYN
+    pub fn intersection(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::Selectors(left), Self::Selectors(right)) => {
+                Self::Selectors(intersect_row_selections(&left.selectors, &right.selectors))
+
+            }
+            (Self::Mask(left), Self::Mask(right)) => {
+                Self::Mask(left.intersection(right))
+            }
+            // need to convert one to the other
+            _ => {todo!()}
+        }
+    }
+
+    /// Compute the union of two [`RowSelection`]
+    /// For example:
+    /// self:      NNYYYYNNYYNYN
+    /// other:     NYNNNNNNN
+    ///
+    /// returned:  NYYYYYNNYYNYN
+    pub fn union(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::Selectors(left), Self::Selectors(right)) => {
+                Self::Selectors(union_row_selections(&left.selectors, &right.selectors))
+            }
+            (Self::Mask(left), Self::Mask(right)) => {
+                Self::Mask(left.union(right))
+            }
+            // need to convert one to the other
+            _ => {todo!()}
+        }
+    }
+
+    /// Returns `true` if this [`RowSelection`] selects any rows
+    pub fn selects_any(&self) -> bool {
+        match self {
+            Self::Selectors(selection) => selection.selects_any(),
+            Self::Mask(mask) => mask.selects_any(),
+        }
+    }
+
+    /// Trims this [`RowSelection`] removing any trailing skips
+    pub(crate) fn trim(self) -> Self {
+        match self {
+            Self::Selectors(selection) => Self::Selectors(selection.trim()),
+            Self::Mask(mask) => {todo!()}
+        }
+    }
+
+    /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
+    pub(crate) fn offset(mut self, offset: usize) -> Self {
+        match &mut self {
+            Self::Selectors(selection) => {
+                Self::Selectors(selection.offset(offset))
+            }
+            Self::Mask(mask) => {todo!()}
+        }
+    }
+
+    /// Limit this [`RowSelection`] to only select `limit` rows
+    pub(crate) fn limit(mut self, mut limit: usize) -> Self {
+        if limit == 0 {
+            self.selectors.clear();
+        }
+
+        for (idx, selection) in self.selectors.iter_mut().enumerate() {
+            if !selection.skip {
+                if selection.row_count >= limit {
+                    selection.row_count = limit;
+                    self.selectors.truncate(idx + 1);
+                    break;
+                } else {
+                    limit -= selection.row_count;
+                }
+            }
+        }
+        self
+    }
+
+    /// Returns an iterator over the [`RowSelector`]s for this
+    /// [`RowSelection`].
+    pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
+        match self {
+            Self::Selectors(selection) => selection.iter(),
+            Self::Mask(mask) => {todo!()}
+        }
+    }
+
+    /// Returns the number of selected rows
+    pub fn row_count(&self) -> usize {
+        match self {
+            Self::Selectors(selection) => selection.row_count(),
+            Self::Mask(mask) => {mask.row_count()}
+        }
+    }
+
+    /// Returns the number of de-selected rows
+    pub fn skipped_row_count(&self) -> usize {
+        match self {
+            Self::Selectors(selection) => selection.skipped_row_count(),
+            Self::Mask(mask) => {mask.skipped_row_count()}
+        }
+    }
+
+    /// Expands the selection to align with batch boundaries.
+    /// This is needed when using cached array readers to ensure that
+    /// the cached data covers full batches.
+    pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
+        match self {
+            Self::Selectors(selection) => {
+                Self::Selectors(selection.expand_to_batch_boundaries(batch_size, total_rows))
+            }
+            Self::Mask(mask) => {todo!()}
+        }
+    }
+}
+
+impl From<Vec<RowSelector>> for RowSelection {
+    fn from(selectors: Vec<RowSelector>) -> Self {
+        Self::Selectors(selectors.into_iter().collect())
+    }
+}
+
+impl FromIterator<RowSelector> for RowSelection {
+    fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
+        Self::Selectors(iter.into_iter().collect())
+    }
+}
+
+// TODO move to its own module
+/// Selection based on Vec<RowSelector>
+///
+/// This represents the result of a filter evaluation as a series of ranges.
+/// It is more efficient for large contiguous selections or skips.
+///
+/// It is similar to the "Range Index" described in
+/// [Predicate Caching: Query-Driven Secondary Indexing for Cloud Data Warehouses]
+///
+/// [Predicate Caching: Query-Driven Secondary Indexing for Cloud Data Warehouses]: https://dl.acm.org/doi/10.1145/3626246.3653395
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+struct RowSelectorRowSelection {
+    selectors: Vec<RowSelector>,
+}
+
+impl RowSelectorRowSelection {
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
     /// # Panic
@@ -567,13 +820,13 @@ impl RowSelection {
     }
 }
 
-impl From<Vec<RowSelector>> for RowSelection {
+impl From<Vec<RowSelector>> for RowSelectorRowSelection {
     fn from(selectors: Vec<RowSelector>) -> Self {
         selectors.into_iter().collect()
     }
 }
 
-impl FromIterator<RowSelector> for RowSelection {
+impl FromIterator<RowSelector> for RowSelectorRowSelection {
     fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
         let iter = iter.into_iter();
 
@@ -621,7 +874,7 @@ impl From<RowSelection> for VecDeque<RowSelector> {
 /// other:     NYNNNNNNY
 ///
 /// returned:  NNNNNNNNYYNYN
-fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelection {
+fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelectorRowSelection {
     let mut l_iter = left.iter().copied().peekable();
     let mut r_iter = right.iter().copied().peekable();
 
