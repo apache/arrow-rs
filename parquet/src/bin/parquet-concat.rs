@@ -109,9 +109,11 @@ impl Args {
                 let mut rg_out = writer.next_row_group()?;
                 for (col_idx, column) in rg.columns().iter().enumerate() {
                     let bloom_filter = read_bloom_filter(column, &input);
-                    let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
+                    let column_index = rg_column_indexes
+                        .and_then(|row| row.get(col_idx).and_then(|opt| opt.clone()));
 
-                    let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
+                    let offset_index = rg_offset_indexes
+                        .and_then(|row| row.get(col_idx).and_then(|opt| opt.clone()));
 
                     let result = ColumnCloseResult {
                         bytes_written: column.compressed_size() as _,

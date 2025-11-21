@@ -645,7 +645,10 @@ impl RowGroupReaderBuilder {
     }
 
     /// Get the offset index for the specified row group, if any
-    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[Option<OffsetIndexMetaData>]> {
+    fn row_group_offset_index(
+        &self,
+        row_group_idx: usize,
+    ) -> Option<&[Option<OffsetIndexMetaData>]> {
         self.metadata
             .offset_index()
             .filter(|index| !index.is_empty())

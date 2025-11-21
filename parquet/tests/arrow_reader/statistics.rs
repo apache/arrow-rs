@@ -47,10 +47,10 @@ use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
 use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::file::statistics::{Statistics, ValueStatistics};
 use parquet::schema::types::ColumnPath;
-use parquet::file::page_index::column_index::ColumnIndexMetaData;
 use parquet::schema::types::{SchemaDescPtr, SchemaDescriptor};
 
 #[derive(Debug, Default, Clone)]
@@ -3074,7 +3074,10 @@ mod page_index_partial_tests {
         // Create writer properties that enable page indexes only for the first column
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
-            .set_column_statistics_enabled(ColumnPath::new(vec!["col1".to_string()]), EnabledStatistics::Page)
+            .set_column_statistics_enabled(
+                ColumnPath::new(vec!["col1".to_string()]),
+                EnabledStatistics::Page,
+            )
             .build();
 
         // Create test data
@@ -3084,7 +3087,8 @@ mod page_index_partial_tests {
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
                 Arc::new(Int32Array::from(vec![6, 7, 8, 9, 10])),
             ],
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
         writer.write(&batch).expect("writing batch");
@@ -3099,7 +3103,9 @@ mod page_index_partial_tests {
         let metadata = reader.metadata();
 
         // Check that column index is present at top level
-        let column_index = metadata.column_index().expect("column index should be present when page index is enabled");
+        let column_index = metadata
+            .column_index()
+            .expect("column index should be present when page index is enabled");
 
         // Verify structure: 1 row group
         assert_eq!(column_index.len(), 1);
@@ -3107,16 +3113,30 @@ mod page_index_partial_tests {
 
         // Verify per-column: first column has index, second has NONE
         assert_eq!(rg_column_index.len(), 2);
-        assert!(rg_column_index[0].is_some(), "first column should have column index");
-        assert!(rg_column_index[1].is_none(), "second column should have None column index");
+        assert!(
+            rg_column_index[0].is_some(),
+            "first column should have column index"
+        );
+        assert!(
+            rg_column_index[1].is_none(),
+            "second column should have None column index"
+        );
 
         // Check that offset index follows the same pattern (both should be present)
-        let offset_index = metadata.offset_index().expect("offset index should be present when page index is enabled");
+        let offset_index = metadata
+            .offset_index()
+            .expect("offset index should be present when page index is enabled");
         assert_eq!(offset_index.len(), 1);
         let rg_offset_index = &offset_index[0];
         assert_eq!(rg_offset_index.len(), 2);
-        assert!(rg_offset_index[0].is_some(), "first column should have offset index");
-        assert!(rg_offset_index[1].is_some(), "second column should have offset index");
+        assert!(
+            rg_offset_index[0].is_some(),
+            "first column should have offset index"
+        );
+        assert!(
+            rg_offset_index[1].is_some(),
+            "second column should have offset index"
+        );
     }
 
     /// Test that partially missing offset indexes across columns does not panic
@@ -3138,7 +3158,10 @@ mod page_index_partial_tests {
         // Create writer properties that enable page indexes only for the first column
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
-            .set_column_statistics_enabled(ColumnPath::new(vec!["col1".to_string()]), EnabledStatistics::Page)
+            .set_column_statistics_enabled(
+                ColumnPath::new(vec!["col1".to_string()]),
+                EnabledStatistics::Page,
+            )
             .build();
 
         // Create test data
@@ -3148,7 +3171,8 @@ mod page_index_partial_tests {
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
                 Arc::new(Int32Array::from(vec![6, 7, 8, 9, 10])),
             ],
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
         writer.write(&batch).expect("writing batch");
@@ -3163,7 +3187,9 @@ mod page_index_partial_tests {
         let metadata = reader.metadata();
 
         // Check that offset index is present at top level
-        let offset_index = metadata.offset_index().expect("offset index should be present when page index is enabled");
+        let offset_index = metadata
+            .offset_index()
+            .expect("offset index should be present when page index is enabled");
 
         // Verify structure: 1 row group
         assert_eq!(offset_index.len(), 1);
@@ -3171,16 +3197,30 @@ mod page_index_partial_tests {
 
         // Verify per-column: first column has index, second does not
         assert_eq!(rg_offset_index.len(), 2);
-        assert!(rg_offset_index[0].is_some(), "first column should have offset index");
-        assert!(rg_offset_index[1].is_some(), "second column should have offset index");
+        assert!(
+            rg_offset_index[0].is_some(),
+            "first column should have offset index"
+        );
+        assert!(
+            rg_offset_index[1].is_some(),
+            "second column should have offset index"
+        );
 
         // Check that column index follows the same pattern
-        let column_index = metadata.column_index().expect("column index should be present when page index is enabled");
+        let column_index = metadata
+            .column_index()
+            .expect("column index should be present when page index is enabled");
         assert_eq!(column_index.len(), 1);
         let rg_column_index = &column_index[0];
         assert_eq!(rg_column_index.len(), 2);
-        assert!(rg_column_index[0].is_some(), "first column should have column index");
-        assert!(rg_column_index[1].is_none(), "second column should have None column index");
+        assert!(
+            rg_column_index[0].is_some(),
+            "first column should have column index"
+        );
+        assert!(
+            rg_column_index[1].is_none(),
+            "second column should have None column index"
+        );
     }
 
     /// Test regression: no page indexes for all columns should not panic
@@ -3212,7 +3252,8 @@ mod page_index_partial_tests {
                 Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5])),
                 Arc::new(Int32Array::from(vec![6, 7, 8, 9, 10])),
             ],
-        ).unwrap();
+        )
+        .unwrap();
 
         let mut writer = ArrowWriter::try_new(&mut output_file, schema, Some(props)).unwrap();
         writer.write(&batch).expect("writing batch");
@@ -3227,7 +3268,13 @@ mod page_index_partial_tests {
         let metadata = reader.metadata();
 
         // Check that no page indexes are present
-        assert!(metadata.column_index().is_none(), "column index should be None when disabled");
-        assert!(metadata.offset_index().is_none(), "offset index should be None when disabled");
+        assert!(
+            metadata.column_index().is_none(),
+            "column index should be None when disabled"
+        );
+        assert!(
+            metadata.offset_index().is_none(),
+            "offset index should be None when disabled"
+        );
     }
 }

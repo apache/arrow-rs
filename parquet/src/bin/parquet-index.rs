@@ -103,21 +103,22 @@ impl Args {
             let row_counts =
                 compute_row_counts(offset_index.page_locations.as_slice(), row_group.num_rows());
             match &column_indices[column_idx] {
-                ColumnIndexMetaData::NONE => println!("NO INDEX"),
-                ColumnIndexMetaData::BOOLEAN(v) => {
+                Some(ColumnIndexMetaData::NONE) => println!("NO INDEX"),
+                Some(ColumnIndexMetaData::BOOLEAN(v)) => {
                     print_index::<bool>(v, offset_index, &row_counts)?
                 }
-                ColumnIndexMetaData::INT32(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::INT64(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::INT96(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::FLOAT(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::DOUBLE(v) => print_index(v, offset_index, &row_counts)?,
-                ColumnIndexMetaData::BYTE_ARRAY(v) => {
+                Some(ColumnIndexMetaData::INT32(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::INT64(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::INT96(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::FLOAT(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::DOUBLE(v)) => print_index(v, offset_index, &row_counts)?,
+                Some(ColumnIndexMetaData::BYTE_ARRAY(v)) => {
                     print_bytes_index(v, offset_index, &row_counts)?
                 }
-                ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v) => {
+                Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(v)) => {
                     print_bytes_index(v, offset_index, &row_counts)?
                 }
+                None => println!("NO INDEX"),
             }
         }
         Ok(())

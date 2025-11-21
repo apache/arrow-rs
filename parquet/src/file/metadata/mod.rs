@@ -1908,7 +1908,9 @@ mod tests {
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
-            .set_column_index(Some(vec![vec![Some(ColumnIndexMetaData::BOOLEAN(native_index))]]))
+            .set_column_index(Some(vec![vec![Some(ColumnIndexMetaData::BOOLEAN(
+                native_index,
+            ))]]))
             .set_offset_index(Some(vec![vec![Some(offset_index)]]))
             .build();
 

@@ -328,7 +328,9 @@ impl<R: 'static + ChunkReader> RowGroupReader for SerializedRowGroupReader<'_, R
     fn get_column_page_reader(&self, i: usize) -> Result<Box<dyn PageReader>> {
         let col = self.metadata.column(i);
 
-        let page_locations = self.offset_index.and_then(|x| x[i].as_ref().map(|idx| idx.page_locations.clone()));
+        let page_locations = self
+            .offset_index
+            .and_then(|x| x[i].as_ref().map(|idx| idx.page_locations.clone()));
 
         let props = Arc::clone(&self.props);
         Ok(Box::new(SerializedPageReader::new_with_properties(
@@ -1919,8 +1921,20 @@ mod tests {
         let reader = SerializedFileReader::new_with_options(test_file, read_options)?;
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
-        assert_eq!(metadata.column_index().expect("column index should be present").len(), 1);
-        assert_eq!(metadata.offset_index().expect("offset index should be present").len(), 1);
+        assert_eq!(
+            metadata
+                .column_index()
+                .expect("column index should be present")
+                .len(),
+            1
+        );
+        assert_eq!(
+            metadata
+                .offset_index()
+                .expect("offset index should be present")
+                .len(),
+            1
+        );
 
         // true, false predicate
         let test_file = get_test_file("alltypes_tiny_pages.parquet");
@@ -2005,11 +2019,16 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let column_index = metadata.column_index().expect("column index should be present");
+        let column_index = metadata
+            .column_index()
+            .expect("column index should be present");
 
         // only one row group
         assert_eq!(column_index.len(), 1);
-        let index = if let ColumnIndexMetaData::BYTE_ARRAY(index) = column_index[0][0].as_ref().expect("column index should be present for column 0") {
+        let index = if let ColumnIndexMetaData::BYTE_ARRAY(index) = column_index[0][0]
+            .as_ref()
+            .expect("column index should be present for column 0")
+        {
             index
         } else {
             unreachable!()
@@ -2025,11 +2044,16 @@ mod tests {
         assert_eq!(b"Hello", min.as_bytes());
         assert_eq!(b"today", max.as_bytes());
 
-        let offset_indexes = metadata.offset_index().expect("offset index should be present");
+        let offset_indexes = metadata
+            .offset_index()
+            .expect("offset index should be present");
         // only one row group
         assert_eq!(offset_indexes.len(), 1);
         let offset_index = &offset_indexes[0];
-        let page_offset = &offset_index[0].as_ref().expect("offset index should be present for column 0").page_locations()[0];
+        let page_offset = &offset_index[0]
+            .as_ref()
+            .expect("offset index should be present for column 0")
+            .page_locations()[0];
 
         assert_eq!(4, page_offset.offset);
         assert_eq!(152, page_offset.compressed_page_size);
@@ -2074,15 +2098,24 @@ mod tests {
         let metadata = reader.metadata();
         assert_eq!(metadata.num_row_groups(), 1);
 
-        let column_index = metadata.column_index().expect("column index should be present");
-        let row_group_offset_indexes = &metadata.offset_index().expect("offset index should be present")[0];
+        let column_index = metadata
+            .column_index()
+            .expect("column index should be present");
+        let row_group_offset_indexes = &metadata
+            .offset_index()
+            .expect("offset index should be present")[0];
 
         // only one row group
         assert_eq!(column_index.len(), 1);
         let row_group_metadata = metadata.row_group(0);
 
         //col0->id: INT32 UNCOMPRESSED DO:0 FPO:4 SZ:37325/37325/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[min: 0, max: 7299, num_nulls: 0]
-        assert!(!column_index[0][0].as_ref().expect("column index should be present for column 0").is_sorted());
+        assert!(
+            !column_index[0][0]
+                .as_ref()
+                .expect("column index should be present for column 0")
+                .is_sorted()
+        );
         let boundary_order = column_index[0][0].as_ref().unwrap().get_boundary_order();
         assert!(boundary_order.is_some());
         matches!(boundary_order.unwrap(), BoundaryOrder::UNORDERED);
@@ -2093,7 +2126,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 0),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[0].as_ref().expect("offset index should be present for column 0").page_locations.len(), 325);
+            assert_eq!(
+                row_group_offset_indexes[0]
+                    .as_ref()
+                    .expect("offset index should be present for column 0")
+                    .page_locations
+                    .len(),
+                325
+            );
         } else {
             unreachable!()
         };
@@ -2101,7 +2141,14 @@ mod tests {
         assert!(column_index[0][1].as_ref().unwrap().is_sorted());
         if let ColumnIndexMetaData::BOOLEAN(index) = column_index[0][1].as_ref().unwrap() {
             assert_eq!(index.num_pages(), 82);
-            assert_eq!(row_group_offset_indexes[1].as_ref().expect("offset index should be present for column 1").page_locations.len(), 82);
+            assert_eq!(
+                row_group_offset_indexes[1]
+                    .as_ref()
+                    .expect("offset index should be present for column 1")
+                    .page_locations
+                    .len(),
+                82
+            );
         } else {
             unreachable!()
         };
@@ -2114,7 +2161,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 2),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[2].as_ref().expect("offset index should be present for column 2").page_locations.len(), 325);
+            assert_eq!(
+                row_group_offset_indexes[2]
+                    .as_ref()
+                    .expect("offset index should be present for column 2")
+                    .page_locations
+                    .len(),
+                325
+            );
         } else {
             unreachable!()
         };
@@ -2127,7 +2181,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 3),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[3].as_ref().unwrap().page_locations.len(), 325);
+            assert_eq!(
+                row_group_offset_indexes[3]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                325
+            );
         } else {
             unreachable!()
         };
@@ -2140,7 +2201,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 4),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[4].as_ref().unwrap().page_locations.len(), 325);
+            assert_eq!(
+                row_group_offset_indexes[4]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                325
+            );
         } else {
             unreachable!()
         };
@@ -2153,7 +2221,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 5),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[5].as_ref().unwrap().page_locations.len(), 528);
+            assert_eq!(
+                row_group_offset_indexes[5]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                528
+            );
         } else {
             unreachable!()
         };
@@ -2166,7 +2241,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 6),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[6].as_ref().unwrap().page_locations.len(), 325);
+            assert_eq!(
+                row_group_offset_indexes[6]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                325
+            );
         } else {
             unreachable!()
         };
@@ -2179,7 +2261,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 7),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[7].as_ref().unwrap().page_locations.len(), 528);
+            assert_eq!(
+                row_group_offset_indexes[7]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                528
+            );
         } else {
             unreachable!()
         };
@@ -2192,7 +2281,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 8),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[8].as_ref().unwrap().page_locations.len(), 974);
+            assert_eq!(
+                row_group_offset_indexes[8]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                974
+            );
         } else {
             unreachable!()
         };
@@ -2205,14 +2301,28 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 9),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[9].as_ref().unwrap().page_locations.len(), 352);
+            assert_eq!(
+                row_group_offset_indexes[9]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                352
+            );
         } else {
             unreachable!()
         };
         //col11->timestamp_col: INT96 UNCOMPRESSED DO:0 FPO:490093 SZ:111948/111948/1.00 VC:7300 ENC:BIT_PACKED,RLE,PLAIN ST:[num_nulls: 0, min/max not defined]
         //Notice: min_max values for each page for this col not exits.
         if column_index[0][10].is_none() {
-            assert_eq!(row_group_offset_indexes[10].as_ref().unwrap().page_locations.len(), 974);
+            assert_eq!(
+                row_group_offset_indexes[10]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                974
+            );
         } else {
             unreachable!()
         };
@@ -2225,7 +2335,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 11),
                 BoundaryOrder::ASCENDING,
             );
-            assert_eq!(row_group_offset_indexes[11].as_ref().unwrap().page_locations.len(), 325);
+            assert_eq!(
+                row_group_offset_indexes[11]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                325
+            );
         } else {
             unreachable!()
         };
@@ -2238,7 +2355,14 @@ mod tests {
                 get_row_group_min_max_bytes(row_group_metadata, 12),
                 BoundaryOrder::UNORDERED,
             );
-            assert_eq!(row_group_offset_indexes[12].as_ref().unwrap().page_locations.len(), 325);
+            assert_eq!(
+                row_group_offset_indexes[12]
+                    .as_ref()
+                    .unwrap()
+                    .page_locations
+                    .len(),
+                325
+            );
         } else {
             unreachable!()
         };
@@ -2501,7 +2625,10 @@ mod tests {
         let b = Bytes::from(out);
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(b, options).unwrap();
-        let index = reader.metadata().column_index().expect("column index should be present");
+        let index = reader
+            .metadata()
+            .column_index()
+            .expect("column index should be present");
 
         // 1 row group
         assert_eq!(index.len(), 1);
@@ -2635,13 +2762,31 @@ mod tests {
         // check we only got the relevant page indexes
         assert!(metadata.column_index().is_some());
         assert!(metadata.offset_index().is_some());
-        assert_eq!(metadata.column_index().expect("column index should be present").len(), 1);
-        assert_eq!(metadata.offset_index().expect("offset index should be present").len(), 1);
-        let col_idx = metadata.column_index().expect("column index should be present");
-        let off_idx = metadata.offset_index().expect("offset index should be present");
+        assert_eq!(
+            metadata
+                .column_index()
+                .expect("column index should be present")
+                .len(),
+            1
+        );
+        assert_eq!(
+            metadata
+                .offset_index()
+                .expect("offset index should be present")
+                .len(),
+            1
+        );
+        let col_idx = metadata
+            .column_index()
+            .expect("column index should be present");
+        let off_idx = metadata
+            .offset_index()
+            .expect("offset index should be present");
         let col_stats = metadata.row_group(0).column(0).statistics().unwrap();
         let pg_idx = &col_idx[0][0];
-        let off_idx_i = off_idx[0][0].as_ref().expect("offset index should be present for column 0");
+        let off_idx_i = off_idx[0][0]
+            .as_ref()
+            .expect("offset index should be present for column 0");
 
         // test that we got the index matching the row group
         match pg_idx {
@@ -2678,15 +2823,33 @@ mod tests {
         // check we only got the relevant page indexes
         assert!(metadata.column_index().is_some());
         assert!(metadata.offset_index().is_some());
-        assert_eq!(metadata.column_index().expect("column index should be present").len(), 2);
-        assert_eq!(metadata.offset_index().expect("offset index should be present").len(), 2);
-        let col_idx = metadata.column_index().expect("column index should be present");
-        let off_idx = metadata.offset_index().expect("offset index should be present");
+        assert_eq!(
+            metadata
+                .column_index()
+                .expect("column index should be present")
+                .len(),
+            2
+        );
+        assert_eq!(
+            metadata
+                .offset_index()
+                .expect("offset index should be present")
+                .len(),
+            2
+        );
+        let col_idx = metadata
+            .column_index()
+            .expect("column index should be present");
+        let off_idx = metadata
+            .offset_index()
+            .expect("offset index should be present");
 
         for (i, col_idx_i) in col_idx.iter().enumerate().take(metadata.num_row_groups()) {
             let col_stats = metadata.row_group(i).column(0).statistics().unwrap();
             let pg_idx = &col_idx_i[0];
-            let off_idx_i = off_idx[i][0].as_ref().expect("offset index should be present for column 0");
+            let off_idx_i = off_idx[i][0]
+                .as_ref()
+                .expect("offset index should be present for column 0");
 
             // test that we got the index matching the row group
             match pg_idx {

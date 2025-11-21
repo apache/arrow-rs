@@ -97,10 +97,14 @@ impl InMemoryRowGroup<'_> {
                     let use_expanded = cache_mask.map(|m| m.leaf_included(idx)).unwrap_or(false);
                     if use_expanded {
                         ranges.extend(
-                            expanded_selection.scan_ranges(&offset_index[idx].as_ref().unwrap().page_locations),
+                            expanded_selection
+                                .scan_ranges(&offset_index[idx].as_ref().unwrap().page_locations),
                         );
                     } else {
-                        ranges.extend(selection.scan_ranges(&offset_index[idx].as_ref().unwrap().page_locations));
+                        ranges.extend(
+                            selection
+                                .scan_ranges(&offset_index[idx].as_ref().unwrap().page_locations),
+                        );
                     }
                     page_start_offsets.push(ranges.iter().map(|range| range.start).collect());
 

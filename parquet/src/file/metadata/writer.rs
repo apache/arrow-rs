@@ -150,11 +150,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         // transform from Option<Vec<Vec<Option<ColumnIndexMetaData>>>> to
         // Option<Vec<Vec<Option<ColumnIndexMetaData>>>>
-        let column_indexes: Option<ParquetColumnIndex> = if all_none {
-            None
-        } else {
-            column_indexes
-        };
+        let column_indexes: Option<ParquetColumnIndex> =
+            if all_none { None } else { column_indexes };
 
         Ok(column_indexes)
     }
@@ -173,11 +170,8 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .as_ref()
             .is_some_and(|oi| oi.iter().all(|oii| oii.iter().all(|idx| idx.is_none())));
 
-        let offset_indexes: Option<ParquetOffsetIndex> = if all_none {
-            None
-        } else {
-            offset_indexes
-        };
+        let offset_indexes: Option<ParquetOffsetIndex> =
+            if all_none { None } else { offset_indexes };
 
         Ok(offset_indexes)
     }
@@ -474,10 +468,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                 (0..self.metadata.row_groups().len())
                     .map(|rg_idx| {
                         let column_indexes = &row_group_column_indexes[rg_idx];
-                        column_indexes
-                            .iter()
-                            .map(|column_index| column_index.clone())
-                            .collect()
+                        column_indexes.to_vec()
                     })
                     .collect()
             })
@@ -490,10 +481,7 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
                 (0..self.metadata.row_groups().len())
                     .map(|rg_idx| {
                         let offset_indexes = &row_group_offset_indexes[rg_idx];
-                        offset_indexes
-                            .iter()
-                            .map(|offset_index| offset_index.clone())
-                            .collect()
+                        offset_indexes.to_vec()
                     })
                     .collect()
             })
