@@ -21,8 +21,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, NullBuffer};
-use arrow_schema::{ArrowError, SortOptions};
-use std::cmp::Ordering;
+use arrow_schema::{ArrowError, DataType, SortOptions};
+use std::{cmp::Ordering, collections::HashMap};
 
 /// Compare the values at two arbitrary indices in two arrays.
 pub type DynComparator = Box<dyn Fn(usize, usize) -> Ordering + Send + Sync>;
@@ -36,9 +36,10 @@ fn child_opts(opts: SortOptions) -> SortOptions {
     }
 }
 
-fn compare<A, F>(l: &A, r: &A, opts: SortOptions, cmp: F) -> DynComparator
+fn compare<A, B, F>(l: &A, r: &B, opts: SortOptions, cmp: F) -> DynComparator
 where
-    A: Array + Clone,
+    A: Array + ?Sized,
+    B: Array + ?Sized,
     F: Fn(usize, usize) -> Ordering + Send + Sync + 'static,
 {
     let l = l.logical_nulls().filter(|x| x.null_count() > 0);
@@ -296,6 +297,124 @@ fn compare_struct(
     Ok(f)
 }
 
+fn compare_union(
+    left: &dyn Array,
+    right: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let left = left.as_union();
+    let right = right.as_union();
+
+    let (left_fields, left_mode) = match left.data_type() {
+        DataType::Union(fields, mode) => (fields, mode),
+        _ => unreachable!(),
+    };
+    let (right_fields, right_mode) = match right.data_type() {
+        DataType::Union(fields, mode) => (fields, mode),
+        _ => unreachable!(),
+    };
+
+    if left_fields != right_fields {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot compare UnionArrays with different fields: left={:?}, right={:?}",
+            left_fields, right_fields
+        )));
+    }
+
+    if left_mode != right_mode {
+        return Err(ArrowError::InvalidArgumentError(format!(
+            "Cannot compare UnionArrays with different modes: left={:?}, right={:?}",
+            left_mode, right_mode
+        )));
+    }
+
+    let c_opts = child_opts(opts);
+
+    let mut field_comparators = HashMap::with_capacity(left_fields.len());
+
+    for (type_id, _field) in left_fields.iter() {
+        let left_child = left.child(type_id);
+        let right_child = right.child(type_id);
+        let cmp = make_comparator(left_child.as_ref(), right_child.as_ref(), c_opts)?;
+
+        field_comparators.insert(type_id, cmp);
+    }
+
+    let left_type_ids = left.type_ids().clone();
+    let right_type_ids = right.type_ids().clone();
+
+    let left_offsets = left.offsets().cloned();
+    let right_offsets = right.offsets().cloned();
+
+    let f = compare(left, right, opts, move |i, j| {
+        let left_type_id = left_type_ids[i];
+        let right_type_id = right_type_ids[j];
+
+        // first, compare by type_id
+        match left_type_id.cmp(&right_type_id) {
+            Ordering::Equal => {
+                // second, compare by values
+                let left_offset = left_offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
+                let right_offset = right_offsets.as_ref().map(|o| o[j] as usize).unwrap_or(j);
+
+                let cmp = field_comparators
+                    .get(&left_type_id)
+                    .expect("type id not found in field_comparators");
+
+                cmp(left_offset, right_offset)
+            }
+            other => other,
+        }
+    });
+    Ok(f)
+}
+
+fn compare_union_to_opaque(
+    union_array: &dyn Array,
+    opaque_array: &dyn Array,
+    opts: SortOptions,
+) -> Result<DynComparator, ArrowError> {
+    let union_array = union_array.as_union();
+
+    let DataType::Union(union_fields, _) = union_array.data_type() else {
+        unreachable!()
+    };
+
+    let opaque_type_id = union_fields
+        .iter()
+        .find_map(|(i, f)| (f.data_type() == opaque_array.data_type()).then_some(i))
+        .ok_or_else(|| {
+            ArrowError::InvalidArgumentError(format!(
+                "cannot compare union with {} array: type not found in union fields",
+                opaque_array.data_type(),
+            ))
+        })?;
+
+    let c_opts = child_opts(opts);
+
+    let opaque_field_comparator = {
+        let union_child = union_array.child(opaque_type_id);
+        make_comparator(union_child.as_ref(), opaque_array, c_opts)?
+    };
+
+    let union_type_ids = union_array.type_ids().clone();
+    let union_offsets = union_array.offsets().cloned();
+
+    let f = compare(union_array, opaque_array, opts, move |i, j| {
+        let union_type_id = union_type_ids[i];
+
+        match union_type_id.cmp(&opaque_type_id) {
+            Ordering::Equal => {
+                let union_offset = union_offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
+                opaque_field_comparator(union_offset, j)
+            }
+            other => other,
+        }
+    });
+
+    Ok(f)
+}
+
 /// Returns a comparison function that compares two values at two different positions
 /// between the two arrays.
 ///
@@ -412,6 +531,9 @@ pub fn make_comparator(
              }
         },
         (Map(_, _), Map(_, _)) => compare_map(left, right, opts),
+        (Union(_, _), Union(_, _)) => compare_union(left, right, opts),
+        (Union(_, _), _) => compare_union_to_opaque(left, right, opts),
+        (_, Union(_, _)) => compare_union_to_opaque(right, left, opts),
         (lhs, rhs) => Err(ArrowError::InvalidArgumentError(match lhs == rhs {
             true => format!("The data type type {lhs:?} has no natural order"),
             false => "Can't compare arrays of different types".to_string(),
@@ -423,8 +545,8 @@ pub fn make_comparator(
 mod tests {
     use super::*;
     use arrow_array::builder::{Int32Builder, ListBuilder, MapBuilder, StringBuilder};
-    use arrow_buffer::{IntervalDayTime, OffsetBuffer, i256};
-    use arrow_schema::{DataType, Field, Fields};
+    use arrow_buffer::{IntervalDayTime, OffsetBuffer, ScalarBuffer, i256};
+    use arrow_schema::{DataType, Field, Fields, UnionFields};
     use half::f16;
     use std::sync::Arc;
 
@@ -1188,5 +1310,391 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_dense_union() {
+        // create a dense union array with Int32 (type_id = 0) and Utf8 (type_id=1)
+        // the values are: [1, "b", 2, "a", 3]
+        //  type_ids are: [0,  1,  0,  1,  0]
+        //   offsets are: [0, 0, 1, 1, 2] from [1, 2, 3] and ["b", "a"]
+        let int_array = Int32Array::from(vec![1, 2, 3]);
+        let str_array = StringArray::from(vec!["b", "a"]);
+
+        let type_ids = [0, 1, 0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        let array1 =
+            UnionArray::try_new(union_fields.clone(), type_ids, Some(offsets), children).unwrap();
+
+        // create a second array: [2, "a", 1, "c"]
+        //          type ids are: [0,  1,  0,  1]
+        //           offsets are: [0, 0, 1, 1] from [2, 1] and ["a", "c"]
+        let int_array2 = Int32Array::from(vec![2, 1]);
+        let str_array2 = StringArray::from(vec!["a", "c"]);
+        let type_ids2 = [0, 1, 0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets2 = [0, 0, 1, 1].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(str_array2)];
+
+        let array2 =
+            UnionArray::try_new(union_fields, type_ids2, Some(offsets2), children2).unwrap();
+
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+
+        // comparing
+        // [1, "b", 2, "a", 3]
+        // [2, "a", 1, "c"]
+        let cmp = make_comparator(&array1, &array2, opts).unwrap();
+
+        // array1[0] = (type_id=0, value=1)
+        // array2[0] = (type_id=0, value=2)
+        assert_eq!(cmp(0, 0), Ordering::Less); // 1 < 2
+
+        // array1[0] = (type_id=0, value=1)
+        // array2[1] = (type_id=1, value="a")
+        assert_eq!(cmp(0, 1), Ordering::Less); // type_id 0 < 1
+
+        // array1[1] = (type_id=1, value="b")
+        // array2[1] = (type_id=1, value="a")
+        assert_eq!(cmp(1, 1), Ordering::Greater); // "b" > "a"
+
+        // array1[2] = (type_id=0, value=2)
+        // array2[0] = (type_id=0, value=2)
+        assert_eq!(cmp(2, 0), Ordering::Equal); // 2 == 2
+
+        // array1[3] = (type_id=1, value="a")
+        // array2[1] = (type_id=1, value="a")
+        assert_eq!(cmp(3, 1), Ordering::Equal); // "a" == "a"
+
+        // array1[1] = (type_id=1, value="b")
+        // array2[3] = (type_id=1, value="c")
+        assert_eq!(cmp(1, 3), Ordering::Less); // "b" < "c"
+
+        let opts_desc = SortOptions {
+            descending: true,
+            nulls_first: true,
+        };
+        let cmp_desc = make_comparator(&array1, &array2, opts_desc).unwrap();
+
+        assert_eq!(cmp_desc(0, 0), Ordering::Greater); // 1 > 2 (reversed)
+        assert_eq!(cmp_desc(0, 1), Ordering::Greater); // type_id 0 < 1, reversed to Greater
+        assert_eq!(cmp_desc(1, 1), Ordering::Less); // "b" < "a" (reversed)
+    }
+
+    #[test]
+    fn test_sparse_union() {
+        // create a sparse union array with Int32 (type_id=0) and Utf8 (type_id=1)
+        // values: [1, "b", 3]
+        // note, in sparse unions, child arrays have the same length as the union
+        let int_array = Int32Array::from(vec![Some(1), None, Some(3)]);
+        let str_array = StringArray::from(vec![None, Some("b"), None]);
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("a", DataType::Int32, false))),
+            (1, Arc::new(Field::new("b", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        let array = UnionArray::try_new(union_fields, type_ids, None, children).unwrap();
+
+        let opts = SortOptions::default();
+        let cmp = make_comparator(&array, &array, opts).unwrap();
+
+        // array[0] = (type_id=0, value=1), array[2] = (type_id=0, value=3)
+        assert_eq!(cmp(0, 2), Ordering::Less); // 1 < 3
+        // array[0] = (type_id=0, value=1), array[1] = (type_id=1, value="b")
+        assert_eq!(cmp(0, 1), Ordering::Less); // type_id 0 < 1
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn test_union_out_of_bounds() {
+        // create a dense union array with 3 elements
+        let int_array = Int32Array::from(vec![1, 2]);
+        let str_array = StringArray::from(vec!["a"]);
+
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        let array = UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+
+        let opts = SortOptions::default();
+        let cmp = make_comparator(&array, &array, opts).unwrap();
+
+        // oob
+        cmp(0, 3);
+    }
+
+    #[test]
+    fn test_union_incompatible_fields() {
+        // create first union with Int32 and Utf8
+        let int_array1 = Int32Array::from(vec![1, 2]);
+        let str_array1 = StringArray::from(vec!["a", "b"]);
+
+        let type_ids1 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets1 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields1 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children1 = vec![Arc::new(int_array1) as ArrayRef, Arc::new(str_array1)];
+
+        let array1 =
+            UnionArray::try_new(union_fields1, type_ids1, Some(offsets1), children1).unwrap();
+
+        // create second union with Int32 and Float64 (incompatible with first)
+        let int_array2 = Int32Array::from(vec![3, 4]);
+        let float_array2 = Float64Array::from(vec![1.0, 2.0]);
+
+        let type_ids2 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets2 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields2 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("C", DataType::Float64, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(float_array2)];
+
+        let array2 =
+            UnionArray::try_new(union_fields2, type_ids2, Some(offsets2), children2).unwrap();
+
+        let opts = SortOptions::default();
+
+        let Result::Err(ArrowError::InvalidArgumentError(out)) =
+            make_comparator(&array1, &array2, opts)
+        else {
+            panic!("expected error when making comparator of incompatible union arrays");
+        };
+
+        assert_eq!(
+            &out,
+            "Cannot compare UnionArrays with different fields: left=[(0, Field { name: \"A\", data_type: Int32 }), (1, Field { name: \"B\", data_type: Utf8 })], right=[(0, Field { name: \"A\", data_type: Int32 }), (1, Field { name: \"C\", data_type: Float64 })]"
+        );
+    }
+
+    #[test]
+    fn test_union_incompatible_modes() {
+        // create first union as Dense with Int32 and Utf8
+        let int_array1 = Int32Array::from(vec![1, 2]);
+        let str_array1 = StringArray::from(vec!["a", "b"]);
+
+        let type_ids1 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets1 = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+
+        let union_fields1 = [
+            (0, Arc::new(Field::new("A", DataType::Int32, false))),
+            (1, Arc::new(Field::new("B", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+
+        let children1 = vec![Arc::new(int_array1) as ArrayRef, Arc::new(str_array1)];
+
+        let array1 =
+            UnionArray::try_new(union_fields1.clone(), type_ids1, Some(offsets1), children1)
+                .unwrap();
+
+        // create second union as Sparse with same fields (Int32 and Utf8)
+        let int_array2 = Int32Array::from(vec![Some(3), None]);
+        let str_array2 = StringArray::from(vec![None, Some("c")]);
+
+        let type_ids2 = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children2 = vec![Arc::new(int_array2) as ArrayRef, Arc::new(str_array2)];
+
+        let array2 = UnionArray::try_new(union_fields1, type_ids2, None, children2).unwrap();
+
+        let opts = SortOptions::default();
+
+        let Result::Err(ArrowError::InvalidArgumentError(out)) =
+            make_comparator(&array1, &array2, opts)
+        else {
+            panic!("expected error when making comparator of union arrays with different modes");
+        };
+
+        assert_eq!(
+            &out,
+            "Cannot compare UnionArrays with different modes: left=Dense, right=Sparse"
+        );
+    }
+
+    #[test]
+    fn test_union_to_opaque_int32() {
+        let int_array = Int32Array::from(vec![1, 2, 3]);
+        let str_array = StringArray::from(vec!["a", "b"]);
+        let type_ids = [0, 1, 0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
+        let union_fields = [
+            (0, Arc::new(Field::new("ints", DataType::Int32, false))),
+            (1, Arc::new(Field::new("strings", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        // union: [1, "a", 2, "b", 3], opaque: [2, 6, 7]
+        let union_array =
+            UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+        let opaque_array = Int32Array::from(vec![2, 6, 7]);
+        let opts = SortOptions::default();
+
+        let cmp = make_comparator(&union_array, &opaque_array, opts).unwrap();
+
+        // 1 < 2
+        assert_eq!(cmp(0, 0), Ordering::Less);
+        // type_id 1 > 0
+        assert_eq!(cmp(1, 0), Ordering::Greater);
+        // 2 == 2
+        assert_eq!(cmp(2, 0), Ordering::Equal);
+        // 3 > 6
+        assert_eq!(cmp(4, 1), Ordering::Less);
+    }
+
+    #[test]
+    fn test_union_to_opaque_string() {
+        let str_array = StringArray::from(vec![Some("apple"), None, Some("pork")]);
+        let int_array = Int32Array::from(vec![None, Some(67), None]);
+        let type_ids = [1, 0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let union_fields = [
+            (0, Arc::new(Field::new("ints", DataType::Int32, false))),
+            (1, Arc::new(Field::new("strings", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        // sparse union: ["apple", 67, "pork"], opaque: ["howdy", "john", "pork"]
+        let union_array = UnionArray::try_new(union_fields, type_ids, None, children).unwrap();
+        let opaque_array = StringArray::from(vec!["howdy", "john", "pork"]);
+        let opts = SortOptions::default();
+
+        let cmp = make_comparator(&union_array, &opaque_array, opts).unwrap();
+
+        // apple < howdy
+        assert_eq!(cmp(0, 0), Ordering::Less);
+        // type_id < 1
+        assert_eq!(cmp(1, 0), Ordering::Less);
+        // "pork" == "pork"
+        assert_eq!(cmp(2, 2), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_union_to_opaque_with_nulls() {
+        let int_array = Int32Array::from(vec![Some(1), None, Some(3)]);
+        let str_array = StringArray::from(vec![Some("a"), Some("b")]);
+        let type_ids = [0, 1, 0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1, 1, 2].into_iter().collect::<ScalarBuffer<i32>>();
+        let union_fields = [
+            (0, Arc::new(Field::new("ints", DataType::Int32, false))),
+            (1, Arc::new(Field::new("strings", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        // union: [1, "a", null, "b", 3], opaque: [2, null, 1]
+        let union_array =
+            UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+        let opaque_array = Int32Array::from(vec![Some(2), None, Some(1)]);
+        let opts = SortOptions {
+            descending: false,
+            nulls_first: true,
+        };
+        let cmp = make_comparator(&union_array, &opaque_array, opts).unwrap();
+
+        // 1 > null
+        assert_eq!(cmp(0, 1), Ordering::Greater);
+        // null < 2
+        assert_eq!(cmp(2, 0), Ordering::Less);
+        // null == null
+        assert_eq!(cmp(2, 1), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_union_to_opaque_descending() {
+        let int_array = Int32Array::from(vec![1, 2, 3]);
+        let str_array = StringArray::from(vec!["a", "b"]);
+        let type_ids = [0, 1, 0].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+        let union_fields = [
+            (0, Arc::new(Field::new("ints", DataType::Int32, false))),
+            (1, Arc::new(Field::new("strings", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+
+        // union: [1, "a", 2], opaque: [2, 1]
+        let union_array =
+            UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+        let opaque_array = Int32Array::from(vec![2, 1]);
+        let opts = SortOptions {
+            descending: true,
+            nulls_first: false,
+        };
+        let cmp = make_comparator(&union_array, &opaque_array, opts).unwrap();
+        // 1 > 2 (descending)
+        assert_eq!(cmp(0, 0), Ordering::Greater);
+        // 2 == 2
+        assert_eq!(cmp(2, 0), Ordering::Equal);
+        // 1 == 1
+        assert_eq!(cmp(0, 1), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_union_to_opaque_incompatible_type() {
+        let int_array = Int32Array::from(vec![1, 2]);
+        let str_array = StringArray::from(vec!["a", "b"]);
+        let type_ids = [0, 1].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 0].into_iter().collect::<ScalarBuffer<i32>>();
+        let union_fields = [
+            (0, Arc::new(Field::new("ints", DataType::Int32, false))),
+            (1, Arc::new(Field::new("strings", DataType::Utf8, false))),
+        ]
+        .into_iter()
+        .collect::<UnionFields>();
+        let children = vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)];
+        let union_array =
+            UnionArray::try_new(union_fields, type_ids, Some(offsets), children).unwrap();
+        let opaque_array = Float64Array::from(vec![1.0, 2.0]);
+        let opts = SortOptions::default();
+        let Err(err) = make_comparator(&union_array, &opaque_array, opts) else {
+            panic!("expected err");
+        };
+
+        assert!(err.to_string().contains("cannot compare union with"));
     }
 }
