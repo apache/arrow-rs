@@ -498,7 +498,7 @@ impl BooleanArray {
     ///
     /// The iterator must be [`TrustedLen`](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html).
     /// I.e. that `size_hint().1` correctly reports its length. Note that this is a stronger
-    /// guarantee that `ExactSizeIterator` provides which could still report a wrong length.
+    /// guarantee than `ExactSizeIterator` provides, which could still report a wrong length.
     ///
     /// # Panics
     ///
@@ -511,8 +511,9 @@ impl BooleanArray {
     pub unsafe fn from_trusted_len_iter<I, P>(iter: I) -> Self
     where
         P: Into<BooleanAdapter>,
-        I: ExactSizeIterator<Item = P>,
+        I: IntoIterator<Item = P, IntoIter: ExactSizeIterator>,
     {
+        let iter = iter.into_iter();
         let data_len = iter.len();
 
         let num_bytes = bit_util::ceil(data_len, 8);
@@ -715,7 +716,7 @@ mod tests {
         let expected = v.clone().into_iter().collect::<BooleanArray>();
         let actual = unsafe {
             // SAFETY: `v` has trusted length
-            BooleanArray::from_trusted_len_iter(v.into_iter())
+            BooleanArray::from_trusted_len_iter(v)
         };
         assert_eq!(expected, actual);
     }
