@@ -25,11 +25,13 @@ use crate::bit_mask::set_bits;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, bit_util, i256};
 use arrow_schema::{ArrowError, DataType, IntervalUnit, UnionMode};
+use dictionary::merge_dictionaries;
 use half::f16;
 use num_integer::Integer;
 use std::mem;
 
 mod boolean;
+mod dictionary;
 mod fixed_binary;
 mod fixed_size_list;
 mod list;
@@ -604,7 +606,7 @@ impl<'a> MutableArrayData<'a> {
         };
 
         // Get the dictionary if any, and if it is a concatenation of multiple
-        let (dictionary, dict_concat) = match &data_type {
+        let (mut dictionary, dict_concat) = match &data_type {
             DataType::Dictionary(_, _) => {
                 // If more than one dictionary, concatenate dictionaries together
                 let dict_concat = !arrays
@@ -660,9 +662,9 @@ impl<'a> MutableArrayData<'a> {
         });
 
         let extend_values = match &data_type {
-            DataType::Dictionary(_, _) => {
+            DataType::Dictionary(key_data_type, value_data_type) => {
                 let mut next_offset = 0;
-                let extend_values: Result<Vec<_>, _> = arrays
+                let result = arrays
                     .iter()
                     .map(|array| {
                         let offset = next_offset;
@@ -672,12 +674,24 @@ impl<'a> MutableArrayData<'a> {
                             next_offset += dict_len;
                         }
 
-                        build_extend_dictionary(array, offset, offset + dict_len)
+                        // -1 since offset is exclusive
+                        build_extend_dictionary(array, offset, 1.max(offset + dict_len) - 1)
                             .ok_or(ArrowError::DictionaryKeyOverflowError)
                     })
-                    .collect();
-
-                extend_values.expect("MutableArrayData::new is infallible")
+                    .collect::<Result<Vec<_>, ArrowError>>();
+                match result {
+                    Err(_) => {
+                        let (extends, merged_dictionary_values) = merge_dictionaries(
+                            key_data_type.as_ref(),
+                            value_data_type.as_ref(),
+                            &arrays,
+                        )
+                        .expect("fail merging dictionary");
+                        dictionary = Some(merged_dictionary_values);
+                        extends
+                    }
+                    Ok(extends) => extends,
+                }
             }
             DataType::BinaryView | DataType::Utf8View => {
                 let mut next_offset = 0u32;
@@ -705,6 +719,7 @@ impl<'a> MutableArrayData<'a> {
             buffer2,
             child_data,
         };
+
         Self {
             arrays,
             data,
@@ -840,6 +855,9 @@ mod test {
     use super::*;
     use arrow_schema::Field;
     use std::sync::Arc;
+
+    #[test]
+    fn test_dictionary_overflow() {}
 
     #[test]
     fn test_list_append_with_capacities() {
