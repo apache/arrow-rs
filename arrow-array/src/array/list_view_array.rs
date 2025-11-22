@@ -225,8 +225,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
             nulls: Some(NullBuffer::new_null(len)),
-            value_offsets: ScalarBuffer::from(vec![]),
-            value_sizes: ScalarBuffer::from(vec![]),
+            value_offsets: ScalarBuffer::from(vec![OffsetSize::usize_as(0); len]),
+            value_sizes: ScalarBuffer::from(vec![OffsetSize::usize_as(0); len]),
             values,
         }
     }
