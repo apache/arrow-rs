@@ -21,7 +21,7 @@ use std::sync::Arc;
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
 use parquet::file::metadata::{
     ColumnChunkMetaData, FileMetaData, PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions,
-    ParquetMetaDataReader, ParquetMetaDataWriter, RowGroupMetaData,
+    ParquetMetaDataReader, ParquetMetaDataWriter, ParquetStatisticsPolicy, RowGroupMetaData,
 };
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::TrackedWrite;
@@ -173,6 +173,23 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(true);
+    c.bench_function("decode metadata with stats mask", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
+        })
+    });
+
+    let options =
+        ParquetMetaDataOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata with skip PES", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
+                .unwrap();
+        })
+    });
+
     let buf: Bytes = black_box(encoded_meta()).into();
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
@@ -183,6 +200,21 @@ fn criterion_benchmark(c: &mut Criterion) {
     let schema = ParquetMetaDataReader::decode_schema(&buf).unwrap();
     let options = ParquetMetaDataOptions::new().with_schema(schema);
     c.bench_function("decode metadata (wide) with schema", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(true);
+    c.bench_function("decode metadata (wide) with stats mask", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let options =
+        ParquetMetaDataOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata (wide) with skip PES", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
         })
