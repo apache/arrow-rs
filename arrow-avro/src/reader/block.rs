@@ -17,8 +17,8 @@
 
 //! Decoder for [`Block`]
 
+use crate::errors::{AvroError, Result};
 use crate::reader::vlq::VLQDecoder;
-use arrow_schema::ArrowError;
 
 /// A file data block
 ///
@@ -75,14 +75,14 @@ impl BlockDecoder {
     /// can then be used again to read the next block, if any
     ///
     /// [`BufRead::fill_buf`]: std::io::BufRead::fill_buf
-    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize, ArrowError> {
+    pub fn decode(&mut self, mut buf: &[u8]) -> Result<usize> {
         let max_read = buf.len();
         while !buf.is_empty() {
             match self.state {
                 BlockDecoderState::Count => {
                     if let Some(c) = self.vlq_decoder.long(&mut buf) {
                         self.in_progress.count = c.try_into().map_err(|_| {
-                            ArrowError::ParseError(format!(
+                            AvroError::ParseError(format!(
                                 "Block count cannot be negative, got {c}"
                             ))
                         })?;
@@ -93,9 +93,7 @@ impl BlockDecoder {
                 BlockDecoderState::Size => {
                     if let Some(c) = self.vlq_decoder.long(&mut buf) {
                         self.bytes_remaining = c.try_into().map_err(|_| {
-                            ArrowError::ParseError(format!(
-                                "Block size cannot be negative, got {c}"
-                            ))
+                            AvroError::ParseError(format!("Block size cannot be negative, got {c}"))
                         })?;
 
                         self.in_progress.data.reserve(self.bytes_remaining);
