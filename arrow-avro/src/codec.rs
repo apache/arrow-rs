@@ -993,13 +993,13 @@ fn union_branch_name(dt: &AvroDataType) -> String {
     dt.codec.union_field_name()
 }
 
-fn build_union_fields(encodings: &[AvroDataType]) -> UnionFields {
+fn build_union_fields(encodings: &[AvroDataType]) -> Result<UnionFields, ArrowError> {
     let arrow_fields: Vec<Field> = encodings
         .iter()
         .map(|encoding| encoding.field_with_name(&union_branch_name(encoding)))
         .collect();
     let type_ids: Vec<i8> = (0..arrow_fields.len()).map(|i| i as i8).collect();
-    UnionFields::new(type_ids, arrow_fields)
+    UnionFields::try_new(type_ids, arrow_fields)
 }
 
 /// Resolves Avro type names to [`AvroDataType`]
@@ -1267,7 +1267,7 @@ impl<'a> Maker<'a> {
                     .map(|s| self.parse_type(s, namespace))
                     .collect::<Result<_, _>>()?;
                 // Build Arrow layout once here
-                let union_fields = build_union_fields(&children);
+                let union_fields = build_union_fields(&children)?;
                 Ok(AvroDataType::new(
                     Codec::Union(Arc::from(children), union_fields, UnionMode::Dense),
                     Default::default(),
@@ -1620,7 +1620,7 @@ impl<'a> Maker<'a> {
         for writer in writer_variants {
             writer_to_reader.push(self.find_best_promotion(writer, reader_variants, namespace));
         }
-        let union_fields = build_union_fields(&reader_encodings);
+        let union_fields = build_union_fields(&reader_encodings)?;
         let mut dt = AvroDataType::new(
             Codec::Union(reader_encodings.into(), union_fields, UnionMode::Dense),
             Default::default(),
