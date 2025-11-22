@@ -445,6 +445,9 @@ mod tests {
         let mut actual = String::from_utf8(buffer_vec).unwrap();
         let pos = actual.find('\n').unwrap() + 1;
         actual = actual[pos..].to_string();
+        // Normalize line endings for cross-platform compatibility
+        let expected = expected.replace("\r\n", "\n").trim_start().to_string();
+        let actual = actual.replace("\r\n", "\n").trim_start().to_string();
         assert_eq!(
             expected, actual,
             "help text not match. please update to \n---\n{actual}\n---\n"
