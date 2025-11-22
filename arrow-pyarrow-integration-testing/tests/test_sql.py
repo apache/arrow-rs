@@ -27,7 +27,9 @@ import pytz
 
 import arrow_pyarrow_integration_testing as rust
 
-PYARROW_PRE_14 = int(pa.__version__.split('.')[0]) < 14
+PYARROW_MAJOR_VER = int(pa.__version__.split(".")[0])
+PYARROW_PRE_14 = PYARROW_MAJOR_VER < 14
+PYARROW_PRE_16 = PYARROW_MAJOR_VER < 16
 
 
 @contextlib.contextmanager
@@ -112,8 +114,16 @@ _supported_pyarrow_types = [
     ),
 ]
 
-_unsupported_pyarrow_types = [
-]
+if PYARROW_MAJOR_VER >= 16:
+    _supported_pyarrow_types.extend(
+        [
+            pa.list_view(pa.uint64()),
+            pa.large_list_view(pa.uint64()),
+            pa.list_view(pa.string()),
+            pa.large_list_view(pa.string()),
+        ]
+    )
+
 
 # As of pyarrow 14, pyarrow implements the Arrow PyCapsule interface
 # (https://arrow.apache.org/docs/format/CDataInterface/PyCapsuleInterface.html).
@@ -157,12 +167,6 @@ def test_type_roundtrip_pycapsule(pyarrow_type):
     restored = rust.round_trip_type(wrapped)
     assert restored == pyarrow_type
     assert restored is not pyarrow_type
-
-
-@pytest.mark.parametrize("pyarrow_type", _unsupported_pyarrow_types, ids=str)
-def test_type_roundtrip_raises(pyarrow_type):
-    with pytest.raises(pa.ArrowException):
-        rust.round_trip_type(pyarrow_type)
 
 @pytest.mark.parametrize('pyarrow_type', _supported_pyarrow_types, ids=str)
 def test_field_roundtrip(pyarrow_type):
@@ -336,6 +340,21 @@ def test_list_array():
     assert a.type == b.type
     del a
     del b
+
+
+@pytest.mark.skipif(PYARROW_PRE_16, reason="requires pyarrow 16")
+def test_list_view_array():
+    """
+    Python -> Rust -> Python
+    """
+    a = pa.array([[], None, [1, 2], [4, 5, 6]], pa.list_view(pa.int64()))
+    b = rust.round_trip_array(a)
+    b.validate(full=True)
+    assert a.to_pylist() == b.to_pylist()
+    assert a.type == b.type
+    del a
+    del b
+
 
 def test_map_array():
     """
