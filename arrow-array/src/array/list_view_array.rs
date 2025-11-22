@@ -1120,4 +1120,11 @@ mod tests {
             .collect();
         assert_eq!(values, vec![Some(vec![]), Some(vec![]), Some(vec![])]);
     }
+
+    #[test]
+    fn test_list_view_new_null_len() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let array = ListViewArray::new_null(field, 5);
+        assert_eq!(array.len(), 5);
+    }
 }
