@@ -15,24 +15,25 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow::{
-    array::{self, Array, ArrayRef, BinaryViewArray, StructArray},
-    compute::CastOptions,
+    array::{self, Array, ArrayRef, BinaryViewArray, GenericListArray, StructArray, UInt32Array},
+    compute::{CastOptions, take},
     datatypes::Field,
     error::Result,
 };
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use parquet_variant::{VariantPath, VariantPathElement};
+use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, VariantPath, VariantPathElement};
 
-use crate::VariantArray;
 use crate::variant_array::BorrowedShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
+use crate::{ShreddingState, variant_array::StructArrayBuilder};
+use crate::{VariantArray, variant_array::ShreddingStateCow};
 
 use arrow::array::AsArray;
 use std::sync::Arc;
 
 pub(crate) enum ShreddedPathStep<'a> {
     /// Path step succeeded, return the new shredding state
-    Success(BorrowedShreddingState<'a>),
+    Success(ShreddingStateCow<'a>),
     /// The path element is not present in the `typed_value` column and there is no `value` column,
     /// so we know it does not exist. It, and all paths under it, are all-NULL.
     Missing,
@@ -97,14 +98,67 @@ pub(crate) fn follow_shredded_path_element<'a>(
             })?;
 
             let state = BorrowedShreddingState::try_from(struct_array)?;
-            Ok(ShreddedPathStep::Success(state))
+            Ok(ShreddedPathStep::Success(state.into()))
         }
-        VariantPathElement::Index { .. } => {
+        VariantPathElement::Index { index } => {
             // TODO: Support array indexing. Among other things, it will require slicing not
             // only the array we have here, but also the corresponding metadata and null masks.
-            Err(ArrowError::NotYetImplemented(
-                "Pathing into shredded variant array index".into(),
-            ))
+            let Some(list_array) = typed_value.as_any().downcast_ref::<GenericListArray<i32>>()
+            else {
+                // Downcast failure - if strict cast options are enabled, this should be an error
+                if !cast_options.safe {
+                    return Err(ArrowError::CastError(format!(
+                        "Cannot access index '{}' on non-list type: {}",
+                        index,
+                        typed_value.data_type()
+                    )));
+                }
+                // With safe cast options, return NULL (missing_path_step)
+                return Ok(missing_path_step());
+            };
+
+            let offsets = list_array.offsets();
+            let values = list_array.values(); // This is a StructArray
+
+            let Some(struct_array) = values.as_any().downcast_ref::<StructArray>() else {
+                return Ok(missing_path_step());
+            };
+
+            let Some(typed_array) = struct_array.column_by_name("typed_value") else {
+                return Ok(missing_path_step());
+            };
+
+            // Build the list of indices to take
+            let mut take_indices = Vec::with_capacity(list_array.len());
+            for i in 0..list_array.len() {
+                let start = offsets[i] as usize;
+                let end = offsets[i + 1] as usize;
+                let len = end - start;
+
+                if *index < len {
+                    take_indices.push(Some((start + index) as u32));
+                } else {
+                    take_indices.push(None);
+                }
+            }
+
+            let index_array = UInt32Array::from(take_indices);
+
+            // Use Arrow compute kernel to gather elements
+            let taken = take(typed_array, &index_array, None)?;
+
+            let metadata_array = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                EMPTY_VARIANT_METADATA_BYTES,
+                taken.len(),
+            ));
+
+            let struct_array = &StructArrayBuilder::new()
+                .with_field("metadata", Arc::new(metadata_array), false)
+                .with_field("typed_value", taken, true)
+                .build();
+
+            let state = ShreddingState::try_from(struct_array)?;
+            Ok(ShreddedPathStep::Success(state.into()))
         }
     }
 }
@@ -160,20 +214,21 @@ fn shredded_get_path(
 
     // Peel away the prefix of path elements that traverses the shredded parts of this variant
     // column. Shredding will traverse the rest of the path on a per-row basis.
-    let mut shredding_state = input.shredding_state().borrow();
+    let mut shredding_state = ShreddingStateCow::Borrowed(input.shredding_state().borrow());
     let mut accumulated_nulls = input.inner().nulls().cloned();
     let mut path_index = 0;
     for path_element in path {
-        match follow_shredded_path_element(&shredding_state, path_element, cast_options)? {
+        match follow_shredded_path_element(&shredding_state.as_view(), path_element, cast_options)?
+        {
             ShreddedPathStep::Success(state) => {
                 // Union nulls from the typed_value we just accessed
-                if let Some(typed_value) = shredding_state.typed_value_field() {
+                if let Some(typed_value) = shredding_state.as_view().typed_value_field() {
                     accumulated_nulls = arrow::buffer::NullBuffer::union(
                         accumulated_nulls.as_ref(),
                         typed_value.nulls(),
                     );
                 }
-                shredding_state = state;
+                shredding_state = ShreddingStateCow::Owned(state.into_owned());
                 path_index += 1;
                 continue;
             }
@@ -187,7 +242,7 @@ fn shredded_get_path(
             }
             ShreddedPathStep::NotShredded => {
                 let target = make_target_variant(
-                    shredding_state.value_field().cloned(),
+                    shredding_state.as_view().value_field().cloned(),
                     None,
                     accumulated_nulls,
                 );
@@ -198,8 +253,8 @@ fn shredded_get_path(
 
     // Path exhausted! Create a new `VariantArray` for the location we landed on.
     let target = make_target_variant(
-        shredding_state.value_field().cloned(),
-        shredding_state.typed_value_field().cloned(),
+        shredding_state.as_view().value_field().cloned(),
+        shredding_state.as_view().typed_value_field().cloned(),
         accumulated_nulls,
     );
 
@@ -307,15 +362,15 @@ mod test {
 
     use super::{GetOptions, variant_get};
     use crate::variant_array::{ShreddedVariantFieldArray, StructArrayBuilder};
-    use crate::{VariantArray, VariantArrayBuilder, json_to_variant};
+    use crate::{VariantArray, VariantArrayBuilder, VariantValueArrayBuilder, json_to_variant};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, Float32Array,
-        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
-        LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        Float64Array, GenericListArray, Int8Array, Int16Array, Int32Array, Int64Array,
+        LargeBinaryArray, LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
         Time64MicrosecondArray,
     };
-    use arrow::buffer::NullBuffer;
+    use arrow::buffer::{NullBuffer, OffsetBuffer};
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
@@ -1619,7 +1674,96 @@ mod test {
         let expected: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), Some(42)]));
         assert_eq!(&result, &expected);
     }
+    /// This test manually constructs a shredded variant array representing lists
+    /// like ["comedy", "drama"] and ["horror", 123]
+    /// as VariantArray using variant_get.
+    #[test]
+    fn test_shredded_list_index_access() {
+        let array = shredded_list_variant_array();
+        // Test: Extract the 0 index field as VariantArray first
+        let options = GetOptions::new_with_path(VariantPath::from(0));
+        let result = variant_get(&array, options).unwrap();
+        let result_variant = VariantArray::try_new(&result).unwrap();
+        assert_eq!(result_variant.len(), 2);
 
+        // Row 0: expect 0 index = "comedy"
+        assert_eq!(result_variant.value(0), Variant::from("comedy"));
+        // Row 1: expect 0 index = "horror"
+        assert_eq!(result_variant.value(1), Variant::from("horror"));
+    }
+    /// Test extracting shredded list field with type conversion
+    #[test]
+    fn test_shredded_list_as_string() {
+        let array = shredded_list_variant_array();
+        // Test: Extract the 0 index values as StringArray (type conversion)
+        let field = Field::new("typed_value", DataType::Utf8, false);
+        let options = GetOptions::new_with_path(VariantPath::from(0))
+            .with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&array, options).unwrap();
+        // Should get StringArray
+        let expected: ArrayRef = Arc::new(StringArray::from(vec![Some("comedy"), Some("horror")]));
+        assert_eq!(&result, &expected);
+    }
+    /// Helper function to create a shredded variant array representing lists
+    ///
+    /// This creates an array that represents:
+    /// Row 0: ["comedy", "drama"] ([0] is shredded, [1] is shredded - perfectly shredded)
+    /// Row 1: ["horror", 123] ([0] is shredded, [1] is int - partially shredded)
+    ///
+    /// The physical layout follows the shredding spec where:
+    /// - metadata: contains list metadata
+    /// - typed_value: StructArray with 0 index value
+    /// - value: contains fallback for
+    fn shredded_list_variant_array() -> ArrayRef {
+        // Create metadata array
+        let metadata_array =
+            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 2));
+
+        // Building the typed_value ListArray
+
+        let mut variant_value_builder = VariantValueArrayBuilder::new(8);
+        variant_value_builder.append_null();
+        variant_value_builder.append_null();
+        variant_value_builder.append_null();
+        variant_value_builder.append_value(Variant::from(123i32));
+
+        let struct_array = StructArrayBuilder::new()
+            .with_field(
+                "value",
+                Arc::new(variant_value_builder.build().unwrap()),
+                true,
+            )
+            .with_field(
+                "typed_value",
+                Arc::new(StringArray::from(vec![
+                    Some("comedy"),
+                    Some("drama"),
+                    Some("horror"),
+                    None,
+                ])),
+                true,
+            )
+            .build();
+
+        let typed_value_array = GenericListArray::<i32>::new(
+            Arc::new(Field::new_list_field(
+                struct_array.data_type().clone(),
+                true,
+            )),
+            OffsetBuffer::from_lengths([2, 2]),
+            Arc::new(struct_array),
+            None,
+        );
+
+        // Build the main VariantArray
+        let main_struct = crate::variant_array::StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata_array), false)
+            // .with_field("value", Arc::new(value_array), true)
+            .with_field("typed_value", Arc::new(typed_value_array), true)
+            .build();
+
+        Arc::new(main_struct)
+    }
     /// Helper function to create a shredded variant array representing objects
     ///
     /// This creates an array that represents:
