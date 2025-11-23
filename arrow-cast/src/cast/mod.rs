@@ -11866,4 +11866,60 @@ mod tests {
         // Verify the run-ends were cast correctly (run ends at 3, 6, 9)
         assert_eq!(run_array.run_ends().values(), &[3i64, 6i64, 9i64]);
     }
+
+    #[test]
+    fn test_string_dicts_to_binary_view() {
+        let expected = BinaryViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(StringArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(StringViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeStringArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array =
+                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::BinaryView).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_binary_dicts_to_string_view() {
+        let expected = StringViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(BinaryArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(BinaryViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeBinaryArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array =
+                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::Utf8View).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
+    }
 }
