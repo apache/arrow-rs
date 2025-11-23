@@ -3824,4 +3824,18 @@ mod test {
             assert!(result.is_null(i));
         }
     }
+
+    #[test]
+    fn test_perfect_shredding_returns_same_arc_ptr() {
+        let variant_array = perfectly_shredded_int32_variant_array();
+        
+        let variant_array_ref = VariantArray::try_new(&variant_array).unwrap();
+        let typed_value_arc = variant_array_ref.typed_value_field().unwrap().clone();
+        
+        let field = Field::new("result", DataType::Int32, true);
+        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
+        let result = variant_get(&variant_array, options).unwrap();
+        
+        assert!(Arc::ptr_eq(&typed_value_arc, &result));
+    }
 }
