@@ -290,6 +290,7 @@ impl<'a> FormatOptions<'a> {
 /// this example requires the `prettyprint` feature.
 ///
 /// ```rust
+/// # #[cfg(feature = "prettyprint")]{
 /// use std::fmt::Write;
 /// use arrow_array::{cast::AsArray, Array, Int32Array};
 /// use arrow_cast::display::{ArrayFormatter, ArrayFormatterFactory, DisplayIndex, FormatOptions, FormatResult};
@@ -351,6 +352,7 @@ impl<'a> FormatOptions<'a> {
 ///        &my_batches,
 ///        &FormatOptions::new().with_formatter_factory(Some(&MyFormatters {}))
 /// );
+/// # }
 /// ```
 pub trait ArrayFormatterFactory: Debug + Send + Sync {
     /// Creates a new [`ArrayFormatter`] for the given [`Array`] and an optional [`Field`]. If the
