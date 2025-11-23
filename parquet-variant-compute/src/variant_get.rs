@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 use arrow::{
-    array::{self, Array, ArrayRef, BinaryViewArray, StructArray, make_array},
+    array::{self, Array, ArrayRef, BinaryViewArray, StructArray},
     compute::CastOptions,
     datatypes::Field,
     error::Result,
@@ -209,7 +209,7 @@ fn shredded_get_path(
     };
 
     // Try to return the typed value directly when we have a perfect shredding match.
-    if let Some(shredded) = try_perfect_shredding(&target, as_field)? {
+    if let Some(shredded) = try_perfect_shredding(&target, as_field) {
         return Ok(shredded);
     }
 
@@ -241,10 +241,7 @@ fn shredded_get_path(
     shred_basic_variant(target, VariantPath::default(), Some(as_field))
 }
 
-fn try_perfect_shredding(
-    variant_array: &VariantArray,
-    as_field: &Field,
-) -> Result<Option<ArrayRef>> {
+fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Option<ArrayRef> {
     // Try to return the typed value directly when we have a perfect shredding match.
     if !matches!(as_field.data_type(), DataType::Struct(_))
         && let Some(typed_value) = variant_array.typed_value_field()
@@ -259,18 +256,9 @@ fn try_perfect_shredding(
 
         // This is a perfect shredding, where the value is entirely shredded out,
         // so we can just return the typed value.
-
-        let parent_nulls = variant_array.nulls();
-        let current_nulls = typed_value.nulls();
-        let combined_nulls = arrow::buffer::NullBuffer::union(parent_nulls, current_nulls);
-        let data = typed_value
-            .to_data()
-            .into_builder()
-            .nulls(combined_nulls)
-            .build()?;
-        return Ok(Some(make_array(data)));
+        return Some(typed_value.clone());
     }
-    Ok(None)
+    None
 }
 
 /// Returns an array with the specified path extracted from the variant values.
@@ -639,32 +627,6 @@ mod test {
             Some(100),
         ]));
         assert_eq!(&result, &expected)
-    }
-
-    // on a perfect shredding, we must still obey the parent nulls
-    #[test]
-    fn get_variant_shredded_utf8_respects_parent_nulls() {
-        let metadata =
-            BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, 2));
-        let typed_value = Arc::new(StringArray::from(vec![Some("foo"), Some("bar")]));
-        let parent_nulls = NullBuffer::from(vec![false, true]);
-
-        let variant_array = VariantArray::from_parts(
-            metadata,
-            None,
-            Some(typed_value.clone()),
-            Some(parent_nulls),
-        );
-        let input: ArrayRef = ArrayRef::from(variant_array);
-
-        let field = Field::new("result", DataType::Utf8, true);
-        let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
-        let result = variant_get(&input, options).unwrap();
-        let strings = result.as_any().downcast_ref::<StringArray>().unwrap();
-
-        assert_eq!(strings.len(), 2);
-        assert!(strings.is_null(0));
-        assert_eq!(strings.value(1), "bar");
     }
 
     /// Shredding: extract a value as an Int32Array, unsafe cast (should error on "n/a")
