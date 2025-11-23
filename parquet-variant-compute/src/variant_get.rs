@@ -243,8 +243,10 @@ fn shredded_get_path(
 
 fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Option<ArrayRef> {
     // Try to return the typed value directly when we have a perfect shredding match.
-    if !matches!(as_field.data_type(), DataType::Struct(_))
-        && let Some(typed_value) = variant_array.typed_value_field()
+    if matches!(as_field.data_type(), DataType::Struct(_)) {
+        return None;
+    }
+    if let Some(typed_value) = variant_array.typed_value_field()
         && typed_value.data_type() == as_field.data_type()
         && variant_array
             .value_field()
@@ -3828,14 +3830,14 @@ mod test {
     #[test]
     fn test_perfect_shredding_returns_same_arc_ptr() {
         let variant_array = perfectly_shredded_int32_variant_array();
-        
+
         let variant_array_ref = VariantArray::try_new(&variant_array).unwrap();
         let typed_value_arc = variant_array_ref.typed_value_field().unwrap().clone();
-        
+
         let field = Field::new("result", DataType::Int32, true);
         let options = GetOptions::new().with_as_type(Some(FieldRef::from(field)));
         let result = variant_get(&variant_array, options).unwrap();
-        
+
         assert!(Arc::ptr_eq(&typed_value_arc, &result));
     }
 }
