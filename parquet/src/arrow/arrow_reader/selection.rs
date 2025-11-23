@@ -15,7 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+mod mask;
+
 use crate::arrow::ProjectionMask;
+use crate::arrow::arrow_reader::selection::mask::BooleanRowSelection;
 use crate::errors::ParquetError;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::{Array, BooleanArray};
@@ -135,12 +138,285 @@ impl RowSelector {
 /// * Consecutive [`RowSelector`]s alternate skipping or selecting rows
 ///
 /// [`PageIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
-#[derive(Debug, Clone, Default, Eq, PartialEq)]
-pub struct RowSelection {
-    selectors: Vec<RowSelector>,
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum RowSelection {
+    Selectors(RowSelectorRowSelection),
+    Mask(BooleanRowSelection),
+}
+impl Default for RowSelection {
+    fn default() -> Self {
+        Self::Selectors(RowSelectorRowSelection::default())
+    }
 }
 
 impl RowSelection {
+    /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
+    ///
+    /// # Panic
+    ///
+    /// Panics if any of the [`BooleanArray`] contain nulls
+    pub fn from_filters(filters: &[BooleanArray]) -> Self {
+        // TODO decide how to do this based on density or something??
+        Self::Selectors(RowSelectorRowSelection::from_filters(filters))
+    }
+
+    /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
+    pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
+        ranges: I,
+        total_rows: usize,
+    ) -> Self {
+        // todo should this be decided based on density or something??
+        Self::Selectors(RowSelectorRowSelection::from_consecutive_ranges(
+            ranges, total_rows,
+        ))
+    }
+
+    /// Given an offset index, return the byte ranges for all data pages selected by `self`
+    ///
+    /// This is useful for determining what byte ranges to fetch from underlying storage
+    ///
+    /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
+    /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
+    /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
+    pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
+        match self {
+            Self::Selectors(selection) => selection.scan_ranges(page_locations),
+            Self::Mask(_mask) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Returns true if selectors should be forced, preventing mask materialisation
+    pub(crate) fn should_force_selectors(
+        &self,
+        projection: &ProjectionMask,
+        offset_index: Option<&[OffsetIndexMetaData]>,
+    ) -> bool {
+        match self {
+            Self::Selectors(selectors) => {
+                selectors.should_force_selectors(projection, offset_index)
+            }
+            Self::Mask(_) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Splits off the first `row_count` from this [`RowSelection`]
+    pub fn split_off(&mut self, row_count: usize) -> Self {
+        match self {
+            Self::Selectors(selection) => Self::Selectors(selection.split_off(row_count)),
+            Self::Mask(_mask) => {
+                todo!()
+            }
+        }
+    }
+
+    /// returns a [`RowSelection`] representing rows that are selected in both
+    /// input [`RowSelection`]s.
+    ///
+    /// This is equivalent to the logical `AND` / conjunction of the two
+    /// selections.
+    ///
+    /// # Example
+    /// If `N` means the row is not selected, and `Y` means it is
+    /// selected:
+    ///
+    /// ```text
+    /// self:     NNNNNNNNNNNNYYYYYYYYYYYYYYYYYYYYYYNNNYYYYY
+    /// other:                YYYYYNNNNYYYYYYYYYYYYY   YYNNN
+    ///
+    /// returned: NNNNNNNNNNNNYYYYYNNNNYYYYYYYYYYYYYNNNYYNNN
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if `other` does not have a length equal to the number of rows selected
+    /// by this RowSelection
+    ///
+    pub fn and_then(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::Selectors(left), Self::Selectors(right)) => {
+                Self::Selectors(left.and_then(right))
+            }
+            (Self::Mask(left), Self::Mask(right)) => Self::Mask(left.and_then(right)),
+            // need to convert one to the other
+            _ => {
+                todo!()
+            }
+        }
+    }
+
+    /// Compute the intersection of two [`RowSelection`]
+    /// For example:
+    /// self:      NNYYYYNNYYNYN
+    /// other:     NYNNNNNNY
+    ///
+    /// returned:  NNNNNNNNYYNYN
+    pub fn intersection(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::Selectors(left), Self::Selectors(right)) => {
+                Self::Selectors(intersect_row_selections(&left.selectors, &right.selectors))
+            }
+            (Self::Mask(left), Self::Mask(right)) => Self::Mask(left.intersection(right)),
+            // need to convert one to the other
+            _ => {
+                todo!()
+            }
+        }
+    }
+
+    /// Compute the union of two [`RowSelection`]
+    /// For example:
+    /// self:      NNYYYYNNYYNYN
+    /// other:     NYNNNNNNN
+    ///
+    /// returned:  NYYYYYNNYYNYN
+    pub fn union(&self, other: &Self) -> Self {
+        match (self, other) {
+            (Self::Selectors(left), Self::Selectors(right)) => {
+                Self::Selectors(union_row_selections(&left.selectors, &right.selectors))
+            }
+            (Self::Mask(left), Self::Mask(right)) => Self::Mask(left.union(right)),
+            // need to convert one to the other
+            _ => {
+                todo!()
+            }
+        }
+    }
+
+    /// Returns `true` if this [`RowSelection`] selects any rows
+    pub fn selects_any(&self) -> bool {
+        match self {
+            Self::Selectors(selection) => selection.selects_any(),
+            Self::Mask(mask) => mask.selects_any(),
+        }
+    }
+
+    /// Trims this [`RowSelection`] removing any trailing skips
+    pub(crate) fn trim(self) -> Self {
+        match self {
+            Self::Selectors(selection) => Self::Selectors(selection.trim()),
+            Self::Mask(_mask) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
+    pub(crate) fn offset(self, offset: usize) -> Self {
+        match self {
+            Self::Selectors(selection) => Self::Selectors(selection.offset(offset)),
+            Self::Mask(_mask) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Limit this [`RowSelection`] to only select `limit` rows
+    pub(crate) fn limit(self, limit: usize) -> Self {
+        match self {
+            Self::Selectors(selection) => Self::Selectors(selection.limit(limit)),
+            Self::Mask(_mask) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Returns an iterator over the [`RowSelector`]s for this
+    /// [`RowSelection`].
+    pub fn iter(&self) -> impl Iterator<Item = &RowSelector> {
+        match self {
+            Self::Selectors(selection) => selection.iter(),
+            Self::Mask(_mask) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Returns the number of selected rows
+    pub fn row_count(&self) -> usize {
+        match self {
+            Self::Selectors(selection) => selection.row_count(),
+            Self::Mask(mask) => mask.row_count(),
+        }
+    }
+
+    /// Returns the number of de-selected rows
+    pub fn skipped_row_count(&self) -> usize {
+        match self {
+            Self::Selectors(selection) => selection.skipped_row_count(),
+            Self::Mask(mask) => {
+                todo!()
+            }
+        }
+    }
+
+    /// Expands the selection to align with batch boundaries.
+    /// This is needed when using cached array readers to ensure that
+    /// the cached data covers full batches.
+    pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
+        match self {
+            Self::Selectors(selection) => {
+                Self::Selectors(selection.expand_to_batch_boundaries(batch_size, total_rows))
+            }
+            Self::Mask(mask) => {
+                todo!()
+            }
+        }
+    }
+}
+
+impl From<Vec<RowSelector>> for RowSelection {
+    fn from(selectors: Vec<RowSelector>) -> Self {
+        Self::Selectors(selectors.into_iter().collect())
+    }
+}
+
+impl FromIterator<RowSelector> for RowSelection {
+    fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
+        Self::Selectors(iter.into_iter().collect())
+    }
+}
+impl From<RowSelection> for Vec<RowSelector> {
+    fn from(r: RowSelection) -> Self {
+        match r {
+            RowSelection::Selectors(selection) => selection.into(),
+            RowSelection::Mask(_) => {
+                todo!()
+            }
+        }
+    }
+}
+
+impl From<RowSelection> for VecDeque<RowSelector> {
+    fn from(r: RowSelection) -> Self {
+        match r {
+            RowSelection::Selectors(selection) => selection.into(),
+            RowSelection::Mask(_) => {
+                todo!()
+            }
+        }
+    }
+}
+
+// TODO move to its own module
+/// Selection based on Vec<RowSelector>
+///
+/// This represents the result of a filter evaluation as a series of ranges.
+/// It is more efficient for large contiguous selections or skips.
+///
+/// It is similar to the "Range Index" described in
+/// [Predicate Caching: Query-Driven Secondary Indexing for Cloud Data Warehouses]
+///
+/// [Predicate Caching: Query-Driven Secondary Indexing for Cloud Data Warehouses]: https://dl.acm.org/doi/10.1145/3626246.3653395
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+struct RowSelectorRowSelection {
+    selectors: Vec<RowSelector>,
+}
+
+impl RowSelectorRowSelection {
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
     /// # Panic
@@ -567,13 +843,13 @@ impl RowSelection {
     }
 }
 
-impl From<Vec<RowSelector>> for RowSelection {
+impl From<Vec<RowSelector>> for RowSelectorRowSelection {
     fn from(selectors: Vec<RowSelector>) -> Self {
         selectors.into_iter().collect()
     }
 }
 
-impl FromIterator<RowSelector> for RowSelection {
+impl FromIterator<RowSelector> for RowSelectorRowSelection {
     fn from_iter<T: IntoIterator<Item = RowSelector>>(iter: T) -> Self {
         let iter = iter.into_iter();
 
@@ -603,14 +879,14 @@ impl FromIterator<RowSelector> for RowSelection {
     }
 }
 
-impl From<RowSelection> for Vec<RowSelector> {
-    fn from(r: RowSelection) -> Self {
+impl From<RowSelectorRowSelection> for Vec<RowSelector> {
+    fn from(r: RowSelectorRowSelection) -> Self {
         r.selectors
     }
 }
 
-impl From<RowSelection> for VecDeque<RowSelector> {
-    fn from(r: RowSelection) -> Self {
+impl From<RowSelectorRowSelection> for VecDeque<RowSelector> {
+    fn from(r: RowSelectorRowSelection) -> Self {
         r.selectors.into()
     }
 }
@@ -621,7 +897,10 @@ impl From<RowSelection> for VecDeque<RowSelector> {
 /// other:     NYNNNNNNY
 ///
 /// returned:  NNNNNNNNYYNYN
-fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelection {
+fn intersect_row_selections(
+    left: &[RowSelector],
+    right: &[RowSelector],
+) -> RowSelectorRowSelection {
     let mut l_iter = left.iter().copied().peekable();
     let mut r_iter = right.iter().copied().peekable();
 
@@ -683,7 +962,7 @@ fn intersect_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowS
 /// returned:  NYYYYYNNYYNYN
 ///
 /// This can be removed from here once RowSelection::union is in parquet::arrow
-fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelection {
+fn union_row_selections(left: &[RowSelector], right: &[RowSelector]) -> RowSelectorRowSelection {
     let mut l_iter = left.iter().copied().peekable();
     let mut r_iter = right.iter().copied().peekable();
 
@@ -946,14 +1225,14 @@ mod tests {
             BooleanArray::from(Vec::<bool>::new()),
         ];
 
-        let selection = RowSelection::from_filters(&filters[..1]);
+        let selection = RowSelectorRowSelection::from_filters(&filters[..1]);
         assert!(selection.selects_any());
         assert_eq!(
             selection.selectors,
             vec![RowSelector::skip(3), RowSelector::select(4)]
         );
 
-        let selection = RowSelection::from_filters(&filters[..2]);
+        let selection = RowSelectorRowSelection::from_filters(&filters[..2]);
         assert!(selection.selects_any());
         assert_eq!(
             selection.selectors,
@@ -965,7 +1244,7 @@ mod tests {
             ]
         );
 
-        let selection = RowSelection::from_filters(&filters);
+        let selection = RowSelectorRowSelection::from_filters(&filters);
         assert!(selection.selects_any());
         assert_eq!(
             selection.selectors,
@@ -978,14 +1257,14 @@ mod tests {
             ]
         );
 
-        let selection = RowSelection::from_filters(&filters[2..3]);
+        let selection = RowSelectorRowSelection::from_filters(&filters[2..3]);
         assert!(!selection.selects_any());
         assert_eq!(selection.selectors, vec![RowSelector::skip(4)]);
     }
 
     #[test]
     fn test_split_off() {
-        let mut selection = RowSelection::from(vec![
+        let mut selection = RowSelectorRowSelection::from(vec![
             RowSelector::skip(34),
             RowSelector::select(12),
             RowSelector::skip(3),
@@ -1034,7 +1313,7 @@ mod tests {
 
     #[test]
     fn test_offset() {
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             RowSelector::select(5),
             RowSelector::skip(23),
             RowSelector::select(7),
@@ -1092,21 +1371,21 @@ mod tests {
 
     #[test]
     fn test_and() {
-        let mut a = RowSelection::from(vec![
+        let mut a = RowSelectorRowSelection::from(vec![
             RowSelector::skip(12),
             RowSelector::select(23),
             RowSelector::skip(3),
             RowSelector::select(5),
         ]);
 
-        let b = RowSelection::from(vec![
+        let b = RowSelectorRowSelection::from(vec![
             RowSelector::select(5),
             RowSelector::skip(4),
             RowSelector::select(15),
             RowSelector::skip(4),
         ]);
 
-        let mut expected = RowSelection::from(vec![
+        let mut expected = RowSelectorRowSelection::from(vec![
             RowSelector::skip(12),
             RowSelector::select(5),
             RowSelector::skip(4),
@@ -1122,9 +1401,9 @@ mod tests {
         expected.split_off(7);
         assert_eq!(a.and_then(&b), expected);
 
-        let a = RowSelection::from(vec![RowSelector::select(5), RowSelector::skip(3)]);
+        let a = RowSelectorRowSelection::from(vec![RowSelector::select(5), RowSelector::skip(3)]);
 
-        let b = RowSelection::from(vec![
+        let b = RowSelectorRowSelection::from(vec![
             RowSelector::select(2),
             RowSelector::skip(1),
             RowSelector::select(1),
@@ -1170,70 +1449,70 @@ mod tests {
             RowSelector::skip(0),
         ];
 
-        let expected = RowSelection::from(vec![
+        let expected = RowSelectorRowSelection::from(vec![
             RowSelector::skip(6),
             RowSelector::select(10),
             RowSelector::skip(4),
         ]);
 
-        assert_eq!(RowSelection::from_iter(a), expected);
-        assert_eq!(RowSelection::from_iter(b), expected);
-        assert_eq!(RowSelection::from_iter(c), expected);
+        assert_eq!(RowSelectorRowSelection::from_iter(a), expected);
+        assert_eq!(RowSelectorRowSelection::from_iter(b), expected);
+        assert_eq!(RowSelectorRowSelection::from_iter(c), expected);
     }
 
     #[test]
     fn test_combine_2elements() {
         let a = vec![RowSelector::select(10), RowSelector::select(5)];
         let a_expect = vec![RowSelector::select(15)];
-        assert_eq!(RowSelection::from_iter(a).selectors, a_expect);
+        assert_eq!(RowSelectorRowSelection::from_iter(a).selectors, a_expect);
 
         let b = vec![RowSelector::select(10), RowSelector::skip(5)];
         let b_expect = vec![RowSelector::select(10), RowSelector::skip(5)];
-        assert_eq!(RowSelection::from_iter(b).selectors, b_expect);
+        assert_eq!(RowSelectorRowSelection::from_iter(b).selectors, b_expect);
 
         let c = vec![RowSelector::skip(10), RowSelector::select(5)];
         let c_expect = vec![RowSelector::skip(10), RowSelector::select(5)];
-        assert_eq!(RowSelection::from_iter(c).selectors, c_expect);
+        assert_eq!(RowSelectorRowSelection::from_iter(c).selectors, c_expect);
 
         let d = vec![RowSelector::skip(10), RowSelector::skip(5)];
         let d_expect = vec![RowSelector::skip(15)];
-        assert_eq!(RowSelection::from_iter(d).selectors, d_expect);
+        assert_eq!(RowSelectorRowSelection::from_iter(d).selectors, d_expect);
     }
 
     #[test]
     fn test_from_one_and_empty() {
         let a = vec![RowSelector::select(10)];
-        let selection1 = RowSelection::from(a.clone());
+        let selection1 = RowSelectorRowSelection::from(a.clone());
         assert_eq!(selection1.selectors, a);
 
         let b = vec![];
-        let selection1 = RowSelection::from(b.clone());
+        let selection1 = RowSelectorRowSelection::from(b.clone());
         assert_eq!(selection1.selectors, b)
     }
 
     #[test]
     #[should_panic(expected = "selection exceeds the number of selected rows")]
     fn test_and_longer() {
-        let a = RowSelection::from(vec![
+        let a = RowSelectorRowSelection::from(vec![
             RowSelector::select(3),
             RowSelector::skip(33),
             RowSelector::select(3),
             RowSelector::skip(33),
         ]);
-        let b = RowSelection::from(vec![RowSelector::select(36)]);
+        let b = RowSelectorRowSelection::from(vec![RowSelector::select(36)]);
         a.and_then(&b);
     }
 
     #[test]
     #[should_panic(expected = "selection contains less than the number of selected rows")]
     fn test_and_shorter() {
-        let a = RowSelection::from(vec![
+        let a = RowSelectorRowSelection::from(vec![
             RowSelector::select(3),
             RowSelector::skip(33),
             RowSelector::select(3),
             RowSelector::skip(33),
         ]);
-        let b = RowSelection::from(vec![RowSelector::select(3)]);
+        let b = RowSelectorRowSelection::from(vec![RowSelector::select(3)]);
         a.and_then(&b);
     }
 
@@ -1311,11 +1590,11 @@ mod tests {
         for _ in 0..100 {
             let a_len = rand.random_range(10..100);
             let a_bools: Vec<_> = (0..a_len).map(|_| rand.random_bool(0.2)).collect();
-            let a = RowSelection::from_filters(&[BooleanArray::from(a_bools.clone())]);
+            let a = RowSelectorRowSelection::from_filters(&[BooleanArray::from(a_bools.clone())]);
 
             let b_len: usize = a_bools.iter().map(|x| *x as usize).sum();
             let b_bools: Vec<_> = (0..b_len).map(|_| rand.random_bool(0.8)).collect();
-            let b = RowSelection::from_filters(&[BooleanArray::from(b_bools.clone())]);
+            let b = RowSelectorRowSelection::from_filters(&[BooleanArray::from(b_bools.clone())]);
 
             let mut expected_bools = vec![false; a_len];
 
@@ -1326,7 +1605,8 @@ mod tests {
                 }
             }
 
-            let expected = RowSelection::from_filters(&[BooleanArray::from(expected_bools)]);
+            let expected =
+                RowSelectorRowSelection::from_filters(&[BooleanArray::from(expected_bools)]);
 
             let total_rows: usize = expected.selectors.iter().map(|s| s.row_count).sum();
             assert_eq!(a_len, total_rows);
@@ -1345,7 +1625,7 @@ mod tests {
             RowSelector::select(4),
         ];
 
-        let round_tripped = RowSelection::from(selectors.clone())
+        let round_tripped = RowSelectorRowSelection::from(selectors.clone())
             .iter()
             .cloned()
             .collect::<Vec<_>>();
@@ -1355,11 +1635,15 @@ mod tests {
     #[test]
     fn test_limit() {
         // Limit to existing limit should no-op
-        let selection = RowSelection::from(vec![RowSelector::select(10), RowSelector::skip(90)]);
+        let selection =
+            RowSelectorRowSelection::from(vec![RowSelector::select(10), RowSelector::skip(90)]);
         let limited = selection.limit(10);
-        assert_eq!(RowSelection::from(vec![RowSelector::select(10)]), limited);
+        assert_eq!(
+            RowSelectorRowSelection::from(vec![RowSelector::select(10)]),
+            limited
+        );
 
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             RowSelector::select(10),
             RowSelector::skip(10),
             RowSelector::select(10),
@@ -1444,7 +1728,7 @@ mod tests {
             },
         ];
 
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             // Skip first page
             RowSelector::skip(10),
             // Multiple selects in same page
@@ -1467,7 +1751,7 @@ mod tests {
         // assert_eq!(mask, vec![false, true, true, false, true, true, false]);
         assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60]);
 
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             // Skip first page
             RowSelector::skip(10),
             // Multiple selects in same page
@@ -1491,7 +1775,7 @@ mod tests {
         // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
         assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
 
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             // Skip first page
             RowSelector::skip(10),
             // Multiple selects in same page
@@ -1517,7 +1801,7 @@ mod tests {
         // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
         assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
 
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             // Skip first page
             RowSelector::skip(10),
             // Multiple selects in same page
@@ -1540,7 +1824,7 @@ mod tests {
     #[test]
     fn test_from_ranges() {
         let ranges = [1..3, 4..6, 6..6, 8..8, 9..10];
-        let selection = RowSelection::from_consecutive_ranges(ranges.into_iter(), 10);
+        let selection = RowSelectorRowSelection::from_consecutive_ranges(ranges.into_iter(), 10);
         assert_eq!(
             selection.selectors,
             vec![
@@ -1555,14 +1839,14 @@ mod tests {
 
         let out_of_order_ranges = [1..3, 8..10, 4..7];
         let result = std::panic::catch_unwind(|| {
-            RowSelection::from_consecutive_ranges(out_of_order_ranges.into_iter(), 10)
+            RowSelectorRowSelection::from_consecutive_ranges(out_of_order_ranges.into_iter(), 10)
         });
         assert!(result.is_err());
     }
 
     #[test]
     fn test_empty_selector() {
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             RowSelector::skip(0),
             RowSelector::select(2),
             RowSelector::skip(0),
@@ -1570,7 +1854,7 @@ mod tests {
         ]);
         assert_eq!(selection.selectors, vec![RowSelector::select(4)]);
 
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             RowSelector::select(0),
             RowSelector::skip(2),
             RowSelector::select(0),
@@ -1581,18 +1865,18 @@ mod tests {
 
     #[test]
     fn test_intersection() {
-        let selection = RowSelection::from(vec![RowSelector::select(1048576)]);
+        let selection = RowSelectorRowSelection::from(vec![RowSelector::select(1048576)]);
         let result = selection.intersection(&selection);
         assert_eq!(result, selection);
 
-        let a = RowSelection::from(vec![
+        let a = RowSelectorRowSelection::from(vec![
             RowSelector::skip(10),
             RowSelector::select(10),
             RowSelector::skip(10),
             RowSelector::select(20),
         ]);
 
-        let b = RowSelection::from(vec![
+        let b = RowSelectorRowSelection::from(vec![
             RowSelector::skip(20),
             RowSelector::select(20),
             RowSelector::skip(10),
@@ -1611,12 +1895,12 @@ mod tests {
 
     #[test]
     fn test_union() {
-        let selection = RowSelection::from(vec![RowSelector::select(1048576)]);
+        let selection = RowSelectorRowSelection::from(vec![RowSelector::select(1048576)]);
         let result = selection.union(&selection);
         assert_eq!(result, selection);
 
         // NYNYY
-        let a = RowSelection::from(vec![
+        let a = RowSelectorRowSelection::from(vec![
             RowSelector::skip(10),
             RowSelector::select(10),
             RowSelector::skip(10),
@@ -1624,7 +1908,7 @@ mod tests {
         ]);
 
         // NNYYNYN
-        let b = RowSelection::from(vec![
+        let b = RowSelectorRowSelection::from(vec![
             RowSelector::skip(20),
             RowSelector::select(20),
             RowSelector::skip(10),
@@ -1647,7 +1931,7 @@ mod tests {
 
     #[test]
     fn test_row_count() {
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             RowSelector::skip(34),
             RowSelector::select(12),
             RowSelector::skip(3),
@@ -1657,17 +1941,19 @@ mod tests {
         assert_eq!(selection.row_count(), 12 + 35);
         assert_eq!(selection.skipped_row_count(), 34 + 3);
 
-        let selection = RowSelection::from(vec![RowSelector::select(12), RowSelector::select(35)]);
+        let selection =
+            RowSelectorRowSelection::from(vec![RowSelector::select(12), RowSelector::select(35)]);
 
         assert_eq!(selection.row_count(), 12 + 35);
         assert_eq!(selection.skipped_row_count(), 0);
 
-        let selection = RowSelection::from(vec![RowSelector::skip(34), RowSelector::skip(3)]);
+        let selection =
+            RowSelectorRowSelection::from(vec![RowSelector::skip(34), RowSelector::skip(3)]);
 
         assert_eq!(selection.row_count(), 0);
         assert_eq!(selection.skipped_row_count(), 34 + 3);
 
-        let selection = RowSelection::from(vec![]);
+        let selection = RowSelectorRowSelection::from(vec![]);
 
         assert_eq!(selection.row_count(), 0);
         assert_eq!(selection.skipped_row_count(), 0);
@@ -1675,7 +1961,7 @@ mod tests {
 
     #[test]
     fn test_trim() {
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             RowSelector::skip(34),
             RowSelector::select(12),
             RowSelector::skip(3),
@@ -1691,7 +1977,7 @@ mod tests {
 
         assert_eq!(selection.trim().selectors, expected);
 
-        let selection = RowSelection::from(vec![
+        let selection = RowSelectorRowSelection::from(vec![
             RowSelector::skip(34),
             RowSelector::select(12),
             RowSelector::skip(3),
