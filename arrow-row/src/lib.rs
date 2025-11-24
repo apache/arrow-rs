@@ -1990,6 +1990,8 @@ unsafe fn decode_column(
                 child_arrays,
             )?;
 
+            // note: union arrays don't support physical null buffers
+            // nulls are represented logically though child arrays
             Arc::new(union_array)
         }
     };
@@ -3871,6 +3873,52 @@ mod tests {
     }
 
     #[test]
+    fn test_sparse_union_with_nulls() {
+        // create a sparse union with Int32 (type_id = 0) and Utf8 (type_id = 1)
+        let int_array = Int32Array::from(vec![Some(1), None, Some(3), None, Some(5)]);
+        let str_array = StringArray::from(vec![None::<&str>; 5]);
+
+        // [1, null (both children null), 3, null (both children null), 5]
+        let type_ids = vec![0, 1, 0, 1, 0].into();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, true))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            None,
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)],
+        )
+        .unwrap();
+
+        let union_type = union_array.data_type().clone();
+        let converter = RowConverter::new(vec![SortField::new(union_type)]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone())])
+            .unwrap();
+
+        // round trip
+        let back = converter.convert_rows(&rows).unwrap();
+        let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
+
+        assert_eq!(union_array.len(), back_union.len());
+        for i in 0..union_array.len() {
+            let expected_null = union_array.is_null(i);
+            let actual_null = back_union.is_null(i);
+            assert_eq!(expected_null, actual_null, "Null mismatch at index {i}");
+            if !expected_null {
+                assert_eq!(union_array.type_id(i), back_union.type_id(i));
+            }
+        }
+    }
+
+    #[test]
     fn test_dense_union() {
         // create a dense union with Int32 (type_id = 0) and use Utf8 (type_id = 1)
         let int_array = Int32Array::from(vec![1, 3, 5]);
@@ -3910,6 +3958,53 @@ mod tests {
         assert_eq!(union_array.len(), back_union.len());
         for i in 0..union_array.len() {
             assert_eq!(union_array.type_id(i), back_union.type_id(i));
+        }
+    }
+
+    #[test]
+    fn test_dense_union_with_nulls() {
+        // create a dense union with Int32 (type_id = 0) and Utf8 (type_id = 1)
+        let int_array = Int32Array::from(vec![Some(1), None, Some(5)]);
+        let str_array = StringArray::from(vec![Some("a"), None]);
+
+        // [1, "a", 5, null (str null), null (int null)]
+        let type_ids = vec![0, 1, 0, 1, 0].into();
+        let offsets = vec![0, 0, 1, 1, 2].into();
+
+        let union_fields = [
+            (0, Arc::new(Field::new("int", DataType::Int32, true))),
+            (1, Arc::new(Field::new("str", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect();
+
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids,
+            Some(offsets),
+            vec![Arc::new(int_array) as ArrayRef, Arc::new(str_array)],
+        )
+        .unwrap();
+
+        let union_type = union_array.data_type().clone();
+        let converter = RowConverter::new(vec![SortField::new(union_type)]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone())])
+            .unwrap();
+
+        // round trip
+        let back = converter.convert_rows(&rows).unwrap();
+        let back_union = back[0].as_any().downcast_ref::<UnionArray>().unwrap();
+
+        assert_eq!(union_array.len(), back_union.len());
+        for i in 0..union_array.len() {
+            let expected_null = union_array.is_null(i);
+            let actual_null = back_union.is_null(i);
+            assert_eq!(expected_null, actual_null, "Null mismatch at index {i}");
+            if !expected_null {
+                assert_eq!(union_array.type_id(i), back_union.type_id(i));
+            }
         }
     }
 
