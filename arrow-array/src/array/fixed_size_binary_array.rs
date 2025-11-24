@@ -119,10 +119,11 @@ impl FixedSizeBinaryArray {
     /// * `size < 0`
     /// * `size * len` would overflow `usize`
     pub fn new_null(size: i32, len: usize) -> Self {
+        const BITS_IN_A_BYTE: usize = 8;
         let capacity_in_bytes = size.to_usize().unwrap().checked_mul(len).unwrap();
         Self {
             data_type: DataType::FixedSizeBinary(size),
-            value_data: MutableBuffer::new_null(capacity_in_bytes * 8).into(),
+            value_data: MutableBuffer::new_null(capacity_in_bytes * BITS_IN_A_BYTE).into(),
             nulls: Some(NullBuffer::new_null(len)),
             value_length: size,
             len,
