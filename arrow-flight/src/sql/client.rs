@@ -565,8 +565,8 @@ impl<T> PreparedStatement<T>
 where
     T: tonic::client::GrpcService<tonic::body::Body>,
     T::Error: Into<StdError>,
-    T::ResponseBody: Body<Data = Bytes> + std::marker::Send + 'static,
-    <T::ResponseBody as Body>::Error: Into<StdError> + std::marker::Send,
+    T::ResponseBody: Body<Data = Bytes> + Send + 'static,
+    <T::ResponseBody as Body>::Error: Into<StdError> + Send,
 {
     pub(crate) fn new(
         flight_client: FlightSqlServiceClient<T>,
