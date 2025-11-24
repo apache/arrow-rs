@@ -36,6 +36,7 @@ bench = false
 all-features = true
 
 [features]
+# Enable memory tracking support
 pool = []
 
 [dependencies]
