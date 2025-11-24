@@ -354,6 +354,75 @@ pub unsafe trait Array: std::fmt::Debug + Send + Sync {
     /// This value will always be greater than returned by `get_buffer_memory_size()` and
     /// includes the overhead of the data structures that contain the pointers to the various buffers.
     fn get_array_memory_size(&self) -> usize;
+
+    /// Claim memory used by this array in the provided memory pool.
+    ///
+    /// This recursively claims memory for:
+    /// - All data buffers in this array
+    /// - All child arrays (for nested types like List, Struct, etc.)
+    /// - The null bitmap buffer if present
+    ///
+    /// This method guarantees that the memory pool will only compute occupied memory
+    /// exactly once. For example, if this array is derived from operations like `slice`,
+    /// calling `claim` on it would not change the memory pool's usage if the underlying buffers
+    /// are already counted before.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{Int32Array, Array};
+    /// # use arrow_buffer::TrackingMemoryPool;
+    /// # use arrow_buffer::MemoryPool;
+    ///
+    /// let pool = TrackingMemoryPool::default();
+    ///
+    /// let small_array = Int32Array::from(vec![1, 2, 3, 4, 5]);
+    /// let small_array_size = small_array.get_buffer_memory_size();
+    ///
+    /// // Claim the array's memory in the pool
+    /// small_array.claim(&pool);
+    ///
+    /// // Create and claim slices of `small_array`; should not increase memory usage
+    /// let slice1 = small_array.slice(0, 2);
+    /// let slice2 = small_array.slice(2, 2);
+    /// slice1.claim(&pool);
+    /// slice2.claim(&pool);
+    ///
+    /// assert_eq!(pool.used(), small_array_size);
+    ///
+    /// // Create a `large_array` which does not derive from the original `small_array`
+    ///
+    /// let large_array = Int32Array::from((0..1000).collect::<Vec<i32>>());
+    /// let large_array_size = large_array.get_buffer_memory_size();
+    ///
+    /// large_array.claim(&pool);
+    ///
+    /// // Trying to claim more than once is a no-op
+    /// large_array.claim(&pool);
+    /// large_array.claim(&pool);
+    ///
+    /// assert_eq!(pool.used(), small_array_size + large_array_size);
+    ///
+    /// let sum_of_all_sizes = small_array_size + large_array_size + slice1.get_buffer_memory_size() + slice2.get_buffer_memory_size();
+    ///
+    /// // `get_buffer_memory_size` works independently of the memory pool, so a sum of all the
+    /// // arrays in scope will always be >= the memory used reported by the memory pool.
+    /// assert_ne!(pool.used(), sum_of_all_sizes);
+    ///
+    /// // Until the final claim is dropped the buffer size remains accounted for
+    /// drop(small_array);
+    /// drop(slice1);
+    ///
+    /// assert_eq!(pool.used(), small_array_size + large_array_size);
+    ///
+    /// // Dropping this finally releases the buffer that was backing `small_array`
+    /// drop(slice2);
+    ///
+    /// assert_eq!(pool.used(), large_array_size);
+    /// ```
+    #[cfg(feature = "pool")]
+    fn claim(&self, pool: &dyn arrow_buffer::MemoryPool) {
+        self.to_data().claim(pool)
+    }
 }
 
 /// A reference-counted reference to a generic `Array`
