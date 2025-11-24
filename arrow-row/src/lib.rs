@@ -1595,7 +1595,10 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 type_ids,
                 offsets,
             } => {
-                let union_array = array.as_any().downcast_ref::<UnionArray>().unwrap();
+                let union_array = array
+                    .as_any()
+                    .downcast_ref::<UnionArray>()
+                    .expect("expected UnionArray");
 
                 let lengths = (0..union_array.len()).map(|i| {
                     let type_id = type_ids[i];
