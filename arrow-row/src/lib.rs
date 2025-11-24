@@ -624,7 +624,7 @@ impl Codec {
                 let rows = converter.convert_columns(std::slice::from_ref(values))?;
                 Ok(Encoder::RunEndEncoded(rows))
             }
-            Codec::Union(converters, _, mode) => {
+            Codec::Union(converters, _, _mode) => {
                 let union_array = array
                     .as_any()
                     .downcast_ref::<UnionArray>()
@@ -644,7 +644,6 @@ impl Codec {
                     child_rows,
                     type_ids,
                     offsets,
-                    mode: *mode,
                 })
             }
         }
@@ -686,7 +685,6 @@ enum Encoder<'a> {
         child_rows: Vec<Rows>,
         type_ids: ScalarBuffer<i8>,
         offsets: Option<ScalarBuffer<i32>>,
-        mode: UnionMode,
     },
 }
 
@@ -1596,21 +1594,12 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 child_rows,
                 type_ids,
                 offsets,
-                mode,
             } => {
                 let union_array = array.as_any().downcast_ref::<UnionArray>().unwrap();
 
                 let lengths = (0..union_array.len()).map(|i| {
                     let type_id = type_ids[i];
-
-                    let child_row_i = match (mode, offsets) {
-                        (UnionMode::Dense, Some(offsets)) => offsets[i] as usize,
-                        (UnionMode::Sparse, None) => i,
-                        foreign => {
-                            unreachable!("invalid union mode/offsets combination: {foreign:?}")
-                        }
-                    };
-
+                    let child_row_i = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
                     let child_row = child_rows[type_id as usize].row(child_row_i);
 
                     // length: 1 byte null sentinel + 1 byte type_id + child row bytes
@@ -1737,7 +1726,6 @@ fn encode_column(
             child_rows,
             type_ids,
             offsets: offsets_buf,
-            mode,
         } => {
             let union_array = as_union_array(column);
             let null_sentinel = null_sentinel(opts);
@@ -1755,14 +1743,7 @@ fn encode_column(
 
                     let type_id = type_ids[i];
 
-                    let child_row_idx = match (mode, offsets_buf) {
-                        (UnionMode::Dense, Some(o)) => o[i] as usize,
-                        (UnionMode::Sparse, None) => i,
-                        foreign => {
-                            unreachable!("invalid union mode/offsets combination: {foreign:?}")
-                        }
-                    };
-
+                    let child_row_idx = offsets_buf.as_ref().map(|o| o[i] as usize).unwrap_or(i);
                     let child_row = child_rows[type_id as usize].row(child_row_idx);
                     let child_bytes = child_row.as_ref();
 
