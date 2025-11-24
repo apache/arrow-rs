@@ -460,7 +460,7 @@ enum Codec {
     RunEndEncoded(RowConverter),
     /// Row converters for each union field (indexed by type_id)
     /// and the encoding of null rows for each field
-    Union(Vec<RowConverter>, Vec<OwnedRow>, UnionMode),
+    Union(Vec<RowConverter>, Vec<OwnedRow>),
 }
 
 impl Codec {
@@ -527,7 +527,7 @@ impl Codec {
 
                 Ok(Self::Struct(converter, owned))
             }
-            DataType::Union(fields, mode) => {
+            DataType::Union(fields, _mode) => {
                 // similar to dictionaries and lists, we set descending to false and negate nulls_first
                 // since the encoded contents will be inverted if descending is set
                 let options = SortOptions {
@@ -554,7 +554,7 @@ impl Codec {
                     null_rows.push(owned);
                 }
 
-                Ok(Self::Union(converters, null_rows, *mode))
+                Ok(Self::Union(converters, null_rows))
             }
             _ => Err(ArrowError::NotYetImplemented(format!(
                 "not yet implemented: {:?}",
@@ -624,7 +624,7 @@ impl Codec {
                 let rows = converter.convert_columns(std::slice::from_ref(values))?;
                 Ok(Encoder::RunEndEncoded(rows))
             }
-            Codec::Union(converters, _, _mode) => {
+            Codec::Union(converters, _) => {
                 let union_array = array
                     .as_any()
                     .downcast_ref::<UnionArray>()
@@ -656,7 +656,7 @@ impl Codec {
             Codec::Struct(converter, nulls) => converter.size() + nulls.data.len(),
             Codec::List(converter) => converter.size(),
             Codec::RunEndEncoded(converter) => converter.size(),
-            Codec::Union(converters, null_rows, _) => {
+            Codec::Union(converters, null_rows) => {
                 converters.iter().map(|c| c.size()).sum::<usize>()
                     + null_rows.iter().map(|n| n.data.len()).sum::<usize>()
             }
@@ -1888,7 +1888,7 @@ unsafe fn decode_column(
             },
             _ => unreachable!(),
         },
-        Codec::Union(converters, null_rows, _mode) => {
+        Codec::Union(converters, null_rows) => {
             let len = rows.len();
 
             let DataType::Union(union_fields, mode) = &field.data_type else {
