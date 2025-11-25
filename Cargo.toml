@@ -101,8 +101,6 @@ arrow-schema = { version = "57.1.0", path = "./arrow-schema" }
 arrow-select = { version = "57.1.0", path = "./arrow-select" }
 arrow-string = { version = "57.1.0", path = "./arrow-string" }
 parquet = { version = "57.1.0", path = "./parquet", default-features = false }
-
-# These crates have not yet been released and thus do not use the workspace version
 parquet-geospatial = { version = "57.1.0", path = "./parquet-geospatial" }
 parquet-variant = { version = "57.1.0", path = "./parquet-variant" }
 parquet-variant-json = { version = "57.1.0", path = "./parquet-variant-json" }
