@@ -1605,8 +1605,8 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     let child_row_i = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
                     let child_row = child_rows[type_id as usize].row(child_row_i);
 
-                    // length: 1 byte null sentinel + 1 byte type_id + child row bytes
-                    1 + 1 + child_row.as_ref().len()
+                    // length: 1 byte type_id + child row bytes
+                    1 + child_row.as_ref().len()
                 });
 
                 tracker.push_variable(lengths);
@@ -1730,36 +1730,25 @@ fn encode_column(
             type_ids,
             offsets: offsets_buf,
         } => {
-            let union_array = as_union_array(column);
-            let null_sentinel = null_sentinel(opts);
-
             offsets
                 .iter_mut()
                 .skip(1)
                 .enumerate()
                 .for_each(|(i, offset)| {
-                    let sentinel = if union_array.is_valid(i) {
-                        0x01
-                    } else {
-                        null_sentinel
-                    };
-
                     let type_id = type_ids[i];
 
                     let child_row_idx = offsets_buf.as_ref().map(|o| o[i] as usize).unwrap_or(i);
                     let child_row = child_rows[type_id as usize].row(child_row_idx);
                     let child_bytes = child_row.as_ref();
 
-                    data[*offset] = sentinel;
-
                     let type_id_byte = if opts.descending {
                         !(type_id as u8)
                     } else {
                         type_id as u8
                     };
-                    data[*offset + 1] = type_id_byte;
+                    data[*offset] = type_id_byte;
 
-                    let child_start = *offset + 2;
+                    let child_start = *offset + 1;
                     let child_end = child_start + child_bytes.len();
                     data[child_start..child_end].copy_from_slice(child_bytes);
 
@@ -1902,8 +1891,7 @@ unsafe fn decode_column(
             let mut rows_by_field: Vec<Vec<(usize, &[u8])>> = vec![Vec::new(); converters.len()];
 
             for (idx, row) in rows.iter_mut().enumerate() {
-                // skip the null sentinel
-                let mut cursor = 1;
+                let mut cursor = 0;
 
                 let type_id_byte = {
                     let id = row[cursor];
