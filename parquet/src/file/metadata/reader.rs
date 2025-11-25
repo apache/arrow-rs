@@ -96,7 +96,7 @@ pub enum PageIndexPolicy {
 impl From<bool> for PageIndexPolicy {
     fn from(value: bool) -> Self {
         match value {
-            true => Self::Required,
+            true => Self::Optional,
             false => Self::Skip,
         }
     }

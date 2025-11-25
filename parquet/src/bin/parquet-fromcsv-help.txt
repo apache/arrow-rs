@@ -1,4 +1,3 @@
-
 Usage: parquet [OPTIONS] --schema <SCHEMA> --input-file <INPUT_FILE> --output-file <OUTPUT_FILE>
 
 Options:
