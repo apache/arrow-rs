@@ -319,8 +319,9 @@ mod test {
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
+    use arrow::util::display::FormatOptions;
     use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
-    use arrow_schema::{DataType, Field, FieldRef, Fields, TimeUnit};
+    use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{
         EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
@@ -1038,6 +1039,43 @@ mod test {
         perfectly_shredded_null_variant_array,
         arrow::array::NullArray::new(3)
     );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_null_variant_array_with_int, || {
+        Int32Array::from(vec![Some(32), Some(64), Some(48)])
+    });
+
+    // We append null values if type miss match happens in safe mode
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_null_with_type_missmatch_in_safe_mode,
+        DataType::Null,
+        perfectly_shredded_null_variant_array_with_int,
+        arrow::array::NullArray::new(3)
+    );
+
+    // We'll return an error if type miss match happens in strict mode
+    #[test]
+    fn get_variant_perfectly_shredded_null_as_null_with_type_missmatch_in_strict_mode() {
+        let array = perfectly_shredded_null_variant_array_with_int();
+        let field = Field::new("typed_value", DataType::Null, true);
+        let options = GetOptions::new()
+            .with_as_type(Some(FieldRef::from(field)))
+            .with_cast_options(CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            });
+
+        let result = variant_get(&array, options);
+
+        assert!(result.is_err());
+        let error_msg = format!("{}", result.unwrap_err());
+        assert!(
+            error_msg
+                .contains("Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])"),
+            "Expected=[Cast error: Failed to extract primitive of type Null from variant Int32(32) at path VariantPath([])],\
+                Got error message=[{}]",
+            error_msg
+        );
+    }
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_decimal4_variant_array, || {
         Decimal32Array::from(vec![Some(12345), Some(23400), Some(-12342)])
@@ -3683,6 +3721,34 @@ mod test {
         assert!(err.to_string().contains(
             "Failed to cast to Decimal256(precision=76, scale=39) from variant Decimal16"
         ));
+    }
+
+    #[test]
+    fn get_non_supported_temporal_types_error() {
+        let values = vec![None, Some(Variant::Null), Some(Variant::BooleanFalse)];
+        let variant_array: ArrayRef = ArrayRef::from(VariantArray::from_iter(values));
+
+        let test_cases = vec![
+            FieldRef::from(Field::new(
+                "result",
+                DataType::Duration(TimeUnit::Microsecond),
+                true,
+            )),
+            FieldRef::from(Field::new(
+                "result",
+                DataType::Interval(IntervalUnit::YearMonth),
+                true,
+            )),
+        ];
+
+        for field in test_cases {
+            let options = GetOptions::new().with_as_type(Some(field));
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Casting Variant to duration/interval types is not supported")
+            );
+        }
     }
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_invalid_time_variant_array, || {

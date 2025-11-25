@@ -396,6 +396,18 @@ impl UnionFields {
         self.0.iter().map(|(id, f)| (*id, f))
     }
 
+    /// Searches for a field by its type id, returning the type id and field reference if found.
+    /// Returns `None` if no field with the given type id exists.
+    pub fn find_by_type_id(&self, type_id: i8) -> Option<(i8, &FieldRef)> {
+        self.iter().find(|&(i, _)| i == type_id)
+    }
+
+    /// Searches for a field by value equality, returning its type id and reference if found.
+    /// Returns `None` if no matching field exists in this [`UnionFields`].
+    pub fn find_by_field(&self, field: &Field) -> Option<(i8, &FieldRef)> {
+        self.iter().find(|&(_, f)| f.as_ref() == field)
+    }
+
     /// Merge this field into self if it is compatible.
     ///
     /// See [`Field::try_merge`]

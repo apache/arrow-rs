@@ -311,6 +311,14 @@ impl UnionArray {
         }
     }
 
+    /// Returns the [`UnionFields`] for the union.
+    pub fn fields(&self) -> &UnionFields {
+        match self.data_type() {
+            DataType::Union(fields, _) => fields,
+            _ => unreachable!("Union array's data type is not a union!"),
+        }
+    }
+
     /// Returns whether the `UnionArray` is dense (or sparse if `false`).
     pub fn is_dense(&self) -> bool {
         match self.data_type() {
