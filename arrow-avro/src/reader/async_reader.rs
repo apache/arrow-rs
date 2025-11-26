@@ -99,21 +99,20 @@ impl AsyncAvroReader {
         store: Arc<dyn object_store::ObjectStore>,
         location: Path,
         range: Option<Range<u64>>,
-        file_size: Option<u64>,
+        file_size: u64,
         reader_schema: Option<AvroSchema>,
         batch_size: usize,
     ) -> Result<Self, ArrowError> {
-        let file_size = match file_size {
-            None | Some(0) => {
-                store
-                    .head(&location)
-                    .await
-                    .map_err(|err| {
-                        ArrowError::AvroError(format!("HEAD request failed for file, {err}"))
-                    })?
-                    .size
-            }
-            Some(size) => size,
+        let file_size = if file_size == 0 {
+            store
+                .head(&location)
+                .await
+                .map_err(|err| {
+                    ArrowError::AvroError(format!("HEAD request failed for file, {err}"))
+                })?
+                .size
+        } else {
+            file_size
         };
 
         // Start by reading the header from the beginning of the avro file
@@ -754,8 +753,7 @@ mod tests {
 
         let reader_schema = schema.map(|schema| AvroSchema::try_from(schema.as_ref()).unwrap());
         let reader =
-            AsyncAvroReader::try_new(store, location, range, None, reader_schema, batch_size)
-                .await?;
+            AsyncAvroReader::try_new(store, location, range, 0, reader_schema, batch_size).await?;
 
         let batches: Vec<RecordBatch> = reader.try_collect().await?;
         Ok(batches)
@@ -995,7 +993,7 @@ mod tests {
             store,
             location,
             None,
-            None,
+            0,
             Some(reader_schema),
             2, // Small batch size to force multiple batches
         )
@@ -1017,7 +1015,7 @@ mod tests {
 
         let schema = get_alltypes_schema();
         let reader_schema = AvroSchema::try_from(schema.as_ref()).unwrap();
-        let reader = AsyncAvroReader::try_new(store, location, None, None, Some(reader_schema), 1)
+        let reader = AsyncAvroReader::try_new(store, location, None, 0, Some(reader_schema), 1)
             .await
             .unwrap();
 
