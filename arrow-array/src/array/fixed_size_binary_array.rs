@@ -95,7 +95,7 @@ impl FixedSizeBinaryArray {
         })?;
 
         let len = if s == 0 {
-            if values.is_empty() {
+            if !values.is_empty() {
                 return Err(ArrowError::InvalidArgumentError(
                     "Buffer cannot have non-zero length if the item size is zero".to_owned(),
                 ));
