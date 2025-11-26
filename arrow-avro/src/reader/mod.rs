@@ -502,6 +502,7 @@ mod vlq;
 #[cfg(feature = "object_store")]
 mod async_reader;
 
+#[cfg(feature = "object_store")]
 pub use async_reader::AsyncAvroReader;
 
 fn is_incomplete_data(err: &ArrowError) -> bool {
