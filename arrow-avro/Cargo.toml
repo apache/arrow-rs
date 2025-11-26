@@ -36,7 +36,7 @@ bench = false
 all-features = true
 
 [features]
-default = ["deflate", "snappy", "zstd", "bzip2", "xz"]
+default = ["deflate", "snappy", "zstd", "bzip2", "xz", "object_store"]
 deflate = ["flate2"]
 snappy = ["snap", "crc"]
 canonical_extension_types = ["arrow-schema/canonical_extension_types"]
@@ -44,6 +44,7 @@ md5 = ["dep:md5"]
 sha256 = ["dep:sha2"]
 small_decimals = []
 avro_custom_types = ["dep:arrow-select"]
+object_store = ["dep:object_store", "dep:bytes", "dep:futures"]
 
 [dependencies]
 arrow-schema = { workspace = true }
@@ -66,6 +67,9 @@ indexmap = "2.10"
 rand = "0.9"
 md5 = { version = "0.8", optional = true }
 sha2 = { version = "0.10", optional = true }
+object_store = { version = "0.12.0", default-features = false, optional = true }
+bytes = { version = "1.10.1", optional = true }
+futures = { version = "0.3.31", optional = true }
 
 [dev-dependencies]
 arrow-data = { workspace = true }
@@ -83,6 +87,8 @@ async-stream = "0.3.6"
 apache-avro = "0.21.0"
 num-bigint = "0.4"
 once_cell = "1.21.3"
+object_store = { version = "0.12.0", features = ["fs"]}
+tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 
 [[bench]]
 name = "avro_reader"
