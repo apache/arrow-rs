@@ -211,19 +211,24 @@ impl AsyncAvroReader {
                     unreachable!("ReaderState::Limbo should never be observed");
                 }
                 ReaderState::FetchingData(mut future) => {
-                    // Done this way(passing the future in the enum etc.) so in the future this can be replaced with proper polling.
                     let data_chunks = match future.poll_unpin(cx)? {
                         Poll::Ready(data) => data,
                         Poll::Pending => {
+                            // Return control to executor
                             self.reader_state = ReaderState::FetchingData(future);
                             return Poll::Pending;
                         }
                     };
 
                     // We only requested one range, so we expect one chunk.
-                    let chunk = data_chunks.into_iter().next().unwrap();
-                    // This is the first time we read data, so try and find the sync marker.
+                    let chunk = data_chunks.into_iter().next().ok_or(ArrowError::AvroError(
+                        "Fetched one chunk from object_store, but object store returned zero"
+                            .into(),
+                    ))?;
+
                     if self.file_data.is_empty() {
+                        // This is the first time we read data, so try and find the sync marker.
+
                         self.file_data = chunk;
                         self.reader_state = ReaderState::DecodingBlock;
 
@@ -234,7 +239,7 @@ impl AsyncAvroReader {
                         let block_start = match sync_marker_pos {
                             Some(pos) => pos + 16, // Move past the sync marker
                             None => {
-                                // Sync marker not found, this is actually valid if Spark arbitrarily split the file at its end.s
+                                // Sync marker not found, this is actually valid if we arbitrarily split the file at its end.
                                 self.reader_state = ReaderState::Finished;
                                 return Poll::Ready(None);
                             }
