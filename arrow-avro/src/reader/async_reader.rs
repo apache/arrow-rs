@@ -69,10 +69,13 @@ enum ReaderState {
 /// An asynchronous Avro file reader that implements `Stream<Item = Result<RecordBatch, ArrowError>>`.
 /// This uses ObjectStore to fetch data ranges as needed, starting with fetching the header,
 /// then reading all the blocks in the provided range where:
-/// 1. Searching from `range.start` for the first sync marker, and starting with the following block.
-/// 2. Reading blocks sequentially, decoding them into RecordBatches.
-/// 3. If a block is incomplete (due to range ending mid-block), fetching the remaining bytes from ObjectStore.
-/// 4. If no range was originally provided, reads the full file.
+/// 1. Reads and decodes data until the header is fully decoded.
+/// 2. Searching from `range.start` for the first sync marker, and starting with the following block.
+///    (If `range.start` is less than the header length, we start at the header length minus the sync marker bytes)
+/// 3. Reading blocks sequentially, decoding them into RecordBatches.
+/// 4. If a block is incomplete (due to range ending mid-block), fetching the remaining bytes from ObjectStore.
+/// 5. If no range was originally provided, reads the full file.
+/// 6. If the range is 0, file_size is 0, or `range.end` is less than the header length, finish immediately.
 pub struct AsyncAvroReader {
     store: Arc<dyn object_store::ObjectStore>,
     location: Path,
