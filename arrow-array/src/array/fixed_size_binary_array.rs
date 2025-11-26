@@ -76,10 +76,14 @@ impl FixedSizeBinaryArray {
 
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts, returning an error on failure
     ///
+    /// Creating an arrow with `size == 0` will try to get the length from the null buffer. If
+    /// no null buffer is provided, the resulting array will have length zero.
+    ///
     /// # Errors
     ///
     /// * `size < 0`
     /// * `values.len() / size != nulls.len()`
+    /// * `size == 0 && values.len() != 0`
     pub fn try_new(
         size: i32,
         values: Buffer,
@@ -90,7 +94,18 @@ impl FixedSizeBinaryArray {
             ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
-        let len = values.len() / s;
+        let len = if s == 0 {
+            if values.len() != 0 {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Buffer cannot have non-zero length if the item size is zero".to_owned(),
+                ));
+            }
+
+            // If the item size is zero, try to determine the length from the null buffer
+            nulls.as_ref().map(|n| n.len()).unwrap_or(0)
+        } else {
+            values.len() / s
+        };
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -672,10 +687,10 @@ impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
 
 #[cfg(test)]
 mod tests {
-    use crate::RecordBatch;
-    use arrow_schema::{Field, Schema};
-
     use super::*;
+    use crate::RecordBatch;
+    use crate::builder::FixedSizeBinaryBuilder;
+    use arrow_schema::{Field, Schema};
 
     #[test]
     fn test_fixed_size_binary_array() {
@@ -1002,10 +1017,37 @@ mod tests {
         );
 
         let nulls = NullBuffer::new_null(3);
-        let err = FixedSizeBinaryArray::try_new(2, buffer, Some(nulls)).unwrap_err();
+        let err = FixedSizeBinaryArray::try_new(2, buffer.clone(), Some(nulls)).unwrap_err();
         assert_eq!(
             err.to_string(),
             "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3"
         );
+
+        let zero_sized = FixedSizeBinaryArray::new(0, Buffer::default(), None);
+        assert_eq!(zero_sized.len(), 0);
+
+        let nulls = NullBuffer::new_null(3);
+        let zero_sized_with_nulls = FixedSizeBinaryArray::new(0, Buffer::default(), Some(nulls));
+        assert_eq!(zero_sized_with_nulls.len(), 3);
+
+        let zero_sized_with_non_empty_buffer = FixedSizeBinaryArray::try_new(0, buffer, None);
+        assert!(
+            matches!(
+                zero_sized_with_non_empty_buffer,
+                Err(ArrowError::InvalidArgumentError(_))
+            ),
+            "Should not be able to create a zero sized array with non-empty buffer"
+        );
+    }
+
+    #[test]
+    fn test_zero_sized_builder() {
+        let mut builder = FixedSizeBinaryBuilder::new(0);
+        builder.append_value([]).unwrap();
+        builder.append_null();
+        let array = builder.finish();
+
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.null_count(), 1);
     }
 }
