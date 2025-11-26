@@ -32,7 +32,7 @@
 - ValueStatistics methods can't be used from generic context in external crate [\#8823](https://github.com/apache/arrow-rs/issues/8823) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
 - Custom Pretty-Printing Implementation for Column when Formatting Record Batches [\#8821](https://github.com/apache/arrow-rs/issues/8821) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Parquet-concat: supports bloom filter and page index [\#8804](https://github.com/apache/arrow-rs/issues/8804) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)]
-- \[Parquet\] virtual row group number support [\#8800](https://github.com/apache/arrow-rs/issues/8800)
+- \[Parquet\] virtual row number support [\#7299](https://github.com/apache/arrow-rs/issues/7299)
 - \[Variant\] Enforce shredded-type validation in `shred_variant` [\#8795](https://github.com/apache/arrow-rs/issues/8795) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Simplify decision logic to call `FilterBuilder::optimize` or not [\#8781](https://github.com/apache/arrow-rs/issues/8781) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - \[Variant\] Add variant to arrow for DataType::{Binary, LargeBinary, BinaryView} [\#8767](https://github.com/apache/arrow-rs/issues/8767) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
