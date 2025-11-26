@@ -1029,13 +1029,11 @@ mod tests {
         let zero_sized_with_nulls = FixedSizeBinaryArray::new(0, Buffer::default(), Some(nulls));
         assert_eq!(zero_sized_with_nulls.len(), 3);
 
-        let zero_sized_with_non_empty_buffer = FixedSizeBinaryArray::try_new(0, buffer, None);
-        assert!(
-            matches!(
-                zero_sized_with_non_empty_buffer,
-                Err(ArrowError::InvalidArgumentError(_))
-            ),
-            "Should not be able to create a zero sized array with non-empty buffer"
+        let zero_sized_with_non_empty_buffer_err =
+            FixedSizeBinaryArray::try_new(0, buffer, None).unwrap_err();
+        assert_eq!(
+            zero_sized_with_non_empty_buffer_err.to_string(),
+            "Invalid argument error: Buffer cannot have non-zero length if the item size is zero"
         );
     }
 }
