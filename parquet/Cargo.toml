@@ -176,6 +176,11 @@ required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"
 
 [[test]]
+name = "metadata_memory"
+required-features = ["arrow"]
+path = "./tests/metadata_memory.rs"
+
+[[test]]
 name = "variant_integration"
 required-features = ["arrow", "variant_experimental", "serde"]
 path = "./tests/variant_integration.rs"
