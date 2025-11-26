@@ -657,11 +657,113 @@ mod tests {
     };
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit, UnionFields, UnionMode};
     use parquet_variant::{
-        EMPTY_VARIANT_METADATA_BYTES, ObjectBuilder, ReadOnlyMetadataBuilder, Variant,
-        VariantBuilder,
+        BuilderSpecificState, EMPTY_VARIANT_METADATA_BYTES, ObjectBuilder, ReadOnlyMetadataBuilder,
+        Variant, VariantBuilder,
     };
     use std::sync::Arc;
     use uuid::Uuid;
+
+    #[derive(Clone)]
+    enum VariantValue<'a> {
+        Value(Variant<'a, 'a>),
+        List(Vec<VariantValue<'a>>),
+        Object(Vec<(&'a str, VariantValue<'a>)>),
+        Null,
+    }
+
+    impl<'a, T> From<T> for VariantValue<'a>
+    where
+        T: Into<Variant<'a, 'a>>,
+    {
+        fn from(value: T) -> Self {
+            Self::Value(value.into())
+        }
+    }
+
+    #[derive(Clone)]
+    enum VariantRow<'a> {
+        Value(VariantValue<'a>),
+        List(Vec<VariantValue<'a>>),
+        Object(Vec<(&'a str, VariantValue<'a>)>),
+        Null,
+    }
+
+    fn build_variant_array(rows: Vec<VariantRow<'static>>) -> VariantArray {
+        let mut builder = VariantArrayBuilder::new(rows.len());
+
+        fn append_variant_value<'a, B>(builder: &mut B, value: VariantValue<'a>)
+        where
+            B: parquet_variant::VariantBuilderExt,
+        {
+            match value {
+                VariantValue::Value(v) => builder.append_value(v),
+                VariantValue::List(values) => {
+                    let mut list = builder.new_list();
+                    for v in values {
+                        append_variant_value(&mut list, v);
+                    }
+                    list.finish();
+                }
+                VariantValue::Object(fields) => {
+                    let mut object = builder.new_object();
+                    for (name, value) in fields {
+                        append_variant_field(&mut object, name, value);
+                    }
+                    object.finish();
+                }
+                VariantValue::Null => builder.append_null(),
+            }
+        }
+
+        fn append_variant_field<'a, S: BuilderSpecificState>(
+            object: &mut ObjectBuilder<'_, S>,
+            name: &'a str,
+            value: VariantValue<'a>,
+        ) {
+            match value {
+                VariantValue::Value(v) => {
+                    object.insert(name, v);
+                }
+                VariantValue::List(values) => {
+                    let mut list = object.new_list(name);
+                    for v in values {
+                        append_variant_value(&mut list, v);
+                    }
+                    list.finish();
+                }
+                VariantValue::Object(fields) => {
+                    let mut nested = object.new_object(name);
+                    for (field_name, v) in fields {
+                        append_variant_field(&mut nested, field_name, v);
+                    }
+                    nested.finish();
+                }
+                VariantValue::Null => {
+                    object.insert(name, Variant::Null);
+                }
+            }
+        }
+
+        rows.into_iter().for_each(|row| match row {
+            VariantRow::Value(value) => append_variant_value(&mut builder, value),
+            VariantRow::List(values) => {
+                let mut list = builder.new_list();
+                for value in values {
+                    append_variant_value(&mut list, value);
+                }
+                list.finish();
+            }
+            VariantRow::Object(fields) => {
+                let mut object = builder.new_object();
+                for (name, value) in fields {
+                    append_variant_field(&mut object, name, value);
+                }
+                object.finish();
+            }
+            VariantRow::Null => builder.append_null(),
+        });
+        builder.build()
+    }
 
     #[test]
     fn test_already_shredded_input_error() {
@@ -916,30 +1018,26 @@ mod tests {
 
     #[test]
     fn test_array_shredding_as_list() {
-        let mut builder = VariantArrayBuilder::new(5);
-        // Row 0: List of ints should shred entirely into typed_value
-        builder
-            .new_list()
-            .with_value(Variant::from(1i64))
-            .with_value(Variant::from(2i64))
-            .with_value(Variant::from(3i64))
-            .finish();
-        // Row 1: Contains incompatible types so values fall back
-        builder
-            .new_list()
-            .with_value(Variant::from(1i64))
-            .with_value(Variant::from("two"))
-            .with_value(Variant::Null)
-            .finish();
-        // Row 2: Not a list -> entire row falls back
-        builder.append_variant(Variant::from("not a list"));
-        // Row 3: Array-level null propagates
-        builder.append_null();
-        // Row 4: Empty list exercises zero-length offsets
-        builder.new_list().finish();
-
-        // Target schema is List<Int64>
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: List of ints should shred entirely into typed_value
+            VariantRow::List(vec![
+                VariantValue::from(1i64),
+                VariantValue::from(2i64),
+                VariantValue::from(3i64),
+            ]),
+            // Row 1: Contains incompatible types so values fall back
+            VariantRow::List(vec![
+                VariantValue::from(1i64),
+                VariantValue::from("two"),
+                VariantValue::from(Variant::Null),
+            ]),
+            // Row 2: Not a list -> entire row falls back
+            VariantRow::Value(VariantValue::from("not a list")),
+            // Row 3: Array-level null propagates
+            VariantRow::Null,
+            // Row 4: Empty list exercises zero-length offsets
+            VariantRow::List(vec![]),
+        ]);
         let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 5);
@@ -1026,16 +1124,14 @@ mod tests {
 
     #[test]
     fn test_array_shredding_as_large_list() {
-        let mut builder = VariantArrayBuilder::new(3);
-        builder
-            .new_list()
-            .with_value(Variant::from(1i64))
-            .with_value(Variant::from(2i64))
-            .finish();
-        builder.append_variant(Variant::from("not a list"));
-        builder.new_list().finish();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: List of ints shreds to typed_value
+            VariantRow::List(vec![VariantValue::from(1i64), VariantValue::from(2i64)]),
+            // Row 1: Not a list -> entire row falls back
+            VariantRow::Value(VariantValue::from("not a list")),
+            // Row 2: Empty list
+            VariantRow::List(vec![]),
+        ]);
         let list_schema = DataType::LargeList(Arc::new(Field::new("item", DataType::Int64, true)));
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 3);
@@ -1066,29 +1162,26 @@ mod tests {
 
     #[test]
     fn test_array_shredding_as_list_view() {
-        let mut builder = VariantArrayBuilder::new(4);
-        // Row 0: Standard list
-        builder
-            .new_list()
-            .with_value(Variant::from(1i64))
-            .with_value(Variant::from(2i64))
-            .with_value(Variant::from(3i64))
-            .finish();
-        // Row 1: List with incompatible types -> element fallback
-        builder
-            .new_list()
-            .with_value(Variant::from(1i64))
-            .with_value(Variant::from("two"))
-            .with_value(Variant::Null)
-            .finish();
-        // Row 2: Not a list -> top-level fallback
-        builder.append_variant(Variant::from("not a list"));
-        // Row 3: Top-level Null
-        builder.append_null();
-        // Row 4: Empty list
-        builder.new_list().finish();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: Standard list
+            VariantRow::List(vec![
+                VariantValue::from(1i64),
+                VariantValue::from(2i64),
+                VariantValue::from(3i64),
+            ]),
+            // Row 1: List with incompatible types -> element fallback
+            VariantRow::List(vec![
+                VariantValue::from(1i64),
+                VariantValue::from("two"),
+                VariantValue::from(Variant::Null),
+            ]),
+            // Row 2: Not a list -> top-level fallback
+            VariantRow::Value(VariantValue::from("not a list")),
+            // Row 3: Top-level Null
+            VariantRow::Null,
+            // Row 4: Empty list
+            VariantRow::List(vec![]),
+        ]);
         let list_schema = DataType::ListView(Arc::new(Field::new("item", DataType::Int64, true)));
 
         let result = shred_variant(&input, &list_schema).unwrap();
@@ -1176,16 +1269,14 @@ mod tests {
 
     #[test]
     fn test_array_shredding_as_large_list_view() {
-        let mut builder = VariantArrayBuilder::new(3);
-        builder
-            .new_list()
-            .with_value(Variant::from(1i64))
-            .with_value(Variant::from(2i64))
-            .finish();
-        builder.append_variant(Variant::from("fallback"));
-        builder.new_list().finish();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: List of ints shreds to typed_value
+            VariantRow::List(vec![VariantValue::from(1i64), VariantValue::from(2i64)]),
+            // Row 1: Not a list -> entire row falls back
+            VariantRow::Value(VariantValue::from("fallback")),
+            // Row 2: Empty list
+            VariantRow::List(vec![]),
+        ]);
         let schema = DataType::LargeListView(Arc::new(Field::new("item", DataType::Int64, true)));
         let result = shred_variant(&input, &schema).unwrap();
         assert_eq!(result.len(), 3);
@@ -1217,38 +1308,28 @@ mod tests {
 
     #[test]
     fn test_array_shredding_with_array_elements() {
-        let mut builder = VariantArrayBuilder::new(4);
-        // Row 0: list of lists that converts cleanly [[1, 2], [3, 4], []]
-        let mut outer = builder.new_list();
-        outer
-            .new_list()
-            .with_value(Variant::from(1i64))
-            .with_value(Variant::from(2i64))
-            .finish();
-        outer
-            .new_list()
-            .with_value(Variant::from(3i64))
-            .with_value(Variant::from(4i64))
-            .finish();
-        outer.new_list().finish();
-        outer.finish();
-        // Row 1: inner list contains an incompatible element -> element fallback [[5, "bad", null], "not a list inner", null]
-        let mut outer = builder.new_list();
-        outer
-            .new_list()
-            .with_value(Variant::from(5i64))
-            .with_value(Variant::from("bad"))
-            .with_value(Variant::Null)
-            .finish();
-        outer.append_value("not a list inner");
-        outer.append_null();
-        outer.finish();
-        // Row 2: not a list at all
-        builder.append_variant(Variant::from("not a list"));
-        // Row 3: null row
-        builder.append_null();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: [[1, 2], [3, 4], []] - clean nested lists
+            VariantRow::List(vec![
+                VariantValue::List(vec![VariantValue::from(1i64), VariantValue::from(2i64)]),
+                VariantValue::List(vec![VariantValue::from(3i64), VariantValue::from(4i64)]),
+                VariantValue::List(vec![]),
+            ]),
+            // Row 1: [[5, "bad", null], "not a list inner", null] - inner fallbacks
+            VariantRow::List(vec![
+                VariantValue::List(vec![
+                    VariantValue::from(5i64),
+                    VariantValue::from("bad"),
+                    VariantValue::from(Variant::Null),
+                ]),
+                VariantValue::from("not a list inner"),
+                VariantValue::Null,
+            ]),
+            // Row 2: "not a list" - top-level fallback
+            VariantRow::Value(VariantValue::from("not a list")),
+            // Row 3: null row
+            VariantRow::Null,
+        ]);
         let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
         let list_schema = DataType::List(Arc::new(Field::new(
             "item",
@@ -1376,23 +1457,20 @@ mod tests {
 
     #[test]
     fn test_array_shredding_with_object_elements() {
-        let mut builder = VariantArrayBuilder::new(3);
-        // Row 0: List of objects with optional fields
-        let mut list_builder = builder.new_list();
-        list_builder
-            .new_object()
-            .with_field("id", 1i64)
-            .with_field("name", "Alice")
-            .finish();
-        list_builder
-            .new_object()
-            .with_field("id", Variant::Null)
-            .finish();
-        list_builder.finish();
-        // Row 1: Wrong top-level type -> fallback
-        builder.append_variant(Variant::from("not a list"));
-        // Row 2: Null row
-        builder.append_null();
+        let input = build_variant_array(vec![
+            // Row 0: [{"id": 1, "name": "Alice"}, {"id": null}] fully shards
+            VariantRow::List(vec![
+                VariantValue::Object(vec![
+                    ("id", VariantValue::from(1i64)),
+                    ("name", VariantValue::from("Alice")),
+                ]),
+                VariantValue::Object(vec![("id", VariantValue::from(Variant::Null))]),
+            ]),
+            // Row 1: "not a list" -> fallback
+            VariantRow::Value(VariantValue::from("not a list")),
+            // Row 2: Null row
+            VariantRow::Null,
+        ]);
 
         // Target schema is List<Struct<id:int64,name:utf8>>
         let object_fields = Fields::from(vec![
@@ -1404,7 +1482,6 @@ mod tests {
             DataType::Struct(object_fields),
             true,
         )));
-        let input = builder.build();
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 3);
 
@@ -1494,53 +1571,39 @@ mod tests {
 
     #[test]
     fn test_object_shredding_comprehensive() {
-        let mut builder = VariantArrayBuilder::new(7);
-
-        // Row 0: Fully shredded object
-        builder
-            .new_object()
-            .with_field("score", 95.5f64)
-            .with_field("age", 30i64)
-            .finish();
-
-        // Row 1: Partially shredded object (extra email field)
-        builder
-            .new_object()
-            .with_field("score", 87.2f64)
-            .with_field("age", 25i64)
-            .with_field("email", "bob@example.com")
-            .finish();
-
-        // Row 2: Missing field (no score)
-        builder.new_object().with_field("age", 35i64).finish();
-
-        // Row 3: Type mismatch (score is string, age is string)
-        builder
-            .new_object()
-            .with_field("score", "ninety-five")
-            .with_field("age", "thirty")
-            .finish();
-
-        // Row 4: Non-object
-        builder.append_variant(Variant::from("not an object"));
-
-        // Row 5: Empty object
-        builder.new_object().finish();
-
-        // Row 6: Null
-        builder.append_null();
-
-        // Row 7: Object with only "wrong" fields
-        builder.new_object().with_field("foo", 10).finish();
-
-        // Row 8: Object with one "right" and one "wrong" field
-        builder
-            .new_object()
-            .with_field("score", 66.67f64)
-            .with_field("foo", 10)
-            .finish();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: Fully shredded object
+            VariantRow::Object(vec![
+                ("score", VariantValue::from(95.5f64)),
+                ("age", VariantValue::from(30i64)),
+            ]),
+            // Row 1: Partially shredded object (extra email field)
+            VariantRow::Object(vec![
+                ("score", VariantValue::from(87.2f64)),
+                ("age", VariantValue::from(25i64)),
+                ("email", VariantValue::from("bob@example.com")),
+            ]),
+            // Row 2: Missing field (no score)
+            VariantRow::Object(vec![("age", VariantValue::from(35i64))]),
+            // Row 3: Type mismatch (score is string, age is string)
+            VariantRow::Object(vec![
+                ("score", VariantValue::from("ninety-five")),
+                ("age", VariantValue::from("thirty")),
+            ]),
+            // Row 4: Non-object
+            VariantRow::Value(VariantValue::from("not an object")),
+            // Row 5: Empty object
+            VariantRow::Object(vec![]),
+            // Row 6: Null
+            VariantRow::Null,
+            // Row 7: Object with only "wrong" fields
+            VariantRow::Object(vec![("foo", VariantValue::from(10))]),
+            // Row 8: Object with one "right" and one "wrong" field
+            VariantRow::Object(vec![
+                ("score", VariantValue::from(66.67f64)),
+                ("foo", VariantValue::from(10)),
+            ]),
+        ]);
 
         // Create target schema: struct<score: float64, age: int64>
         // Both types are supported for shredding
@@ -1857,36 +1920,27 @@ mod tests {
 
     #[test]
     fn test_object_shredding_with_array_field() {
-        let mut builder = VariantArrayBuilder::new(4);
-
-        // Row 0: Object with well-typed scores list
-        let mut object = builder.new_object();
-        object
-            .new_list("scores")
-            .with_value(Variant::from(10i64))
-            .with_value(Variant::from(20i64))
-            .finish();
-        object.finish();
-
-        // Row 1: Object whose scores list contains incompatible type
-        let mut object = builder.new_object();
-        object
-            .new_list("scores")
-            .with_value(Variant::from("oops"))
-            .with_value(Variant::Null)
-            .finish();
-        object.finish();
-
-        // Row 2: Object missing the scores field entirely
-        builder.new_object().finish();
-
-        // Row 3: Non-object fallback
-        builder.append_variant(Variant::from("not an object"));
-
-        // Row 4: Top-level Null
-        builder.append_null();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: Object with well-typed scores list
+            VariantRow::Object(vec![(
+                "scores",
+                VariantValue::List(vec![VariantValue::from(10i64), VariantValue::from(20i64)]),
+            )]),
+            // Row 1: Object whose scores list contains incompatible type
+            VariantRow::Object(vec![(
+                "scores",
+                VariantValue::List(vec![
+                    VariantValue::from("oops"),
+                    VariantValue::from(Variant::Null),
+                ]),
+            )]),
+            // Row 2: Object missing the scores field entirely
+            VariantRow::Object(vec![]),
+            // Row 3: Non-object fallback
+            VariantRow::Value(VariantValue::from("not an object")),
+            // Row 4: Top-level Null
+            VariantRow::Null,
+        ]);
         let list_field = Arc::new(Field::new("item", DataType::Int64, true));
         let schema = DataType::Struct(Fields::from(vec![Field::new(
             "scores",
@@ -1976,14 +2030,11 @@ mod tests {
     #[test]
     fn test_object_different_schemas() {
         // Create object with multiple fields
-        let mut builder = VariantArrayBuilder::new(1);
-        builder
-            .new_object()
-            .with_field("id", 123i32)
-            .with_field("age", 25i64)
-            .with_field("score", 95.5f64)
-            .finish();
-        let input = builder.build();
+        let input = build_variant_array(vec![VariantRow::Object(vec![
+            ("id", VariantValue::from(123i32)),
+            ("age", VariantValue::from(25i64)),
+            ("score", VariantValue::from(95.5f64)),
+        ])]);
 
         // Test with schema containing only id field
         let schema1 = DataType::Struct(Fields::from(vec![Field::new("id", DataType::Int32, true)]));
@@ -2017,44 +2068,33 @@ mod tests {
         let mock_uuid_2 = Uuid::new_v4();
         let mock_uuid_3 = Uuid::new_v4();
 
-        let mut builder = VariantArrayBuilder::new(6);
-
-        // Row 0: Fully shredded object with both UUID fields
-        builder
-            .new_object()
-            .with_field("id", mock_uuid_1)
-            .with_field("session_id", mock_uuid_2)
-            .finish();
-
-        // Row 1: Partially shredded object - UUID fields plus extra field
-        builder
-            .new_object()
-            .with_field("id", mock_uuid_2)
-            .with_field("session_id", mock_uuid_3)
-            .with_field("name", "test_user")
-            .finish();
-
-        // Row 2: Missing UUID field (no session_id)
-        builder.new_object().with_field("id", mock_uuid_1).finish();
-
-        // Row 3: Type mismatch - id is UUID but session_id is a string
-        builder
-            .new_object()
-            .with_field("id", mock_uuid_3)
-            .with_field("session_id", "not-a-uuid")
-            .finish();
-
-        // Row 4: Object with non-UUID value in id field
-        builder
-            .new_object()
-            .with_field("id", 12345i64)
-            .with_field("session_id", mock_uuid_1)
-            .finish();
-
-        // Row 5: Null
-        builder.append_null();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            // Row 0: Fully shredded object with both UUID fields
+            VariantRow::Object(vec![
+                ("id", VariantValue::from(mock_uuid_1)),
+                ("session_id", VariantValue::from(mock_uuid_2)),
+            ]),
+            // Row 1: Partially shredded object - UUID fields plus extra field
+            VariantRow::Object(vec![
+                ("id", VariantValue::from(mock_uuid_2)),
+                ("session_id", VariantValue::from(mock_uuid_3)),
+                ("name", VariantValue::from("test_user")),
+            ]),
+            // Row 2: Missing UUID field (no session_id)
+            VariantRow::Object(vec![("id", VariantValue::from(mock_uuid_1))]),
+            // Row 3: Type mismatch - id is UUID but session_id is a string
+            VariantRow::Object(vec![
+                ("id", VariantValue::from(mock_uuid_3)),
+                ("session_id", VariantValue::from("not-a-uuid")),
+            ]),
+            // Row 4: Object with non-UUID value in id field
+            VariantRow::Object(vec![
+                ("id", VariantValue::from(12345i64)),
+                ("session_id", VariantValue::from(mock_uuid_1)),
+            ]),
+            // Row 5: Null
+            VariantRow::Null,
+        ]);
 
         let fields = Fields::from(vec![
             Field::new("id", DataType::FixedSizeBinary(16), true),
