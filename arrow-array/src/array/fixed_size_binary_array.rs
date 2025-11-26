@@ -119,10 +119,11 @@ impl FixedSizeBinaryArray {
     /// * `size < 0`
     /// * `size * len` would overflow `usize`
     pub fn new_null(size: i32, len: usize) -> Self {
-        let capacity = size.to_usize().unwrap().checked_mul(len).unwrap();
+        const BITS_IN_A_BYTE: usize = 8;
+        let capacity_in_bytes = size.to_usize().unwrap().checked_mul(len).unwrap();
         Self {
             data_type: DataType::FixedSizeBinary(size),
-            value_data: MutableBuffer::new(capacity).into(),
+            value_data: MutableBuffer::new_null(capacity_in_bytes * BITS_IN_A_BYTE).into(),
             nulls: Some(NullBuffer::new_null(len)),
             value_length: size,
             len,
@@ -982,6 +983,10 @@ mod tests {
 
         let nulls = NullBuffer::new_null(5);
         FixedSizeBinaryArray::new(2, buffer.clone(), Some(nulls));
+
+        let null_array = FixedSizeBinaryArray::new_null(4, 3);
+        assert_eq!(null_array.len(), 3);
+        assert_eq!(null_array.values().len(), 12);
 
         let a = FixedSizeBinaryArray::new(3, buffer.clone(), None);
         assert_eq!(a.len(), 3);
