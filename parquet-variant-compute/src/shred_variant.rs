@@ -281,10 +281,10 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         Ok(())
     }
 
-    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
-        // If the value is not an array, typed_value must be null.
-        // If the value is an array, value must be null.
-        match value {
+    fn append_value(&mut self, variant: Variant<'_, '_>) -> Result<bool> {
+        // If the variant is not an array, typed_value must be null.
+        // If the variant is an array, value must be null.
+        match variant {
             Variant::List(list) => {
                 self.value_builder.append_null();
                 self.typed_value_builder.append_value(list)?;
