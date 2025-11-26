@@ -569,7 +569,13 @@ impl<'a> RecordBatchDecoder<'a> {
     }
 
     fn next_buffer(&mut self) -> Result<Buffer, ArrowError> {
-        read_buffer(self.buffers.next().unwrap(), self.data, self.compression)
+        read_buffer(
+            self.buffers.next().ok_or_else(|| {
+                ArrowError::IpcError("Invalid buffer from IPC RecordBatch".to_string())
+            })?,
+            self.data,
+            self.compression,
+        )
     }
 
     fn skip_buffer(&mut self) {
