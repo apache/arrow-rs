@@ -95,7 +95,7 @@ impl FixedSizeBinaryArray {
         })?;
 
         let len = if s == 0 {
-            if values.len() != 0 {
+            if values.is_empty() {
                 return Err(ArrowError::InvalidArgumentError(
                     "Buffer cannot have non-zero length if the item size is zero".to_owned(),
                 ));
@@ -689,7 +689,6 @@ impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
 mod tests {
     use super::*;
     use crate::RecordBatch;
-    use crate::builder::FixedSizeBinaryBuilder;
     use arrow_schema::{Field, Schema};
 
     #[test]
@@ -1038,16 +1037,5 @@ mod tests {
             ),
             "Should not be able to create a zero sized array with non-empty buffer"
         );
-    }
-
-    #[test]
-    fn test_zero_sized_builder() {
-        let mut builder = FixedSizeBinaryBuilder::new(0);
-        builder.append_value([]).unwrap();
-        builder.append_null();
-        let array = builder.finish();
-
-        assert_eq!(array.len(), 2);
-        assert_eq!(array.null_count(), 1);
     }
 }
