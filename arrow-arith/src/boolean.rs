@@ -24,7 +24,7 @@
 
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
-use arrow_buffer::{BooleanBuffer, NullBuffer, buffer_bin_and_not};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 
 /// Logical 'and' boolean values with Kleene logic
@@ -252,7 +252,7 @@ where
 /// assert_eq!(and_ab, BooleanArray::from(vec![Some(false), Some(true), None]));
 /// ```
 pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
-    binary_boolean_kernel(left, right, |a, b| a & b)
+    left.binary(right, |a, b| a & b)
 }
 
 /// Performs `OR` operation on two arrays. If either left or right value is null then the
@@ -269,7 +269,7 @@ pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, Ar
 /// assert_eq!(or_ab, BooleanArray::from(vec![Some(true), Some(true), None]));
 /// ```
 pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
-    binary_boolean_kernel(left, right, |a, b| a | b)
+    left.binary(right, |a, b| a | b)
 }
 
 /// Performs `AND_NOT` operation on two arrays. If either left or right value is null then the
@@ -287,10 +287,7 @@ pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, Arr
 /// // It's equal to and(left, not(right))
 /// assert_eq!(andn_ab, and(&a, &not(&b).unwrap()).unwrap());
 pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
-    binary_boolean_kernel(left, right, |a, b| {
-        let buffer = buffer_bin_and_not(a.inner(), b.offset(), b.inner(), a.offset(), a.len());
-        BooleanBuffer::new(buffer, left.offset(), left.len())
-    })
+    left.binary(right, |a, b| a & !b)
 }
 
 /// Performs unary `NOT` operation on an arrays. If value is null then the result is also
@@ -306,9 +303,7 @@ pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray
 /// assert_eq!(not_a, BooleanArray::from(vec![Some(true), Some(false), None]));
 /// ```
 pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
-    let nulls = left.nulls().cloned();
-    let values = !left.values();
-    Ok(BooleanArray::new(values, nulls))
+    Ok(left.unary(|a| !a))
 }
 
 /// Returns a non-null [BooleanArray] with whether each value of the array is null.
@@ -970,5 +965,337 @@ mod tests {
         ]
         .into_iter()
         .collect()
+    }
+
+    #[test]
+    fn test_boolean_kernels_with_nulls_and_offsets() {
+        // Construct BooleanArrays with mixed values and nulls
+        let left = BooleanArray::from(vec![
+            Some(true), Some(false), None, Some(true), Some(false), None, Some(true)
+        ]);
+        let right = BooleanArray::from(vec![
+            None, Some(true), Some(false), None, Some(true), Some(false), Some(true)
+        ]);
+
+        // Create sliced views with non-zero offsets
+        let left_sliced = left.slice(1, 5); // Some(false), None, Some(true), Some(false), None
+        let right_sliced = right.slice(2, 5); // Some(false), None, Some(true), Some(false), Some(true)
+
+        // Test and
+        let result_full = and(&left, &right).unwrap();
+        let result_sliced = and(&left_sliced, &right_sliced).unwrap();
+
+        let expected_full = BooleanArray::from(vec![
+            None, Some(false), None, None, Some(false), None, Some(true)
+        ]);
+        let expected_sliced = BooleanArray::from(vec![
+            Some(false), None, Some(true), Some(false), None
+        ]);
+
+        assert_eq!(result_full, expected_full);
+        assert_eq!(result_sliced, expected_sliced);
+
+        // Test or
+        let result_full = or(&left, &right).unwrap();
+        let result_sliced = or(&left_sliced, &right_sliced).unwrap();
+
+        let expected_full = BooleanArray::from(vec![
+            None, Some(true), None, None, Some(true), None, Some(true)
+        ]);
+        let expected_sliced = BooleanArray::from(vec![
+            Some(false), None, Some(true), Some(false), None
+        ]);
+
+        assert_eq!(result_full, expected_full);
+        assert_eq!(result_sliced, expected_sliced);
+
+        // Test and_kleene: true if both true, false if either false, null otherwise
+        let result_full = and_kleene(&left, &right).unwrap();
+        let result_sliced = and_kleene(&left_sliced, &right_sliced).unwrap();
+
+        let expected_full = BooleanArray::from(vec![
+            None, Some(false), Some(false), None, Some(false), Some(false), Some(true)
+        ]);
+        let expected_sliced = BooleanArray::from(vec![
+            Some(false), None, Some(true), Some(false), None
+        ]);
+
+        assert_eq!(result_full, expected_full);
+        assert_eq!(result_sliced, expected_sliced);
+
+        // Test or_kleene: false if both false, true if either true, null otherwise
+        let result_full = or_kleene(&left, &right).unwrap();
+        let result_sliced = or_kleene(&left_sliced, &right_sliced).unwrap();
+
+        let expected_full = BooleanArray::from(vec![
+            Some(true), Some(true), None, Some(true), Some(true), None, Some(true)
+        ]);
+        let expected_sliced = BooleanArray::from(vec![
+            Some(false), None, Some(true), Some(false), Some(true)
+        ]);
+
+        assert_eq!(result_full, expected_full);
+        assert_eq!(result_sliced, expected_sliced);
+
+        // Test not
+        let result_full = not(&left).unwrap();
+        let result_sliced = not(&left_sliced).unwrap();
+
+        let expected_full = BooleanArray::from(vec![
+            Some(false), Some(true), None, Some(false), Some(true), None, Some(false)
+        ]);
+        let expected_sliced = BooleanArray::from(vec![
+            Some(true), None, Some(false), Some(true), None
+        ]);
+
+        assert_eq!(result_full, expected_full);
+        assert_eq!(result_sliced, expected_sliced);
+    }
+
+    #[test]
+    fn test_boolean_kernels_zero_length_and_all_null() {
+        // Empty arrays
+        let empty = BooleanArray::from(Vec::<Option<bool>>::new());
+        let result_and = and(&empty, &empty).unwrap();
+        let result_or = or(&empty, &empty).unwrap();
+        let result_not = not(&empty).unwrap();
+        let result_and_kleene = and_kleene(&empty, &empty).unwrap();
+        let result_or_kleene = or_kleene(&empty, &empty).unwrap();
+
+        assert_eq!(result_and.len(), 0);
+        assert_eq!(result_or.len(), 0);
+        assert_eq!(result_not.len(), 0);
+        assert_eq!(result_and_kleene.len(), 0);
+        assert_eq!(result_or_kleene.len(), 0);
+
+        // All-null arrays
+        let all_null = BooleanArray::new_null(5);
+        let result_and = and(&all_null, &all_null).unwrap();
+        let result_or = or(&all_null, &all_null).unwrap();
+        let result_not = not(&all_null).unwrap();
+        let result_and_kleene = and_kleene(&all_null, &all_null).unwrap();
+        let result_or_kleene = or_kleene(&all_null, &all_null).unwrap();
+
+        assert_eq!(result_and, all_null);
+        assert_eq!(result_or, all_null);
+        assert_eq!(result_not, all_null);
+        assert_eq!(result_and_kleene, all_null);
+        assert_eq!(result_or_kleene, all_null);
+
+        // Array with only first element non-null
+        let partial = BooleanArray::from(vec![Some(true), None, None, None, None]);
+        let result_not = not(&partial).unwrap();
+        let expected_not = BooleanArray::from(vec![Some(false), None, None, None, None]);
+        assert_eq!(result_not, expected_not);
+
+        // Array with only last element non-null
+        let partial = BooleanArray::from(vec![None, None, None, None, Some(false)]);
+        let result_not = not(&partial).unwrap();
+        let expected_not = BooleanArray::from(vec![None, None, None, None, Some(true)]);
+        assert_eq!(result_not, expected_not);
+    }
+
+    // Helper functions for reference implementations
+    fn ref_and_sql(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a & b),
+            _ => None,
+        }
+    }
+
+    fn ref_or_sql(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a | b),
+            _ => None,
+        }
+    }
+
+    fn ref_and_kleene(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a & b),
+            (None, Some(b)) => if !b { Some(false) } else { None },
+            (Some(a), None) => if !a { Some(false) } else { None },
+            (None, None) => None,
+        }
+    }
+
+    fn ref_or_kleene(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+        match (a, b) {
+            (Some(a), Some(b)) => Some(a | b),
+            (None, Some(b)) => if b { Some(true) } else { None },
+            (Some(a), None) => if a { Some(true) } else { None },
+            (None, None) => None,
+        }
+    }
+
+    fn ref_not(a: Option<bool>) -> Option<bool> {
+        a.map(|x| !x)
+    }
+
+    #[test]
+    fn test_boolean_kernels_random_equivalence() {
+        use rand::{Rng, SeedableRng};
+
+        // Use a fixed seed for reproducible tests
+        let mut rng = rand::rngs::StdRng::from_seed([48u8; 32]);
+
+        for _ in 0..20 { // 20 random iterations
+            // Pick random length 1..64
+            let len = rng.random_range(1..=64);
+
+            // Generate random Vec<Option<bool>> for left and right
+            let mut left_vec = Vec::with_capacity(len);
+            let mut right_vec = Vec::with_capacity(len);
+            for _ in 0..len {
+                let is_null = rng.random_bool(0.2); // 20% chance of null
+                let val = if is_null { None } else { Some(rng.random_bool(0.5)) };
+                left_vec.push(val);
+                let is_null = rng.random_bool(0.2);
+                let val = if is_null { None } else { Some(rng.random_bool(0.5)) };
+                right_vec.push(val);
+            }
+
+            // Construct BooleanArrays
+            let left = BooleanArray::from(left_vec.clone());
+            let right = BooleanArray::from(right_vec.clone());
+
+            // Construct sliced variants if possible
+            let (left_slice, right_slice) = if len > 1 {
+                let slice_len = len - 1;
+                (left.slice(1, slice_len), right.slice(1, slice_len))
+            } else {
+                (left.clone(), right.clone()) // fallback for len=1
+            };
+
+            // Test each kernel
+            let kernels = vec![
+                ("and", Box::new(|l: &BooleanArray, r: &BooleanArray| and(l, r).unwrap()) as Box<dyn Fn(&BooleanArray, &BooleanArray) -> BooleanArray>),
+                ("or", Box::new(|l, r| or(l, r).unwrap())),
+                ("and_kleene", Box::new(|l, r| and_kleene(l, r).unwrap())),
+                ("or_kleene", Box::new(|l, r| or_kleene(l, r).unwrap())),
+            ];
+
+            for (name, kernel) in kernels {
+                // Full arrays
+                let result = kernel(&left, &right);
+                let expected: Vec<Option<bool>> = left_vec.iter().zip(&right_vec).map(|(a, b)| match name {
+                    "and" => ref_and_sql(*a, *b),
+                    "or" => ref_or_sql(*a, *b),
+                    "and_kleene" => ref_and_kleene(*a, *b),
+                    "or_kleene" => ref_or_kleene(*a, *b),
+                    _ => unreachable!(),
+                }).collect();
+                let result_vec: Vec<Option<bool>> = result.iter().collect();
+                assert_eq!(result_vec, expected, "Full {} mismatch", name);
+
+                // Sliced arrays
+                if len > 1 {
+                    let result_slice = kernel(&left_slice, &right_slice);
+                    let expected_slice: Vec<Option<bool>> = left_vec[1..].iter().zip(&right_vec[1..]).map(|(a, b)| match name {
+                        "and" => ref_and_sql(*a, *b),
+                        "or" => ref_or_sql(*a, *b),
+                        "and_kleene" => ref_and_kleene(*a, *b),
+                        "or_kleene" => ref_or_kleene(*a, *b),
+                        _ => unreachable!(),
+                    }).collect();
+                    let result_slice_vec: Vec<Option<bool>> = result_slice.iter().collect();
+                    assert_eq!(result_slice_vec, expected_slice, "Sliced {} mismatch", name);
+                }
+            }
+
+            // Test not separately
+            let result_not = not(&left).unwrap();
+            let expected_not: Vec<Option<bool>> = left_vec.iter().map(|a| ref_not(*a)).collect();
+            let result_not_vec: Vec<Option<bool>> = result_not.iter().collect();
+            assert_eq!(result_not_vec, expected_not, "Full not mismatch");
+
+            if len > 1 {
+                let result_not_slice = not(&left_slice).unwrap();
+                let expected_not_slice: Vec<Option<bool>> = left_vec[1..].iter().map(|a| ref_not(*a)).collect();
+                let result_not_slice_vec: Vec<Option<bool>> = result_not_slice.iter().collect();
+                assert_eq!(result_not_slice_vec, expected_not_slice, "Sliced not mismatch");
+            }
+        }
+    }
+
+    #[test]
+    fn test_boolean_array_byte_boundary_regressions() {
+        // Test historically dangerous bitmap patterns for BooleanArray binary/unary operations
+        // Construct BooleanArray from Vec<Option<bool>> with length 10: [T, F, None, T, F, None, T, F, None, T]
+        // Underlying bitmap: bits for values and nulls
+        let data = vec![Some(true), Some(false), None, Some(true), Some(false), None, Some(true), Some(false), None, Some(true)];
+        let array = BooleanArray::from(data.clone());
+
+        // Slice cases: (slice_start, slice_len, description)
+        let slice_cases = vec![
+            (0, 5, "start=0, len=5"),
+            (1, 4, "start=1, len=4 (offset+len=5)"),
+            (3, 5, "start=3, len=5 (cross potential boundary)"),
+            (5, 5, "start=5, len=5"),
+        ];
+
+        for (start, len, desc) in slice_cases {
+            let slice = array.slice(start, len);
+            let slice_data = &data[start..start+len];
+
+            // Test unary NOT
+            let result_not = slice.unary(|a| !a);
+            let expected_not: Vec<Option<bool>> = slice_data.iter().map(|x| x.map(|b| !b)).collect();
+            let result_not_vec: Vec<Option<bool>> = result_not.iter().collect();
+            assert_eq!(result_not_vec, expected_not, "NOT {} mismatch", desc);
+
+            // For binary, need another slice; use the same slice for simplicity, but with different op
+            // Test binary AND with itself (should be identity for non-null)
+            let result_and = slice.binary(&slice, |a, b| a & b).unwrap();
+            let expected_and: Vec<Option<bool>> = slice_data.iter().map(|x| match x {
+                Some(b) => Some(b & b),
+                None => None,
+            }).collect();
+            let result_and_vec: Vec<Option<bool>> = result_and.iter().collect();
+            assert_eq!(result_and_vec, expected_and, "AND self {} mismatch", desc);
+
+            // Test binary OR with itself
+            let result_or = slice.binary(&slice, |a, b| a | b).unwrap();
+            let expected_or: Vec<Option<bool>> = slice_data.iter().map(|x| match x {
+                Some(b) => Some(b | b),
+                None => None,
+            }).collect();
+            let result_or_vec: Vec<Option<bool>> = result_or.iter().collect();
+            assert_eq!(result_or_vec, expected_or, "OR self {} mismatch", desc);
+        }
+    }
+
+    #[test]
+    fn test_and_kleene_byte_boundary_regressions() {
+        // Test and_kleene with slices that hit byte boundaries
+        let left_data = vec![Some(true), Some(false), None, Some(true), Some(false), None, Some(true), Some(false), None, Some(true)];
+        let right_data = vec![Some(false), Some(true), Some(true), Some(false), Some(true), Some(false), Some(true), Some(false), Some(true), Some(false)];
+        let left = BooleanArray::from(left_data.clone());
+        let right = BooleanArray::from(right_data.clone());
+
+        // Slice cases
+        let slice_cases = vec![
+            (0, 5),
+            (1, 4),
+            (3, 5),
+            (5, 5),
+        ];
+
+        for (start, len) in slice_cases {
+            let left_slice = left.slice(start, len);
+            let right_slice = right.slice(start, len);
+            let left_slice_data = &left_data[start..start+len];
+            let right_slice_data = &right_data[start..start+len];
+
+            let result = and_kleene(&left_slice, &right_slice).unwrap();
+            let expected: Vec<Option<bool>> = left_slice_data.iter().zip(right_slice_data).map(|(a, b)| match (a, b) {
+                (Some(a), Some(b)) => Some(a & b),
+                (None, Some(b)) => if !b { Some(false) } else { None },
+                (Some(a), None) => if !a { Some(false) } else { None },
+                (None, None) => None,
+            }).collect();
+            let result_vec: Vec<Option<bool>> = result.iter().collect();
+            assert_eq!(result_vec, expected, "and_kleene slice start={}, len={} mismatch", start, len);
+        }
     }
 }
