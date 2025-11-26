@@ -246,8 +246,8 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
     if matches!(as_field.data_type(), DataType::Struct(_)) {
         return None;
     }
-    if let Some(typed_value) = variant_array.typed_value_field()
-        && typed_value.data_type() == as_field.data_type()
+    let typed_value = variant_array.typed_value_field()?;
+    if typed_value.data_type() == as_field.data_type()
         && variant_array
             .value_field()
             .is_none_or(|v| v.null_count() == v.len())
@@ -3839,5 +3839,124 @@ mod test {
         let result = variant_get(&variant_array, options).unwrap();
 
         assert!(Arc::ptr_eq(&typed_value_arc, &result));
+    }
+
+    #[test]
+    fn test_perfect_shredding_three_typed_value_columns() {
+        // Column 1: perfectly shredded primitive with all nulls
+        let all_nulls_values: Arc<Int32Array> = Arc::new(Int32Array::from(vec![
+            Option::<i32>::None,
+            Option::<i32>::None,
+            Option::<i32>::None,
+        ]));
+        let all_nulls_erased: ArrayRef = all_nulls_values.clone();
+        let all_nulls_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(all_nulls_erased.clone()), None);
+        let all_nulls_type = all_nulls_field.data_type().clone();
+        let all_nulls_struct: ArrayRef = ArrayRef::from(all_nulls_field);
+
+        // Column 2: perfectly shredded primitive with some nulls
+        let some_nulls_values: Arc<Int32Array> =
+            Arc::new(Int32Array::from(vec![Some(10), None, Some(30)]));
+        let some_nulls_erased: ArrayRef = some_nulls_values.clone();
+        let some_nulls_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(some_nulls_erased.clone()), None);
+        let some_nulls_type = some_nulls_field.data_type().clone();
+        let some_nulls_struct: ArrayRef = ArrayRef::from(some_nulls_field);
+
+        // Column 3: perfectly shredded nested struct
+        let inner_values: Arc<Int32Array> =
+            Arc::new(Int32Array::from(vec![Some(111), None, Some(333)]));
+        let inner_erased: ArrayRef = inner_values.clone();
+        let inner_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(inner_erased.clone()), None);
+        let inner_field_type = inner_field.data_type().clone();
+        let inner_struct_array: ArrayRef = ArrayRef::from(inner_field);
+
+        let nested_struct = Arc::new(
+            StructArray::try_new(
+                Fields::from(vec![Field::new("inner", inner_field_type, true)]),
+                vec![inner_struct_array],
+                None,
+            )
+            .unwrap(),
+        );
+        let nested_struct_erased: ArrayRef = nested_struct.clone();
+        let struct_field =
+            ShreddedVariantFieldArray::from_parts(None, Some(nested_struct_erased.clone()), None);
+        let struct_field_type = struct_field.data_type().clone();
+        let struct_field_struct: ArrayRef = ArrayRef::from(struct_field);
+
+        // Assemble the top-level typed_value struct with the three columns above
+        let typed_value_struct = StructArray::try_new(
+            Fields::from(vec![
+                Field::new("all_nulls", all_nulls_type, true),
+                Field::new("some_nulls", some_nulls_type, true),
+                Field::new("struct_field", struct_field_type, true),
+            ]),
+            vec![all_nulls_struct, some_nulls_struct, struct_field_struct],
+            None,
+        )
+        .unwrap();
+
+        let metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+            EMPTY_VARIANT_METADATA_BYTES,
+            all_nulls_values.len(),
+        ));
+        let variant_struct = StructArrayBuilder::new()
+            .with_field("metadata", Arc::new(metadata), false)
+            .with_field("typed_value", Arc::new(typed_value_struct), true)
+            .build();
+        let variant_array: ArrayRef = VariantArray::try_new(&variant_struct).unwrap().into();
+
+        // Case 1: all-null primitive column should reuse the typed_value Arc directly
+        let all_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
+        let all_nulls_result = variant_get(
+            &variant_array,
+            GetOptions::new_with_path(VariantPath::from("all_nulls"))
+                .with_as_type(Some(all_nulls_field_ref)),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&all_nulls_result, &all_nulls_erased));
+
+        // Case 2: primitive column with some nulls should also reuse its typed_value Arc
+        let some_nulls_field_ref = FieldRef::from(Field::new("result", DataType::Int32, true));
+        let some_nulls_result = variant_get(
+            &variant_array,
+            GetOptions::new_with_path(VariantPath::from("some_nulls"))
+                .with_as_type(Some(some_nulls_field_ref)),
+        )
+        .unwrap();
+        assert!(Arc::ptr_eq(&some_nulls_result, &some_nulls_erased));
+
+        // Case 3: struct column should return a StructArray composed from the nested field
+        let struct_child_fields = Fields::from(vec![Field::new("inner", DataType::Int32, true)]);
+        let struct_field_ref = FieldRef::from(Field::new(
+            "result",
+            DataType::Struct(struct_child_fields.clone()),
+            true,
+        ));
+        let struct_result = variant_get(
+            &variant_array,
+            GetOptions::new_with_path(VariantPath::from("struct_field"))
+                .with_as_type(Some(struct_field_ref)),
+        )
+        .unwrap();
+        let struct_array = struct_result
+            .as_any()
+            .downcast_ref::<StructArray>()
+            .unwrap();
+        assert_eq!(struct_array.len(), 3);
+        assert_eq!(struct_array.null_count(), 0);
+
+        let inner_values_result = struct_array
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(inner_values_result.len(), 3);
+        assert_eq!(inner_values_result.value(0), 111);
+        assert!(inner_values_result.is_null(1));
+        assert_eq!(inner_values_result.value(2), 333);
     }
 }
