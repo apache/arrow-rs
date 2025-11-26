@@ -1297,13 +1297,30 @@ pub(super) fn serialize_column_meta_data<W: Write>(
     if let Some(dictionary_page_offset) = column_chunk.dictionary_page_offset {
         last_field_id = dictionary_page_offset.write_thrift_field(w, 11, last_field_id)?;
     }
-    // PageStatistics is the same as thrift Statistics, but writable
-    let stats = page_stats_to_thrift(column_chunk.statistics());
-    if let Some(stats) = stats {
-        last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
+
+    // Only write statistics to plaintext footer if column is not encrypted
+
+    #[cfg(feature = "encryption")]
+    if column_chunk.crypto_metadata().is_none() {
+        // PageStatistics is the same as thrift Statistics, but writable
+        let stats = page_stats_to_thrift(column_chunk.statistics());
+        if let Some(stats) = stats {
+            last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
+        }
+        if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
+            last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
+        }
     }
-    if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
-        last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
+    #[cfg(not(feature = "encryption"))]
+    {
+        // PageStatistics is the same as thrift Statistics, but writable
+        let stats = page_stats_to_thrift(column_chunk.statistics());
+        if let Some(stats) = stats {
+            last_field_id = stats.write_thrift_field(w, 12, last_field_id)?;
+        }
+        if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
+            last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
+        }
     }
     if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
         last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
@@ -1559,12 +1576,11 @@ impl WriteThrift for ColumnChunkMetaData {
 
         #[cfg(feature = "encryption")]
         {
-            // only write the ColumnMetaData if we haven't already encrypted it
-            if self.encrypted_column_metadata.is_none() {
-                writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-                serialize_column_meta_data(self, writer)?;
-                last_field_id = 3;
-            }
+            // Always write the ColumnMetaData struct
+            // Statistics are conditionally excluded based on crypto_metadata in serialize_column_meta_data
+            writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+            serialize_column_meta_data(self, writer)?;
+            last_field_id = 3;
         }
         #[cfg(not(feature = "encryption"))]
         {
