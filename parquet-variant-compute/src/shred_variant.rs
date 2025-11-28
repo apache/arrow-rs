@@ -30,9 +30,8 @@ use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow::compute::CastOptions;
 use arrow::datatypes::{ArrowNativeTypeOp, DataType, FieldRef, Fields, TimeUnit};
 use arrow::error::{ArrowError, Result};
-use parquet_variant::{Variant, VariantBuilderExt, VariantList};
-
 use indexmap::IndexMap;
+use parquet_variant::{Variant, VariantBuilderExt, VariantList};
 use std::sync::Arc;
 
 /// Shreds the input binary variant using a target shredding schema derived from the requested data type.
@@ -651,11 +650,14 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
+    use crate::arrow_to_variant::ListLikeArray;
     use arrow::array::{
-        Array, FixedSizeBinaryArray, Float64Array, Int64Array, LargeListArray, LargeListViewArray,
-        ListArray, ListViewArray, StringArray,
+        Array, BinaryViewArray, FixedSizeBinaryArray, Float64Array, GenericListArray,
+        GenericListViewArray, Int64Array, ListArray, OffsetSizeTrait, PrimitiveArray, StringArray,
     };
-    use arrow::datatypes::{DataType, Field, Fields, TimeUnit, UnionFields, UnionMode};
+    use arrow::datatypes::{
+        ArrowPrimitiveType, DataType, Field, Fields, Int64Type, TimeUnit, UnionFields, UnionMode,
+    };
     use parquet_variant::{
         BuilderSpecificState, EMPTY_VARIANT_METADATA_BYTES, ObjectBuilder, ReadOnlyMetadataBuilder,
         Variant, VariantBuilder,
@@ -763,6 +765,157 @@ mod tests {
             VariantRow::Null => builder.append_null(),
         });
         builder.build()
+    }
+
+    fn downcast_list_like_array<'a, O: OffsetSizeTrait>(
+        array: &'a VariantArray,
+    ) -> &'a dyn ListLikeArray<OffsetSize = O> {
+        let typed_value = array.typed_value_field().unwrap();
+        if let Some(list) = typed_value.as_any().downcast_ref::<GenericListArray<O>>() {
+            list
+        } else if let Some(list_view) = typed_value
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+        {
+            list_view
+        } else {
+            panic!(
+                "Expected list-like typed_value with matching offset type, got {}",
+                typed_value.data_type()
+            );
+        }
+    }
+
+    fn assert_list_structure<O: OffsetSizeTrait>(
+        array: &VariantArray,
+        expected_len: usize,
+        expected_offsets: &[O],
+        expected_sizes: &[Option<O>],
+        expected_fallbacks: &[Option<Variant<'static, 'static>>],
+    ) {
+        assert_eq!(array.len(), expected_len);
+
+        let fallbacks = (array.value_field().unwrap(), Some(array.metadata_field()));
+        let array = downcast_list_like_array::<O>(array);
+
+        assert_eq!(
+            array.value_offsets().unwrap(),
+            expected_offsets,
+            "list offsets mismatch"
+        );
+        assert_eq!(
+            array.len(),
+            expected_sizes.len(),
+            "expected_sizes should match array length"
+        );
+        assert_eq!(
+            array.len(),
+            expected_fallbacks.len(),
+            "expected_fallbacks should match array length"
+        );
+        assert_eq!(
+            array.len(),
+            fallbacks.0.len(),
+            "fallbacks value field should match array length"
+        );
+
+        // Validate per-row shredding outcomes for the list array
+        for (idx, (expected_size, expected_fallback)) in expected_sizes
+            .iter()
+            .zip(expected_fallbacks.iter())
+            .enumerate()
+        {
+            match expected_size {
+                Some(len) => {
+                    // Successfully shredded: typed list value present, no fallback value
+                    assert!(array.is_valid(idx));
+                    assert_eq!(array.value_size(idx), *len);
+                    assert!(fallbacks.0.is_null(idx));
+                }
+                None => {
+                    // Unable to shred: typed list value absent, fallback should carry the variant
+                    assert!(array.is_null(idx));
+                    assert_eq!(array.value_size(idx), O::zero());
+                    match expected_fallback {
+                        Some(expected_variant) => {
+                            assert!(fallbacks.0.is_valid(idx));
+                            let metadata_bytes = fallbacks
+                                .1
+                                .filter(|m| m.is_valid(idx))
+                                .map(|m| m.value(idx))
+                                .filter(|bytes| !bytes.is_empty())
+                                .unwrap_or(EMPTY_VARIANT_METADATA_BYTES);
+                            assert_eq!(
+                                Variant::new(metadata_bytes, fallbacks.0.value(idx)),
+                                expected_variant.clone()
+                            );
+                        }
+                        None => unreachable!(),
+                    }
+                }
+            }
+        }
+    }
+
+    fn assert_list_structure_and_elements<T: ArrowPrimitiveType, O: OffsetSizeTrait>(
+        array: &VariantArray,
+        expected_len: usize,
+        expected_offsets: &[O],
+        expected_sizes: &[Option<O>],
+        expected_fallbacks: &[Option<Variant<'static, 'static>>],
+        expected_shredded_elements: (&[Option<T::Native>], &[Option<Variant<'static, 'static>>]),
+    ) {
+        assert_list_structure(
+            array,
+            expected_len,
+            expected_offsets,
+            expected_sizes,
+            expected_fallbacks,
+        );
+        let array = downcast_list_like_array::<O>(array);
+
+        // Validate the shredded state of list elements (typed values and fallbacks)
+        let (expected_values, expected_fallbacks) = expected_shredded_elements;
+        assert_eq!(
+            expected_values.len(),
+            expected_fallbacks.len(),
+            "expected_values and expected_fallbacks should be aligned"
+        );
+
+        // Validate the shredded primitive values for list elements
+        let element_array = ShreddedVariantFieldArray::try_new(array.values().as_ref()).unwrap();
+        let element_values = element_array
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<PrimitiveArray<T>>()
+            .unwrap();
+        assert_eq!(element_values.len(), expected_values.len());
+        for (idx, expected_value) in expected_values.iter().enumerate() {
+            match expected_value {
+                Some(value) => {
+                    assert!(element_values.is_valid(idx));
+                    assert_eq!(element_values.value(idx), *value);
+                }
+                None => assert!(element_values.is_null(idx)),
+            }
+        }
+
+        // Validate fallback variants for list elements that could not be shredded
+        let element_fallbacks = element_array.value_field().unwrap();
+        assert_eq!(element_fallbacks.len(), expected_fallbacks.len());
+        for (idx, expected_fallback) in expected_fallbacks.iter().enumerate() {
+            match expected_fallback {
+                Some(expected_variant) => {
+                    assert!(element_fallbacks.is_valid(idx));
+                    assert_eq!(
+                        Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(idx)),
+                        expected_variant.clone()
+                    );
+                }
+                None => assert!(element_fallbacks.is_null(idx)),
+            }
+        }
     }
 
     #[test]
@@ -1042,83 +1195,29 @@ mod tests {
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 5);
 
-        // Validate the top level value_field and typed_value_field
-        let metadata_field = result.metadata_field();
-        let value_field = result.value_field().unwrap();
-        let typed_value = result
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
-
-        assert_eq!(typed_value.value_offsets(), &[0, 3, 6, 6, 6, 6]);
-
-        // Row 0: [1, 2, 3]
-        assert!(value_field.is_null(0));
-        assert!(typed_value.is_valid(0));
-        assert_eq!(typed_value.value_length(0), 3);
-
-        // Row 1: [1, "two", Variant::Null]
-        assert!(value_field.is_null(1));
-        assert!(typed_value.is_valid(1));
-        assert_eq!(typed_value.value_length(1), 3);
-
-        // Row 2: "not a list"
-        assert!(value_field.is_valid(2));
-        assert!(typed_value.is_null(2));
-        assert_eq!(
-            Variant::new(metadata_field.value(2), value_field.value(2)),
-            Variant::from("not a list")
-        );
-
-        // Row 3: Variant::Null
-        assert!(result.is_valid(3));
-        assert!(value_field.is_valid(3));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(3)),
-            Variant::Null
-        );
-        assert!(typed_value.is_null(3));
-
-        // Row 4: [] empty list
-        assert!(value_field.is_null(4));
-        assert!(typed_value.is_valid(4));
-        assert_eq!(typed_value.value_length(4), 0);
-
-        // Inspect the element-level shredded array
-        let element_array =
-            ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
-        let element_values = element_array
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        // [1, 2, 3, 1, null, null]
-        assert_eq!(element_values.len(), 6);
-        assert_eq!(element_values.value(0), 1);
-        assert_eq!(element_values.value(1), 2);
-        assert_eq!(element_values.value(2), 3);
-        assert_eq!(element_values.value(3), 1);
-        assert!(element_values.is_null(4));
-        assert!(element_values.is_null(5));
-
-        // [null, null, null, null, "two", Variant::Null]
-        let element_fallbacks = element_array.value_field().unwrap();
-        assert!(element_fallbacks.is_null(0));
-        assert!(element_fallbacks.is_null(1));
-        assert!(element_fallbacks.is_null(2));
-        assert!(element_fallbacks.is_null(3));
-        assert!(element_fallbacks.is_valid(4));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(4)),
-            Variant::from("two")
-        );
-        assert!(element_fallbacks.is_valid(5));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(5)),
-            Variant::Null
+        assert_list_structure_and_elements::<Int64Type, i32>(
+            &result,
+            5,
+            &[0, 3, 6, 6, 6, 6],
+            &[Some(3), Some(3), None, None, Some(0)],
+            &[
+                None,
+                None,
+                Some(Variant::from("not a list")),
+                Some(Variant::Null),
+                None,
+            ],
+            (
+                &[Some(1), Some(2), Some(3), Some(1), None, None],
+                &[
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(Variant::from("two")),
+                    Some(Variant::Null),
+                ],
+            ),
         );
     }
 
@@ -1136,28 +1235,14 @@ mod tests {
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 3);
 
-        let typed_value = result
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<LargeListArray>()
-            .unwrap();
-
-        assert_eq!(typed_value.value_offsets(), &[0, 2, 2, 2]);
-        assert!(typed_value.is_valid(0));
-        assert!(typed_value.is_null(1));
-        assert!(typed_value.is_valid(2));
-
-        let shredded = ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
-        let element_values = shredded
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(element_values.len(), 2);
-        assert_eq!(element_values.value(0), 1);
-        assert_eq!(element_values.value(1), 2);
+        assert_list_structure_and_elements::<Int64Type, i64>(
+            &result,
+            3,
+            &[0, 2, 2, 2],
+            &[Some(2), None, Some(0)],
+            &[None, Some(Variant::from("not a list")), None],
+            (&[Some(1), Some(2)], &[None, None]),
+        );
     }
 
     #[test]
@@ -1183,87 +1268,32 @@ mod tests {
             VariantRow::List(vec![]),
         ]);
         let list_schema = DataType::ListView(Arc::new(Field::new("item", DataType::Int64, true)));
-
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 5);
 
-        let metadata_field = result.metadata_field();
-        let value_field = result.value_field().unwrap();
-        let typed_value = result
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<ListViewArray>()
-            .unwrap();
-
-        assert_eq!(typed_value.value_offsets(), &[0, 3, 6, 6, 6]);
-        assert_eq!(typed_value.value_sizes(), &[3, 3, 0, 0, 0]);
-
-        // Row 0: [1, 2, 3]
-        assert!(value_field.is_null(0));
-        assert!(typed_value.is_valid(0));
-        assert_eq!(typed_value.value_size(0), 3);
-
-        // Row 1: [1, "two", Variant::Null]
-        assert!(value_field.is_null(1));
-        assert!(typed_value.is_valid(1));
-        assert_eq!(typed_value.value_size(1), 3);
-
-        // Row 2: "not a list"
-        assert!(value_field.is_valid(2));
-        assert!(typed_value.is_null(2));
-        assert_eq!(
-            Variant::new(metadata_field.value(2), value_field.value(2)),
-            Variant::from("not a list")
-        );
-
-        // Row 3: Variant::Null
-        assert!(result.is_valid(3));
-        assert!(value_field.is_valid(3));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(3)),
-            Variant::Null
-        );
-        assert!(typed_value.is_null(3));
-
-        // Row 4: [] empty list
-        assert!(value_field.is_null(4));
-        assert!(typed_value.is_valid(4));
-        assert_eq!(typed_value.value_size(4), 0);
-
-        let element_array =
-            ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
-        let element_values = element_array
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        // [1, 2, 3, 1, null, null]
-        assert_eq!(element_values.len(), 6);
-        assert_eq!(element_values.value(0), 1);
-        assert_eq!(element_values.value(1), 2);
-        assert_eq!(element_values.value(2), 3);
-        assert_eq!(element_values.value(3), 1);
-        assert!(element_values.is_null(4));
-        assert!(element_values.is_null(5));
-
-        let element_fallbacks = element_array.value_field().unwrap();
-        // [null, null, null, null, "two", Variant::Null]
-        assert_eq!(element_fallbacks.len(), 6);
-        assert!(element_fallbacks.is_null(0));
-        assert!(element_fallbacks.is_null(1));
-        assert!(element_fallbacks.is_null(2));
-        assert!(element_fallbacks.is_null(3));
-        assert!(element_fallbacks.is_valid(4));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(4)),
-            Variant::from("two")
-        );
-        assert!(element_fallbacks.is_valid(5));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(5)),
-            Variant::Null
+        assert_list_structure_and_elements::<Int64Type, i32>(
+            &result,
+            5,
+            &[0, 3, 6, 6, 6],
+            &[Some(3), Some(3), None, None, Some(0)],
+            &[
+                None,
+                None,
+                Some(Variant::from("not a list")),
+                Some(Variant::Null),
+                None,
+            ],
+            (
+                &[Some(1), Some(2), Some(3), Some(1), None, None],
+                &[
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(Variant::from("two")),
+                    Some(Variant::Null),
+                ],
+            ),
         );
     }
 
@@ -1277,33 +1307,19 @@ mod tests {
             // Row 2: Empty list
             VariantRow::List(vec![]),
         ]);
-        let schema = DataType::LargeListView(Arc::new(Field::new("item", DataType::Int64, true)));
-        let result = shred_variant(&input, &schema).unwrap();
+        let list_schema =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Int64, true)));
+        let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 3);
 
-        let typed_value = result
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<LargeListViewArray>()
-            .unwrap();
-
-        assert_eq!(typed_value.value_offsets(), &[0, 2, 2]);
-        assert_eq!(typed_value.value_sizes(), &[2, 0, 0]);
-        assert!(typed_value.is_valid(0));
-        assert!(typed_value.is_null(1));
-        assert!(typed_value.is_valid(2));
-
-        let shredded = ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
-        let element_values = shredded
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(element_values.len(), 2);
-        assert_eq!(element_values.value(0), 1);
-        assert_eq!(element_values.value(1), 2);
+        assert_list_structure_and_elements::<Int64Type, i64>(
+            &result,
+            3,
+            &[0, 2, 2],
+            &[Some(2), None, Some(0)],
+            &[None, Some(Variant::from("fallback")), None],
+            (&[Some(1), Some(2)], &[None, None]),
+        );
     }
 
     #[test]
@@ -1331,16 +1347,15 @@ mod tests {
             VariantRow::Null,
         ]);
         let inner_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_list_schema = DataType::List(inner_field);
         let list_schema = DataType::List(Arc::new(Field::new(
             "item",
-            DataType::List(inner_field),
+            inner_list_schema.clone(),
             true,
         )));
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 4);
 
-        let metadata_field = result.metadata_field();
-        let value_field = result.value_field().unwrap();
         let typed_value = result
             .typed_value_field()
             .unwrap()
@@ -1348,110 +1363,66 @@ mod tests {
             .downcast_ref::<ListArray>()
             .unwrap();
 
-        assert!(value_field.is_null(0));
-        assert!(typed_value.is_valid(0));
-        assert_eq!(typed_value.value_length(0), 3);
-
-        assert!(value_field.is_null(1));
-        assert!(typed_value.is_valid(1));
-        assert_eq!(typed_value.value_length(1), 3);
-
-        assert!(value_field.is_valid(2));
-        assert!(typed_value.is_null(2));
-        assert_eq!(
-            Variant::new(metadata_field.value(2), value_field.value(2)),
-            Variant::from("not a list")
+        assert_list_structure::<i32>(
+            &result,
+            4,
+            &[0, 3, 6, 6, 6],
+            &[Some(3), Some(3), None, None],
+            &[
+                None,
+                None,
+                Some(Variant::from("not a list")),
+                Some(Variant::Null),
+            ],
         );
-
-        assert!(result.is_valid(3));
-        assert!(value_field.is_valid(3));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(3)),
-            Variant::Null
-        );
-        assert!(typed_value.is_null(3));
 
         let outer_elements =
             ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
         assert_eq!(outer_elements.len(), 6);
-        // [[1, 2], [3, 4], [], [5, "bad", Variant::Null], "not a list inner", Variant::Null]
         let outer_values = outer_elements
             .typed_value_field()
             .unwrap()
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-        assert_eq!(outer_values.value_offsets(), &[0, 2, 4, 4, 7, 7, 7]);
         let outer_fallbacks = outer_elements.value_field().unwrap();
 
-        // Outer element 1: [1, 2]
-        assert!(outer_values.is_valid(0));
-        assert_eq!(outer_values.value(0).len(), 2);
-        assert!(outer_fallbacks.is_null(0));
-
-        // Outer element 2: [3, 4]
-        assert!(outer_values.is_valid(1));
-        assert_eq!(outer_values.value(1).len(), 2);
-        assert!(outer_fallbacks.is_null(1));
-
-        // Outer element 3: []
-        assert!(outer_values.is_valid(2));
-        assert_eq!(outer_values.value(2).len(), 0);
-        assert!(outer_fallbacks.is_null(2));
-
-        // Outer element 4: [5, "bad", null]]
-        assert!(outer_values.is_valid(3));
-        assert_eq!(outer_values.value(3).len(), 3);
-        assert!(outer_fallbacks.is_null(3));
-
-        // Outer element 5: "not a list inner"
-        assert!(outer_values.is_null(4));
-        assert!(outer_fallbacks.is_valid(4));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, outer_fallbacks.value(4)),
-            Variant::from("not a list inner")
+        let outer_metadata = BinaryViewArray::from_iter_values(std::iter::repeat_n(
+            EMPTY_VARIANT_METADATA_BYTES,
+            outer_elements.len(),
+        ));
+        let outer_variant = VariantArray::from_parts(
+            outer_metadata,
+            Some(outer_fallbacks.clone()),
+            Some(Arc::new(outer_values.clone())),
+            None,
         );
 
-        // Outer element 5: Variant::Null
-        assert!(outer_values.is_null(5));
-        assert!(outer_fallbacks.is_valid(5));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, outer_fallbacks.value(5)),
-            Variant::Null
-        );
-
-        // [1, 2, 3, 4, 5, "bad", Variant::Null]
-        let inner_elements =
-            ShreddedVariantFieldArray::try_new(outer_values.values().as_ref()).unwrap();
-        assert_eq!(inner_elements.len(), 7);
-        let inner_values = inner_elements
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        let inner_fallbacks = inner_elements.value_field().unwrap();
-
-        assert_eq!(inner_values.value(0), 1);
-        assert_eq!(inner_values.value(1), 2);
-        assert_eq!(inner_values.value(2), 3);
-        assert_eq!(inner_values.value(3), 4);
-        assert_eq!(inner_values.value(4), 5);
-        assert!(inner_values.is_null(5));
-        assert!(inner_values.is_null(6));
-
-        for i in 0..5 {
-            assert!(inner_fallbacks.is_null(i));
-        }
-        assert!(inner_fallbacks.is_valid(5));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, inner_fallbacks.value(5)),
-            Variant::from("bad")
-        );
-        assert!(inner_fallbacks.is_valid(6));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, inner_fallbacks.value(6)),
-            Variant::Null
+        assert_list_structure_and_elements::<Int64Type, i32>(
+            &outer_variant,
+            outer_elements.len(),
+            &[0, 2, 4, 4, 7, 7, 7],
+            &[Some(2), Some(2), Some(0), Some(3), None, None],
+            &[
+                None,
+                None,
+                None,
+                None,
+                Some(Variant::from("not a list inner")),
+                Some(Variant::Null),
+            ],
+            (
+                &[Some(1), Some(2), Some(3), Some(4), Some(5), None, None],
+                &[
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some(Variant::from("bad")),
+                    Some(Variant::Null),
+                ],
+            ),
         );
     }
 
@@ -1485,41 +1456,21 @@ mod tests {
         let result = shred_variant(&input, &list_schema).unwrap();
         assert_eq!(result.len(), 3);
 
-        // Validate the top level value_field and typed_value_field
-        let metadata_field = result.metadata_field();
-        let value_field = result.value_field().unwrap();
+        assert_list_structure::<i32>(
+            &result,
+            3,
+            &[0, 2, 2, 2],
+            &[Some(2), None, None],
+            &[None, Some(Variant::from("not a list")), Some(Variant::Null)],
+        );
+
+        // Validate nested struct fields for each element
         let typed_value = result
             .typed_value_field()
             .unwrap()
             .as_any()
             .downcast_ref::<ListArray>()
             .unwrap();
-
-        assert_eq!(typed_value.value_offsets(), &[0, 2, 2, 2]);
-
-        // Row 0: [{"id": 1i64, "name": "Alice"}, {"id": null}]
-        assert!(value_field.is_null(0));
-        assert!(typed_value.is_valid(0));
-        assert_eq!(typed_value.value_length(0), 2);
-
-        // Row 1: "not a list"
-        assert!(value_field.is_valid(1));
-        assert!(typed_value.is_null(1));
-        assert_eq!(
-            Variant::new(metadata_field.value(1), value_field.value(1)),
-            Variant::from("not a list")
-        );
-
-        // Row 2: null
-        assert!(result.is_valid(2));
-        assert!(value_field.is_valid(2));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, value_field.value(2)),
-            Variant::Null
-        );
-        assert!(typed_value.is_null(2));
-
-        // Validate nested struct fields for each element
         let element_array =
             ShreddedVariantFieldArray::try_new(typed_value.values().as_ref()).unwrap();
         assert_eq!(element_array.len(), 2);
@@ -1942,9 +1893,10 @@ mod tests {
             VariantRow::Null,
         ]);
         let list_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let inner_list_schema = DataType::List(list_field);
         let schema = DataType::Struct(Fields::from(vec![Field::new(
             "scores",
-            DataType::List(list_field),
+            inner_list_schema.clone(),
             true,
         )]));
 
@@ -1982,48 +1934,30 @@ mod tests {
         let scores_field =
             ShreddedVariantFieldArray::try_new(typed_struct.column_by_name("scores").unwrap())
                 .unwrap();
-        let scores_lists = scores_field
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<ListArray>()
-            .unwrap();
-
-        assert!(scores_lists.is_valid(0));
-        assert_eq!(scores_lists.value_length(0), 2);
-        assert!(scores_lists.is_valid(1));
-        assert_eq!(scores_lists.value_length(1), 2);
-        assert!(scores_lists.is_null(2));
-        assert!(scores_lists.is_null(3));
-
-        // Inspect the flattened list elements for both shredded rows
-        let element_array =
-            ShreddedVariantFieldArray::try_new(scores_lists.values().as_ref()).unwrap();
-        let element_values = element_array
-            .typed_value_field()
-            .unwrap()
-            .as_any()
-            .downcast_ref::<Int64Array>()
-            .unwrap();
-        assert_eq!(element_values.len(), 4);
-        assert_eq!(element_values.value(0), 10);
-        assert_eq!(element_values.value(1), 20);
-        assert!(element_values.is_null(2));
-        assert!(element_values.is_null(3));
-
-        let element_fallbacks = element_array.value_field().unwrap();
-        assert_eq!(element_fallbacks.len(), 4);
-        assert!(element_fallbacks.is_null(0));
-        assert!(element_fallbacks.is_null(1));
-        assert!(element_fallbacks.is_valid(2));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(2)),
-            Variant::from("oops")
-        );
-        assert!(element_fallbacks.is_valid(3));
-        assert_eq!(
-            Variant::new(EMPTY_VARIANT_METADATA_BYTES, element_fallbacks.value(3)),
-            Variant::Null
+        assert_list_structure_and_elements::<Int64Type, i32>(
+            &VariantArray::from_parts(
+                BinaryViewArray::from_iter_values(std::iter::repeat_n(
+                    EMPTY_VARIANT_METADATA_BYTES,
+                    scores_field.len(),
+                )),
+                Some(scores_field.value_field().unwrap().clone()),
+                Some(scores_field.typed_value_field().unwrap().clone()),
+                None,
+            ),
+            scores_field.len(),
+            &[0i32, 2, 4, 4, 4, 4],
+            &[Some(2), Some(2), None, None, None],
+            &[
+                None,
+                None,
+                Some(Variant::Null),
+                Some(Variant::Null),
+                Some(Variant::Null),
+            ],
+            (
+                &[Some(10), Some(20), None, None],
+                &[None, None, Some(Variant::from("oops")), Some(Variant::Null)],
+            ),
         );
     }
 
