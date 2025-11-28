@@ -569,13 +569,10 @@ impl<'a> RecordBatchDecoder<'a> {
     }
 
     fn next_buffer(&mut self) -> Result<Buffer, ArrowError> {
-        read_buffer(
-            self.buffers.next().ok_or_else(|| {
-                ArrowError::IpcError("Invalid buffer from IPC RecordBatch".to_string())
-            })?,
-            self.data,
-            self.compression,
-        )
+        let buffer = self.buffers.next().ok_or_else(|| {
+            ArrowError::IpcError("Buffer count mismatched with metadata".to_string())
+        })?;
+        read_buffer(buffer, self.data, self.compression)
     }
 
     fn skip_buffer(&mut self) {
@@ -2005,6 +2002,55 @@ mod tests {
             batch_err.unwrap().to_string(),
             "Parser error: Invalid metadata length: -1"
         );
+    }
+
+    #[test]
+    fn test_missing_buffer_metadata_error() {
+        use crate::r#gen::Message::*;
+        use flatbuffers::FlatBufferBuilder;
+
+        let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int32, true)]));
+
+        // create RecordBatch buffer metadata with invalid buffer count
+        // Int32Array needs 2 buffers (validity + data) but we provide only 1
+        let mut fbb = FlatBufferBuilder::new();
+        let nodes = fbb.create_vector(&[FieldNode::new(2, 0)]);
+        let buffers = fbb.create_vector(&[crate::Buffer::new(0, 8)]);
+        let batch_offset = RecordBatch::create(
+            &mut fbb,
+            &RecordBatchArgs {
+                length: 2,
+                nodes: Some(nodes),
+                buffers: Some(buffers),
+                compression: None,
+                variadicBufferCounts: None,
+            },
+        );
+        fbb.finish_minimal(batch_offset);
+        let batch_bytes = fbb.finished_data().to_vec();
+        let batch = flatbuffers::root::<RecordBatch>(&batch_bytes).unwrap();
+
+        let data_buffer = Buffer::from(vec![0u8; 8]);
+        let dictionaries: HashMap<i64, ArrayRef> = HashMap::new();
+        let metadata = MetadataVersion::V5;
+
+        let decoder = RecordBatchDecoder::try_new(
+            &data_buffer,
+            batch,
+            schema.clone(),
+            &dictionaries,
+            &metadata,
+        )
+        .unwrap();
+
+        let result = decoder.read_record_batch();
+
+        match result {
+            Err(ArrowError::IpcError(msg)) => {
+                assert_eq!(msg, "Buffer count mismatched with metadata");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
