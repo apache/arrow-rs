@@ -40,9 +40,6 @@
  * Then:
  *   result_valid(i) = V(i) & !C(i)
  *   result_value(i) = left_value(i)    // when result_valid(i) == true
- *
- * This contract is the law. All nullif implementations must follow it.
- * See docs/arraydata_bitmap_layout_contract.md for full details.
  */
 
 use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
@@ -103,7 +100,13 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let validity = if let Some(left_nulls) = left_data.nulls() {
         let left_valid = left_nulls.inner().inner();
         let left_bit_offset = left_nulls.inner().offset();
-        compute_nullif_validity(&left_valid, left_bit_offset, &cond_mask.inner(), cond_offset, len)
+        compute_nullif_validity(
+            &left_valid,
+            left_bit_offset,
+            &cond_mask.inner(),
+            cond_offset,
+            len,
+        )
     } else {
         // left is all valid
         let left_valid_len = (len + 7) / 8;
@@ -114,7 +117,13 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         let left_valid = Buffer::from(left_valid_data);
         let left_bit_offset = 0;
-        compute_nullif_validity(&left_valid, left_bit_offset, &cond_mask.inner(), cond_offset, len)
+        compute_nullif_validity(
+            &left_valid,
+            left_bit_offset,
+            &cond_mask.inner(),
+            cond_offset,
+            len,
+        )
     };
 
     let (null_buffer, _) = compute_null_buffer(&validity, len);
@@ -143,14 +152,20 @@ fn compute_null_buffer(validity: &Buffer, len: usize) -> (BooleanBuffer, usize) 
     (null_buffer, null_count)
 }
 
-/// Computes the NULLIF validity bitmap from left validity and condition mask.
+/// Computes the NULLIF validity bitmap from the left array's validity and
+/// a boolean condition mask.
 ///
-/// For each logical index `i` in `0..len`:
-/// - `left_bit = bit(left_valid, left_offset + i)`
-/// - `cond_bit = bit(cond_mask, cond_offset + i)`
-/// - `result_bit = left_bit & !cond_bit`
-///
-/// This implements the core bitmap logic for NULLIF, isolating it from array-level concerns.
+/// Invariants used here:
+/// - For any `ArrayData` with `len = L` and `offset = O`, logical index `i`
+///   (0 <= i < L) is valid iff `get_bit(validity, O + i)` is true.
+/// - Let `V(i)` be the left array's validity at logical index `i`.
+/// - Let `C(i)` be the boolean condition at logical index `i`, where `true`
+///   means "nullify this position".
+/// - NULLIF result validity is defined as:
+///       result_valid(i) = V(i) & !C(i)
+///   for `i` in `0..len`.
+/// - The result array is built with `offset = 0`, so bit `i` in the result
+///   validity bitmap corresponds directly to logical index `i`.
 fn compute_nullif_validity(
     left_valid: &Buffer,
     left_offset: usize,
@@ -175,9 +190,16 @@ fn copy_array_data_with_offset_zero(left_data: &ArrayData) -> Result<ArrayData, 
             let values = left_data.buffers()[0].bitwise_unary(offset, len, |b| b);
             buffers.push(values);
         }
-        DataType::Int8 | DataType::UInt8 | DataType::Int16 | DataType::UInt16 |
-        DataType::Int32 | DataType::UInt32 | DataType::Float32 |
-        DataType::Int64 | DataType::UInt64 | DataType::Float64 => {
+        DataType::Int8
+        | DataType::UInt8
+        | DataType::Int16
+        | DataType::UInt16
+        | DataType::Int32
+        | DataType::UInt32
+        | DataType::Float32
+        | DataType::Int64
+        | DataType::UInt64
+        | DataType::Float64 => {
             let element_size = get_element_size(data_type);
             let start = offset * element_size;
             let end = start + len * element_size;
@@ -191,14 +213,23 @@ fn copy_array_data_with_offset_zero(left_data: &ArrayData) -> Result<ArrayData, 
             let offsets_end = offset + len + 1;
             let offsets_slice = &offsets_buf.as_slice()[offsets_start * 4..offsets_end * 4];
             let base_offset = i32::from_le_bytes(offsets_slice[0..4].try_into().unwrap()) as usize;
-            let data_end = i32::from_le_bytes(offsets_slice[offsets_slice.len() - 4..].try_into().unwrap()) as usize;
+            let data_end =
+                i32::from_le_bytes(offsets_slice[offsets_slice.len() - 4..].try_into().unwrap())
+                    as usize;
             let data_slice = &data_buf.as_slice()[base_offset..data_end];
             let mut new_offsets = Vec::with_capacity(len + 1);
             for i in 0..=len {
-                let old_offset = i32::from_le_bytes(offsets_slice[i * 4..(i + 1) * 4].try_into().unwrap()) as usize;
+                let old_offset =
+                    i32::from_le_bytes(offsets_slice[i * 4..(i + 1) * 4].try_into().unwrap())
+                        as usize;
                 new_offsets.push((old_offset - base_offset) as i32);
             }
-            let new_offsets_buf = Buffer::from(new_offsets.into_iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
+            let new_offsets_buf = Buffer::from(
+                new_offsets
+                    .into_iter()
+                    .flat_map(|x| x.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+            );
             buffers.push(new_offsets_buf);
             buffers.push(Buffer::from(data_slice));
         }
@@ -209,20 +240,31 @@ fn copy_array_data_with_offset_zero(left_data: &ArrayData) -> Result<ArrayData, 
             let offsets_end = offset + len + 1;
             let offsets_slice = &offsets_buf.as_slice()[offsets_start * 8..offsets_end * 8];
             let base_offset = i64::from_le_bytes(offsets_slice[0..8].try_into().unwrap()) as usize;
-            let data_end = i64::from_le_bytes(offsets_slice[offsets_slice.len() - 8..].try_into().unwrap()) as usize;
+            let data_end =
+                i64::from_le_bytes(offsets_slice[offsets_slice.len() - 8..].try_into().unwrap())
+                    as usize;
             let data_slice = &data_buf.as_slice()[base_offset..data_end];
             let mut new_offsets = Vec::with_capacity(len + 1);
             for i in 0..=len {
-                let old_offset = i64::from_le_bytes(offsets_slice[i * 8..(i + 1) * 8].try_into().unwrap()) as usize;
+                let old_offset =
+                    i64::from_le_bytes(offsets_slice[i * 8..(i + 1) * 8].try_into().unwrap())
+                        as usize;
                 new_offsets.push((old_offset - base_offset) as i64);
             }
-            let new_offsets_buf = Buffer::from(new_offsets.into_iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<u8>>());
+            let new_offsets_buf = Buffer::from(
+                new_offsets
+                    .into_iter()
+                    .flat_map(|x| x.to_le_bytes())
+                    .collect::<Vec<u8>>(),
+            );
             buffers.push(new_offsets_buf);
             buffers.push(Buffer::from(data_slice));
         }
         DataType::Struct(_) => {
             // No buffers for struct
-            child_data = left_data.child_data().iter()
+            child_data = left_data
+                .child_data()
+                .iter()
                 .map(|child| copy_array_data_with_offset_zero(child))
                 .collect::<Result<Vec<_>, _>>()?;
         }
@@ -251,11 +293,11 @@ fn copy_array_data_with_offset_zero(left_data: &ArrayData) -> Result<ArrayData, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::bit_util::get_bit;
     use arrow_array::builder::{BooleanBuilder, Int32Builder, StructBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
+    use arrow_buffer::bit_util::get_bit;
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields};
     use rand::{Rng, rng};
@@ -698,7 +740,13 @@ mod tests {
         // Test with different condition
         let array2 = Int32Array::from(vec![Some(10), None, Some(20), Some(30), None]);
 
-        let condition2 = BooleanArray::from(vec![Some(false), Some(true), Some(false), Some(true), Some(false)]);
+        let condition2 = BooleanArray::from(vec![
+            Some(false),
+            Some(true),
+            Some(false),
+            Some(true),
+            Some(false),
+        ]);
 
         let result = nullif(&array2, &condition2).unwrap();
         let expected = Int32Array::from(vec![
@@ -716,28 +764,46 @@ mod tests {
         // Construct a small Int32Array with nulls
         let values = Int32Array::from(vec![Some(1), None, Some(2), Some(1), None, Some(3)]);
         // Construct a "condition" array (equals values for nullif)
-        let equals = BooleanArray::from(vec![Some(true), Some(false), None, Some(true), Some(false), None]);
+        let equals = BooleanArray::from(vec![
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+            Some(false),
+            None,
+        ]);
 
         // Helper to build expected Vec<Option<i32>>
         fn build_expected(values: &[Option<i32>], equals: &[Option<bool>]) -> Vec<Option<i32>> {
-            values.iter().zip(equals.iter()).map(|(&v, &e)| {
-                if v.is_none() {
-                    None
-                } else if e == Some(true) {
-                    None
-                } else {
-                    v
-                }
-            }).collect()
+            values
+                .iter()
+                .zip(equals.iter())
+                .map(|(&v, &e)| {
+                    if v.is_none() {
+                        None
+                    } else if e == Some(true) {
+                        None
+                    } else {
+                        v
+                    }
+                })
+                .collect()
         }
 
         // Test full arrays
         let result_full = nullif(&values, &equals).unwrap();
         assert_eq!(result_full.len(), values.len());
-        let actual_nulls: Vec<Option<i32>> = result_full.as_primitive::<Int32Type>().iter().collect();
-        let expected_full = build_expected(&[Some(1), None, Some(2), Some(1), None, Some(3)], &[Some(true), Some(false), None, Some(true), Some(false), None]);
+        let actual_nulls: Vec<Option<i32>> =
+            result_full.as_primitive::<Int32Type>().iter().collect();
+        let expected_full = build_expected(
+            &[Some(1), None, Some(2), Some(1), None, Some(3)],
+            &[Some(true), Some(false), None, Some(true), Some(false), None],
+        );
         assert_eq!(actual_nulls, expected_full);
-        assert_eq!(result_full.null_count(), actual_nulls.iter().filter(|x| x.is_none()).count());
+        assert_eq!(
+            result_full.null_count(),
+            actual_nulls.iter().filter(|x| x.is_none()).count()
+        );
 
         // Test sliced arrays: values.slice(1, 4) and equals.slice(1, 4)
         // values[1..5]: None, Some(2), Some(1), None
@@ -746,10 +812,17 @@ mod tests {
         let equals_slice1 = equals.slice(1, 4);
         let result_slice1 = nullif(&values_slice1, &equals_slice1).unwrap();
         assert_eq!(result_slice1.len(), 4);
-        let actual_slice1: Vec<Option<i32>> = result_slice1.as_primitive::<Int32Type>().iter().collect();
-        let expected_slice1 = build_expected(&[None, Some(2), Some(1), None], &[Some(false), None, Some(true), Some(false)]);
+        let actual_slice1: Vec<Option<i32>> =
+            result_slice1.as_primitive::<Int32Type>().iter().collect();
+        let expected_slice1 = build_expected(
+            &[None, Some(2), Some(1), None],
+            &[Some(false), None, Some(true), Some(false)],
+        );
         assert_eq!(actual_slice1, expected_slice1);
-        assert_eq!(result_slice1.null_count(), actual_slice1.iter().filter(|x| x.is_none()).count());
+        assert_eq!(
+            result_slice1.null_count(),
+            actual_slice1.iter().filter(|x| x.is_none()).count()
+        );
 
         // Test another slice: values.slice(2, 3) and equals.slice(2, 3)
         // values[2..5]: Some(2), Some(1), None
@@ -758,29 +831,59 @@ mod tests {
         let equals_slice2 = equals.slice(2, 3);
         let result_slice2 = nullif(&values_slice2, &equals_slice2).unwrap();
         assert_eq!(result_slice2.len(), 3);
-        let actual_slice2: Vec<Option<i32>> = result_slice2.as_primitive::<Int32Type>().iter().collect();
-        let expected_slice2 = build_expected(&[Some(2), Some(1), None], &[None, Some(true), Some(false)]);
+        let actual_slice2: Vec<Option<i32>> =
+            result_slice2.as_primitive::<Int32Type>().iter().collect();
+        let expected_slice2 =
+            build_expected(&[Some(2), Some(1), None], &[None, Some(true), Some(false)]);
         assert_eq!(actual_slice2, expected_slice2);
-        assert_eq!(result_slice2.null_count(), actual_slice2.iter().filter(|x| x.is_none()).count());
+        assert_eq!(
+            result_slice2.null_count(),
+            actual_slice2.iter().filter(|x| x.is_none()).count()
+        );
     }
 
     #[test]
     fn test_nullif_boolean_offsets_regression() {
         // Use BooleanArray to reproduce BooleanBuffer slicing issues
-        let values = BooleanArray::from(vec![Some(true), None, Some(false), Some(true), None, Some(false), Some(true), Some(false)]);
-        let equals = BooleanArray::from(vec![Some(false), Some(true), None, Some(true), Some(false), None, Some(true), Some(false)]);
+        let values = BooleanArray::from(vec![
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            None,
+            Some(false),
+            Some(true),
+            Some(false),
+        ]);
+        let equals = BooleanArray::from(vec![
+            Some(false),
+            Some(true),
+            None,
+            Some(true),
+            Some(false),
+            None,
+            Some(true),
+            Some(false),
+        ]);
 
         // Helper to build expected Vec<Option<bool>>
-        fn build_expected_bool(values: &[Option<bool>], equals: &[Option<bool>]) -> Vec<Option<bool>> {
-            values.iter().zip(equals.iter()).map(|(&v, &e)| {
-                if v.is_none() {
-                    None
-                } else if e == Some(true) {
-                    None
-                } else {
-                    v
-                }
-            }).collect()
+        fn build_expected_bool(
+            values: &[Option<bool>],
+            equals: &[Option<bool>],
+        ) -> Vec<Option<bool>> {
+            values
+                .iter()
+                .zip(equals.iter())
+                .map(|(&v, &e)| {
+                    if v.is_none() {
+                        None
+                    } else if e == Some(true) {
+                        None
+                    } else {
+                        v
+                    }
+                })
+                .collect()
         }
 
         // Test slices that cross byte boundaries (e.g., offset=1,len=5; offset=3,len=5; offset=7,len=1)
@@ -791,9 +894,15 @@ mod tests {
         let result_slice1 = nullif(&values_slice1, &equals_slice1).unwrap();
         assert_eq!(result_slice1.len(), 5);
         let actual_slice1: Vec<Option<bool>> = result_slice1.as_boolean().iter().collect();
-        let expected_slice1 = build_expected_bool(&[None, Some(false), Some(true), None, Some(false)], &[Some(true), None, Some(true), Some(false), None]);
+        let expected_slice1 = build_expected_bool(
+            &[None, Some(false), Some(true), None, Some(false)],
+            &[Some(true), None, Some(true), Some(false), None],
+        );
         assert_eq!(actual_slice1, expected_slice1);
-        assert_eq!(result_slice1.null_count(), actual_slice1.iter().filter(|x| x.is_none()).count());
+        assert_eq!(
+            result_slice1.null_count(),
+            actual_slice1.iter().filter(|x| x.is_none()).count()
+        );
 
         // Slice 2: offset=3, len=5 (values[3..8]: Some(true), None, Some(false), Some(true), Some(false))
         // equals[3..8]: Some(true), Some(false), None, Some(true), Some(false)
@@ -802,9 +911,15 @@ mod tests {
         let result_slice2 = nullif(&values_slice2, &equals_slice2).unwrap();
         assert_eq!(result_slice2.len(), 5);
         let actual_slice2: Vec<Option<bool>> = result_slice2.as_boolean().iter().collect();
-        let expected_slice2 = build_expected_bool(&[Some(true), None, Some(false), Some(true), Some(false)], &[Some(true), Some(false), None, Some(true), Some(false)]);
+        let expected_slice2 = build_expected_bool(
+            &[Some(true), None, Some(false), Some(true), Some(false)],
+            &[Some(true), Some(false), None, Some(true), Some(false)],
+        );
         assert_eq!(actual_slice2, expected_slice2);
-        assert_eq!(result_slice2.null_count(), actual_slice2.iter().filter(|x| x.is_none()).count());
+        assert_eq!(
+            result_slice2.null_count(),
+            actual_slice2.iter().filter(|x| x.is_none()).count()
+        );
 
         // Slice 3: offset=7, len=1 (values[7..8]: Some(false))
         // equals[7..8]: Some(false)
@@ -815,7 +930,10 @@ mod tests {
         let actual_slice3: Vec<Option<bool>> = result_slice3.as_boolean().iter().collect();
         let expected_slice3 = build_expected_bool(&[Some(false)], &[Some(false)]);
         assert_eq!(actual_slice3, expected_slice3);
-        assert_eq!(result_slice3.null_count(), actual_slice3.iter().filter(|x| x.is_none()).count());
+        assert_eq!(
+            result_slice3.null_count(),
+            actual_slice3.iter().filter(|x| x.is_none()).count()
+        );
     }
 
     #[test]
@@ -856,29 +974,44 @@ mod tests {
         // Cases: (left_offset, cond_offset, len, expected_bits as Vec<bool>)
         let cases = vec![
             // No offset, 8 bits
-            (0, 0, 8, vec![
-                // left bits: 0 0 0 0 1 1 1 1
-                // cond bits: 0 1 0 1 0 1 0 1
-                // result: 0&!0=0, 0&!1=0, 0&!0=0, 0&!1=0, 1&!0=1, 1&!1=0, 1&!0=1, 1&!1=0
-                // => 0,0,0,0,1,0,1,0
-                false, false, false, false, true, false, true, false
-            ]),
+            (
+                0,
+                0,
+                8,
+                vec![
+                    // left bits: 0 0 0 0 1 1 1 1
+                    // cond bits: 0 1 0 1 0 1 0 1
+                    // result: 0&!0=0, 0&!1=0, 0&!0=0, 0&!1=0, 1&!0=1, 1&!1=0, 1&!0=1, 1&!1=0
+                    // => 0,0,0,0,1,0,1,0
+                    false, false, false, false, true, false, true, false,
+                ],
+            ),
             // Offsets that make (offset+len)%8==0
-            (1, 1, 7, vec![
-                // left_offset=1, left bits 1-7: 0,0,0,1,1,1,1
-                // cond_offset=1, cond bits 1-7: 1,0,1,0,1,0,1
-                // result: 0&!1=0, 0&!0=0, 0&!1=0, 1&!0=1, 1&!1=0, 1&!0=1, 1&!1=0
-                // => 0,0,0,1,0,1,0
-                false, false, false, true, false, true, false
-            ]),
+            (
+                1,
+                1,
+                7,
+                vec![
+                    // left_offset=1, left bits 1-7: 0,0,0,1,1,1,1
+                    // cond_offset=1, cond bits 1-7: 1,0,1,0,1,0,1
+                    // result: 0&!1=0, 0&!0=0, 0&!1=0, 1&!0=1, 1&!1=0, 1&!0=1, 1&!1=0
+                    // => 0,0,0,1,0,1,0
+                    false, false, false, true, false, true, false,
+                ],
+            ),
             // A cross-byte case
-            (3, 3, 5, vec![
-                // left_offset=3, left bits 3-7: 0,1,1,1,1
-                // cond_offset=3, cond bits 3-7: 1,0,1,0,1
-                // result: 0&!1=0, 1&!0=1, 1&!1=0, 1&!0=1, 1&!1=0
-                // => 0,1,0,1,0
-                false, true, false, true, false
-            ]),
+            (
+                3,
+                3,
+                5,
+                vec![
+                    // left_offset=3, left bits 3-7: 0,1,1,1,1
+                    // cond_offset=3, cond bits 3-7: 1,0,1,0,1
+                    // result: 0&!1=0, 1&!0=1, 1&!1=0, 1&!0=1, 1&!1=0
+                    // => 0,1,0,1,0
+                    false, true, false, true, false,
+                ],
+            ),
         ];
 
         for (loff, coff, len, expected) in cases {
@@ -886,7 +1019,11 @@ mod tests {
             // Check each bit in the resulting Buffer against expected
             for i in 0..len {
                 let bit = get_bit(mask.as_slice(), i);
-                assert_eq!(bit, expected[i], "mismatch at bit {} for offsets ({}, {})", i, loff, coff);
+                assert_eq!(
+                    bit, expected[i],
+                    "mismatch at bit {} for offsets ({}, {})",
+                    i, loff, coff
+                );
             }
         }
     }
