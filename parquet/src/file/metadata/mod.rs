@@ -146,10 +146,20 @@ pub(crate) use writer::ThriftMetadataWriter;
 ///
 /// `column_index[row_group_number][column_number]` holds the
 /// [`ColumnIndex`] corresponding to column `column_number` of row group
-/// `row_group_number`, or `None` if no index is available.
+/// `row_group_number`, or `None` if no index is available for that column chunk.
 ///
-/// For example `column_index[2][3]` holds the [`ColumnIndex`] for the fourth
-/// column in the third row group of the parquet file, or `None`.
+/// Note: `None` at the leaf level means "no index for this (row_group, column)".
+///
+/// # Example
+///
+/// ```rust
+/// # use parquet::file::metadata::ParquetColumnIndex;
+/// # fn example(indexes: &ParquetColumnIndex, rg: usize, col: usize) {
+/// if let Some(idx) = indexes[rg][col].as_ref() {
+///     // use idx
+/// }
+/// # }
+/// ```
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
@@ -162,7 +172,21 @@ pub type ParquetColumnIndex = Vec<Vec<Option<ColumnIndexMetaData>>>;
 ///
 /// `offset_index[row_group_number][column_number]` holds
 /// the [`OffsetIndexMetaData`] corresponding to column
-/// `column_number`of row group `row_group_number`, or `None` if no index is available.
+/// `column_number`of row group `row_group_number`, or `None` if no index is available
+/// for that column chunk.
+///
+/// Note: `None` at the leaf level means "no index for this (row_group, column)".
+///
+/// # Example
+///
+/// ```rust
+/// # use parquet::file::metadata::ParquetOffsetIndex;
+/// # fn example(indexes: &ParquetOffsetIndex, rg: usize, col: usize) {
+/// if let Some(idx) = indexes[rg][col].as_ref() {
+///     // use idx
+/// }
+/// # }
+/// ```
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md

@@ -19,6 +19,23 @@
 
 # Changelog
 
+## [58.0.0](https://github.com/apache/arrow-rs/tree/58.0.0) (2025-11-28)
+
+**Breaking changes:**
+
+- [Parquet] Changed `ParquetColumnIndex` and `ParquetOffsetIndex` aliases to `Vec<Vec<Option<...>>>` to correctly model missing indexes per column chunk. Code accessing these indexes via `metadata.column_index()` or `metadata.offset_index()` must now handle the `Option` wrapper.
+
+  Migration example:
+  ```rust
+  // Before
+  let idx: &ColumnIndexMetaData = &metadata.column_index().unwrap()[rg][col];
+
+  // After
+  let idx: &ColumnIndexMetaData = metadata.column_index().unwrap()[rg][col]
+      .as_ref()
+      .expect("index missing");
+  ```
+
 ## [57.0.0](https://github.com/apache/arrow-rs/tree/57.0.0) (2025-10-19)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/56.2.0...57.0.0)

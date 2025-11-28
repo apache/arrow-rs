@@ -20,7 +20,6 @@
 mod delta_byte_array;
 mod dictionary_index;
 
-#[allow(unused_imports)]
 pub use delta_byte_array::DeltaByteArrayDecoder;
 #[allow(unused_imports)]
 pub use dictionary_index::DictIndexDecoder;

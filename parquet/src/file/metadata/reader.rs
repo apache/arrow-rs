@@ -90,13 +90,16 @@ pub enum PageIndexPolicy {
     /// Read the page index if it exists, otherwise do not error.
     Optional,
     /// Require the page index to exist, and error if it does not.
+    ///
+    /// Note: Required is enforced only for the offset index. Column indexes may still be
+    /// absent for some column chunks; consumers must handle None.
     Required,
 }
 
 impl From<bool> for PageIndexPolicy {
     fn from(value: bool) -> Self {
         match value {
-            true => Self::Optional,
+            true => Self::Required,
             false => Self::Skip,
         }
     }

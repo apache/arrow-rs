@@ -26,6 +26,7 @@
 use crate::basic::LogicalType;
 use crate::errors::ParquetError;
 use crate::schema::types::Type;
+#[cfg(feature = "variant_experimental")]
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::Field;
 
@@ -36,7 +37,7 @@ use arrow_schema::Field;
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
 pub(crate) fn try_add_extension_type(
-    #[allow(unused_mut)] mut arrow_field: Field,
+    mut arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
     let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {

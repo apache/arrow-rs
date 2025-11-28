@@ -150,10 +150,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
 
         // transform from Option<Vec<Vec<Option<ColumnIndexMetaData>>>> to
         // Option<Vec<Vec<Option<ColumnIndexMetaData>>>>
-        let column_indexes: Option<ParquetColumnIndex> =
-            if all_none { None } else { column_indexes };
-
-        Ok(column_indexes)
+        Ok(if all_none { None } else { column_indexes })
     }
 
     /// Serialize the offset indexes and transform to `Option<ParquetOffsetIndex>`
@@ -170,10 +167,7 @@ impl<'a, W: Write> ThriftMetadataWriter<'a, W> {
             .as_ref()
             .is_some_and(|oi| oi.iter().all(|oii| oii.iter().all(|idx| idx.is_none())));
 
-        let offset_indexes: Option<ParquetOffsetIndex> =
-            if all_none { None } else { offset_indexes };
-
-        Ok(offset_indexes)
+        Ok(if all_none { None } else { offset_indexes })
     }
 
     /// Assembles and writes the final metadata to self.buf
@@ -432,8 +426,8 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         let key_value_metadata = file_metadata.key_value_metadata().cloned();
 
-        let column_indexes = self.convert_column_indexes();
-        let offset_indexes = self.convert_offset_index();
+        let column_indexes = self.metadata.column_index();
+        let offset_indexes = self.metadata.offset_index();
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
@@ -444,11 +438,11 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
         );
 
         if let Some(column_indexes) = column_indexes {
-            encoder = encoder.with_column_indexes(column_indexes);
+            encoder = encoder.with_column_indexes(column_indexes.clone());
         }
 
         if let Some(offset_indexes) = offset_indexes {
-            encoder = encoder.with_offset_indexes(offset_indexes);
+            encoder = encoder.with_offset_indexes(offset_indexes.clone());
         }
 
         if let Some(key_value_metadata) = key_value_metadata {
@@ -458,37 +452,9 @@ impl<'a, W: Write> ParquetMetaDataWriter<'a, W> {
 
         Ok(())
     }
-
-    fn convert_column_indexes(&self) -> Option<Vec<Vec<Option<ColumnIndexMetaData>>>> {
-        // TODO(ets): we're converting from ParquetColumnIndex to vec<vec<option>>,
-        // but then converting back to ParquetColumnIndex in the end. need to unify this.
-        self.metadata
-            .column_index()
-            .map(|row_group_column_indexes| {
-                (0..self.metadata.row_groups().len())
-                    .map(|rg_idx| {
-                        let column_indexes = &row_group_column_indexes[rg_idx];
-                        column_indexes.to_vec()
-                    })
-                    .collect()
-            })
-    }
-
-    fn convert_offset_index(&self) -> Option<Vec<Vec<Option<OffsetIndexMetaData>>>> {
-        self.metadata
-            .offset_index()
-            .map(|row_group_offset_indexes| {
-                (0..self.metadata.row_groups().len())
-                    .map(|rg_idx| {
-                        let offset_indexes = &row_group_offset_indexes[rg_idx];
-                        offset_indexes.to_vec()
-                    })
-                    .collect()
-            })
-    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 struct MetadataObjectWriter {
     #[cfg(feature = "encryption")]
     file_encryptor: Option<Arc<FileEncryptor>>,

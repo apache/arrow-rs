@@ -279,16 +279,6 @@ pub(crate) fn parse_column_index(
 
     metadata.set_column_index(Some(index));
 
-    if column_index_policy == PageIndexPolicy::Required {
-        for rg in metadata.column_index().unwrap() {
-            for col in rg {
-                if col.is_none() {
-                    return Err(general_err!("missing column index"));
-                }
-            }
-        }
-    }
-
     Ok(())
 }
 
