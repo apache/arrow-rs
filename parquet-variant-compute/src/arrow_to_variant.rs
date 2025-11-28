@@ -561,9 +561,11 @@ pub(crate) trait ListLikeArray: Array {
     fn values(&self) -> &ArrayRef;
 
     /// Get the offsets backing the list values
+    #[cfg(test)]
     fn value_offsets(&self) -> Option<&[Self::OffsetSize]>;
 
     /// Size (number of values) for the element at `index`
+    #[cfg(test)]
     fn value_size(&self, index: usize) -> Self::OffsetSize;
 
     /// Get the start and end indices for a list element
@@ -577,10 +579,12 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
         self.values()
     }
 
+    #[cfg(test)]
     fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
         Some(GenericListArray::value_offsets(self))
     }
 
+    #[cfg(test)]
     fn value_size(&self, index: usize) -> Self::OffsetSize {
         GenericListArray::value_length(self, index)
     }
@@ -600,10 +604,12 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
         self.values()
     }
 
+    #[cfg(test)]
     fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
         Some(GenericListViewArray::value_offsets(self))
     }
 
+    #[cfg(test)]
     fn value_size(&self, index: usize) -> Self::OffsetSize {
         GenericListViewArray::value_size(self, index)
     }
@@ -624,10 +630,12 @@ impl ListLikeArray for FixedSizeListArray {
         self.values()
     }
 
+    #[cfg(test)]
     fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
         None
     }
 
+    #[cfg(test)]
     fn value_size(&self, _index: usize) -> Self::OffsetSize {
         self.value_length()
     }

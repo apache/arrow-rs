@@ -767,9 +767,9 @@ mod tests {
         builder.build()
     }
 
-    fn downcast_list_like_array<'a, O: OffsetSizeTrait>(
-        array: &'a VariantArray,
-    ) -> &'a dyn ListLikeArray<OffsetSize = O> {
+    fn downcast_list_like_array<O: OffsetSizeTrait>(
+        array: &VariantArray,
+    ) -> &dyn ListLikeArray<OffsetSize = O> {
         let typed_value = array.typed_value_field().unwrap();
         if let Some(list) = typed_value.as_any().downcast_ref::<GenericListArray<O>>() {
             list
