@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::errors::{AvroError, Result};
 use crate::reader::vlq::read_varint;
-use arrow_schema::ArrowError;
 
 /// A wrapper around a byte slice, providing low-level decoding for Avro
 ///
@@ -43,52 +43,51 @@ impl<'a> AvroCursor<'a> {
 
     /// Read a single `u8`
     #[inline]
-    pub(crate) fn get_u8(&mut self) -> Result<u8, ArrowError> {
+    pub(crate) fn get_u8(&mut self) -> Result<u8> {
         match self.buf.first().copied() {
             Some(x) => {
                 self.buf = &self.buf[1..];
                 Ok(x)
             }
-            None => Err(ArrowError::ParseError("Unexpected EOF".to_string())),
+            None => Err(AvroError::EOF("Unexpected EOF".to_string())),
         }
     }
 
     #[inline]
-    pub(crate) fn get_bool(&mut self) -> Result<bool, ArrowError> {
+    pub(crate) fn get_bool(&mut self) -> Result<bool> {
         Ok(self.get_u8()? != 0)
     }
 
-    pub(crate) fn read_vlq(&mut self) -> Result<u64, ArrowError> {
-        let (val, offset) = read_varint(self.buf)
-            .ok_or_else(|| ArrowError::ParseError("bad varint".to_string()))?;
+    pub(crate) fn read_vlq(&mut self) -> Result<u64> {
+        let (val, offset) =
+            read_varint(self.buf).ok_or_else(|| AvroError::ParseError("bad varint".to_string()))?;
         self.buf = &self.buf[offset..];
         Ok(val)
     }
 
     #[inline]
-    pub(crate) fn get_int(&mut self) -> Result<i32, ArrowError> {
+    pub(crate) fn get_int(&mut self) -> Result<i32> {
         let varint = self.read_vlq()?;
         let val: u32 = varint
             .try_into()
-            .map_err(|_| ArrowError::ParseError("varint overflow".to_string()))?;
+            .map_err(|_| AvroError::ParseError("varint overflow".to_string()))?;
         Ok((val >> 1) as i32 ^ -((val & 1) as i32))
     }
 
     #[inline]
-    pub(crate) fn get_long(&mut self) -> Result<i64, ArrowError> {
+    pub(crate) fn get_long(&mut self) -> Result<i64> {
         let val = self.read_vlq()?;
         Ok((val >> 1) as i64 ^ -((val & 1) as i64))
     }
 
-    pub(crate) fn get_bytes(&mut self) -> Result<&'a [u8], ArrowError> {
-        let len: usize = self.get_long()?.try_into().map_err(|_| {
-            ArrowError::ParseError("offset overflow reading avro bytes".to_string())
-        })?;
+    pub(crate) fn get_bytes(&mut self) -> Result<&'a [u8]> {
+        let len: usize = self
+            .get_long()?
+            .try_into()
+            .map_err(|_| AvroError::ParseError("offset overflow reading avro bytes".to_string()))?;
 
         if self.buf.len() < len {
-            return Err(ArrowError::ParseError(
-                "Unexpected EOF reading bytes".to_string(),
-            ));
+            return Err(AvroError::EOF("Unexpected EOF reading bytes".to_string()));
         }
         let ret = &self.buf[..len];
         self.buf = &self.buf[len..];
@@ -96,11 +95,9 @@ impl<'a> AvroCursor<'a> {
     }
 
     #[inline]
-    pub(crate) fn get_float(&mut self) -> Result<f32, ArrowError> {
+    pub(crate) fn get_float(&mut self) -> Result<f32> {
         if self.buf.len() < 4 {
-            return Err(ArrowError::ParseError(
-                "Unexpected EOF reading float".to_string(),
-            ));
+            return Err(AvroError::EOF("Unexpected EOF reading float".to_string()));
         }
         let ret = f32::from_le_bytes(self.buf[..4].try_into().unwrap());
         self.buf = &self.buf[4..];
@@ -108,11 +105,9 @@ impl<'a> AvroCursor<'a> {
     }
 
     #[inline]
-    pub(crate) fn get_double(&mut self) -> Result<f64, ArrowError> {
+    pub(crate) fn get_double(&mut self) -> Result<f64> {
         if self.buf.len() < 8 {
-            return Err(ArrowError::ParseError(
-                "Unexpected EOF reading float".to_string(),
-            ));
+            return Err(AvroError::EOF("Unexpected EOF reading float".to_string()));
         }
         let ret = f64::from_le_bytes(self.buf[..8].try_into().unwrap());
         self.buf = &self.buf[8..];
@@ -120,11 +115,9 @@ impl<'a> AvroCursor<'a> {
     }
 
     /// Read exactly `n` bytes from the buffer (e.g. for Avro `fixed`).
-    pub(crate) fn get_fixed(&mut self, n: usize) -> Result<&'a [u8], ArrowError> {
+    pub(crate) fn get_fixed(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.buf.len() < n {
-            return Err(ArrowError::ParseError(
-                "Unexpected EOF reading fixed".to_string(),
-            ));
+            return Err(AvroError::EOF("Unexpected EOF reading fixed".to_string()));
         }
         let ret = &self.buf[..n];
         self.buf = &self.buf[n..];
