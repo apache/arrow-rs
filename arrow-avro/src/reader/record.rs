@@ -3674,7 +3674,7 @@ mod tests {
             avro_children.push(AvroDataType::new(codec, Default::default(), None));
             fields.push(arrow_schema::Field::new(name, dt, true));
         }
-        let union_fields = UnionFields::new(type_ids, fields);
+        let union_fields = UnionFields::try_new(type_ids, fields).unwrap();
         let union_codec = Codec::Union(avro_children.into(), union_fields, UnionMode::Dense);
         AvroDataType::new(union_codec, Default::default(), None)
     }
@@ -3823,13 +3823,14 @@ mod tests {
             AvroDataType::new(Codec::Int32, Default::default(), None),
             AvroDataType::new(Codec::Utf8, Default::default(), None),
         ];
-        let uf = UnionFields::new(
+        let uf = UnionFields::try_new(
             vec![1, 3],
             vec![
                 arrow_schema::Field::new("i", DataType::Int32, true),
                 arrow_schema::Field::new("s", DataType::Utf8, true),
             ],
-        );
+        )
+        .unwrap();
         let codec = Codec::Union(children.into(), uf, UnionMode::Sparse);
         let dt = AvroDataType::new(codec, Default::default(), None);
         let err = Decoder::try_new(&dt).expect_err("sparse union should not be supported");

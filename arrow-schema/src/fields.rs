@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
 use std::sync::Arc;
+use std::{collections::HashSet, ops::Deref};
 
 use crate::{ArrowError, DataType, Field, FieldRef};
 
@@ -339,12 +339,158 @@ impl UnionFields {
     ///
     /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
     ///
+    /// # Errors
+    ///
+    /// This function returns an error if:
+    /// - Any type_id appears more than once (duplicate type ids)
+    /// - Any field appears more than once (duplicate fields)
+    /// - The number of type_ids doesn't match the number of fields
+    ///
+    /// # Examples
+    ///
     /// ```
     /// use arrow_schema::{DataType, Field, UnionFields};
     /// // Create a new UnionFields with type id mapping
     /// // 1 -> DataType::UInt8
     /// // 3 -> DataType::Utf8
-    /// UnionFields::new(
+    /// let result = UnionFields::try_new(
+    ///     vec![1, 3],
+    ///     vec![
+    ///         Field::new("field1", DataType::UInt8, false),
+    ///         Field::new("field3", DataType::Utf8, false),
+    ///     ],
+    /// );
+    /// assert!(result.is_ok());
+    ///
+    /// // This will fail due to duplicate type id
+    /// let result = UnionFields::try_new(
+    ///     vec![1, 1],
+    ///     vec![
+    ///         Field::new("field1", DataType::UInt8, false),
+    ///         Field::new("field2", DataType::Utf8, false),
+    ///     ],
+    /// );
+    /// assert!(result.is_err());
+    /// ```
+    pub fn try_new<F, T>(type_ids: T, fields: F) -> Result<Self, ArrowError>
+    where
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+        T: IntoIterator<Item = i8>,
+    {
+        let mut type_ids_iter = type_ids.into_iter();
+        let mut fields_iter = fields.into_iter().map(Into::into);
+
+        let fields_capacity = fields_iter.size_hint().0;
+
+        let mut seen_type_ids = 0u128;
+        let mut seen_fields = HashSet::with_capacity(fields_capacity);
+
+        let mut out = Vec::new();
+
+        loop {
+            match (type_ids_iter.next(), fields_iter.next()) {
+                (None, None) => return Ok(Self(out.into())),
+                (Some(type_id), Some(field)) => {
+                    // check type id is non-negative
+                    if type_id < 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "type ids must be non-negative: {type_id}"
+                        )));
+                    }
+
+                    // check type id uniqueness
+                    let mask = 1_u128 << type_id;
+                    if (seen_type_ids & mask) != 0 {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "duplicate type id: {type_id}"
+                        )));
+                    }
+
+                    seen_type_ids |= mask;
+
+                    // check field id uniqueness
+                    if !seen_fields.insert(Arc::clone(&field)) {
+                        return Err(ArrowError::InvalidArgumentError(format!(
+                            "duplicate field: {field}"
+                        )));
+                    }
+
+                    out.push((type_id, field));
+                }
+                (None, Some(_)) => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "fields iterator has more elements than type_ids iterator".to_string(),
+                    ));
+                }
+                (Some(_), None) => {
+                    return Err(ArrowError::InvalidArgumentError(
+                        "type_ids iterator has more elements than fields iterator".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+
+    /// Create a new [`UnionFields`] from a collection of fields with automatically
+    /// assigned type IDs starting from 0.
+    ///
+    /// The type IDs are assigned in increasing order: 0, 1, 2, 3, etc.
+    ///
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
+    ///
+    /// # Panics
+    ///
+    /// Panics if the number of fields exceeds 127 (the maximum value for i8 type IDs).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, UnionFields};
+    /// // Create a new UnionFields with automatic type id assignment
+    /// // 0 -> DataType::UInt8
+    /// // 1 -> DataType::Utf8
+    /// let union_fields = UnionFields::from_fields(vec![
+    ///     Field::new("field1", DataType::UInt8, false),
+    ///     Field::new("field2", DataType::Utf8, false),
+    /// ]);
+    /// assert_eq!(union_fields.len(), 2);
+    /// ```
+    pub fn from_fields<F>(fields: F) -> Self
+    where
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+    {
+        fields
+            .into_iter()
+            .enumerate()
+            .map(|(i, field)| {
+                let id = i8::try_from(i).expect("UnionFields cannot contain more than 127 fields");
+
+                (id, field.into())
+            })
+            .collect()
+    }
+
+    /// Create a new [`UnionFields`] from a [`Fields`] and array of type_ids
+    ///
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
+    ///
+    /// # Deprecated
+    ///
+    /// Use [`UnionFields::try_new`] instead. This method panics on invalid input,
+    /// while `try_new` returns a `Result`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if any type_id appears more than once (duplicate type ids).
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, UnionFields};
+    /// // Create a new UnionFields with type id mapping
+    /// // 1 -> DataType::UInt8
+    /// // 3 -> DataType::Utf8
+    /// UnionFields::try_new(
     ///     vec![1, 3],
     ///     vec![
     ///         Field::new("field1", DataType::UInt8, false),
@@ -352,6 +498,7 @@ impl UnionFields {
     ///     ],
     /// );
     /// ```
+    #[deprecated(since = "57.0.0", note = "Use `try_new` instead")]
     pub fn new<F, T>(type_ids: T, fields: F) -> Self
     where
         F: IntoIterator,
@@ -445,7 +592,6 @@ impl UnionFields {
 
 impl FromIterator<(i8, FieldRef)> for UnionFields {
     fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
-        // TODO: Should this validate type IDs are unique (#3982)
         Self(iter.into_iter().collect())
     }
 }
@@ -500,13 +646,14 @@ mod tests {
             Field::new(
                 "h",
                 DataType::Union(
-                    UnionFields::new(
+                    UnionFields::try_new(
                         vec![1, 3],
                         vec![
                             Field::new("field1", DataType::UInt8, false),
                             Field::new("field3", DataType::Utf8, false),
                         ],
-                    ),
+                    )
+                    .unwrap(),
                     UnionMode::Dense,
                 ),
                 true,
@@ -564,7 +711,8 @@ mod tests {
         assert_eq!(r[0], fields[7]);
 
         let union = DataType::Union(
-            UnionFields::new(vec![1], vec![Field::new("field1", DataType::UInt8, false)]),
+            UnionFields::try_new(vec![1], vec![Field::new("field1", DataType::UInt8, false)])
+                .unwrap(),
             UnionMode::Dense,
         );
 
@@ -579,5 +727,151 @@ mod tests {
         // Propagate error
         let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_union_fields_try_new_valid() {
+        let res = UnionFields::try_new(
+            vec![1, 6, 7],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f6", DataType::Utf8, false),
+                Field::new("f7", DataType::Int32, true),
+            ],
+        );
+        assert!(res.is_ok());
+        let union_fields = res.unwrap();
+        assert_eq!(union_fields.len(), 3);
+        assert_eq!(
+            union_fields.iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            vec![1, 6, 7]
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_empty() {
+        let res = UnionFields::try_new(Vec::<i8>::new(), Vec::<Field>::new());
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_union_fields_try_new_duplicate_type_id() {
+        let res = UnionFields::try_new(
+            vec![1, 1],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f2", DataType::Utf8, false),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("duplicate type id: 1")
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_duplicate_field() {
+        let field = Field::new("field", DataType::UInt8, false);
+        let res = UnionFields::try_new(vec![1, 2], vec![field.clone(), field]);
+        assert!(res.is_err());
+        assert!(res.unwrap_err().to_string().contains("duplicate field"));
+    }
+
+    #[test]
+    fn test_union_fields_try_new_more_type_ids() {
+        let res = UnionFields::try_new(
+            vec![1, 2, 3],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f2", DataType::Utf8, false),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("type_ids iterator has more elements")
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_more_fields() {
+        let res = UnionFields::try_new(
+            vec![1, 2],
+            vec![
+                Field::new("f1", DataType::UInt8, false),
+                Field::new("f2", DataType::Utf8, false),
+                Field::new("f3", DataType::Int32, true),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("fields iterator has more elements")
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_new_negative_type_ids() {
+        let res = UnionFields::try_new(
+            vec![-128, -1, 0, 127],
+            vec![
+                Field::new("field_min", DataType::UInt8, false),
+                Field::new("field_neg", DataType::Utf8, false),
+                Field::new("field_zero", DataType::Int32, true),
+                Field::new("field_max", DataType::Boolean, false),
+            ],
+        );
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("type ids must be non-negative")
+        )
+    }
+
+    #[test]
+    fn test_union_fields_try_new_complex_types() {
+        let res = UnionFields::try_new(
+            vec![0, 1, 2],
+            vec![
+                Field::new(
+                    "struct_field",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("a", DataType::Int32, false),
+                        Field::new("b", DataType::Utf8, true),
+                    ])),
+                    false,
+                ),
+                Field::new_list(
+                    "list_field",
+                    Field::new("item", DataType::Float64, true),
+                    true,
+                ),
+                Field::new(
+                    "dict_field",
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                    false,
+                ),
+            ],
+        );
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().len(), 3);
+    }
+
+    #[test]
+    fn test_union_fields_try_new_single_field() {
+        let res = UnionFields::try_new(
+            vec![42],
+            vec![Field::new("only_field", DataType::Int64, false)],
+        );
+        assert!(res.is_ok());
+        let union_fields = res.unwrap();
+        assert_eq!(union_fields.len(), 1);
+        assert_eq!(union_fields.iter().next().unwrap().0, 42);
     }
 }
