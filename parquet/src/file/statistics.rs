@@ -515,7 +515,7 @@ pub struct ValueStatistics<T> {
     is_min_max_backwards_compatible: bool,
 }
 
-impl<T: ParquetValueType> ValueStatistics<T> {
+impl<T> ValueStatistics<T> {
     /// Creates new typed statistics.
     pub fn new(
         min: Option<T>,
@@ -580,16 +580,6 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         self.max.as_ref()
     }
 
-    /// Returns min value as bytes of the statistics, if min value is known.
-    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
-        self.min_opt().map(AsBytes::as_bytes)
-    }
-
-    /// Returns max value as bytes of the statistics, if max value is known.
-    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
-        self.max_opt().map(AsBytes::as_bytes)
-    }
-
     /// Whether or not min and max values are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
     pub(crate) fn _internal_has_min_max_set(&self) -> bool {
@@ -633,6 +623,18 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     /// compatible with being stored in the deprecated `min` and `max` fields
     pub fn is_min_max_backwards_compatible(&self) -> bool {
         self.is_min_max_backwards_compatible
+    }
+}
+
+impl<T: AsBytes> ValueStatistics<T> {
+    /// Returns min value as bytes of the statistics, if min value is known.
+    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
+        self.min_opt().map(AsBytes::as_bytes)
+    }
+
+    /// Returns max value as bytes of the statistics, if max value is known.
+    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
+        self.max_opt().map(AsBytes::as_bytes)
     }
 }
 
@@ -1120,5 +1122,27 @@ mod tests {
             err.to_string(),
             "Parquet error: Incorrect Int96 max statistics"
         );
+    }
+
+    // Ensures that we can call ValueStatistics::min_opt from a
+    // generic function without reyling on a bound to a private trait.
+    fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
+        match stats.min_opt() {
+            Some(s) => format!("min: {}", s),
+            None => "min: NA".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_generic_access() {
+        let stats = Statistics::int32(Some(12), Some(45), None, Some(11), false);
+
+        match stats {
+            Statistics::Int32(v) => {
+                let stats_string = generic_statistics_handler(v);
+                assert_eq!(&stats_string, "min: 12");
+            }
+            _ => unreachable!(),
+        }
     }
 }

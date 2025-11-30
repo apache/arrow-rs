@@ -38,7 +38,7 @@ use crate::parquet_thrift::ThriftSliceInputProtocol;
 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use crate::record::Row;
 use crate::record::reader::RowIter;
-use crate::schema::types::Type as SchemaType;
+use crate::schema::types::{SchemaDescPtr, Type as SchemaType};
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
@@ -110,6 +110,7 @@ pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: Option<ReaderProperties>,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl ReadOptionsBuilder {
@@ -152,6 +153,13 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    pub fn with_parquet_schema(mut self, schema: SchemaDescPtr) -> Self {
+        self.metadata_options.set_schema(schema);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -161,18 +169,20 @@ impl ReadOptionsBuilder {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
             props,
+            metadata_options: self.metadata_options,
         }
     }
 }
 
 /// A collection of options for reading a Parquet file.
 ///
-/// Currently, only predicates on row group metadata are supported.
+/// Predicates are currently only supported on row group metadata.
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: ReaderProperties,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -193,6 +203,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options.metadata_options.clone()))
             .parse_and_finish(&chunk_reader)?
             .into_builder();
         let mut predicates = options.predicates;
@@ -387,16 +398,19 @@ pub(crate) fn decode_page(
         can_decompress = header_v2.is_compressed.unwrap_or(true);
     }
 
-    // TODO: page header could be huge because of statistics. We should set a
-    // maximum page header size and abort if that is exceeded.
     let buffer = match decompressor {
         Some(decompressor) if can_decompress => {
             let uncompressed_page_size = usize::try_from(page_header.uncompressed_page_size)?;
+            if offset > buffer.len() || offset > uncompressed_page_size {
+                return Err(general_err!("Invalid page header"));
+            }
             let decompressed_size = uncompressed_page_size - offset;
             let mut decompressed = Vec::with_capacity(uncompressed_page_size);
-            decompressed.extend_from_slice(&buffer.as_ref()[..offset]);
+            decompressed.extend_from_slice(&buffer[..offset]);
+            // decompressed size of zero corresponds to a page with no non-null values
+            // see https://github.com/apache/parquet-format/blob/master/README.md#data-pages
             if decompressed_size > 0 {
-                let compressed = &buffer.as_ref()[offset..];
+                let compressed = &buffer[offset..];
                 decompressor.decompress(compressed, &mut decompressed, Some(decompressed_size))?;
             }
 
@@ -458,7 +472,10 @@ pub(crate) fn decode_page(
         }
         _ => {
             // For unknown page type (e.g., INDEX_PAGE), skip and read next.
-            unimplemented!("Page type {:?} is not supported", page_header.r#type)
+            return Err(general_err!(
+                "Page type {:?} is not supported",
+                page_header.r#type
+            ));
         }
     };
 
@@ -891,6 +908,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         *remaining,
                     )?;
                     let data_len = header.compressed_page_size as usize;
+                    let data_start = *offset;
                     *offset += data_len as u64;
                     *remaining -= data_len as u64;
 
@@ -898,16 +916,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
                         continue;
                     }
 
-                    let mut buffer = Vec::with_capacity(data_len);
-                    let read = read.take(data_len as u64).read_to_end(&mut buffer)?;
-
-                    if read != data_len {
-                        return Err(eof_err!(
-                            "Expected to read {} bytes of page, read only {}",
-                            data_len,
-                            read
-                        ));
-                    }
+                    let buffer = self.reader.get_bytes(data_start, data_len)?;
 
                     let buffer =
                         self.context
@@ -915,7 +924,7 @@ impl<R: ChunkReader> PageReader for SerializedPageReader<R> {
 
                     let page = decode_page(
                         header,
-                        Bytes::from(buffer),
+                        buffer,
                         self.physical_type,
                         self.decompressor.as_mut(),
                     )?;
@@ -1130,6 +1139,7 @@ mod tests {
     use crate::column::reader::ColumnReader;
     use crate::data_type::private::ParquetValueType;
     use crate::data_type::{AsBytes, FixedLenByteArrayType, Int32Type};
+    use crate::file::metadata::thrift::DataPageHeaderV2;
     #[allow(deprecated)]
     use crate::file::page_index::index_reader::{read_columns_indexes, read_offset_indexes};
     use crate::file::writer::SerializedFileWriter;
@@ -1138,6 +1148,72 @@ mod tests {
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
 
     use super::*;
+
+    #[test]
+    fn test_decode_page_invalid_offset() {
+        let page_header = PageHeader {
+            r#type: PageType::DATA_PAGE_V2,
+            uncompressed_page_size: 10,
+            compressed_page_size: 10,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            crc: None,
+            data_page_header_v2: Some(DataPageHeaderV2 {
+                num_nulls: 0,
+                num_rows: 0,
+                num_values: 0,
+                encoding: Encoding::PLAIN,
+                definition_levels_byte_length: 11,
+                repetition_levels_byte_length: 0,
+                is_compressed: None,
+                statistics: None,
+            }),
+        };
+
+        let buffer = Bytes::new();
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("DataPage v2 header contains implausible values")
+        );
+    }
+
+    #[test]
+    fn test_decode_unsupported_page() {
+        let mut page_header = PageHeader {
+            r#type: PageType::INDEX_PAGE,
+            uncompressed_page_size: 10,
+            compressed_page_size: 10,
+            data_page_header: None,
+            index_page_header: None,
+            dictionary_page_header: None,
+            crc: None,
+            data_page_header_v2: None,
+        };
+        let buffer = Bytes::new();
+        let err = decode_page(page_header.clone(), buffer.clone(), Type::INT32, None).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Page type INDEX_PAGE is not supported"
+        );
+
+        page_header.data_page_header_v2 = Some(DataPageHeaderV2 {
+            num_nulls: 0,
+            num_rows: 0,
+            num_values: 0,
+            encoding: Encoding::PLAIN,
+            definition_levels_byte_length: 11,
+            repetition_levels_byte_length: 0,
+            is_compressed: None,
+            statistics: None,
+        });
+        let err = decode_page(page_header, buffer, Type::INT32, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("DataPage v2 header contains implausible values")
+        );
+    }
 
     #[test]
     fn test_cursor_and_file_has_the_same_behaviour() {
@@ -2630,5 +2706,52 @@ mod tests {
                 metadata.row_group(i).column(0).data_page_offset()
             );
         }
+    }
+
+    #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("alltypes_plain.parquet");
+        let file_reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let schema = file_reader.metadata().file_metadata().schema_descr_ptr();
+        let expected = file_reader.metadata;
+
+        let options = ReadOptionsBuilder::new()
+            .with_parquet_schema(schema)
+            .build();
+        let file_reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
+        // Should have used the same schema instance
+        assert!(Arc::ptr_eq(
+            &expected.file_metadata().schema_descr_ptr(),
+            &file_reader.metadata.file_metadata().schema_descr_ptr()
+        ));
+    }
+
+    #[test]
+    fn test_read_unknown_logical_type() {
+        let file = get_test_file("unknown-logical-type.parquet");
+        let reader = SerializedFileReader::new(file).expect("Error opening file");
+
+        let schema = reader.metadata().file_metadata().schema_descr();
+        assert_eq!(
+            schema.column(0).logical_type_ref(),
+            Some(&basic::LogicalType::String)
+        );
+        assert_eq!(
+            schema.column(1).logical_type_ref(),
+            Some(&basic::LogicalType::_Unknown { field_id: 2555 })
+        );
+        assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
+
+        let mut iter = reader
+            .get_row_iter(None)
+            .expect("Failed to create row iterator");
+
+        let mut num_rows = 0;
+        while iter.next().is_some() {
+            num_rows += 1;
+        }
+        assert_eq!(num_rows, reader.metadata().file_metadata().num_rows());
     }
 }

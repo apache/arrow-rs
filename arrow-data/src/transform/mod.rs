@@ -35,6 +35,7 @@ mod dictionary;
 mod fixed_binary;
 mod fixed_size_list;
 mod list;
+mod list_view;
 mod null;
 mod primitive;
 mod run;
@@ -267,10 +268,9 @@ fn build_extend(array: &ArrayData) -> Extend<'_> {
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::build_extend::<i64>(array),
         DataType::BinaryView | DataType::Utf8View => unreachable!("should use build_extend_view"),
         DataType::Map(_, _) | DataType::List(_) => list::build_extend::<i32>(array),
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
         DataType::LargeList(_) => list::build_extend::<i64>(array),
+        DataType::ListView(_) => list_view::build_extend::<i32>(array),
+        DataType::LargeListView(_) => list_view::build_extend::<i64>(array),
         DataType::Dictionary(_, _) => unreachable!("should use build_extend_dictionary"),
         DataType::Struct(_) => structure::build_extend(array),
         DataType::FixedSizeBinary(_) => fixed_binary::build_extend(array),
@@ -315,10 +315,9 @@ fn build_extend_nulls(data_type: &DataType) -> ExtendNulls {
         DataType::LargeUtf8 | DataType::LargeBinary => variable_size::extend_nulls::<i64>,
         DataType::BinaryView | DataType::Utf8View => primitive::extend_nulls::<u128>,
         DataType::Map(_, _) | DataType::List(_) => list::extend_nulls::<i32>,
-        DataType::ListView(_) | DataType::LargeListView(_) => {
-            unimplemented!("ListView/LargeListView not implemented")
-        }
         DataType::LargeList(_) => list::extend_nulls::<i64>,
+        DataType::ListView(_) => list_view::extend_nulls::<i32>,
+        DataType::LargeListView(_) => list_view::extend_nulls::<i64>,
         DataType::Dictionary(child_data_type, _) => match child_data_type.as_ref() {
             DataType::UInt8 => primitive::extend_nulls::<u8>,
             DataType::UInt16 => primitive::extend_nulls::<u16>,
@@ -452,7 +451,11 @@ impl<'a> MutableArrayData<'a> {
                 new_buffers(data_type, *capacity)
             }
             (
-                DataType::List(_) | DataType::LargeList(_) | DataType::FixedSizeList(_, _),
+                DataType::List(_)
+                | DataType::LargeList(_)
+                | DataType::ListView(_)
+                | DataType::LargeListView(_)
+                | DataType::FixedSizeList(_, _),
                 Capacities::List(capacity, _),
             ) => {
                 array_capacity = *capacity;
@@ -493,10 +496,11 @@ impl<'a> MutableArrayData<'a> {
             | DataType::Utf8View
             | DataType::Interval(_)
             | DataType::FixedSizeBinary(_) => vec![],
-            DataType::ListView(_) | DataType::LargeListView(_) => {
-                unimplemented!("ListView/LargeListView not implemented")
-            }
-            DataType::Map(_, _) | DataType::List(_) | DataType::LargeList(_) => {
+            DataType::Map(_, _)
+            | DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
                 let children = arrays
                     .iter()
                     .map(|array| &array.child_data()[0])
@@ -800,7 +804,12 @@ impl<'a> MutableArrayData<'a> {
                 b.insert(0, data.buffer1.into());
                 b
             }
-            DataType::Utf8 | DataType::Binary | DataType::LargeUtf8 | DataType::LargeBinary => {
+            DataType::Utf8
+            | DataType::Binary
+            | DataType::LargeUtf8
+            | DataType::LargeBinary
+            | DataType::ListView(_)
+            | DataType::LargeListView(_) => {
                 vec![data.buffer1.into(), data.buffer2.into()]
             }
             DataType::Union(_, mode) => {

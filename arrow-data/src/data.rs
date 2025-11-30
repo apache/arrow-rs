@@ -615,6 +615,16 @@ impl ArrayData {
                     vec![ArrayData::new_empty(f.data_type())],
                     true,
                 ),
+                DataType::ListView(f) => (
+                    vec![zeroed(len * 4), zeroed(len * 4)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
+                DataType::LargeListView(f) => (
+                    vec![zeroed(len * 8), zeroed(len * 8)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
                 DataType::FixedSizeList(f, list_len) => (
                     vec![],
                     vec![ArrayData::new_null(f.data_type(), *list_len as usize * len)],
@@ -980,7 +990,15 @@ impl ArrayData {
     ) -> Result<(), ArrowError> {
         let offsets: &[T] = self.typed_buffer(0, self.len)?;
         let sizes: &[T] = self.typed_buffer(1, self.len)?;
-        for i in 0..values_length {
+        if offsets.len() != sizes.len() {
+            return Err(ArrowError::ComputeError(format!(
+                "ListView offsets len {} does not match sizes len {}",
+                offsets.len(),
+                sizes.len()
+            )));
+        }
+
+        for i in 0..sizes.len() {
             let size = sizes[i].to_usize().ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
                     "Error converting size[{}] ({}) to usize for {}",
@@ -2460,6 +2478,24 @@ mod tests {
         }
 
         let array = ArrayData::new_null(&DataType::Utf8View, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
         assert_eq!(array.len(), array_len);
         for i in 0..array.len() {
             assert!(array.is_null(i));

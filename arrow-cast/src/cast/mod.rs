@@ -41,11 +41,13 @@ mod decimal;
 mod dictionary;
 mod list;
 mod map;
+mod run_array;
 mod string;
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
 use crate::cast::list::*;
 use crate::cast::map::*;
+use crate::cast::run_array::*;
 use crate::cast::string::*;
 
 use arrow_buffer::IntervalMonthDayNano;
@@ -67,7 +69,7 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
-pub use decimal::DecimalCast;
+pub use decimal::{DecimalCast, rescale_decimal};
 
 /// CastOptions provides a way to override the default cast behaviors
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -139,6 +141,8 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(from_value_type, to_value_type)
         }
         (Dictionary(_, value_type), _) => can_cast_types(value_type, to_type),
+        (RunEndEncoded(_, value_type), _) => can_cast_types(value_type.data_type(), to_type),
+        (_, RunEndEncoded(_, value_type)) => can_cast_types(from_type, value_type.data_type()),
         (_, Dictionary(_, value_type)) => can_cast_types(from_type, value_type),
         (List(list_from) | LargeList(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
@@ -217,12 +221,34 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         (Struct(from_fields), Struct(to_fields)) => {
-            from_fields.len() == to_fields.len()
-                && from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+            if from_fields.len() != to_fields.len() {
+                return false;
+            }
+
+            // fast path, all field names are in the same order and same number of fields
+            if from_fields
+                .iter()
+                .zip(to_fields.iter())
+                .all(|(f1, f2)| f1.name() == f2.name())
+            {
+                return from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
                     // Assume that nullability between two structs are compatible, if not,
                     // cast kernel will return error.
                     can_cast_types(f1.data_type(), f2.data_type())
-                })
+                });
+            }
+
+            // slow path, we match the fields by name
+            to_fields.iter().all(|to_field| {
+                from_fields
+                    .iter()
+                    .find(|from_field| from_field.name() == to_field.name())
+                    .is_some_and(|from_field| {
+                        // Assume that nullability between two structs are compatible, if not,
+                        // cast kernel will return error.
+                        can_cast_types(from_field.data_type(), to_field.data_type())
+                    })
+            })
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
@@ -791,6 +817,37 @@ pub fn cast_with_options(
             | Map(_, _)
             | Dictionary(_, _),
         ) => Ok(new_null_array(to_type, array.len())),
+        (RunEndEncoded(index_type, _), _) => match index_type.data_type() {
+            Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, cast_options),
+            Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, cast_options),
+            Int64 => run_end_encoded_cast::<Int64Type>(array, to_type, cast_options),
+            _ => Err(ArrowError::CastError(format!(
+                "Casting from run end encoded type {from_type:?} to {to_type:?} not supported",
+            ))),
+        },
+        (_, RunEndEncoded(index_type, value_type)) => {
+            let array_ref = make_array(array.to_data());
+            match index_type.data_type() {
+                Int16 => cast_to_run_end_encoded::<Int16Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    cast_options,
+                ),
+                Int32 => cast_to_run_end_encoded::<Int32Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    cast_options,
+                ),
+                Int64 => cast_to_run_end_encoded::<Int64Type>(
+                    &array_ref,
+                    value_type.data_type(),
+                    cast_options,
+                ),
+                _ => Err(ArrowError::CastError(format!(
+                    "Casting from type {from_type:?} to run end encoded type {to_type:?} not supported",
+                ))),
+            }
+        }
         (Dictionary(index_type, _), _) => match **index_type {
             Int8 => dictionary_cast::<Int8Type>(array, to_type, cast_options),
             Int16 => dictionary_cast::<Int16Type>(array, to_type, cast_options),
@@ -1134,14 +1191,46 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Struct(_), Struct(to_fields)) => {
+        (Struct(from_fields), Struct(to_fields)) => {
             let array = array.as_struct();
-            let fields = array
-                .columns()
-                .iter()
-                .zip(to_fields.iter())
-                .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
-                .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+
+            // Fast path: if field names are in the same order, we can just zip and cast
+            let fields_match_order = from_fields.len() == to_fields.len()
+                && from_fields
+                    .iter()
+                    .zip(to_fields.iter())
+                    .all(|(f1, f2)| f1.name() == f2.name());
+
+            let fields = if fields_match_order {
+                // Fast path: cast columns in order
+                array
+                    .columns()
+                    .iter()
+                    .zip(to_fields.iter())
+                    .map(|(column, field)| {
+                        cast_with_options(column, field.data_type(), cast_options)
+                    })
+                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+            } else {
+                // Slow path: match fields by name and reorder
+                to_fields
+                    .iter()
+                    .map(|to_field| {
+                        let from_field_idx = from_fields
+                            .iter()
+                            .position(|from_field| from_field.name() == to_field.name())
+                            .ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "Field '{}' not found in source struct",
+                                    to_field.name()
+                                ))
+                            })?;
+                        let column = array.column(from_field_idx);
+                        cast_with_options(column, to_field.data_type(), cast_options)
+                    })
+                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+            };
+
             let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
             Ok(Arc::new(array) as ArrayRef)
         }
@@ -2640,10 +2729,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use DataType::*;
+    use arrow_array::{Int64Array, RunArray, StringArray};
     use arrow_buffer::i256;
     use arrow_buffer::{Buffer, IntervalDayTime, NullBuffer};
+    use arrow_schema::{DataType, Field};
     use chrono::NaiveDate;
     use half::f16;
+    use std::sync::Arc;
 
     #[derive(Clone)]
     struct DecimalCastTestConfig {
@@ -7794,8 +7887,6 @@ mod tests {
     #[test]
     fn test_cast_utf8_dict() {
         // FROM a dictionary with of Utf8 values
-        use DataType::*;
-
         let mut builder = StringDictionaryBuilder::<Int8Type>::new();
         builder.append("one").unwrap();
         builder.append_null();
@@ -7850,7 +7941,6 @@ mod tests {
 
     #[test]
     fn test_cast_dict_to_dict_bad_index_value_primitive() {
-        use DataType::*;
         // test converting from an array that has indexes of a type
         // that are out of bounds for a particular other kind of
         // index.
@@ -7878,7 +7968,6 @@ mod tests {
 
     #[test]
     fn test_cast_dict_to_dict_bad_index_value_utf8() {
-        use DataType::*;
         // Same test as test_cast_dict_to_dict_bad_index_value but use
         // string values (and encode the expected behavior here);
 
@@ -7907,8 +7996,6 @@ mod tests {
     #[test]
     fn test_cast_primitive_dict() {
         // FROM a dictionary with of INT32 values
-        use DataType::*;
-
         let mut builder = PrimitiveDictionaryBuilder::<Int8Type, Int32Type>::new();
         builder.append(1).unwrap();
         builder.append_null();
@@ -7929,8 +8016,6 @@ mod tests {
 
     #[test]
     fn test_cast_primitive_array_to_dict() {
-        use DataType::*;
-
         let mut builder = PrimitiveBuilder::<Int32Type>::new();
         builder.append_value(1);
         builder.append_null();
@@ -8774,7 +8859,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Utf8), unsorted) to Map("entries": Struct("key": Utf8, "value": Utf8), sorted) not supported"#
+            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Utf8), sorted) not supported"#
         );
     }
 
@@ -8825,7 +8910,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Interval(DayTime)), unsorted) to Map("entries": Struct("key": Utf8, "value": Duration(s)), sorted) not supported"#
+            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Interval(DayTime)), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Duration(s)), sorted) not supported"#
         );
     }
 
@@ -10805,11 +10890,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(Field::new("a", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("c", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10853,11 +10938,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![Some(42), None, Some(19), None]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(Field::new("a", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("c", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Int32, true)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10887,11 +10972,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![i32::MAX, 25, 1, 100]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(Field::new("a", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("c", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10930,7 +11015,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct("a": Boolean) to Utf8 not supported"#,
+            r#"Cast error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10941,9 +11026,168 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct("a": Boolean) not supported"#,
+            r#"Cast error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
+    }
+
+    #[test]
+    fn test_cast_struct_with_different_field_order() {
+        // Test slow path: fields are in different order
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, false)),
+                string.clone() as ArrayRef,
+            ),
+        ]);
+
+        // Target has fields in different order: c, a, b instead of a, b, c
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("c", DataType::Utf8, false),
+                Field::new("a", DataType::Utf8, false), // Boolean to Utf8
+                Field::new("b", DataType::Utf8, false), // Int32 to Utf8
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type).unwrap();
+        let result_struct = result.as_struct();
+
+        assert_eq!(result_struct.data_type(), &to_type);
+        assert_eq!(result_struct.num_columns(), 3);
+
+        // Verify field "c" (originally position 2, now position 0) remains Utf8
+        let c_column = result_struct.column(0).as_string::<i32>();
+        assert_eq!(
+            c_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["foo", "bar", "baz", "qux"]
+        );
+
+        // Verify field "a" (originally position 0, now position 1) was cast from Boolean to Utf8
+        let a_column = result_struct.column(1).as_string::<i32>();
+        assert_eq!(
+            a_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["false", "false", "true", "true"]
+        );
+
+        // Verify field "b" (originally position 1, now position 2) was cast from Int32 to Utf8
+        let b_column = result_struct.column(2).as_string::<i32>();
+        assert_eq!(
+            b_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["42", "28", "19", "31"]
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_with_missing_field() {
+        // Test that casting fails when target has a field not present in source
+        let boolean = Arc::new(BooleanArray::from(vec![false, true]));
+        let struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Boolean, false)),
+            boolean.clone() as ArrayRef,
+        )]);
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int32, false), // Field "b" doesn't exist in source
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Cast error: Field 'b' not found in source struct"
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_with_subset_of_fields() {
+        // Test casting to a struct with fewer fields (selecting a subset)
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, false)),
+                string.clone() as ArrayRef,
+            ),
+        ]);
+
+        // Target has only fields "c" and "a", omitting "b"
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("c", DataType::Utf8, false),
+                Field::new("a", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type).unwrap();
+        let result_struct = result.as_struct();
+
+        assert_eq!(result_struct.data_type(), &to_type);
+        assert_eq!(result_struct.num_columns(), 2);
+
+        // Verify field "c" remains Utf8
+        let c_column = result_struct.column(0).as_string::<i32>();
+        assert_eq!(
+            c_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["foo", "bar", "baz", "qux"]
+        );
+
+        // Verify field "a" was cast from Boolean to Utf8
+        let a_column = result_struct.column(1).as_string::<i32>();
+        assert_eq!(
+            a_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["false", "false", "true", "true"]
+        );
+    }
+
+    #[test]
+    fn test_can_cast_struct_with_missing_field() {
+        // Test that can_cast_types returns false when target has a field not in source
+        let from_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("c", DataType::Boolean, false), // Field "c" not in source
+            ]
+            .into(),
+        );
+
+        assert!(!can_cast_types(&from_type, &to_type));
     }
 
     fn run_decimal_cast_test_case_between_multiple_types(t: DecimalCastTestConfig) {
@@ -11416,5 +11660,423 @@ mod tests {
             error.to_string(),
             "Invalid argument error: -1.0 is too small to store in a Decimal32 of precision 1. Min is -0.9"
         );
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_primitive() {
+        // Create a RunEndEncoded array: [1, 1, 2, 2, 2, 3]
+        let run_ends = Int32Array::from(vec![2, 5, 6]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(run_array) as ArrayRef;
+        // Cast to Int64
+        let cast_result = cast(&array_ref, &DataType::Int64).unwrap();
+        // Verify the result is a RunArray with Int64 values
+        let result_run_array = cast_result.as_any().downcast_ref::<Int64Array>().unwrap();
+        assert_eq!(
+            result_run_array.values(),
+            &[1i64, 1i64, 2i64, 2i64, 2i64, 3i64]
+        );
+    }
+
+    #[test]
+    fn test_run_end_encoded_to_string() {
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let values = Int32Array::from(vec![10, 20, 30]);
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(run_array) as ArrayRef;
+
+        // Cast to String
+        let cast_result = cast(&array_ref, &DataType::Utf8).unwrap();
+
+        // Verify the result is a RunArray with String values
+        let result_array = cast_result.as_any().downcast_ref::<StringArray>().unwrap();
+        // Check that values are correct
+        assert_eq!(result_array.value(0), "10");
+        assert_eq!(result_array.value(1), "10");
+        assert_eq!(result_array.value(2), "20");
+    }
+
+    #[test]
+    fn test_primitive_to_run_end_encoded() {
+        // Create an Int32 array with repeated values: [1, 1, 2, 2, 2, 3]
+        let source_array = Int32Array::from(vec![1, 1, 2, 2, 2, 3]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        // Cast to RunEndEncoded<Int32, Int32>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+
+        // Verify the result is a RunArray
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        // Check run structure: runs should end at positions [2, 5, 6]
+        assert_eq!(result_run_array.run_ends().values(), &[2, 5, 6]);
+
+        // Check values: should be [1, 2, 3]
+        let values_array = result_run_array.values().as_primitive::<Int32Type>();
+        assert_eq!(values_array.values(), &[1, 2, 3]);
+    }
+
+    #[test]
+    fn test_primitive_to_run_end_encoded_with_nulls() {
+        let source_array = Int32Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            None,
+            Some(2),
+            Some(2),
+            Some(3),
+            Some(3),
+            None,
+            None,
+            Some(4),
+            Some(4),
+            Some(5),
+            Some(5),
+            None,
+            None,
+        ]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+        assert_eq!(
+            result_run_array.run_ends().values(),
+            &[2, 4, 6, 8, 10, 12, 14, 16]
+        );
+        assert_eq!(
+            result_run_array
+                .values()
+                .as_primitive::<Int32Type>()
+                .values(),
+            &[1, 0, 2, 3, 0, 4, 5, 0]
+        );
+        assert_eq!(result_run_array.values().null_count(), 3);
+    }
+
+    #[test]
+    fn test_primitive_to_run_end_encoded_with_nulls_consecutive() {
+        let source_array = Int64Array::from(vec![
+            Some(1),
+            Some(1),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(4),
+            Some(20),
+            Some(500),
+            Some(500),
+            None,
+            None,
+        ]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int64, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+        assert_eq!(
+            result_run_array.run_ends().values(),
+            &[2, 10, 11, 12, 14, 16]
+        );
+        assert_eq!(
+            result_run_array
+                .values()
+                .as_primitive::<Int64Type>()
+                .values(),
+            &[1, 0, 4, 20, 500, 0]
+        );
+        assert_eq!(result_run_array.values().null_count(), 2);
+    }
+
+    #[test]
+    fn test_string_to_run_end_encoded() {
+        // Create a String array with repeated values: ["a", "a", "b", "c", "c"]
+        let source_array = StringArray::from(vec!["a", "a", "b", "c", "c"]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        // Cast to RunEndEncoded<Int32, String>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+
+        // Verify the result is a RunArray
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        // Check run structure: runs should end at positions [2, 3, 5]
+        assert_eq!(result_run_array.run_ends().values(), &[2, 3, 5]);
+
+        // Check values: should be ["a", "b", "c"]
+        let values_array = result_run_array.values().as_string::<i32>();
+        assert_eq!(values_array.value(0), "a");
+        assert_eq!(values_array.value(1), "b");
+        assert_eq!(values_array.value(2), "c");
+    }
+
+    #[test]
+    fn test_empty_array_to_run_end_encoded() {
+        // Create an empty Int32 array
+        let source_array = Int32Array::from(Vec::<i32>::new());
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        // Cast to RunEndEncoded<Int32, Int32>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+
+        // Verify the result is an empty RunArray
+        let result_run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .unwrap();
+
+        // Check that both run_ends and values are empty
+        assert_eq!(result_run_array.run_ends().len(), 0);
+        assert_eq!(result_run_array.values().len(), 0);
+    }
+
+    #[test]
+    fn test_run_end_encoded_with_nulls() {
+        // Create a RunEndEncoded array with nulls: [1, 1, null, 2, 2]
+        let run_ends = Int32Array::from(vec![2, 3, 5]);
+        let values = Int32Array::from(vec![Some(1), None, Some(2)]);
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(run_array) as ArrayRef;
+
+        // Cast to String
+        let cast_result = cast(&array_ref, &DataType::Utf8).unwrap();
+
+        // Verify the result preserves nulls
+        let result_run_array = cast_result.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(result_run_array.value(0), "1");
+        assert!(result_run_array.is_null(2));
+        assert_eq!(result_run_array.value(4), "2");
+    }
+
+    #[test]
+    fn test_different_index_types() {
+        // Test with Int16 index type
+        let source_array = Int32Array::from(vec![1, 1, 2, 3, 3]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        assert_eq!(cast_result.data_type(), &target_type);
+
+        // Verify the cast worked correctly: values are [1, 2, 3]
+        // and run-ends are [2, 3, 5]
+        let run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int16Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(0), 1);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(1), 2);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(2), 3);
+        assert_eq!(run_array.run_ends().values(), &[2i16, 3i16, 5i16]);
+
+        // Test again with Int64 index type
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        let cast_result = cast(&array_ref, &target_type).unwrap();
+        assert_eq!(cast_result.data_type(), &target_type);
+
+        // Verify the cast worked correctly: values are [1, 2, 3]
+        // and run-ends are [2, 3, 5]
+        let run_array = cast_result
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(0), 1);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(1), 2);
+        assert_eq!(run_array.values().as_primitive::<Int32Type>().value(2), 3);
+        assert_eq!(run_array.run_ends().values(), &[2i64, 3i64, 5i64]);
+    }
+
+    #[test]
+    fn test_unsupported_cast_to_run_end_encoded() {
+        // Create a Struct array - complex nested type that might not be supported
+        let field = Field::new("item", DataType::Int32, false);
+        let struct_array = StructArray::from(vec![(
+            Arc::new(field),
+            Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+        )]);
+        let array_ref = Arc::new(struct_array) as ArrayRef;
+
+        // This should fail because:
+        // 1. The target type is not RunEndEncoded
+        // 2. The target type is not supported for casting from StructArray
+        let cast_result = cast(&array_ref, &DataType::FixedSizeBinary(10));
+
+        // Expect this to fail
+        assert!(cast_result.is_err());
+    }
+
+    /// Test casting RunEndEncoded<Int64, String> to RunEndEncoded<Int16, String> should fail
+    #[test]
+    fn test_cast_run_end_encoded_int64_to_int16_should_fail() {
+        // Construct a valid REE array with Int64 run-ends
+        let run_ends = Int64Array::from(vec![100_000, 400_000, 700_000]); // values too large for Int16
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int64Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int16, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false, // This should make it fail instead of returning nulls
+            format_options: FormatOptions::default(),
+        };
+
+        // This should fail due to run-end overflow
+        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
+            cast_with_options(&array_ref, &target_type, &cast_options);
+
+        let e = result.expect_err("Cast should have failed but succeeded");
+        assert!(
+            e.to_string()
+                .contains("Cast error: Can't cast value 100000 to type Int16")
+        );
+    }
+
+    #[test]
+    fn test_cast_run_end_encoded_int64_to_int16_with_safe_should_fail_with_null_invalid_error() {
+        // Construct a valid REE array with Int64 run-ends
+        let run_ends = Int64Array::from(vec![100_000, 400_000, 700_000]); // values too large for Int16
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int64Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int16, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int16, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: true,
+            format_options: FormatOptions::default(),
+        };
+
+        // This fails even though safe is true because the run_ends array has null values
+        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
+            cast_with_options(&array_ref, &target_type, &cast_options);
+        let e = result.expect_err("Cast should have failed but succeeded");
+        assert!(
+            e.to_string()
+                .contains("Invalid argument error: Found null values in run_ends array. The run_ends array should not have null values.")
+        );
+    }
+
+    /// Test casting RunEndEncoded<Int16, String> to RunEndEncoded<Int64, String> should succeed
+    #[test]
+    fn test_cast_run_end_encoded_int16_to_int64_should_succeed() {
+        // Construct a valid REE array with Int16 run-ends
+        let run_ends = Int16Array::from(vec![2, 5, 8]); // values that fit in Int16
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int64, Utf8> (upcast should succeed)
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        // This should succeed due to valid upcast
+        let result: Result<Arc<dyn Array + 'static>, ArrowError> =
+            cast_with_options(&array_ref, &target_type, &cast_options);
+
+        let array_ref = result.expect("Cast should have succeeded but failed");
+        // Downcast to RunArray<Int64Type>
+        let run_array = array_ref
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+
+        // Verify the cast worked correctly
+        // Assert the values were cast correctly
+        assert_eq!(run_array.run_ends().values(), &[2i64, 5i64, 8i64]);
+        assert_eq!(run_array.values().as_string::<i32>().value(0), "a");
+        assert_eq!(run_array.values().as_string::<i32>().value(1), "b");
+        assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
+    }
+
+    #[test]
+    fn test_cast_run_end_encoded_dictionary_to_run_end_encoded() {
+        // Construct a valid dictionary encoded array
+        let values = StringArray::from_iter([Some("a"), Some("b"), Some("c")]);
+        let keys = UInt64Array::from_iter(vec![1, 1, 1, 0, 0, 0, 2, 2, 2]);
+        let array_ref = Arc::new(DictionaryArray::new(keys, Arc::new(values))) as ArrayRef;
+
+        // Attempt to cast to RunEndEncoded<Int64, Utf8>
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        // This should succeed
+        let result = cast_with_options(&array_ref, &target_type, &cast_options)
+            .expect("Cast should have succeeded but failed");
+
+        // Verify the cast worked correctly
+        // Assert the values were cast correctly
+        let run_array = result
+            .as_any()
+            .downcast_ref::<RunArray<Int64Type>>()
+            .unwrap();
+        assert_eq!(run_array.values().as_string::<i32>().value(0), "b");
+        assert_eq!(run_array.values().as_string::<i32>().value(1), "a");
+        assert_eq!(run_array.values().as_string::<i32>().value(2), "c");
+
+        // Verify the run-ends were cast correctly (run ends at 3, 6, 9)
+        assert_eq!(run_array.run_ends().values(), &[3i64, 6i64, 9i64]);
     }
 }
