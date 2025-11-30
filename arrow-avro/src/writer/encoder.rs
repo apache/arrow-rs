@@ -227,7 +227,6 @@ pub(crate) struct FieldEncoder<'a> {
 impl<'a> FieldEncoder<'a> {
     fn make_encoder(
         array: &'a dyn Array,
-        field: &Field,
         plan: &FieldPlan,
         nullability: Option<Nullability>,
     ) -> Result<Self, ArrowError> {
@@ -563,61 +562,48 @@ impl<'a> FieldEncoder<'a> {
                     .as_any()
                     .downcast_ref::<UnionArray>()
                     .ok_or_else(|| ArrowError::SchemaError("Expected UnionArray".into()))?;
-
                 Encoder::Union(Box::new(UnionEncoder::try_new(arr, bindings)?))
             }
             FieldPlan::RunEndEncoded {
                 values_nullability,
                 value_plan,
             } => {
-                let dt = array.data_type();
-                let values_field = match dt {
-                    DataType::RunEndEncoded(_re_field, v_field) => v_field.as_ref(),
-                    other => {
-                        return Err(ArrowError::SchemaError(format!(
-                            "Avro RunEndEncoded site requires Arrow DataType::RunEndEncoded, found: {other:?}"
-                        )));
-                    }
-                };
                 // Helper closure to build a typed RunEncodedEncoder<R>
                 let build = |run_arr_any: &'a dyn Array| -> Result<Encoder<'a>, ArrowError> {
                     if let Some(arr) = run_arr_any.as_any().downcast_ref::<RunArray<Int16Type>>() {
-                        let values_enc = prepare_value_site_encoder(
-                            arr.values().as_ref(),
-                            values_field,
-                            *values_nullability,
-                            value_plan.as_ref(),
-                        )?;
                         return Ok(Encoder::RunEncoded16(Box::new(RunEncodedEncoder::<
                             Int16Type,
                         >::new(
-                            arr, values_enc
+                            arr,
+                            FieldEncoder::make_encoder(
+                                arr.values().as_ref(),
+                                value_plan.as_ref(),
+                                *values_nullability,
+                            )?,
                         ))));
                     }
                     if let Some(arr) = run_arr_any.as_any().downcast_ref::<RunArray<Int32Type>>() {
-                        let values_enc = prepare_value_site_encoder(
-                            arr.values().as_ref(),
-                            values_field,
-                            *values_nullability,
-                            value_plan.as_ref(),
-                        )?;
                         return Ok(Encoder::RunEncoded32(Box::new(RunEncodedEncoder::<
                             Int32Type,
                         >::new(
-                            arr, values_enc
+                            arr,
+                            FieldEncoder::make_encoder(
+                                arr.values().as_ref(),
+                                value_plan.as_ref(),
+                                *values_nullability,
+                            )?,
                         ))));
                     }
                     if let Some(arr) = run_arr_any.as_any().downcast_ref::<RunArray<Int64Type>>() {
-                        let values_enc = prepare_value_site_encoder(
-                            arr.values().as_ref(),
-                            values_field,
-                            *values_nullability,
-                            value_plan.as_ref(),
-                        )?;
                         return Ok(Encoder::RunEncoded64(Box::new(RunEncodedEncoder::<
                             Int64Type,
                         >::new(
-                            arr, values_enc
+                            arr,
+                            FieldEncoder::make_encoder(
+                                arr.values().as_ref(),
+                                value_plan.as_ref(),
+                                *values_nullability,
+                            )?,
                         ))));
                     }
                     Err(ArrowError::SchemaError(
@@ -629,28 +615,20 @@ impl<'a> FieldEncoder<'a> {
             }
         };
         // Compute the effective null state from writer-declared nullability and data nulls.
-        let null_state = match (nullability, array.null_count() > 0) {
-            (None, false) => NullState::NonNullable,
-            (None, true) => {
-                return Err(ArrowError::InvalidArgumentError(format!(
-                    "Avro site '{}' is non-nullable, but array contains nulls",
-                    field.name()
-                )));
-            }
-            (Some(order), false) => {
-                // Optimization: drop any bitmap; emit a constant "value" branch byte.
-                NullState::NullableNoNulls {
-                    union_value_byte: union_value_branch_byte(order, false),
+        let null_state = match nullability {
+            None => NullState::NonNullable,
+            Some(order) => {
+                if let Some(nulls) = array.nulls().cloned() {
+                    NullState::Nullable {
+                        nulls,
+                        null_order: order,
+                    }
+                } else {
+                    // Nullable site with no null buffer for this view
+                    NullState::NullableNoNulls {
+                        union_value_byte: union_value_branch_byte(order, false),
+                    }
                 }
-            }
-            (Some(null_order), true) => {
-                let Some(nulls) = array.nulls().cloned() else {
-                    return Err(ArrowError::InvalidArgumentError(format!(
-                        "Array for Avro site '{}' reports nulls but has no null buffer",
-                        field.name()
-                    )));
-                };
-                NullState::Nullable { nulls, null_order }
             }
         };
         Ok(Self {
@@ -797,8 +775,6 @@ impl RecordEncoder {
         &'a self,
         batch: &'a RecordBatch,
     ) -> Result<Vec<FieldEncoder<'a>>, ArrowError> {
-        let schema_binding = batch.schema();
-        let fields = schema_binding.fields();
         let arrays = batch.columns();
         let mut out = Vec::with_capacity(self.columns.len());
         for col_plan in self.columns.iter() {
@@ -806,7 +782,6 @@ impl RecordEncoder {
             let array = arrays.get(arrow_index).ok_or_else(|| {
                 ArrowError::SchemaError(format!("Column index {arrow_index} out of range"))
             })?;
-            let field = fields[arrow_index].as_ref();
             #[cfg(not(feature = "avro_custom_types"))]
             let site_nullability = match &col_plan.plan {
                 FieldPlan::RunEndEncoded { .. } => None,
@@ -814,13 +789,11 @@ impl RecordEncoder {
             };
             #[cfg(feature = "avro_custom_types")]
             let site_nullability = col_plan.nullability;
-            let encoder = prepare_value_site_encoder(
+            out.push(FieldEncoder::make_encoder(
                 array.as_ref(),
-                field,
-                site_nullability,
                 &col_plan.plan,
-            )?;
-            out.push(encoder);
+                site_nullability,
+            )?);
         }
         Ok(out)
     }
@@ -1348,39 +1321,14 @@ impl<'a> MapEncoder<'a> {
                 )));
             }
         };
-
-        let entries_struct_fields = match map.data_type() {
-            DataType::Map(entries, _) => match entries.data_type() {
-                DataType::Struct(fs) => fs,
-                other => {
-                    return Err(ArrowError::SchemaError(format!(
-                        "Arrow Map entries must be Struct, found: {other:?}"
-                    )));
-                }
-            },
-            _ => {
-                return Err(ArrowError::SchemaError(
-                    "Expected MapArray with DataType::Map".into(),
-                ));
-            }
-        };
-
-        let v_idx = find_map_value_field_index(entries_struct_fields).ok_or_else(|| {
-            ArrowError::SchemaError("Map entries struct missing value field".into())
-        })?;
-        let value_field = entries_struct_fields[v_idx].as_ref();
-
-        let values_enc = prepare_value_site_encoder(
-            map.values().as_ref(),
-            value_field,
-            values_nullability,
-            value_plan,
-        )?;
-
         Ok(Self {
             map,
             keys: keys_kind,
-            values: values_enc,
+            values: FieldEncoder::make_encoder(
+                map.values().as_ref(),
+                value_plan,
+                values_nullability,
+            )?,
             keys_offset: keys_arr.offset(),
             values_offset: map.values().offset(),
         })
@@ -1452,6 +1400,7 @@ impl EnumEncoder<'_> {
 struct UnionEncoder<'a> {
     encoders: Vec<FieldEncoder<'a>>,
     array: &'a UnionArray,
+    type_id_to_encoder_index: Vec<Option<usize>>,
 }
 
 impl<'a> UnionEncoder<'a> {
@@ -1459,7 +1408,6 @@ impl<'a> UnionEncoder<'a> {
         let DataType::Union(fields, UnionMode::Dense) = array.data_type() else {
             return Err(ArrowError::SchemaError("Expected Dense UnionArray".into()));
         };
-
         if fields.len() != field_bindings.len() {
             return Err(ArrowError::SchemaError(format!(
                 "Mismatched number of union branches between Arrow array ({}) and encoding plan ({})",
@@ -1467,37 +1415,44 @@ impl<'a> UnionEncoder<'a> {
                 field_bindings.len()
             )));
         }
+        let max_type_id = fields.iter().map(|(tid, _)| tid).max().unwrap_or(0);
+        let mut type_id_to_encoder_index: Vec<Option<usize>> =
+            vec![None; (max_type_id + 1) as usize];
         let mut encoders = Vec::with_capacity(fields.len());
-        for (type_id, field_ref) in fields.iter() {
+        for (i, (type_id, _)) in fields.iter().enumerate() {
             let binding = field_bindings
-                .get(type_id as usize)
+                .get(i)
                 .ok_or_else(|| ArrowError::SchemaError("Binding and field mismatch".to_string()))?;
-
-            let child = array.child(type_id).as_ref();
-
-            let encoder = prepare_value_site_encoder(
-                child,
-                field_ref.as_ref(),
-                binding.nullability,
+            encoders.push(FieldEncoder::make_encoder(
+                array.child(type_id).as_ref(),
                 &binding.plan,
-            )?;
-            encoders.push(encoder);
+                binding.nullability,
+            )?);
+            type_id_to_encoder_index[type_id as usize] = Some(i);
         }
-        Ok(Self { encoders, array })
+        Ok(Self {
+            encoders,
+            array,
+            type_id_to_encoder_index,
+        })
     }
 
     fn encode<W: Write + ?Sized>(&mut self, out: &mut W, idx: usize) -> Result<(), ArrowError> {
+        // SAFETY: `idx` is always in bounds because:
+        // 1. The encoder is called from `RecordEncoder::encode,` which iterates over `0..batch.num_rows()`
+        // 2. `self.array` is a column from the same batch, so its length equals `batch.num_rows()`
+        // 3. `type_ids()` returns a buffer with exactly `self.array.len()` entries (one per logical element)
         let type_id = self.array.type_ids()[idx];
-        let branch_index = type_id as usize;
-        write_int(out, type_id as i32)?;
-        let child_row = self.array.value_offset(idx);
-
-        let encoder = self
-            .encoders
-            .get_mut(branch_index)
+        let encoder_index = self
+            .type_id_to_encoder_index
+            .get(type_id as usize)
+            .and_then(|opt| *opt)
             .ok_or_else(|| ArrowError::SchemaError(format!("Invalid type_id {type_id}")))?;
-
-        encoder.encode(out, child_row)
+        write_int(out, encoder_index as i32)?;
+        let encoder = self.encoders.get_mut(encoder_index).ok_or_else(|| {
+            ArrowError::SchemaError(format!("Invalid encoder index {encoder_index}"))
+        })?;
+        encoder.encode(out, self.array.value_offset(idx))
     }
 }
 
@@ -1510,23 +1465,16 @@ impl<'a> StructEncoder<'a> {
         array: &'a StructArray,
         field_bindings: &[FieldBinding],
     ) -> Result<Self, ArrowError> {
-        let DataType::Struct(fields) = array.data_type() else {
-            return Err(ArrowError::SchemaError("Expected Struct".into()));
-        };
         let mut encoders = Vec::with_capacity(field_bindings.len());
         for field_binding in field_bindings {
             let idx = field_binding.arrow_index;
             let column = array.columns().get(idx).ok_or_else(|| {
                 ArrowError::SchemaError(format!("Struct child index {idx} out of range"))
             })?;
-            let field = fields.get(idx).ok_or_else(|| {
-                ArrowError::SchemaError(format!("Struct child index {idx} out of range"))
-            })?;
-            let encoder = prepare_value_site_encoder(
+            let encoder = FieldEncoder::make_encoder(
                 column.as_ref(),
-                field,
-                field_binding.nullability,
                 &field_binding.plan,
+                field_binding.nullability,
             )?;
             encoders.push(encoder);
         }
@@ -1583,24 +1531,13 @@ impl<'a, O: OffsetSizeTrait> ListEncoder<'a, O> {
         items_nullability: Option<Nullability>,
         item_plan: &FieldPlan,
     ) -> Result<Self, ArrowError> {
-        let child_field = match list.data_type() {
-            DataType::List(field) => field.as_ref(),
-            DataType::LargeList(field) => field.as_ref(),
-            _ => {
-                return Err(ArrowError::SchemaError(
-                    "Expected List or LargeList for ListEncoder".into(),
-                ));
-            }
-        };
-        let values_enc = prepare_value_site_encoder(
-            list.values().as_ref(),
-            child_field,
-            items_nullability,
-            item_plan,
-        )?;
         Ok(Self {
             list,
-            values: values_enc,
+            values: FieldEncoder::make_encoder(
+                list.values().as_ref(),
+                item_plan,
+                items_nullability,
+            )?,
             values_offset: list.values().offset(),
         })
     }
@@ -1647,24 +1584,13 @@ impl<'a, O: OffsetSizeTrait> ListViewEncoder<'a, O> {
         items_nullability: Option<Nullability>,
         item_plan: &FieldPlan,
     ) -> Result<Self, ArrowError> {
-        let child_field = match list.data_type() {
-            DataType::ListView(field) => field.as_ref(),
-            DataType::LargeListView(field) => field.as_ref(),
-            _ => {
-                return Err(ArrowError::SchemaError(
-                    "Expected ListView or LargeListView for ListViewEncoder".into(),
-                ));
-            }
-        };
-        let values_enc = prepare_value_site_encoder(
-            list.values().as_ref(),
-            child_field,
-            items_nullability,
-            item_plan,
-        )?;
         Ok(Self {
             list,
-            values: values_enc,
+            values: FieldEncoder::make_encoder(
+                list.values().as_ref(),
+                item_plan,
+                items_nullability,
+            )?,
             values_offset: list.values().offset(),
         })
     }
@@ -1701,23 +1627,13 @@ impl<'a> FixedSizeListEncoder<'a> {
         items_nullability: Option<Nullability>,
         item_plan: &FieldPlan,
     ) -> Result<Self, ArrowError> {
-        let child_field = match list.data_type() {
-            DataType::FixedSizeList(field, _len) => field.as_ref(),
-            _ => {
-                return Err(ArrowError::SchemaError(
-                    "Expected FixedSizeList for FixedSizeListEncoder".into(),
-                ));
-            }
-        };
-        let values_enc = prepare_value_site_encoder(
-            list.values().as_ref(),
-            child_field,
-            items_nullability,
-            item_plan,
-        )?;
         Ok(Self {
             list,
-            values: values_enc,
+            values: FieldEncoder::make_encoder(
+                list.values().as_ref(),
+                item_plan,
+                items_nullability,
+            )?,
             values_offset: list.values().offset(),
             elem_len: list.value_length() as usize,
         })
@@ -1733,16 +1649,6 @@ impl<'a> FixedSizeListEncoder<'a> {
                 .encode(out, row.saturating_sub(self.values_offset))
         })
     }
-}
-
-fn prepare_value_site_encoder<'a>(
-    values_array: &'a dyn Array,
-    value_field: &Field,
-    nullability: Option<Nullability>,
-    plan: &FieldPlan,
-) -> Result<FieldEncoder<'a>, ArrowError> {
-    // Effective nullability is computed here from the writer-declared site nullability and data.
-    FieldEncoder::make_encoder(values_array, value_field, plan, nullability)
 }
 
 /// Avro `fixed` encoder for Arrow `FixedSizeBinaryArray`.
@@ -2049,8 +1955,7 @@ mod tests {
         plan: &FieldPlan,
         nullability: Option<Nullability>,
     ) -> Vec<u8> {
-        let field = Field::new("f", array.data_type().clone(), true);
-        let mut enc = FieldEncoder::make_encoder(array, &field, plan, nullability).unwrap();
+        let mut enc = FieldEncoder::make_encoder(array, plan, nullability).unwrap();
         let mut out = Vec::new();
         for i in 0..array.len() {
             enc.encode(&mut out, i).unwrap();
@@ -2381,9 +2286,7 @@ mod tests {
             FixedSizeBinaryArray::try_new(10, arrow_buffer::Buffer::from(vec![0u8; 10]), None)
                 .unwrap();
         let plan = FieldPlan::Uuid;
-
-        let field = Field::new("f", arr.data_type().clone(), true);
-        let mut enc = FieldEncoder::make_encoder(&arr, &field, &plan, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &plan, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -2749,8 +2652,7 @@ mod tests {
     #[test]
     fn duration_encoder_year_month_rejects_negative() {
         let arr: PrimitiveArray<IntervalYearMonthType> = vec![-1i32].into();
-        let field = Field::new("f", DataType::Interval(IntervalUnit::YearMonth), true);
-        let mut enc = FieldEncoder::make_encoder(&arr, &field, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -2777,8 +2679,7 @@ mod tests {
     fn duration_encoder_day_time_rejects_negative() {
         let bad = IntervalDayTimeType::make_value(-1, 0);
         let arr: PrimitiveArray<IntervalDayTimeType> = vec![bad].into();
-        let field = Field::new("f", DataType::Interval(IntervalUnit::DayTime), true);
-        let mut enc = FieldEncoder::make_encoder(&arr, &field, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -2805,8 +2706,7 @@ mod tests {
     fn duration_encoder_month_day_nano_rejects_non_ms_multiple() {
         let bad = IntervalMonthDayNanoType::make_value(0, 0, 1);
         let arr: PrimitiveArray<IntervalMonthDayNanoType> = vec![bad].into();
-        let field = Field::new("f", DataType::Interval(IntervalUnit::MonthDayNano), true);
-        let mut enc = FieldEncoder::make_encoder(&arr, &field, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -2854,8 +2754,7 @@ mod tests {
         let nanos = ((u64::from(u32::MAX) + 1) * 1_000_000) as i64;
         let v = IntervalMonthDayNanoType::make_value(0, 0, nanos);
         let arr: PrimitiveArray<IntervalMonthDayNanoType> = vec![v].into();
-        let field = Field::new("f", DataType::Interval(IntervalUnit::MonthDayNano), true);
-        let mut enc = FieldEncoder::make_encoder(&arr, &field, &FieldPlan::Scalar, None).unwrap();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3007,9 +2906,7 @@ mod tests {
         // Time32(Second) must encode as Avro time-millis (ms since midnight).
         let arr: arrow_array::PrimitiveArray<arrow_array::types::Time32SecondType> =
             vec![0i32, 1, -2, 12_345].into();
-
         let got = encode_all(&arr, &FieldPlan::Scalar, None);
-
         let mut expected = Vec::new();
         for secs in [0i32, 1, -2, 12_345] {
             let millis = (secs as i64) * 1000;
@@ -3022,16 +2919,8 @@ mod tests {
     fn time32_seconds_to_millis_overflow() {
         // Choose a value that will overflow i32 when multiplied by 1000.
         let overflow_secs: i32 = i32::MAX / 1000 + 1;
-        let arr: arrow_array::PrimitiveArray<arrow_array::types::Time32SecondType> =
-            vec![overflow_secs].into();
-
-        let field = arrow_schema::Field::new(
-            "f",
-            arrow_schema::DataType::Time32(arrow_schema::TimeUnit::Second),
-            true,
-        );
-        let mut enc = FieldEncoder::make_encoder(&arr, &field, &FieldPlan::Scalar, None).unwrap();
-
+        let arr: PrimitiveArray<Time32SecondType> = vec![overflow_secs].into();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3048,11 +2937,8 @@ mod tests {
     #[test]
     fn timestamp_seconds_to_millis_encoder() {
         // Timestamp(Second) must encode as Avro timestamp-millis (ms since epoch).
-        let arr: arrow_array::PrimitiveArray<arrow_array::types::TimestampSecondType> =
-            vec![0i64, 1, -1, 1_234_567_890].into();
-
+        let arr: PrimitiveArray<TimestampSecondType> = vec![0i64, 1, -1, 1_234_567_890].into();
         let got = encode_all(&arr, &FieldPlan::Scalar, None);
-
         let mut expected = Vec::new();
         for secs in [0i64, 1, -1, 1_234_567_890] {
             let millis = secs * 1000;
@@ -3065,16 +2951,8 @@ mod tests {
     fn timestamp_seconds_to_millis_overflow() {
         // Overflow i64 when multiplied by 1000.
         let overflow_secs: i64 = i64::MAX / 1000 + 1;
-        let arr: arrow_array::PrimitiveArray<arrow_array::types::TimestampSecondType> =
-            vec![overflow_secs].into();
-
-        let field = arrow_schema::Field::new(
-            "f",
-            arrow_schema::DataType::Timestamp(arrow_schema::TimeUnit::Second, None),
-            true,
-        );
-        let mut enc = FieldEncoder::make_encoder(&arr, &field, &FieldPlan::Scalar, None).unwrap();
-
+        let arr: PrimitiveArray<TimestampSecondType> = vec![overflow_secs].into();
+        let mut enc = FieldEncoder::make_encoder(&arr, &FieldPlan::Scalar, None).unwrap();
         let mut out = Vec::new();
         let err = enc.encode(&mut out, 0).unwrap_err();
         match err {
@@ -3090,15 +2968,61 @@ mod tests {
 
     #[test]
     fn timestamp_nanos_encoder() {
-        let arr: arrow_array::PrimitiveArray<arrow_array::types::TimestampNanosecondType> =
-            vec![0i64, 1, -1, 123].into();
-
+        let arr: PrimitiveArray<TimestampNanosecondType> = vec![0i64, 1, -1, 123].into();
         let got = encode_all(&arr, &FieldPlan::Scalar, None);
-
         let mut expected = Vec::new();
         for ns in [0i64, 1, -1, 123] {
             expected.extend_from_slice(&avro_long_bytes(ns));
         }
+        assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn union_encoder_string_int_nonzero_type_ids() {
+        let strings = StringArray::from(vec!["hello", "world"]);
+        let ints = Int32Array::from(vec![10, 20, 30]);
+        let union_fields = UnionFields::new(
+            vec![2, 5],
+            vec![
+                Field::new("v_str", DataType::Utf8, true),
+                Field::new("v_int", DataType::Int32, true),
+            ],
+        );
+        let type_ids = Buffer::from_slice_ref([2_i8, 5, 5, 2, 5]);
+        let offsets = Buffer::from_slice_ref([0_i32, 0, 1, 1, 2]);
+        let union_array = UnionArray::try_new(
+            union_fields,
+            type_ids.into(),
+            Some(offsets.into()),
+            vec![Arc::new(strings), Arc::new(ints)],
+        )
+        .unwrap();
+        let plan = FieldPlan::Union {
+            bindings: vec![
+                FieldBinding {
+                    arrow_index: 0,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+                FieldBinding {
+                    arrow_index: 1,
+                    nullability: None,
+                    plan: FieldPlan::Scalar,
+                },
+            ],
+        };
+        let got = encode_all(&union_array, &plan, None);
+        let mut expected = Vec::new();
+        expected.extend(avro_long_bytes(0));
+        expected.extend(avro_len_prefixed_bytes(b"hello"));
+        expected.extend(avro_long_bytes(1));
+        expected.extend(avro_long_bytes(10));
+        expected.extend(avro_long_bytes(1));
+        expected.extend(avro_long_bytes(20));
+        expected.extend(avro_long_bytes(0));
+        expected.extend(avro_len_prefixed_bytes(b"world"));
+        expected.extend(avro_long_bytes(1));
+        expected.extend(avro_long_bytes(30));
         assert_bytes_eq(&got, &expected);
     }
 }

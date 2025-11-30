@@ -409,10 +409,11 @@ mod tests {
     };
     use arrow_array::{
         Array, ArrayRef, BinaryArray, Date32Array, Int32Array, PrimitiveArray, RecordBatch,
-        StructArray, UnionArray,
+        StringArray, StructArray, UnionArray,
     };
     #[cfg(feature = "avro_custom_types")]
-    use arrow_array::{Int16Array, Int64Array, RunArray, StringArray};
+    use arrow_array::{Int16Array, Int64Array, RunArray};
+    use arrow_schema::UnionMode;
     #[cfg(not(feature = "avro_custom_types"))]
     use arrow_schema::{DataType, Field, Schema};
     #[cfg(feature = "avro_custom_types")]
@@ -488,6 +489,236 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .expect("int column");
         assert_eq!(col, &Int32Array::from(vec![10, 20]));
+        Ok(())
+    }
+
+    #[test]
+    fn test_nullable_struct_with_nonnullable_field_sliced_encoding() {
+        use arrow_array::{ArrayRef, Int32Array, StringArray, StructArray};
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::{DataType, Field, Fields, Schema};
+        use std::sync::Arc;
+        let inner_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, false), // non-nullable
+            Field::new("name", DataType::Utf8, true), // nullable
+        ]);
+        let inner_struct_type = DataType::Struct(inner_fields.clone());
+        let schema = Schema::new(vec![
+            Field::new("before", inner_struct_type.clone(), true), // nullable struct
+            Field::new("after", inner_struct_type.clone(), true),  // nullable struct
+            Field::new("op", DataType::Utf8, false),               // non-nullable
+        ]);
+        let before_ids = Int32Array::from(vec![None, None]);
+        let before_names = StringArray::from(vec![None::<&str>, None]);
+        let before_struct = StructArray::new(
+            inner_fields.clone(),
+            vec![
+                Arc::new(before_ids) as ArrayRef,
+                Arc::new(before_names) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![false, false])),
+        );
+        let after_ids = Int32Array::from(vec![1, 2]); // non-nullable, no nulls
+        let after_names = StringArray::from(vec![Some("Alice"), Some("Bob")]);
+        let after_struct = StructArray::new(
+            inner_fields.clone(),
+            vec![
+                Arc::new(after_ids) as ArrayRef,
+                Arc::new(after_names) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![true, true])),
+        );
+        let op_col = StringArray::from(vec!["r", "r"]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(before_struct) as ArrayRef,
+                Arc::new(after_struct) as ArrayRef,
+                Arc::new(op_col) as ArrayRef,
+            ],
+        )
+        .expect("failed to create test batch");
+        let mut sink = Vec::new();
+        let mut writer = WriterBuilder::new(schema)
+            .with_fingerprint_strategy(FingerprintStrategy::Id(1))
+            .build::<_, AvroSoeFormat>(&mut sink)
+            .expect("failed to create writer");
+        for row_idx in 0..batch.num_rows() {
+            let single_row = batch.slice(row_idx, 1);
+            let after_col = single_row.column(1);
+            assert_eq!(
+                after_col.null_count(),
+                0,
+                "after column should have no nulls in sliced row"
+            );
+            writer
+                .write(&single_row)
+                .unwrap_or_else(|e| panic!("Failed to encode row {row_idx}: {e}"));
+        }
+        writer.finish().expect("failed to finish writer");
+        assert!(!sink.is_empty(), "encoded output should not be empty");
+    }
+
+    #[test]
+    fn test_nullable_struct_with_decimal_and_timestamp_sliced() {
+        use arrow_array::{
+            ArrayRef, Decimal128Array, Int32Array, StringArray, StructArray,
+            TimestampMicrosecondArray,
+        };
+        use arrow_buffer::NullBuffer;
+        use arrow_schema::{DataType, Field, Fields, Schema};
+        use std::sync::Arc;
+        let row_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("category", DataType::Utf8, true),
+            Field::new("price", DataType::Decimal128(10, 2), true),
+            Field::new("stock_quantity", DataType::Int32, true),
+            Field::new(
+                "created_at",
+                DataType::Timestamp(TimeUnit::Microsecond, None),
+                true,
+            ),
+        ]);
+        let row_struct_type = DataType::Struct(row_fields.clone());
+        let schema = Schema::new(vec![
+            Field::new("before", row_struct_type.clone(), true),
+            Field::new("after", row_struct_type.clone(), true),
+            Field::new("op", DataType::Utf8, false),
+        ]);
+        let before_struct = StructArray::new_null(row_fields.clone(), 2);
+        let ids = Int32Array::from(vec![1, 2]);
+        let names = StringArray::from(vec![Some("Widget"), Some("Gadget")]);
+        let categories = StringArray::from(vec![Some("Electronics"), Some("Electronics")]);
+        let prices = Decimal128Array::from(vec![Some(1999), Some(2999)])
+            .with_precision_and_scale(10, 2)
+            .unwrap();
+        let quantities = Int32Array::from(vec![Some(100), Some(50)]);
+        let timestamps = TimestampMicrosecondArray::from(vec![
+            Some(1700000000000000i64),
+            Some(1700000001000000i64),
+        ]);
+        let after_struct = StructArray::new(
+            row_fields.clone(),
+            vec![
+                Arc::new(ids) as ArrayRef,
+                Arc::new(names) as ArrayRef,
+                Arc::new(categories) as ArrayRef,
+                Arc::new(prices) as ArrayRef,
+                Arc::new(quantities) as ArrayRef,
+                Arc::new(timestamps) as ArrayRef,
+            ],
+            Some(NullBuffer::from(vec![true, true])),
+        );
+        let op_col = StringArray::from(vec!["r", "r"]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(before_struct) as ArrayRef,
+                Arc::new(after_struct) as ArrayRef,
+                Arc::new(op_col) as ArrayRef,
+            ],
+        )
+        .expect("failed to create products batch");
+        let mut sink = Vec::new();
+        let mut writer = WriterBuilder::new(schema)
+            .with_fingerprint_strategy(FingerprintStrategy::Id(1))
+            .build::<_, AvroSoeFormat>(&mut sink)
+            .expect("failed to create writer");
+        // Encode row by row
+        for row_idx in 0..batch.num_rows() {
+            let single_row = batch.slice(row_idx, 1);
+            writer
+                .write(&single_row)
+                .unwrap_or_else(|e| panic!("Failed to encode product row {row_idx}: {e}"));
+        }
+        writer.finish().expect("failed to finish writer");
+        assert!(!sink.is_empty());
+    }
+
+    #[test]
+    fn non_nullable_child_in_nullable_struct_should_encode_per_row() {
+        use arrow_array::{
+            ArrayRef, Int32Array, Int64Array, RecordBatch, StringArray, StructArray,
+        };
+        use arrow_schema::{DataType, Field, Fields, Schema};
+        use std::sync::Arc;
+        let row_fields = Fields::from(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+        ]);
+        let row_struct_dt = DataType::Struct(row_fields.clone());
+        let before: ArrayRef = Arc::new(StructArray::new_null(row_fields.clone(), 1));
+        let id_col: ArrayRef = Arc::new(Int32Array::from(vec![1]));
+        let name_col: ArrayRef = Arc::new(StringArray::from(vec![None::<&str>]));
+        let after: ArrayRef = Arc::new(StructArray::new(
+            row_fields.clone(),
+            vec![id_col, name_col],
+            None,
+        ));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("before", row_struct_dt.clone(), true),
+            Field::new("after", row_struct_dt, true),
+            Field::new("op", DataType::Utf8, false),
+            Field::new("ts_ms", DataType::Int64, false),
+        ]));
+        let op = Arc::new(StringArray::from(vec!["r"])) as ArrayRef;
+        let ts_ms = Arc::new(Int64Array::from(vec![1732900000000_i64])) as ArrayRef;
+        let batch = RecordBatch::try_new(schema.clone(), vec![before, after, op, ts_ms]).unwrap();
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new(schema.as_ref().clone())
+            .build::<_, AvroSoeFormat>(&mut buf)
+            .unwrap();
+        let single = batch.slice(0, 1);
+        let res = writer.write(&single);
+        assert!(
+            res.is_ok(),
+            "expected to encode successfully, got: {:?}",
+            res.err()
+        );
+    }
+
+    #[test]
+    fn test_union_nonzero_type_ids() -> Result<(), ArrowError> {
+        use arrow_array::UnionArray;
+        use arrow_buffer::Buffer;
+        use arrow_schema::UnionFields;
+        let union_fields = UnionFields::new(
+            vec![2, 5],
+            vec![
+                Field::new("v_str", DataType::Utf8, true),
+                Field::new("v_int", DataType::Int32, true),
+            ],
+        );
+        let strings = StringArray::from(vec!["hello", "world"]);
+        let ints = Int32Array::from(vec![10, 20, 30]);
+        let type_ids = Buffer::from_slice_ref([2_i8, 5, 5, 2, 5]);
+        let offsets = Buffer::from_slice_ref([0_i32, 0, 1, 1, 2]);
+        let union_array = UnionArray::try_new(
+            union_fields.clone(),
+            type_ids.into(),
+            Some(offsets.into()),
+            vec![Arc::new(strings) as ArrayRef, Arc::new(ints) as ArrayRef],
+        )?;
+        let schema = Schema::new(vec![Field::new(
+            "union_col",
+            DataType::Union(union_fields, UnionMode::Dense),
+            false,
+        )]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(union_array) as ArrayRef],
+        )?;
+        let mut writer = AvroWriter::new(Vec::<u8>::new(), schema.clone())?;
+        assert!(
+            writer.write(&batch).is_ok(),
+            "Expected no error from writing"
+        );
+        writer.finish()?;
+        assert!(
+            writer.finish().is_ok(),
+            "Expected no error from finishing writer"
+        );
         Ok(())
     }
 
