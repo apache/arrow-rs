@@ -318,7 +318,7 @@ impl<'a> IntoIterator for &'a Fields {
 }
 
 /// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Clone, Eq, Ord, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct UnionFields(Arc<[(i8, FieldRef)]>);
@@ -342,6 +342,28 @@ impl std::ops::Index<usize> for UnionFields {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
+    }
+}
+
+impl PartialEq for UnionFields {
+    fn eq(&self, other: &Self) -> bool {
+        self.len() == other.len()
+            && self.iter().all(|a| {
+                other.iter().any(|b| {
+                    a.0 == b.0
+                        && a.1.is_nullable() == b.1.is_nullable()
+                        && a.1.data_type().equals_datatype(b.1.data_type())
+                })
+            })
+    }
+}
+
+impl std::hash::Hash for UnionFields {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let mut v = self.0.iter().collect::<Vec<_>>();
+        v.sort_by_key(|(id, _)| *id);
+
+        v.hash(state);
     }
 }
 
@@ -620,5 +642,31 @@ mod tests {
         // Propagate error
         let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_union_field_equality() {
+        let ids = vec![0, 1, 2];
+        let fields = vec![
+            Field::new("a", DataType::Binary, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Int16, true),
+        ];
+
+        let u = UnionFields::new(ids.clone(), fields.clone());
+        assert_eq!(u.clone(), u.clone());
+
+        let u_rev = UnionFields::new(ids.clone().into_iter().rev(), fields.into_iter().rev());
+        assert_eq!(u, u_rev);
+
+        let fields_2 = vec![
+            Field::new("a", DataType::Binary, true),
+            Field::new("b", DataType::Utf8, true),
+            // everything is the same from `fields` except Field "c" is not nullable
+            Field::new("c", DataType::Int16, false),
+        ];
+
+        let u2 = UnionFields::new(ids.clone(), fields_2.clone());
+        assert_ne!(u, u2);
     }
 }
