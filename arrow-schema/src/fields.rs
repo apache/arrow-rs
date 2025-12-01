@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::ops::Deref;
 use std::sync::Arc;
+use std::{hash::Hash, ops::Deref};
 
 use crate::{ArrowError, DataType, Field, FieldRef};
 
@@ -358,7 +358,7 @@ impl PartialEq for UnionFields {
     }
 }
 
-impl std::hash::Hash for UnionFields {
+impl Hash for UnionFields {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         let mut v = self.0.iter().collect::<Vec<_>>();
         v.sort_by_key(|(id, _)| *id);
