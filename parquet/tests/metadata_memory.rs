@@ -18,6 +18,7 @@
 //! Tests calculation of the Parquet metadata heap size
 
 use parquet::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
+use parquet::encryption::decrypt::FileDecryptionProperties;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::fs::File;
 use std::hint::black_box;
@@ -65,23 +66,60 @@ static ALLOCATOR: TrackingAllocator = TrackingAllocator::new();
 
 #[test]
 fn test_metadata_heap_memory() {
+    // Run test cases sequentially so that heap allocations
+    // are restricted to a single test case at a time.
     let test_data = arrow::util::test_util::parquet_test_data();
-    let path = format!("{test_data}/alltypes_dictionary.parquet");
+
+    {
+        let path = format!("{test_data}/alltypes_dictionary.parquet");
+        verify_metadata_heap_memory(&path, ArrowReaderOptions::default);
+    }
+
+    {
+        let path = format!("{test_data}/encrypt_columns_plaintext_footer.parquet.encrypted");
+
+        let footer_key = b"0123456789012345";
+        let column_1_key = b"1234567890123450";
+        let column_2_key = b"1234567890123451";
+
+        // Delay creating the FileDecryptionProperties as their heap memory is included
+        // in the heap size calculation.
+        let get_options = || {
+            let decryption_properties = FileDecryptionProperties::builder(footer_key.into())
+                .with_column_key("double_field", column_1_key.into())
+                .with_column_key("float_field", column_2_key.into())
+                .build()
+                .unwrap();
+            ArrowReaderOptions::default().with_file_decryption_properties(decryption_properties)
+        };
+
+        verify_metadata_heap_memory(&path, get_options);
+    }
+}
+
+fn verify_metadata_heap_memory<F>(path: &str, get_options: F)
+where
+    F: FnOnce() -> ArrowReaderOptions,
+{
     let input_file = File::open(path).unwrap();
 
     let baseline = ALLOCATOR.bytes_allocated();
 
-    let options = ArrowReaderOptions::default();
+    let options = get_options();
     let reader_metadata = ArrowReaderMetadata::load(&input_file, options).unwrap();
     let metadata = Arc::clone(reader_metadata.metadata());
     drop(reader_metadata);
 
     let metadata_heap_size = metadata.memory_size();
 
-    let allocated = ALLOCATOR.bytes_allocated() - baseline;
-    black_box(metadata);
     let arc_overhead = std::mem::size_of::<usize>() * 2;
+    let allocated = ALLOCATOR.bytes_allocated() - baseline - arc_overhead;
+    black_box(metadata);
 
     assert!(metadata_heap_size > 0);
-    assert_eq!(metadata_heap_size + arc_overhead, allocated);
+    assert_eq!(
+        metadata_heap_size, allocated,
+        "Calculated heap size {} doesn't match allocated size {} for file {}",
+        metadata_heap_size, allocated, path
+    );
 }

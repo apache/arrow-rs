@@ -177,7 +177,7 @@ path = "./tests/encryption/mod.rs"
 
 [[test]]
 name = "metadata_memory"
-required-features = ["arrow"]
+required-features = ["arrow", "encryption"]
 path = "./tests/metadata_memory.rs"
 
 [[test]]
