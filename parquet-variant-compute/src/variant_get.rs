@@ -3778,18 +3778,18 @@ mod test {
         }
     }
 
-    perfectly_shredded_variant_array_fn!(perfectly_shredded_invalid_time_variant_array, || {
+    fn invalid_time_variant_array() -> ArrayRef {
+        let mut builder = VariantArrayBuilder::new(3);
         // 86401000000 is invalid for Time64Microsecond (max is 86400000000)
-        Time64MicrosecondArray::from(vec![
-            Some(86401000000),
-            Some(86401000000),
-            Some(86401000000),
-        ])
-    });
+        builder.append_variant(Variant::Int64(86401000000));
+        builder.append_variant(Variant::Int64(86401000000));
+        builder.append_variant(Variant::Int64(86401000000));
+        Arc::new(builder.build().into_inner())
+    }
 
     #[test]
     fn test_variant_get_error_when_cast_failure_and_safe_false() {
-        let variant_array = perfectly_shredded_invalid_time_variant_array();
+        let variant_array = invalid_time_variant_array();
 
         let field = Field::new("result", DataType::Time64(TimeUnit::Microsecond), true);
         let cast_options = CastOptions {
@@ -3802,14 +3802,15 @@ mod test {
         let err = variant_get(&variant_array, options).unwrap_err();
         assert!(
             err.to_string().contains(
-                "Cast error: Cast failed at index 0 (array type: Time64(µs)): Invalid microsecond from midnight: 86401000000"
-            )
+                "Cast error: Failed to extract primitive of type Time64(µs) from variant Int64(86401000000) at path VariantPath([])"
+            ),
+            "actual: {err}",
         );
     }
 
     #[test]
     fn test_variant_get_return_null_when_cast_failure_and_safe_true() {
-        let variant_array = perfectly_shredded_invalid_time_variant_array();
+        let variant_array = invalid_time_variant_array();
 
         let field = Field::new("result", DataType::Time64(TimeUnit::Microsecond), true);
         let cast_options = CastOptions {
