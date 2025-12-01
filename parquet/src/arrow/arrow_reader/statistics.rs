@@ -600,14 +600,14 @@ macro_rules! make_data_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $stat_value_type: ty) => {
         struct $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+            I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
         {
             iter: I,
         }
 
         impl<'a, I> $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+            I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
         {
             fn new(iter: I) -> Self {
                 Self { iter }
@@ -616,7 +616,7 @@ macro_rules! make_data_page_stats_iterator {
 
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+            I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
         {
             type Item = Vec<Option<$stat_value_type>>;
 
@@ -630,8 +630,8 @@ macro_rules! make_data_page_stats_iterator {
                         // create an arrow null-array with the length
                         // corresponding to the number of entries in
                         // `ParquetOffsetIndex` per row group per column.
-                        ColumnIndexMetaData::NONE => Some(vec![None; len]),
-                        _ => Some(<$stat_value_type>::$func(&index).collect::<Vec<_>>()),
+                        None => Some(vec![None; len]),
+                        Some(index) => Some(<$stat_value_type>::$func(index).collect::<Vec<_>>()),
                     },
                     _ => None,
                 }
@@ -690,14 +690,14 @@ macro_rules! get_decimal_page_stats_iterator {
     ($iterator_type: ident, $func: ident, $stat_value_type: ident, $convert_func: ident) => {
         struct $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+            I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
         {
             iter: I,
         }
 
         impl<'a, I> $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+            I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
         {
             fn new(iter: I) -> Self {
                 Self { iter }
@@ -706,7 +706,7 @@ macro_rules! get_decimal_page_stats_iterator {
 
         impl<'a, I> Iterator for $iterator_type<'a, I>
         where
-            I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+            I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
         {
             type Item = Vec<Option<$stat_value_type>>;
 
@@ -715,25 +715,26 @@ macro_rules! get_decimal_page_stats_iterator {
                 let next = self.iter.next();
                 match next {
                     Some((len, index)) => match index {
-                        ColumnIndexMetaData::INT32(native_index) => Some(
+                        None => Some(vec![None; len]),
+                        Some(ColumnIndexMetaData::INT32(native_index)) => Some(
                             native_index
                                 .$func()
                                 .map(|x| x.map(|x| $stat_value_type::from(*x)))
                                 .collect::<Vec<_>>(),
                         ),
-                        ColumnIndexMetaData::INT64(native_index) => Some(
+                        Some(ColumnIndexMetaData::INT64(native_index)) => Some(
                             native_index
                                 .$func()
                                 .map(|x| x.map(|x| $stat_value_type::try_from(*x).unwrap()))
                                 .collect::<Vec<_>>(),
                         ),
-                        ColumnIndexMetaData::BYTE_ARRAY(native_index) => Some(
+                        Some(ColumnIndexMetaData::BYTE_ARRAY(native_index)) => Some(
                             native_index
                                 .$func()
                                 .map(|x| x.map(|x| $convert_func(x)))
                                 .collect::<Vec<_>>(),
                         ),
-                        ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(native_index) => Some(
+                        Some(ColumnIndexMetaData::FIXED_LEN_BYTE_ARRAY(native_index)) => Some(
                             native_index
                                 .$func()
                                 .map(|x| x.map(|x| $convert_func(x)))
@@ -1116,7 +1117,7 @@ pub(crate) fn min_page_statistics<'a, I>(
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+    I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
 {
     get_data_page_statistics!(Min, data_type, iterator, physical_type)
 }
@@ -1129,7 +1130,7 @@ pub(crate) fn max_page_statistics<'a, I>(
     physical_type: Option<PhysicalType>,
 ) -> Result<ArrayRef>
 where
-    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+    I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
 {
     get_data_page_statistics!(Max, data_type, iterator, physical_type)
 }
@@ -1140,11 +1141,11 @@ where
 /// The returned Array is an [`UInt64Array`]
 pub(crate) fn null_counts_page_statistics<'a, I>(iterator: I) -> Result<UInt64Array>
 where
-    I: Iterator<Item = (usize, &'a ColumnIndexMetaData)>,
+    I: Iterator<Item = (usize, &'a Option<ColumnIndexMetaData>)>,
 {
     let iter = iterator.flat_map(|(len, index)| match index {
-        ColumnIndexMetaData::NONE => vec![None; len],
-        column_index => column_index.null_counts().map_or(vec![None; len], |v| {
+        None => vec![None; len],
+        Some(column_index) => column_index.null_counts().map_or(vec![None; len], |v| {
             v.iter().map(|i| Some(*i as u64)).collect::<Vec<_>>()
         }),
     });
@@ -1533,11 +1534,15 @@ impl<'a> StatisticsConverter<'a> {
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
                 &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
-                .page_locations()
-                .len();
+            let num_data_pages = if let Some(ci) = column_page_index_per_row_group_per_column {
+                ci.num_pages() as usize
+            } else if let Some(oi) = &column_offset_index[*rg_index][parquet_index] {
+                oi.page_locations().len()
+            } else {
+                0
+            };
 
-            (*num_data_pages, column_page_index_per_row_group_per_column)
+            (num_data_pages, column_page_index_per_row_group_per_column)
         });
 
         min_page_statistics(data_type, iter, self.physical_type)
@@ -1564,11 +1569,15 @@ impl<'a> StatisticsConverter<'a> {
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
                 &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
-                .page_locations()
-                .len();
+            let num_data_pages = if let Some(ci) = column_page_index_per_row_group_per_column {
+                ci.num_pages() as usize
+            } else if let Some(oi) = &column_offset_index[*rg_index][parquet_index] {
+                oi.page_locations().len()
+            } else {
+                0
+            };
 
-            (*num_data_pages, column_page_index_per_row_group_per_column)
+            (num_data_pages, column_page_index_per_row_group_per_column)
         });
 
         max_page_statistics(data_type, iter, self.physical_type)
@@ -1597,11 +1606,15 @@ impl<'a> StatisticsConverter<'a> {
         let iter = row_group_indices.into_iter().map(|rg_index| {
             let column_page_index_per_row_group_per_column =
                 &column_page_index[*rg_index][parquet_index];
-            let num_data_pages = &column_offset_index[*rg_index][parquet_index]
-                .page_locations()
-                .len();
+            let num_data_pages = if let Some(ci) = column_page_index_per_row_group_per_column {
+                ci.num_pages() as usize
+            } else if let Some(oi) = &column_offset_index[*rg_index][parquet_index] {
+                oi.page_locations().len()
+            } else {
+                0
+            };
 
-            (*num_data_pages, column_page_index_per_row_group_per_column)
+            (num_data_pages, column_page_index_per_row_group_per_column)
         });
         null_counts_page_statistics(iter)
     }
@@ -1641,22 +1654,25 @@ impl<'a> StatisticsConverter<'a> {
 
         let mut row_count_total = Vec::new();
         for rg_idx in row_group_indices {
-            let page_locations = &column_offset_index[*rg_idx][parquet_index].page_locations();
+            if let Some(oi) = &column_offset_index[*rg_idx][parquet_index] {
+                let page_locations = oi.page_locations();
 
-            let row_count_per_page = page_locations
-                .windows(2)
-                .map(|loc| Some(loc[1].first_row_index as u64 - loc[0].first_row_index as u64));
+                let row_count_per_page = page_locations
+                    .windows(2)
+                    .map(|loc| Some(loc[1].first_row_index as u64 - loc[0].first_row_index as u64));
 
-            // append the last page row count
-            let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
-            let row_count_per_page = row_count_per_page
-                .chain(std::iter::once(Some(
-                    *num_rows_in_row_group as u64
-                        - page_locations.last().unwrap().first_row_index as u64,
-                )))
-                .collect::<Vec<_>>();
+                // append the last page row count
+                let num_rows_in_row_group = &row_group_metadatas[*rg_idx].num_rows();
+                let row_count_per_page = row_count_per_page
+                    .chain(std::iter::once(Some(
+                        *num_rows_in_row_group as u64
+                            - page_locations.last().unwrap().first_row_index as u64,
+                    )))
+                    .collect::<Vec<_>>();
 
-            row_count_total.extend(row_count_per_page);
+                row_count_total.extend(row_count_per_page);
+            }
+            // else skip
         }
 
         Ok(Some(UInt64Array::from_iter(row_count_total)))
