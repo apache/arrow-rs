@@ -478,7 +478,7 @@ impl VariantSchemaNode {
 
     fn to_shredding_field(&self, name: &str) -> Option<FieldRef> {
         self.to_shredding_type()
-            .map(|data_type| Arc::new(Field::new(name, data_type, false)))
+            .map(|data_type| Arc::new(Field::new(name, data_type, true)))
     }
 }
 
@@ -1386,16 +1386,13 @@ mod tests {
             .with_path("b", &DataType::Float64)
             .build();
 
-        match shredding_type {
-            DataType::Struct(fields) => {
-                assert_eq!(fields.len(), 2);
-                assert_eq!(fields[0].name(), "a");
-                assert_eq!(fields[0].data_type(), &DataType::Int64);
-                assert_eq!(fields[1].name(), "b");
-                assert_eq!(fields[1].data_type(), &DataType::Float64);
-            }
-            _ => panic!("Expected Struct type"),
-        }
+        assert_eq!(
+            shredding_type,
+            DataType::Struct(Fields::from(vec![
+                Field::new("a", DataType::Int64, true),
+                Field::new("b", DataType::Float64, true),
+            ]))
+        );
     }
 
     #[test]
@@ -1409,14 +1406,14 @@ mod tests {
         assert_eq!(
             shredding_type,
             DataType::Struct(Fields::from(vec![
-                Field::new("a", DataType::Int64, false),
+                Field::new("a", DataType::Int64, true),
                 Field::new(
                     "b",
                     DataType::Struct(Fields::from(vec![
-                        Field::new("c", DataType::Utf8, false),
-                        Field::new("d", DataType::Float64, false),
+                        Field::new("c", DataType::Utf8, true),
+                        Field::new("d", DataType::Float64, true),
                     ])),
-                    false
+                    true
                 ),
             ]))
         );
@@ -1533,7 +1530,7 @@ mod tests {
             DataType::Struct(Fields::from(vec![Field::new(
                 "a",
                 DataType::Float64,
-                false
+                true
             ),]))
         );
     }
