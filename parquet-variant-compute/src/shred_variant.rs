@@ -1527,11 +1527,9 @@ mod tests {
 
         assert_eq!(
             shredding_type,
-            DataType::Struct(Fields::from(vec![Field::new(
-                "a",
-                DataType::Float64,
-                true
-            ),]))
+            DataType::Struct(Fields::from(
+                vec![Field::new("a", DataType::Float64, true),]
+            ))
         );
     }
 
