@@ -133,6 +133,34 @@ where
     }
 }
 
+struct GenerateStringView<T: ByteViewType> {
+    str_len: usize,
+    description: String,
+    _marker: std::marker::PhantomData<T>,
+}
+
+impl InputGenerator for GenerateStringView<StringViewType> {
+    fn name(&self) -> &str {
+        self.description.as_str()
+    }
+    fn generate_scalar_with_null_value(&self) -> ArrayRef {
+        new_null_array(&DataType::Utf8View, 1)
+    }
+
+    fn generate_non_null_scalars(&self, seed: u64, number_of_scalars: usize) -> Vec<ArrayRef> {
+        let array = self.generate_array(seed, number_of_scalars, 0.0);
+        (0..number_of_scalars).map(|i| array.slice(i, 1)).collect()
+    }
+
+    fn generate_array(&self, _seed: u64, array_length: usize, null_percentage: f32) -> ArrayRef {
+        Arc::new(create_string_view_array_with_fixed_len(
+            array_length,
+            null_percentage,
+            self.str_len,
+        ))
+    }
+}
+
 fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
     vec![
         ("all_true", create_boolean_array(len, 0.0, 1.0)),
@@ -145,10 +173,9 @@ fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
         ("50pct_nulls", create_boolean_array(len, 0.5, 0.5)),
     ]
 }
+const ARRAY_LEN: usize = 8192;
 
 fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputGenerator) {
-    const ARRAY_LEN: usize = 8192;
-
     let mut group =
         c.benchmark_group(format!("zip_{ARRAY_LEN}_from_{}", input_generator.name()).as_str());
 
@@ -224,6 +251,54 @@ fn bench_zip_input_on_all_masks(
     }
 }
 
+fn bench_zip_on_input_generators_for_scalars(
+    c: &mut Criterion,
+    input_generator_1: &impl InputGenerator,
+    input_generator_2: &impl InputGenerator,
+) {
+    let mut group = c.benchmark_group(
+        format!(
+            "zip_{ARRAY_LEN}_from_{} vs {}",
+            input_generator_1.name(),
+            input_generator_2.name()
+        )
+        .as_str(),
+    );
+
+    let null_scalar = input_generator_1.generate_scalar_with_null_value();
+
+    let [non_null_scalar_1]: [_; 1] = input_generator_1
+        .generate_non_null_scalars(42, 1)
+        .try_into()
+        .unwrap();
+
+    let [non_null_scalar_2]: [_; 1] = input_generator_2
+        .generate_non_null_scalars(18, 1)
+        .try_into()
+        .unwrap();
+
+    let masks = mask_cases(ARRAY_LEN);
+
+    for (description, truthy, falsy) in &[
+        ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
+        (
+            "non_null_scalar_vs_null_scalar",
+            &non_null_scalar_1,
+            &null_scalar,
+        ),
+        ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
+    ] {
+        bench_zip_input_on_all_masks(
+            description,
+            &mut group,
+            &masks,
+            &Scalar::new(truthy),
+            &Scalar::new(falsy),
+        );
+    }
+    group.finish();
+}
+
 fn add_benchmark(c: &mut Criterion) {
     // Primitive
     bench_zip_on_input_generator(
@@ -270,6 +345,88 @@ fn add_benchmark(c: &mut Criterion) {
         &GenerateBytes::<GenericBinaryType<i32>> {
             description: "long bytes (100..400)".to_string(),
             range_length: 100..400,
+            _marker: std::marker::PhantomData,
+        },
+    );
+
+    bench_zip_on_input_generators_for_scalars(
+        c,
+        &GenerateStringView {
+            description: "string views size 3".to_string(),
+            str_len: 3,
+            _marker: std::marker::PhantomData,
+        },
+        &GenerateStringView {
+            description: "3".to_string(),
+            str_len: 3,
+            _marker: std::marker::PhantomData,
+        },
+    );
+
+    bench_zip_on_input_generators_for_scalars(
+        c,
+        &GenerateStringView {
+            description: "string views size 3".to_string(),
+            str_len: 3,
+            _marker: std::marker::PhantomData,
+        },
+        &GenerateStringView {
+            description: "10".to_string(),
+            str_len: 10,
+            _marker: std::marker::PhantomData,
+        },
+    );
+
+    bench_zip_on_input_generators_for_scalars(
+        c,
+        &GenerateStringView {
+            description: "string views size 3".to_string(),
+            str_len: 3,
+            _marker: std::marker::PhantomData,
+        },
+        &GenerateStringView {
+            description: "400".to_string(),
+            str_len: 400,
+            _marker: std::marker::PhantomData,
+        },
+    );
+
+    bench_zip_on_input_generators_for_scalars(
+        c,
+        &GenerateStringView {
+            description: "string views size 10".to_string(),
+            str_len: 10,
+            _marker: std::marker::PhantomData,
+        },
+        &GenerateStringView {
+            description: "10".to_string(),
+            str_len: 10,
+            _marker: std::marker::PhantomData,
+        },
+    );
+    bench_zip_on_input_generators_for_scalars(
+        c,
+        &GenerateStringView {
+            description: "string views size 10".to_string(),
+            str_len: 10,
+            _marker: std::marker::PhantomData,
+        },
+        &GenerateStringView {
+            description: "400".to_string(),
+            str_len: 400,
+            _marker: std::marker::PhantomData,
+        },
+    );
+    bench_zip_on_input_generators_for_scalars(
+        c,
+        &GenerateStringView {
+            description: "string views size 400".to_string(),
+            str_len: 400,
+            _marker: std::marker::PhantomData,
+        },
+        &GenerateStringView {
+            description: "400".to_string(),
+            str_len: 400,
             _marker: std::marker::PhantomData,
         },
     );
