@@ -693,10 +693,7 @@ mod tests {
     fn build_variant_array(rows: Vec<VariantRow<'static>>) -> VariantArray {
         let mut builder = VariantArrayBuilder::new(rows.len());
 
-        fn append_variant_value<'a, B>(builder: &mut B, value: VariantValue<'a>)
-        where
-            B: parquet_variant::VariantBuilderExt,
-        {
+        fn append_variant_value<B: VariantBuilderExt>(builder: &mut B, value: VariantValue) {
             match value {
                 VariantValue::Value(v) => builder.append_value(v),
                 VariantValue::List(values) => {
