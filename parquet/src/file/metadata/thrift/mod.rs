@@ -1345,7 +1345,6 @@ pub(super) fn serialize_column_meta_data<W: Write>(
         last_field_id = dictionary_page_offset.write_thrift_field(w, 11, last_field_id)?;
     }
 
-    // Only write statistics to plaintext footer if column is not encrypted
     if should_write_column_stats(column_chunk) {
         // PageStatistics is the same as thrift Statistics, but writable
         let stats = page_stats_to_thrift(column_chunk.statistics());
