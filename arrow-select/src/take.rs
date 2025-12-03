@@ -24,8 +24,8 @@ use arrow_array::cast::AsArray;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::{
-    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
-    bit_util,
+    bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer,
+    ScalarBuffer,
 };
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
@@ -703,10 +703,13 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
 ) -> Result<FixedSizeBinaryArray, ArrowError> {
     let nulls = values.nulls();
     let array_iter = indices
-        .values()
         .iter()
         .map(|idx| {
-            let idx = maybe_usize::<IndexType::Native>(*idx)?;
+            let Some(idx) = idx else {
+                return Ok(None);
+            };
+
+            let idx = maybe_usize::<IndexType::Native>(idx)?;
             if nulls.map(|n| n.is_valid(idx)).unwrap_or(true) {
                 Ok(Some(values.value(idx)))
             } else {
@@ -2076,6 +2079,32 @@ mod tests {
                 None,
                 Some(vec![Some(10), Some(11), Some(12)]),
             ],
+        );
+    }
+
+    #[test]
+    fn test_take_fixed_size_binary_with_nulls_indices() {
+        let fsb = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            [
+                Some(vec![0x01, 0x01, 0x01, 0x01]),
+                Some(vec![0x02, 0x02, 0x02, 0x02]),
+                Some(vec![0x03, 0x03, 0x03, 0x03]),
+                Some(vec![0x04, 0x04, 0x04, 0x04]),
+            ]
+            .into_iter(),
+            4,
+        )
+        .unwrap();
+
+        // The two middle indices are null -> Should be null in the output.
+        let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
+
+        let result = take_fixed_size_binary(&fsb, &indices, 4).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(
+            result.nulls().unwrap().iter().collect::<Vec<_>>(),
+            vec![true, false, false, true]
         );
     }
 
