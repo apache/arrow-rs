@@ -1132,12 +1132,24 @@ pub enum ColumnOrder {
 
 impl ColumnOrder {
     /// Returns sort order for a physical/logical type.
+    #[deprecated(
+        since = "57.1.0",
+        note = "use `ColumnOrder::sort_order_for_type` instead"
+    )]
     pub fn get_sort_order(
         logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
     ) -> SortOrder {
-        // TODO: Should this take converted and logical type, for compatibility?
+        Self::sort_order_for_type(logical_type.as_ref(), converted_type, physical_type)
+    }
+
+    /// Returns sort order for a physical/logical type.
+    pub fn sort_order_for_type(
+        logical_type: Option<&LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+    ) -> SortOrder {
         match logical_type {
             Some(logical) => match logical {
                 LogicalType::String | LogicalType::Enum | LogicalType::Json | LogicalType::Bson => {

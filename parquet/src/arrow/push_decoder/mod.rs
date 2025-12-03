@@ -37,8 +37,7 @@ use std::sync::Arc;
 
 /// A builder for [`ParquetPushDecoder`].
 ///
-/// To create a new decoder, use [`ParquetPushDecoderBuilder::try_new_decoder`] and pass
-/// the file length and metadata of the Parquet file to decode.
+/// To create a new decoder, use [`ParquetPushDecoderBuilder::try_new_decoder`].
 ///
 /// You can decode the metadata from a Parquet file using either
 /// [`ParquetMetadataReader`] or [`ParquetMetaDataPushDecoder`].
@@ -175,6 +174,7 @@ impl ParquetPushDecoderBuilder {
             limit,
             offset,
             metrics,
+            row_selection_policy,
             max_predicate_cache_size,
         } = self;
 
@@ -196,6 +196,7 @@ impl ParquetPushDecoderBuilder {
             metrics,
             max_predicate_cache_size,
             buffers,
+            row_selection_policy,
         );
 
         // Initialize the decoder with the configured options

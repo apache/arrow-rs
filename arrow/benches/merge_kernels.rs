@@ -26,7 +26,7 @@ use std::sync::Arc;
 use arrow::array::*;
 use arrow::datatypes::*;
 use arrow::util::bench_util::*;
-use arrow_select::zip::zip;
+use arrow_select::merge::merge;
 
 trait InputGenerator {
     fn name(&self) -> &str;
@@ -37,7 +37,7 @@ trait InputGenerator {
     /// Generate a `number_of_scalars` unique scalars
     fn generate_non_null_scalars(&self, seed: u64, number_of_scalars: usize) -> Vec<ArrayRef>;
 
-    /// Generate array with specified length and null percentage
+    /// Generate an array with the specified length and null percentage
     fn generate_array(&self, seed: u64, array_length: usize, null_percentage: f32) -> ArrayRef;
 }
 
@@ -146,11 +146,11 @@ fn mask_cases(len: usize) -> Vec<(&'static str, BooleanArray)> {
     ]
 }
 
-fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputGenerator) {
+fn bench_merge_on_input_generator(c: &mut Criterion, input_generator: &impl InputGenerator) {
     const ARRAY_LEN: usize = 8192;
 
     let mut group =
-        c.benchmark_group(format!("zip_{ARRAY_LEN}_from_{}", input_generator.name()).as_str());
+        c.benchmark_group(format!("merge_{ARRAY_LEN}_from_{}", input_generator.name()).as_str());
 
     let null_scalar = input_generator.generate_scalar_with_null_value();
     let [non_null_scalar_1, non_null_scalar_2]: [_; 2] = input_generator
@@ -158,6 +158,7 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
         .try_into()
         .unwrap();
 
+    // For simplicity, we generate arrays with length ARRAY_LEN. Not all input values will be used.
     let array_1_10pct_nulls = input_generator.generate_array(42, ARRAY_LEN, 0.1);
     let array_2_10pct_nulls = input_generator.generate_array(18, ARRAY_LEN, 0.1);
 
@@ -173,7 +174,7 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
         ),
         ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
     ] {
-        bench_zip_input_on_all_masks(
+        bench_merge_input_on_all_masks(
             description,
             &mut group,
             &masks,
@@ -182,7 +183,7 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
         );
     }
 
-    bench_zip_input_on_all_masks(
+    bench_merge_input_on_all_masks(
         "array_vs_non_null_scalar",
         &mut group,
         &masks,
@@ -190,7 +191,7 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
         &non_null_scalar_1,
     );
 
-    bench_zip_input_on_all_masks(
+    bench_merge_input_on_all_masks(
         "non_null_scalar_vs_array",
         &mut group,
         &masks,
@@ -198,7 +199,7 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
         &array_1_10pct_nulls,
     );
 
-    bench_zip_input_on_all_masks(
+    bench_merge_input_on_all_masks(
         "array_vs_array",
         &mut group,
         &masks,
@@ -209,7 +210,7 @@ fn bench_zip_on_input_generator(c: &mut Criterion, input_generator: &impl InputG
     group.finish();
 }
 
-fn bench_zip_input_on_all_masks(
+fn bench_merge_input_on_all_masks(
     description: &str,
     group: &mut BenchmarkGroup<WallTime>,
     masks: &[(&str, BooleanArray)],
@@ -219,14 +220,14 @@ fn bench_zip_input_on_all_masks(
     for (mask_description, mask) in masks {
         let id = BenchmarkId::new(description, mask_description);
         group.bench_with_input(id, mask, |b, mask| {
-            b.iter(|| hint::black_box(zip(mask, truthy, falsy)))
+            b.iter(|| hint::black_box(merge(mask, truthy, falsy)))
         });
     }
 }
 
 fn add_benchmark(c: &mut Criterion) {
     // Primitive
-    bench_zip_on_input_generator(
+    bench_merge_on_input_generator(
         c,
         &GeneratePrimitive::<Int32Type> {
             description: "i32".to_string(),
@@ -235,7 +236,7 @@ fn add_benchmark(c: &mut Criterion) {
     );
 
     // Short strings
-    bench_zip_on_input_generator(
+    bench_merge_on_input_generator(
         c,
         &GenerateBytes::<GenericStringType<i32>> {
             description: "short strings (3..10)".to_string(),
@@ -245,7 +246,7 @@ fn add_benchmark(c: &mut Criterion) {
     );
 
     // Long strings
-    bench_zip_on_input_generator(
+    bench_merge_on_input_generator(
         c,
         &GenerateBytes::<GenericStringType<i32>> {
             description: "long strings (100..400)".to_string(),
@@ -255,7 +256,7 @@ fn add_benchmark(c: &mut Criterion) {
     );
 
     // Short Bytes
-    bench_zip_on_input_generator(
+    bench_merge_on_input_generator(
         c,
         &GenerateBytes::<GenericBinaryType<i32>> {
             description: "short bytes (3..10)".to_string(),
@@ -265,7 +266,7 @@ fn add_benchmark(c: &mut Criterion) {
     );
 
     // Long Bytes
-    bench_zip_on_input_generator(
+    bench_merge_on_input_generator(
         c,
         &GenerateBytes::<GenericBinaryType<i32>> {
             description: "long bytes (100..400)".to_string(),

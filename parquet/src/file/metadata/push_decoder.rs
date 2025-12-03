@@ -21,11 +21,12 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::{MetadataParser, parse_column_index, parse_offset_index};
-use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData};
+use crate::file::metadata::{FooterTail, PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions};
 use crate::file::page_index::index_reader::acc_range;
 use crate::file::reader::ChunkReader;
 use bytes::Bytes;
 use std::ops::Range;
+use std::sync::Arc;
 
 /// A push decoder for [`ParquetMetaData`].
 ///
@@ -296,6 +297,12 @@ impl ParquetMetaDataPushDecoder {
     /// Set the policy for reading the OffsetIndex (part of the PageIndex)
     pub fn with_offset_index_policy(mut self, offset_index_policy: PageIndexPolicy) -> Self {
         self.offset_index_policy = offset_index_policy;
+        self
+    }
+
+    /// Set the options to use when decoding the Parquet metadata.
+    pub fn with_metadata_options(mut self, options: Option<Arc<ParquetMetaDataOptions>>) -> Self {
+        self.metadata_parser = self.metadata_parser.with_metadata_options(options);
         self
     }
 

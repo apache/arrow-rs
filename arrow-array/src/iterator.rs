@@ -56,7 +56,7 @@ impl<T: ArrayAccessor> ArrayIter<T> {
     /// create a new iterator
     pub fn new(array: T) -> Self {
         let len = array.len();
-        let logical_nulls = array.logical_nulls();
+        let logical_nulls = array.logical_nulls().filter(|x| x.null_count() > 0);
         ArrayIter {
             array,
             logical_nulls,
@@ -102,6 +102,38 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
             Some(self.current_end - self.current),
         )
     }
+
+    #[inline]
+    fn nth(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we can advance to the desired offset
+        match self.current.checked_add(n) {
+            // Yes, and still within bounds
+            Some(new_current) if new_current < self.current_end => {
+                self.current = new_current;
+            }
+
+            // Either overflow or would exceed current_end
+            _ => {
+                self.current = self.current_end;
+                return None;
+            }
+        }
+
+        self.next()
+    }
+
+    #[inline]
+    fn last(mut self) -> Option<Self::Item> {
+        self.next_back()
+    }
+
+    #[inline]
+    fn count(self) -> usize
+    where
+        Self: Sized,
+    {
+        self.len()
+    }
 }
 
 impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
@@ -121,6 +153,25 @@ impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
                 unsafe { Some(self.array.value_unchecked(self.current_end)) }
             })
         }
+    }
+
+    #[inline]
+    fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
+        // Check if we advance to the one before the desired offset
+        match self.current_end.checked_sub(n) {
+            // Yes, and still within bounds
+            Some(new_offset) if self.current < new_offset => {
+                self.current_end = new_offset;
+            }
+
+            // Either underflow or would exceed current
+            _ => {
+                self.current = self.current_end;
+                return None;
+            }
+        }
+
+        self.next_back()
     }
 }
 

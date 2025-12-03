@@ -400,7 +400,7 @@ impl Printer<'_> {
                 // Also print logical type if it is available
                 // If there is a logical type, do not print converted type
                 let logical_type_str = print_logical_and_converted(
-                    basic_info.logical_type().as_ref(),
+                    basic_info.logical_type_ref(),
                     basic_info.converted_type(),
                     precision,
                     scale,
@@ -426,7 +426,7 @@ impl Printer<'_> {
                         write!(self.output, "[{}] ", basic_info.id());
                     }
                     let logical_str = print_logical_and_converted(
-                        basic_info.logical_type().as_ref(),
+                        basic_info.logical_type_ref(),
                         basic_info.converted_type(),
                         0,
                         0,

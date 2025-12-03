@@ -66,28 +66,21 @@ fn test_read_logical_type() {
 
     for (geospatial_file, expected_type) in expected_logical_type {
         let metadata = read_metadata(geospatial_file);
-        let logical_type = metadata
-            .file_metadata()
-            .schema_descr()
-            .column(1)
-            .logical_type()
-            .unwrap();
+        let column_descr = metadata.file_metadata().schema_descr().column(1);
+        let logical_type = column_descr.logical_type_ref().unwrap();
 
-        assert_eq!(logical_type, expected_type);
+        assert_eq!(logical_type, &expected_type);
     }
 
     // The crs value may also contain arbitrary values (in this case some JSON
     // a bit too lengthy to type out)
     let metadata = read_metadata("crs-arbitrary-value.parquet");
-    let logical_type = metadata
-        .file_metadata()
-        .schema_descr()
-        .column(1)
-        .logical_type()
-        .unwrap();
+    let column_descr = metadata.file_metadata().schema_descr().column(1);
+    let logical_type = column_descr.logical_type_ref().unwrap();
 
     if let LogicalType::Geometry { crs } = logical_type {
-        let crs_parsed: Value = serde_json::from_str(&crs.unwrap()).unwrap();
+        let crs = crs.as_ref();
+        let crs_parsed: Value = serde_json::from_str(crs.unwrap()).unwrap();
         assert_eq!(crs_parsed.get("id").unwrap().get("code").unwrap(), 5070);
     } else {
         panic!("Expected geometry type but got {logical_type:?}");
@@ -103,8 +96,8 @@ fn test_read_geospatial_statistics() {
     //    optional binary field_id=-1 wkt (String);
     //    optional binary field_id=-1 geometry (Geometry(crs=));
     let fields = metadata.file_metadata().schema().get_fields();
-    let logical_type = fields[2].get_basic_info().logical_type().unwrap();
-    assert_eq!(logical_type, LogicalType::Geometry { crs: None });
+    let logical_type = fields[2].get_basic_info().logical_type_ref().unwrap();
+    assert_eq!(logical_type, &LogicalType::Geometry { crs: None });
 
     let geo_statistics = metadata.row_group(0).column(2).geo_statistics();
     assert!(geo_statistics.is_some());

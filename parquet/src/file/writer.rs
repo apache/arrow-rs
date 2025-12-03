@@ -1068,6 +1068,7 @@ mod tests {
     use crate::schema::parser::parse_message_type;
     use crate::schema::types;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
+    use crate::util::test_common::file_util::get_test_file;
     use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
@@ -2441,5 +2442,75 @@ mod tests {
             };
             start += 1;
         }
+    }
+
+    #[test]
+    fn test_rewrite_no_page_indexes() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Optional)
+            .parse_and_finish(&file)
+            .unwrap();
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let schema = metadata.file_metadata().schema_descr().root_schema_ptr();
+        let output = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
+
+        for rg in metadata.row_groups() {
+            let mut rg_out = writer.next_row_group().unwrap();
+            for column in rg.columns() {
+                let result = ColumnCloseResult {
+                    bytes_written: column.compressed_size() as _,
+                    rows_written: rg.num_rows() as _,
+                    metadata: column.clone(),
+                    bloom_filter: None,
+                    column_index: None,
+                    offset_index: None,
+                };
+                rg_out.append_column(&file, result).unwrap();
+            }
+            rg_out.close().unwrap();
+        }
+        writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_rewrite_missing_column_index() {
+        // this file has an INT96 column that lacks a column index entry
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Optional)
+            .parse_and_finish(&file)
+            .unwrap();
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let schema = metadata.file_metadata().schema_descr().root_schema_ptr();
+        let output = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
+
+        let column_indexes = metadata.column_index();
+        let offset_indexes = metadata.offset_index();
+
+        for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
+            let rg_column_indexes = column_indexes.and_then(|ci| ci.get(rg_idx));
+            let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
+            let mut rg_out = writer.next_row_group().unwrap();
+            for (col_idx, column) in rg.columns().iter().enumerate() {
+                let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
+                let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
+                let result = ColumnCloseResult {
+                    bytes_written: column.compressed_size() as _,
+                    rows_written: rg.num_rows() as _,
+                    metadata: column.clone(),
+                    bloom_filter: None,
+                    column_index,
+                    offset_index,
+                };
+                rg_out.append_column(&file, result).unwrap();
+            }
+            rg_out.close().unwrap();
+        }
+        writer.close().unwrap();
     }
 }

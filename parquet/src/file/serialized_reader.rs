@@ -38,7 +38,7 @@ use crate::parquet_thrift::ThriftSliceInputProtocol;
 use crate::parquet_thrift::{ReadThrift, ThriftReadInputProtocol};
 use crate::record::Row;
 use crate::record::reader::RowIter;
-use crate::schema::types::Type as SchemaType;
+use crate::schema::types::{SchemaDescPtr, Type as SchemaType};
 use bytes::Bytes;
 use std::collections::VecDeque;
 use std::{fs::File, io::Read, path::Path, sync::Arc};
@@ -110,6 +110,7 @@ pub struct ReadOptionsBuilder {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: Option<ReaderProperties>,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl ReadOptionsBuilder {
@@ -152,6 +153,13 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Provide a Parquet schema to use when decoding the metadata. The schema in the Parquet
+    /// footer will be skipped.
+    pub fn with_parquet_schema(mut self, schema: SchemaDescPtr) -> Self {
+        self.metadata_options.set_schema(schema);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -161,18 +169,20 @@ impl ReadOptionsBuilder {
             predicates: self.predicates,
             enable_page_index: self.enable_page_index,
             props,
+            metadata_options: self.metadata_options,
         }
     }
 }
 
 /// A collection of options for reading a Parquet file.
 ///
-/// Currently, only predicates on row group metadata are supported.
+/// Predicates are currently only supported on row group metadata.
 /// All predicates will be chained using 'AND' to filter the row groups.
 pub struct ReadOptions {
     predicates: Vec<ReadGroupPredicate>,
     enable_page_index: bool,
     props: ReaderProperties,
+    metadata_options: ParquetMetaDataOptions,
 }
 
 impl<R: 'static + ChunkReader> SerializedFileReader<R> {
@@ -193,6 +203,7 @@ impl<R: 'static + ChunkReader> SerializedFileReader<R> {
     #[allow(deprecated)]
     pub fn new_with_options(chunk_reader: R, options: ReadOptions) -> Result<Self> {
         let mut metadata_builder = ParquetMetaDataReader::new()
+            .with_metadata_options(Some(options.metadata_options.clone()))
             .parse_and_finish(&chunk_reader)?
             .into_builder();
         let mut predicates = options.predicates;
@@ -2698,18 +2709,38 @@ mod tests {
     }
 
     #[test]
+    fn test_reuse_schema() {
+        let file = get_test_file("alltypes_plain.parquet");
+        let file_reader = SerializedFileReader::new(file.try_clone().unwrap()).unwrap();
+        let schema = file_reader.metadata().file_metadata().schema_descr_ptr();
+        let expected = file_reader.metadata;
+
+        let options = ReadOptionsBuilder::new()
+            .with_parquet_schema(schema)
+            .build();
+        let file_reader = SerializedFileReader::new_with_options(file, options).unwrap();
+
+        assert_eq!(expected.as_ref(), file_reader.metadata.as_ref());
+        // Should have used the same schema instance
+        assert!(Arc::ptr_eq(
+            &expected.file_metadata().schema_descr_ptr(),
+            &file_reader.metadata.file_metadata().schema_descr_ptr()
+        ));
+    }
+
+    #[test]
     fn test_read_unknown_logical_type() {
         let file = get_test_file("unknown-logical-type.parquet");
         let reader = SerializedFileReader::new(file).expect("Error opening file");
 
         let schema = reader.metadata().file_metadata().schema_descr();
         assert_eq!(
-            schema.column(0).logical_type(),
-            Some(basic::LogicalType::String)
+            schema.column(0).logical_type_ref(),
+            Some(&basic::LogicalType::String)
         );
         assert_eq!(
-            schema.column(1).logical_type(),
-            Some(basic::LogicalType::_Unknown { field_id: 2555 })
+            schema.column(1).logical_type_ref(),
+            Some(&basic::LogicalType::_Unknown { field_id: 2555 })
         );
         assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
 

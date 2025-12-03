@@ -20,7 +20,7 @@ use crate::arrow::array_reader::RowGroups;
 use crate::arrow::arrow_reader::RowSelection;
 use crate::column::page::{PageIterator, PageReader};
 use crate::errors::ParquetError;
-use crate::file::metadata::ParquetMetaData;
+use crate::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, Length, SerializedPageReader};
 use bytes::{Buf, Bytes};
@@ -226,6 +226,14 @@ impl RowGroups for InMemoryRowGroup<'_> {
             }
         }
     }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(std::iter::once(self.metadata.row_group(self.row_group_idx)))
+    }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        self.metadata
+    }
 }
 
 /// An in-memory column chunk.
@@ -258,7 +266,9 @@ impl ColumnChunkData {
                 .map(|idx| data[idx].1.clone())
                 .map_err(|_| {
                     ParquetError::General(format!(
-                        "Invalid offset in sparse column chunk data: {start}"
+                        "Invalid offset in sparse column chunk data: {start}, no matching page found.\
+                         If you are using a `SelectionStrategyPolicy::Mask`, ensure that the OffsetIndex is provided when \
+                         creating the InMemoryRowGroup."
                     ))
                 }),
             ColumnChunkData::Dense { offset, data } => {

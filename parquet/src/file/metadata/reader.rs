@@ -20,9 +20,14 @@ use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
 use crate::file::FOOTER_SIZE;
 use crate::file::metadata::parser::decode_metadata;
-use crate::file::metadata::{FooterTail, ParquetMetaData, ParquetMetaDataPushDecoder};
+use crate::file::metadata::thrift::parquet_schema_from_bytes;
+use crate::file::metadata::{
+    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
+};
 use crate::file::reader::ChunkReader;
+use crate::schema::types::SchemaDescriptor;
 use bytes::Bytes;
+use std::sync::Arc;
 use std::{io::Read, ops::Range};
 
 use crate::DecodeResult;
@@ -68,11 +73,12 @@ pub struct ParquetMetaDataReader {
     column_index: PageIndexPolicy,
     offset_index: PageIndexPolicy,
     prefetch_hint: Option<usize>,
+    metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
     #[cfg(feature = "encryption")]
-    file_decryption_properties: Option<std::sync::Arc<FileDecryptionProperties>>,
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
 /// Describes the policy for reading page indexes
@@ -155,6 +161,12 @@ impl ParquetMetaDataReader {
     /// Sets the [`PageIndexPolicy`] for the offset index
     pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
         self.offset_index = policy;
+        self
+    }
+
+    /// Sets the [`ParquetMetaDataOptions`] to use when decoding
+    pub fn with_metadata_options(mut self, options: Option<ParquetMetaDataOptions>) -> Self {
+        self.metadata_options = options.map(Arc::new);
         self
     }
 
@@ -355,7 +367,8 @@ impl ParquetMetaDataReader {
 
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index);
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
@@ -501,7 +514,8 @@ impl ParquetMetaDataReader {
         let file_size = u64::MAX;
         let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
             .with_offset_index_policy(self.offset_index)
-            .with_column_index_policy(self.column_index);
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
@@ -751,7 +765,8 @@ impl ParquetMetaDataReader {
         let push_decoder =
             ParquetMetaDataPushDecoder::try_new_with_footer_tail(file_size, footer_tail)?
                 // NOTE: DO NOT enable page indexes here, they are handled separately
-                .with_page_index_policy(PageIndexPolicy::Skip);
+                .with_page_index_policy(PageIndexPolicy::Skip)
+                .with_metadata_options(self.metadata_options.clone());
 
         let mut push_decoder = self.prepare_push_decoder(push_decoder);
         push_decoder.push_range(range, buf)?;
@@ -795,7 +810,24 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        decode_metadata(buf)
+        decode_metadata(buf, None)
+    }
+
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Like [`Self::decode_metadata`] but this also accepts
+    /// metadata parsing options.
+    pub fn decode_metadata_with_options(
+        buf: &[u8],
+        options: Option<&ParquetMetaDataOptions>,
+    ) -> Result<ParquetMetaData> {
+        decode_metadata(buf, options)
+    }
+
+    /// Decodes the schema from the Parquet footer in `buf`. Returned as
+    /// a [`SchemaDescriptor`].
+    pub fn decode_schema(buf: &[u8]) -> Result<Arc<SchemaDescriptor>> {
+        Ok(Arc::new(parquet_schema_from_bytes(buf)?))
     }
 }
 
