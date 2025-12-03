@@ -17,7 +17,8 @@
 
 //! Utils for working with packed bit masks
 
-use crate::bit_util::ceil;
+use crate::bit_chunk_iterator::BitChunks;
+use crate::bit_util::{apply_bitwise_binary_op, ceil};
 
 /// Util function to set bits in a slice of bytes.
 ///
@@ -32,28 +33,20 @@ pub fn set_bits(
     offset_read: usize,
     len: usize,
 ) -> usize {
-    assert!(offset_write + len <= write_data.len() * 8);
-    assert!(offset_read + len <= data.len() * 8);
-    let mut null_count = 0;
-    let mut acc = 0;
-    while len > acc {
-        // SAFETY: the arguments to `set_upto_64bits` are within the valid range because
-        // (offset_write + acc) + (len - acc) == offset_write + len <= write_data.len() * 8
-        // (offset_read + acc) + (len - acc) == offset_read + len <= data.len() * 8
-        let (n, len_set) = unsafe {
-            set_upto_64bits(
-                write_data,
-                data,
-                offset_write + acc,
-                offset_read + acc,
-                len - acc,
-            )
-        };
-        null_count += n;
-        acc += len_set;
-    }
+    apply_bitwise_binary_op(
+        write_data,
+        offset_write,
+        data,
+        offset_read,
+        len,
+        |_a, b| b, // copy bits from to_set
+    );
 
-    null_count
+    // TODO move this into a function in bit_utils (and refactor BooleanArray to use it)
+    // count zero bits in data[offset_read..offset_read+len]
+    let chunks = BitChunks::new(data, offset_read, len);
+    let num_ones: usize = chunks.iter_padded().map(|a| a.count_ones() as usize).sum();
+    len - num_ones
 }
 
 /// Similar to `set_bits` but sets only upto 64 bits, actual number of bits set may vary.
