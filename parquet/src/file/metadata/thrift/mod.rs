@@ -1593,7 +1593,7 @@ fn should_write_column_stats(column_chunk: &ColumnChunkMetaData) -> bool {
 }
 
 #[cfg(not(feature = "encryption"))]
-fn should_write_column_stats(column_chunk: &ColumnChunkMetaData) -> bool {
+fn should_write_column_stats(_column_chunk: &ColumnChunkMetaData) -> bool {
     true
 }
 
