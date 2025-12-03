@@ -229,8 +229,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field),
             nulls: Some(NullBuffer::new_null(len)),
-            value_offsets: ScalarBuffer::from(vec![]),
-            value_sizes: ScalarBuffer::from(vec![]),
+            value_offsets: ScalarBuffer::from(vec![OffsetSize::usize_as(0); len]),
+            value_sizes: ScalarBuffer::from(vec![OffsetSize::usize_as(0); len]),
             values,
         }
     }
@@ -1163,6 +1163,13 @@ mod tests {
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
             .collect();
         assert_eq!(values, vec![Some(vec![]), Some(vec![]), Some(vec![])]);
+    }
+
+    #[test]
+    fn test_list_view_new_null_len() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let array = ListViewArray::new_null(field, 5);
+        assert_eq!(array.len(), 5);
     }
 
     #[test]
