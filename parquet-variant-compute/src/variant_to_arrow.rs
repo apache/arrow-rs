@@ -33,7 +33,7 @@ use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow_schema::TimeUnit;
 use std::sync::Arc;
 
-/// Builder for converting variant values to primitive Arrow arrays. It is used by both
+/// Builder for converting primitive variant values to Arrow arrays. It is used by both
 /// `VariantToArrowRowBuilder` (below) and `VariantToShreddedPrimitiveVariantRowBuilder` (in
 /// `shred_variant.rs`).
 pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
@@ -222,7 +222,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
     }
 }
 
-/// Creates a primitive row builder, returning Err if the requested data type is not primitive.
+/// Creates a row builder that converts primitive `Variant` values into the requested Arrow data type.
 pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
@@ -230,128 +230,146 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
 ) -> Result<PrimitiveVariantToArrowRowBuilder<'a>> {
     use PrimitiveVariantToArrowRowBuilder::*;
 
-    let builder = match data_type {
-        DataType::Null => Null(VariantToNullArrowRowBuilder::new(cast_options, capacity)),
-        DataType::Boolean => Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity)),
-        DataType::Int8 => Int8(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int16 => Int16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int32 => Int32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Int64 => Int64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt8 => UInt8(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt16 => UInt16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt32 => UInt32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::UInt64 => UInt64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float16 => Float16(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float32 => Float32(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Float64 => Float64(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Decimal32(precision, scale) => Decimal32(VariantToDecimalArrowRowBuilder::new(
-            cast_options,
-            capacity,
-            *precision,
-            *scale,
-        )?),
-        DataType::Decimal64(precision, scale) => Decimal64(VariantToDecimalArrowRowBuilder::new(
-            cast_options,
-            capacity,
-            *precision,
-            *scale,
-        )?),
-        DataType::Decimal128(precision, scale) => Decimal128(VariantToDecimalArrowRowBuilder::new(
-            cast_options,
-            capacity,
-            *precision,
-            *scale,
-        )?),
-        DataType::Decimal256(precision, scale) => Decimal256(VariantToDecimalArrowRowBuilder::new(
-            cast_options,
-            capacity,
-            *precision,
-            *scale,
-        )?),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => TimestampMicroNtz(
-            VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
-        ),
-        DataType::Timestamp(TimeUnit::Microsecond, tz) => TimestampMicro(
-            VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
-        ),
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => TimestampNanoNtz(
-            VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
-        ),
-        DataType::Timestamp(TimeUnit::Nanosecond, tz) => TimestampNano(
-            VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
-        ),
-        DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::Time64(TimeUnit::Microsecond) => Time(VariantToPrimitiveArrowRowBuilder::new(
-            cast_options,
-            capacity,
-        )),
-        DataType::FixedSizeBinary(16) => {
-            Uuid(VariantToUuidArrowRowBuilder::new(cast_options, capacity))
-        }
-        DataType::FixedSizeBinary(size) => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "FixedSizeBinary({size}) is not a valid variant shredding type. Only FixedSizeBinary(16) for UUID is supported."
-            )));
-        }
-        DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
-        DataType::LargeUtf8 => {
-            LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
-        }
-        DataType::Utf8View => StringView(VariantToStringArrowBuilder::new(cast_options, capacity)),
-        DataType::Binary => Binary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity)),
-        DataType::LargeBinary => {
-            LargeBinary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
-        }
-        DataType::BinaryView => {
-            BinaryView(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
-        }
-        _ if data_type.is_primitive() => {
-            return Err(ArrowError::NotYetImplemented(format!(
-                "Primitive data_type {data_type:?} not yet implemented"
-            )));
-        }
-        _ => {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Not a primitive type: {data_type:?}"
-            )));
-        }
-    };
+    let builder =
+        match data_type {
+            DataType::Null => Null(VariantToNullArrowRowBuilder::new(cast_options, capacity)),
+            DataType::Boolean => {
+                Boolean(VariantToBooleanArrowRowBuilder::new(cast_options, capacity))
+            }
+            DataType::Int8 => Int8(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Int16 => Int16(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Int32 => Int32(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Int64 => Int64(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt8 => UInt8(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt16 => UInt16(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt32 => UInt32(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::UInt64 => UInt64(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Float16 => Float16(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Float32 => Float32(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Float64 => Float64(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Decimal32(precision, scale) => Decimal32(
+                VariantToDecimalArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
+            ),
+            DataType::Decimal64(precision, scale) => Decimal64(
+                VariantToDecimalArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
+            ),
+            DataType::Decimal128(precision, scale) => Decimal128(
+                VariantToDecimalArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
+            ),
+            DataType::Decimal256(precision, scale) => Decimal256(
+                VariantToDecimalArrowRowBuilder::new(cast_options, capacity, *precision, *scale)?,
+            ),
+            DataType::Date32 => Date(VariantToPrimitiveArrowRowBuilder::new(
+                cast_options,
+                capacity,
+            )),
+            DataType::Date64 | DataType::Time32(_) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "DataType {data_type:?} not yet implemented"
+                )));
+            }
+            DataType::Time64(TimeUnit::Microsecond) => Time(
+                VariantToPrimitiveArrowRowBuilder::new(cast_options, capacity),
+            ),
+            DataType::Time64(_) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "DataType {data_type:?} not yet implemented"
+                )));
+            }
+            DataType::Timestamp(TimeUnit::Microsecond, None) => TimestampMicroNtz(
+                VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
+            ),
+            DataType::Timestamp(TimeUnit::Microsecond, tz) => TimestampMicro(
+                VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
+            ),
+            DataType::Timestamp(TimeUnit::Nanosecond, None) => TimestampNanoNtz(
+                VariantToTimestampNtzArrowRowBuilder::new(cast_options, capacity),
+            ),
+            DataType::Timestamp(TimeUnit::Nanosecond, tz) => TimestampNano(
+                VariantToTimestampArrowRowBuilder::new(cast_options, capacity, tz.clone()),
+            ),
+            DataType::Timestamp(..) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "DataType {data_type:?} not yet implemented"
+                )));
+            }
+            DataType::Duration(_) | DataType::Interval(_) => {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Casting Variant to duration/interval types is not supported. \
+                    The Variant format does not define duration/interval types."
+                        .to_string(),
+                ));
+            }
+            DataType::Binary => Binary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity)),
+            DataType::LargeBinary => {
+                LargeBinary(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
+            }
+            DataType::BinaryView => {
+                BinaryView(VariantToBinaryArrowRowBuilder::new(cast_options, capacity))
+            }
+            DataType::FixedSizeBinary(16) => {
+                Uuid(VariantToUuidArrowRowBuilder::new(cast_options, capacity))
+            }
+            DataType::FixedSizeBinary(_) => {
+                return Err(ArrowError::NotYetImplemented(format!(
+                    "DataType {data_type:?} not yet implemented"
+                )));
+            }
+            DataType::Utf8 => String(VariantToStringArrowBuilder::new(cast_options, capacity)),
+            DataType::LargeUtf8 => {
+                LargeString(VariantToStringArrowBuilder::new(cast_options, capacity))
+            }
+            DataType::Utf8View => {
+                StringView(VariantToStringArrowBuilder::new(cast_options, capacity))
+            }
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(..)
+            | DataType::Struct(_)
+            | DataType::Map(..)
+            | DataType::Union(..)
+            | DataType::Dictionary(..)
+            | DataType::RunEndEncoded(..) => {
+                return Err(ArrowError::InvalidArgumentError(format!(
+                    "Casting to {data_type:?} is not applicable for primitive Variant types"
+                )));
+            }
+        };
     Ok(builder)
 }
 
@@ -678,23 +696,84 @@ impl VariantToBinaryVariantArrowRowBuilder {
     }
 }
 
-struct FakeNullBuilder(NullArray);
+#[derive(Default)]
+struct FakeNullBuilder {
+    item_count: usize,
+}
 
 impl FakeNullBuilder {
-    fn new(capacity: usize) -> Self {
-        Self(NullArray::new(capacity))
+    fn append_value(&mut self, _: ()) {
+        self.item_count += 1;
     }
-    fn append_value<T>(&mut self, _: T) {}
-    fn append_null(&mut self) {}
+
+    fn append_null(&mut self) {
+        self.item_count += 1;
+    }
 
     fn finish(self) -> NullArray {
-        self.0
+        NullArray::new(self.item_count)
     }
 }
 
 define_variant_to_primitive_builder!(
     struct VariantToNullArrowRowBuilder<'a>
-    |capacity| -> FakeNullBuilder { FakeNullBuilder::new(capacity) },
-    |_value|  Some(Variant::Null),
+    |_capacity| -> FakeNullBuilder { FakeNullBuilder::default() },
+    |value| value.as_null(),
     type_name: "Null"
 );
+
+#[cfg(test)]
+mod tests {
+    use super::make_primitive_variant_to_arrow_row_builder;
+    use arrow::compute::CastOptions;
+    use arrow::datatypes::{DataType, Field, Fields, UnionFields, UnionMode};
+    use arrow::error::ArrowError;
+    use std::sync::Arc;
+
+    #[test]
+    fn make_primitive_builder_rejects_non_primitive_types() {
+        let cast_options = CastOptions::default();
+        let item_field = Arc::new(Field::new("item", DataType::Int32, true));
+        let struct_fields = Fields::from(vec![Field::new("child", DataType::Int32, true)]);
+        let map_entries_field = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Utf8, false),
+                Field::new("value", DataType::Float64, true),
+            ])),
+            true,
+        ));
+        let union_fields =
+            UnionFields::new(vec![1], vec![Field::new("child", DataType::Int32, true)]);
+        let run_ends_field = Arc::new(Field::new("run_ends", DataType::Int32, false));
+        let ree_values_field = Arc::new(Field::new("values", DataType::Utf8, true));
+
+        let non_primitive_types = vec![
+            DataType::List(item_field.clone()),
+            DataType::LargeList(item_field.clone()),
+            DataType::ListView(item_field.clone()),
+            DataType::LargeListView(item_field.clone()),
+            DataType::FixedSizeList(item_field.clone(), 2),
+            DataType::Struct(struct_fields.clone()),
+            DataType::Map(map_entries_field.clone(), false),
+            DataType::Union(union_fields.clone(), UnionMode::Dense),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::RunEndEncoded(run_ends_field.clone(), ree_values_field.clone()),
+        ];
+
+        for data_type in non_primitive_types {
+            let err =
+                match make_primitive_variant_to_arrow_row_builder(&data_type, &cast_options, 1) {
+                    Ok(_) => panic!("non-primitive type {data_type:?} should be rejected"),
+                    Err(err) => err,
+                };
+
+            match err {
+                ArrowError::InvalidArgumentError(msg) => {
+                    assert!(msg.contains(&format!("{data_type:?}")));
+                }
+                other => panic!("expected InvalidArgumentError, got {other:?}"),
+            }
+        }
+    }
+}

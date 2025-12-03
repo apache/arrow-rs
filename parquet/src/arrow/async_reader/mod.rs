@@ -164,9 +164,12 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
         options: Option<&'a ArrowReaderOptions>,
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         async move {
-            let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
-                PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
-            );
+            let metadata_opts = options.map(|o| o.metadata_options().clone());
+            let metadata_reader = ParquetMetaDataReader::new()
+                .with_page_index_policy(PageIndexPolicy::from(
+                    options.is_some_and(|o| o.page_index()),
+                ))
+                .with_metadata_options(metadata_opts);
 
             #[cfg(feature = "encryption")]
             let metadata_reader = metadata_reader.with_decryption_properties(
@@ -486,6 +489,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection,
             filter,
             selection,
+            row_selection_policy: selection_strategy,
             limit,
             offset,
             metrics,
@@ -494,9 +498,10 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
 
         // Ensure schema of ParquetRecordBatchStream respects projection, and does
         // not store metadata (same as for ParquetRecordBatchReader and emitted RecordBatches)
+        let projection_len = projection.mask.as_ref().map_or(usize::MAX, |m| m.len());
         let projected_fields = schema
             .fields
-            .filter_leaves(|idx, _| projection.leaf_included(idx));
+            .filter_leaves(|idx, _| idx < projection_len && projection.leaf_included(idx));
         let projected_schema = Arc::new(Schema::new(projected_fields));
 
         let decoder = ParquetPushDecoderBuilder {
@@ -507,6 +512,7 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
             projection,
             filter,
             selection,
+            row_selection_policy: selection_strategy,
             batch_size,
             row_groups,
             limit,
@@ -761,23 +767,28 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arrow::arrow_reader::RowSelectionPolicy;
+    use crate::arrow::arrow_reader::tests::test_row_numbers_with_multiple_row_groups_helper;
     use crate::arrow::arrow_reader::{
         ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection, RowSelector,
     };
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
-    use crate::arrow::{ArrowWriter, ProjectionMask};
+    use crate::arrow::schema::virtual_type::RowNumber;
+    use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
+    use arrow::compute::or;
     use arrow::error::Result as ArrowResult;
-    use arrow_array::builder::{ListBuilder, StringBuilder};
+    use arrow_array::builder::{Float32Builder, ListBuilder, StringBuilder};
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, Int8Array, Int32Array, RecordBatchReader, Scalar, StringArray,
-        StructArray, UInt64Array,
+        Array, ArrayRef, BooleanArray, Int8Array, Int32Array, Int64Array, RecordBatchReader,
+        Scalar, StringArray, StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
+    use arrow_select::concat::concat_batches;
     use futures::{StreamExt, TryStreamExt};
     use rand::{Rng, rng};
     use std::collections::HashMap;
@@ -1201,6 +1212,82 @@ mod tests {
         let actual_rows: usize = async_batches.into_iter().map(|b| b.num_rows()).sum();
 
         assert_eq!(actual_rows, expected_rows);
+    }
+
+    #[tokio::test]
+    async fn test_row_filter_full_page_skip_is_handled_async() {
+        let first_value: i64 = 1111;
+        let last_value: i64 = 9999;
+        let num_rows: usize = 12;
+
+        // build data with row selection average length 4
+        // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
+        // The Row Selection would be [1111, (skip 10), 9999]
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int64, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+
+        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
+        int_values[0] = first_value;
+        int_values[num_rows - 1] = last_value;
+        let keys = Int64Array::from(int_values.clone());
+        let values = Int64Array::from(int_values.clone());
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+        )
+        .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(2)
+            .set_data_page_row_count_limit(2)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buffer);
+
+        let builder = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index(true),
+        )
+        .await
+        .unwrap();
+        let schema = builder.parquet_schema().clone();
+        let filter_mask = ProjectionMask::leaves(&schema, [0]);
+
+        let make_predicate = |mask: ProjectionMask| {
+            ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
+                let column = batch.column(0);
+                let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
+                let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
+                or(&match_first, &match_second)
+            })
+        };
+
+        let predicate = make_predicate(filter_mask.clone());
+
+        // The batch size is set to 12 to read all rows in one go after filtering
+        // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
+        let stream = ParquetRecordBatchStreamBuilder::new_with_options(
+            TestReader::new(data.clone()),
+            ArrowReaderOptions::new().with_page_index(true),
+        )
+        .await
+        .unwrap()
+        .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+        .with_batch_size(12)
+        .with_row_selection_policy(RowSelectionPolicy::Auto { threshold: 32 })
+        .build()
+        .unwrap();
+
+        let schema = stream.schema().clone();
+        let batches: Vec<_> = stream.try_collect().await.unwrap();
+        let result = concat_batches(&schema, &batches).unwrap();
+        assert_eq!(result.num_rows(), 2);
     }
 
     #[tokio::test]
@@ -2098,5 +2185,127 @@ mod tests {
                 .sum::<usize>(),
             92
         );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            false,
+            |path, selection, _row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let row_number_field = Arc::new(
+                        Field::new("row_number", DataType::Int64, false)
+                            .with_extension_type(RowNumber),
+                    );
+                    let options = ArrowReaderOptions::new()
+                        .with_virtual_columns(vec![row_number_field])
+                        .unwrap();
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_batch_size(batch_size)
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
+        );
+    }
+
+    #[test]
+    fn test_row_numbers_with_multiple_row_groups_and_filter() {
+        test_row_numbers_with_multiple_row_groups_helper(
+            true,
+            |path, selection, row_filter, batch_size| {
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("Could not create runtime");
+                runtime.block_on(async move {
+                    let file = tokio::fs::File::open(path).await.unwrap();
+                    let row_number_field = Arc::new(
+                        Field::new("row_number", DataType::Int64, false)
+                            .with_extension_type(RowNumber),
+                    );
+                    let options = ArrowReaderOptions::new()
+                        .with_virtual_columns(vec![row_number_field])
+                        .unwrap();
+                    let reader = ParquetRecordBatchStreamBuilder::new_with_options(file, options)
+                        .await
+                        .unwrap()
+                        .with_row_selection(selection)
+                        .with_row_filter(row_filter.expect("No row filter"))
+                        .with_batch_size(batch_size)
+                        .build()
+                        .expect("Could not create reader");
+                    reader.try_collect::<Vec<_>>().await.unwrap()
+                })
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn test_nested_lists() -> Result<()> {
+        // Test case for https://github.com/apache/arrow-rs/issues/8657
+        let list_inner_field = Arc::new(Field::new("item", DataType::Float32, true));
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("vector", DataType::List(list_inner_field.clone()), true),
+        ]));
+
+        let mut list_builder =
+            ListBuilder::new(Float32Builder::new()).with_field(list_inner_field.clone());
+        list_builder.values().append_slice(&[10.0, 10.0, 10.0]);
+        list_builder.append(true);
+        list_builder.values().append_slice(&[20.0, 20.0, 20.0]);
+        list_builder.append(true);
+        list_builder.values().append_slice(&[30.0, 30.0, 30.0]);
+        list_builder.append(true);
+        list_builder.values().append_slice(&[40.0, 40.0, 40.0]);
+        list_builder.append(true);
+        let list_array = list_builder.finish();
+
+        let data = vec![RecordBatch::try_new(
+            table_schema.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(list_array),
+            ],
+        )?];
+
+        let mut buffer = Vec::new();
+        let mut writer = AsyncArrowWriter::try_new(&mut buffer, table_schema, None)?;
+
+        for batch in data {
+            writer.write(&batch).await?;
+        }
+
+        writer.close().await?;
+
+        let reader = TestReader::new(Bytes::from(buffer));
+        let builder = ParquetRecordBatchStreamBuilder::new(reader).await?;
+
+        let predicate = ArrowPredicateFn::new(ProjectionMask::all(), |batch| {
+            Ok(BooleanArray::from(vec![true; batch.num_rows()]))
+        });
+
+        let projection_mask = ProjectionMask::all();
+
+        let mut stream = builder
+            .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+            .with_projection(projection_mask)
+            .build()?;
+
+        while let Some(batch) = stream.next().await {
+            let _ = batch.unwrap(); // ensure there is no panic
+        }
+
+        Ok(())
     }
 }

@@ -118,7 +118,7 @@ pub struct DefaultGeoStatsAccumulatorFactory {}
 impl GeoStatsAccumulatorFactory for DefaultGeoStatsAccumulatorFactory {
     fn new_accumulator(&self, _descr: &ColumnDescPtr) -> Box<dyn GeoStatsAccumulator> {
         #[cfg(feature = "geospatial")]
-        if let Some(crate::basic::LogicalType::Geometry { .. }) = _descr.logical_type() {
+        if let Some(crate::basic::LogicalType::Geometry { .. }) = _descr.logical_type_ref() {
             Box::new(ParquetGeoStatsAccumulator::default())
         } else {
             Box::new(VoidGeoStatsAccumulator::default())

@@ -25,7 +25,7 @@ use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, Fields};
+use arrow::datatypes::{DataType, Fields, TimeUnit};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantBuilderExt};
 
@@ -123,12 +123,38 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 "Shredding variant array values as arrow lists".to_string(),
             ));
         }
-        _ => {
+        // Supported shredded primitive types, see Variant shredding spec:
+        // https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types
+        DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal32(..)
+        | DataType::Decimal64(..)
+        | DataType::Decimal128(..)
+        | DataType::Date32
+        | DataType::Time64(TimeUnit::Microsecond)
+        | DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _)
+        | DataType::Binary
+        | DataType::BinaryView
+        | DataType::Utf8
+        | DataType::Utf8View
+        | DataType::FixedSizeBinary(16) // UUID
+        => {
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
                 VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, top_level);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
+        }
+        DataType::FixedSizeBinary(_) => {
+            return Err(ArrowError::InvalidArgumentError(format!("{data_type} is not a valid variant shredding type. Only FixedSizeBinary(16) for UUID is supported.")))
+        }
+        _ => {
+            return Err(ArrowError::InvalidArgumentError(format!("{data_type} is not a valid variant shredding type")))
         }
     };
     Ok(builder)
@@ -327,7 +353,7 @@ mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
     use arrow::array::{Array, FixedSizeBinaryArray, Float64Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Fields};
+    use arrow::datatypes::{DataType, Field, Fields, TimeUnit, UnionFields, UnionMode};
     use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
     use std::sync::Arc;
     use uuid::Uuid;
@@ -534,6 +560,60 @@ mod tests {
         assert_eq!(typed_value_float64.value(0), 42.0); // int converts to float
         assert_eq!(typed_value_float64.value(1), 3.15);
         assert!(typed_value_float64.is_null(2)); // string doesn't convert
+    }
+
+    #[test]
+    fn test_invalid_shredded_types_rejected() {
+        let input = VariantArray::from_iter([Variant::from(42)]);
+
+        let invalid_types = vec![
+            DataType::UInt8,
+            DataType::Float16,
+            DataType::Decimal256(38, 10),
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::LargeBinary,
+            DataType::LargeUtf8,
+            DataType::FixedSizeBinary(17),
+            DataType::Union(
+                UnionFields::new(
+                    vec![0_i8, 1_i8],
+                    vec![
+                        Field::new("int_field", DataType::Int32, false),
+                        Field::new("str_field", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Dense,
+            ),
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
+            ),
+        ];
+
+        for data_type in invalid_types {
+            let err = shred_variant(&input, &data_type).unwrap_err();
+            assert!(
+                matches!(err, ArrowError::InvalidArgumentError(_)),
+                "expected InvalidArgumentError for {:?}, got {:?}",
+                data_type,
+                err
+            );
+        }
     }
 
     #[test]
