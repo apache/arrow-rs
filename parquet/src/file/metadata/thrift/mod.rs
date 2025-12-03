@@ -1584,6 +1584,19 @@ impl WriteThrift for RowGroupMetaData {
     }
 }
 
+#[cfg(feature = "encryption")]
+fn should_write_column_stats(column_chunk: &ColumnChunkMetaData) -> bool {
+    // If there is encrypted column metadata present,
+    // the column is encrypted with a different key to the footer or a plaintext footer is used,
+    // so the statistics are sensitive and shouldn't be written.
+    column_chunk.encrypted_column_metadata.is_none()
+}
+
+#[cfg(not(feature = "encryption"))]
+fn should_write_column_stats(column_chunk: &ColumnChunkMetaData) -> bool {
+    true
+}
+
 // struct ColumnChunk {
 //   1: optional string file_path
 //   2: required i64 file_offset = 0
@@ -1608,17 +1621,9 @@ impl WriteThrift for ColumnChunkMetaData {
             .file_offset()
             .write_thrift_field(writer, 2, last_field_id)?;
 
-        #[cfg(feature = "encryption")]
-        {
-            // Always write the ColumnMetaData struct
-            // Statistics are conditionally excluded based on crypto_metadata in serialize_column_meta_data
-            writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-            serialize_column_meta_data(self, writer)?;
-            last_field_id = 3;
-        }
-        #[cfg(not(feature = "encryption"))]
-        {
-            // always write the ColumnMetaData
+        // Always write the ColumnMetaData struct
+        // Statistics are conditionally excluded based on crypto_metadata in serialize_column_meta_data
+        if should_write_column_stats(self) {
             writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
             serialize_column_meta_data(self, writer)?;
             last_field_id = 3;
