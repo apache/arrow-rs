@@ -2474,6 +2474,35 @@ mod tests {
         assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
     }
 
+    #[test]
+    fn test_from_str_edge_algo() {
+        assert_eq!(
+            "spHErical".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::SPHERICAL
+        );
+        assert_eq!(
+            "vinceNTY".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::VINCENTY
+        );
+        assert_eq!(
+            "tHOmas".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::THOMAS
+        );
+        assert_eq!(
+            "anDOYEr".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::ANDOYER
+        );
+        assert_eq!(
+            "kaRNey".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::KARNEY
+        );
+        assert!(
+            "does not exist"
+                .parse::<EdgeInterpolationAlgorithm>()
+                .is_err()
+        );
+    }
+
     fn encodings_roundtrip(mut encodings: Vec<Encoding>) {
         encodings.sort();
         let mask = EncodingMask::new_from_encodings(encodings.iter());

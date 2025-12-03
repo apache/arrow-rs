@@ -57,13 +57,13 @@ pub(crate) fn try_add_extension_type(
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geometry { crs } => {
-            let md = parquet_geospatial::WkbMetadata::new(crs.clone(), None);
+            let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), None);
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geography { crs, algorithm } => {
             let algorithm = algorithm.map(|a| a.to_string());
-            let md = parquet_geospatial::WkbMetadata::new(crs.clone(), algorithm);
+            let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), algorithm);
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
         }
         _ => {}

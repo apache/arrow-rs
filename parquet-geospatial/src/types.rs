@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::error::Result;
 use arrow_schema::{ArrowError, DataType, extension::ExtensionType};
 use serde::{Deserialize, Serialize};
 
@@ -55,10 +54,10 @@ impl Metadata {
     ///
     /// If a CRS is provided, and can be parsed as JSON, it will be stored as a JSON object instead
     /// of its string representation.
-    pub fn new(crs: Option<String>, algorithm: Option<String>) -> Self {
-        let crs = crs.map(|c| match serde_json::from_str(&c) {
+    pub fn new(crs: Option<&str>, algorithm: Option<String>) -> Self {
+        let crs = crs.map(|c| match serde_json::from_str(c) {
             Ok(crs) => crs,
-            Err(_) => serde_json::Value::String(c),
+            Err(_) => serde_json::Value::String(c.to_string()),
         });
 
         Self { crs, algorithm }
@@ -76,7 +75,8 @@ impl Metadata {
 
 /// Well-Known Binary (WKB) [`ExtensionType`] for geospatial data.
 ///
-/// Represents the canonical Arrow Extension Type for storing GeoArrow data.
+/// Represents the canonical Arrow Extension Type for storing
+/// [GeoArrow](https://github.com/geoarrow/geoarrow) data.
 #[derive(Debug, Default)]
 pub struct WkbType(Metadata);
 
@@ -89,6 +89,7 @@ impl WkbType {
     }
 }
 
+type ArrowResult<T> = Result<T, ArrowError>;
 impl ExtensionType for WkbType {
     const NAME: &'static str = "geoarrow.wkb";
 
@@ -130,7 +131,7 @@ impl ExtensionType for WkbType {
         serde_json::to_string(&md).ok()
     }
 
-    fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata> {
+    fn deserialize_metadata(metadata: Option<&str>) -> ArrowResult<Self::Metadata> {
         let Some(metadata) = metadata else {
             return Ok(Self::Metadata::default());
         };
@@ -138,7 +139,7 @@ impl ExtensionType for WkbType {
         serde_json::from_str(metadata).map_err(|e| ArrowError::JsonError(e.to_string()))
     }
 
-    fn supports_data_type(&self, data_type: &arrow_schema::DataType) -> Result<()> {
+    fn supports_data_type(&self, data_type: &arrow_schema::DataType) -> ArrowResult<()> {
         match data_type {
             DataType::Binary | DataType::LargeBinary | DataType::BinaryView => Ok(()),
             dt => Err(ArrowError::InvalidArgumentError(format!(
@@ -147,7 +148,7 @@ impl ExtensionType for WkbType {
         }
     }
 
-    fn try_new(data_type: &arrow_schema::DataType, metadata: Self::Metadata) -> Result<Self> {
+    fn try_new(data_type: &arrow_schema::DataType, metadata: Self::Metadata) -> ArrowResult<Self> {
         let wkb = Self(metadata);
         wkb.supports_data_type(data_type)?;
         Ok(wkb)
@@ -161,7 +162,7 @@ mod tests {
 
     /// Test metadata serialization and deserialization with empty/default metadata
     #[test]
-    fn test_metadata_empty_roundtrip() -> Result<()> {
+    fn test_metadata_empty_roundtrip() -> ArrowResult<()> {
         let metadata = Metadata::default();
         let wkb = WkbType::new(Some(metadata));
 
@@ -177,7 +178,7 @@ mod tests {
 
     /// Test metadata serialization with CRS as a simple string
     #[test]
-    fn test_metadata_crs_string_roundtrip() -> Result<()> {
+    fn test_metadata_crs_string_roundtrip() -> ArrowResult<()> {
         let metadata = Metadata::new(Some(String::from("srid:1234")), None);
         let wkb = WkbType::new(Some(metadata));
 
@@ -196,7 +197,7 @@ mod tests {
 
     /// Test metadata serialization with CRS as a JSON object
     #[test]
-    fn test_metadata_crs_json_object_roundtrip() -> Result<()> {
+    fn test_metadata_crs_json_object_roundtrip() -> ArrowResult<()> {
         let crs_json = r#"{"type":"custom_json","properties":{"name":"EPSG:4326"}}"#;
         let metadata = Metadata::new(Some(crs_json.to_string()), None);
         let wkb = WkbType::new(Some(metadata));
@@ -220,7 +221,7 @@ mod tests {
 
     /// Test metadata serialization with algorithm field
     #[test]
-    fn test_metadata_algorithm_roundtrip() -> Result<()> {
+    fn test_metadata_algorithm_roundtrip() -> ArrowResult<()> {
         let metadata = Metadata::new(None, Some("spherical".to_string()));
         let wkb = WkbType::new(Some(metadata));
 
@@ -236,7 +237,7 @@ mod tests {
 
     /// Test metadata serialization with both CRS and algorithm
     #[test]
-    fn test_metadata_full_roundtrip() -> Result<()> {
+    fn test_metadata_full_roundtrip() -> ArrowResult<()> {
         let metadata = Metadata::new(
             Some(String::from("srid:1234")),
             Some("spherical".to_string()),
@@ -258,7 +259,7 @@ mod tests {
 
     /// Test deserialization of None metadata
     #[test]
-    fn test_metadata_deserialize_none() -> Result<()> {
+    fn test_metadata_deserialize_none() -> ArrowResult<()> {
         let deserialized = WkbType::deserialize_metadata(None)?;
         assert!(deserialized.crs.is_none());
         assert!(deserialized.algorithm.is_none());
@@ -303,7 +304,7 @@ mod tests {
 
     /// Test extension type integration using a Field
     #[test]
-    fn test_extension_type_with_field() -> Result<()> {
+    fn test_extension_type_with_field() -> ArrowResult<()> {
         let metadata = Metadata::new(Some(String::from("srid:1234")), None);
         let wkb_type = WkbType::new(Some(metadata));
 
@@ -322,7 +323,7 @@ mod tests {
 
     /// Test extension type DataType support
     #[test]
-    fn test_extension_type_support() -> Result<()> {
+    fn test_extension_type_support() -> ArrowResult<()> {
         let wkb = WkbType::default();
         // supported types
         wkb.supports_data_type(&DataType::Binary)?;
@@ -338,7 +339,7 @@ mod tests {
 
     /// Test CRS canonicalization logic for common lon/lat representations
     #[test]
-    fn test_crs_canonicalization() -> Result<()> {
+    fn test_crs_canonicalization() -> ArrowResult<()> {
         // EPSG:4326 as string should be omitted
         let metadata = Metadata::new(Some(String::from("EPSG:4326")), None);
         let wkb = WkbType::new(Some(metadata));
