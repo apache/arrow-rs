@@ -758,12 +758,12 @@ impl MetadataObjectWriter {
         let encryptor = match column_chunk.column_crypto_metadata.as_deref() {
             None => None,
             Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY) => {
+                let is_footer_encrypted = file_encryptor.properties().encrypt_footer();
+
                 // When uniform encryption is used the footer is already encrypted,
                 // so the column chunk does not need additional encryption.
                 // Except if we're in plaintext footer mode, then we need to encrypt
                 // the column metadata here.
-                let is_footer_encrypted = file_encryptor.properties().encrypt_footer();
-
                 if !is_footer_encrypted {
                     Some(file_encryptor.get_footer_encryptor()?)
                 } else {
@@ -779,8 +779,6 @@ impl MetadataObjectWriter {
         if let Some(mut encryptor) = encryptor {
             use crate::file::metadata::thrift::serialize_column_meta_data;
 
-            // Temporarily clear crypto_metadata so statistics get included in encrypted blob
-            let crypto_metadata = column_chunk.column_crypto_metadata.take();
             let aad = create_module_aad(
                 file_encryptor.file_aad(),
                 ModuleType::ColumnMetaData,
@@ -795,8 +793,6 @@ impl MetadataObjectWriter {
                 serialize_column_meta_data(&column_chunk, &mut prot)?;
             }
             let ciphertext = encryptor.encrypt(&buffer, &aad)?;
-
-            column_chunk.column_crypto_metadata = crypto_metadata;
             column_chunk.encrypted_column_metadata = Some(ciphertext);
         }
 
