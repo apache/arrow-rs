@@ -310,10 +310,10 @@ mod test {
     use crate::{VariantArray, VariantArrayBuilder, json_to_variant};
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
-        Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, Float32Array,
-        Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, LargeBinaryArray,
-        LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
-        Time64MicrosecondArray,
+        Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+        Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+        LargeBinaryArray, LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     };
     use arrow::buffer::NullBuffer;
     use arrow::compute::CastOptions;
@@ -973,6 +973,152 @@ mod test {
         }
     );
 
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_micro_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(1234),       // can't be cast to second & millisecond
+                Some(1234000),    // can be cast to millisecond, but not second
+                Some(1234000000), // can be cast to second & millisecond
+            ])
+            .with_timezone("+00:00")
+        }
+    );
+
+    // The following two tests wants to cover the micro with timezone -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_micro_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_micro_ntz_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampMicrosecondArray::from(vec![
+                Some(1234),       // can't be cast to second & millisecond
+                Some(1234000),    // can be cast to millisecond, but not second
+                Some(1234000000), // can be cast to second & millisecond
+            ])
+        }
+    );
+
+    // The following two tests wants to cover the micro_ntz -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_micro_ntz_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        perfectly_shredded_timestamp_micro_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_nano_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(1234000),       // can't be cast to second & millisecond
+                Some(1234000000),    // can be cast to millisecond, but not second
+                Some(1234000000000), // can be cast to second & millisecond
+            ])
+            .with_timezone("+00:00")
+        }
+    );
+
+    // The following two tests wants to cover the nano with timezone -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_nano_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from("+00:00"))),
+        perfectly_shredded_timestamp_nano_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+        .with_timezone("+00:00")
+    );
+
+    perfectly_shredded_variant_array_fn!(
+        perfectly_shredded_timestamp_nano_ntz_variant_array_for_second_and_milli_second,
+        || {
+            arrow::array::TimestampNanosecondArray::from(vec![
+                Some(1234000),       // can't be cast to second & millisecond
+                Some(1234000000),    // can be cast to millisecond, but not second
+                Some(1234000000000), // can be cast to second & millisecond
+            ])
+        }
+    );
+
+    // The following two tests wants to cover the nano_ntz -> milli/second cases
+    // there are three test items, which contains some items can be cast safely, and some can't
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_second,
+        DataType::Timestamp(TimeUnit::Second, None),
+        perfectly_shredded_timestamp_nano_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampSecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to second safely
+            Some(1234)
+        ])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_milli,
+        DataType::Timestamp(TimeUnit::Millisecond, None),
+        perfectly_shredded_timestamp_nano_ntz_variant_array_for_second_and_milli_second,
+        arrow::array::TimestampMillisecondArray::from(vec![
+            None, // Return None if can't be cast to millisecond safely
+            Some(1234),
+            Some(1234000)
+        ])
+    );
+
     perfectly_shredded_to_arrow_primitive_test!(
         get_variant_perfectly_shredded_timestamp_nano_ntz_as_timestamp_nano_ntz,
         DataType::Timestamp(TimeUnit::Nanosecond, None),
@@ -1016,6 +1162,17 @@ mod test {
         Date32Array::from(vec![Some(-12345), Some(17586), Some(20000)])
     );
 
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_date_as_date64,
+        DataType::Date64,
+        perfectly_shredded_date_variant_array,
+        Date64Array::from(vec![
+            Some(-1066608000000),
+            Some(1519430400000),
+            Some(1728000000000)
+        ])
+    );
+
     perfectly_shredded_variant_array_fn!(perfectly_shredded_time_variant_array, || {
         Time64MicrosecondArray::from(vec![Some(12345000), Some(87654000), Some(135792000)])
     });
@@ -1025,6 +1182,47 @@ mod test {
         DataType::Time64(TimeUnit::Microsecond),
         perfectly_shredded_time_variant_array,
         Time64MicrosecondArray::from(vec![Some(12345000), Some(87654000), Some(135792000)])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_time_as_time64_nano,
+        DataType::Time64(TimeUnit::Nanosecond),
+        perfectly_shredded_time_variant_array,
+        Time64NanosecondArray::from(vec![
+            Some(12345000000),
+            Some(87654000000),
+            Some(135792000000)
+        ])
+    );
+
+    perfectly_shredded_variant_array_fn!(perfectly_shredded_time_variant_array_for_time32, || {
+        Time64MicrosecondArray::from(vec![
+            Some(1234),        // This can't be cast to Time32
+            Some(7654000),     // This can be cast to Time32(Millisecond), but not Time32(Second)
+            Some(35792000000), // This can be cast to Time32(Second) & Time32(Millisecond)
+        ])
+    });
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_time_as_time32_second,
+        DataType::Time32(TimeUnit::Second),
+        perfectly_shredded_time_variant_array_for_time32,
+        Time32SecondArray::from(vec![
+            None,
+            None, // Return None if can't be cast to Time32(Second) safely
+            Some(35792)
+        ])
+    );
+
+    perfectly_shredded_to_arrow_primitive_test!(
+        get_variant_perfectly_shredded_time_as_time32_milli,
+        DataType::Time32(TimeUnit::Millisecond),
+        perfectly_shredded_time_variant_array_for_time32,
+        Time32MillisecondArray::from(vec![
+            None, // Return None if can't be cast to Time32(Second) safely
+            Some(7654),
+            Some(35792000)
+        ])
     );
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_null_variant_array, || {
