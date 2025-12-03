@@ -555,20 +555,24 @@ fn filter_null_mask(
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
+    assert!(buffer.len() >= predicate.filter.len());
 
     match &predicate.strategy {
         IterationStrategy::IndexIterator => {
-            let bits = IndexIterator::new(&predicate.filter, predicate.count)
-                .map(|src_idx| bit_util::get_bit(src, src_idx + offset));
+            let bits =
+                // SAFETY: IndexIterator uses the filter predicate to derive indices
+                IndexIterator::new(&predicate.filter, predicate.count).map(|src_idx| unsafe {
+                    bit_util::get_bit_raw(buffer.values().as_ptr(), src_idx + offset)
+                });
 
             // SAFETY: `IndexIterator` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::Indices(indices) => {
-            let bits = indices
-                .iter()
-                .map(|src_idx| bit_util::get_bit(src, *src_idx + offset));
-
+            // SAFETY: indices were derived from the filter predicate
+            let bits = indices.iter().map(|src_idx| unsafe {
+                bit_util::get_bit_raw(buffer.values().as_ptr(), *src_idx + offset)
+            });
             // SAFETY: `Vec::iter()` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
@@ -614,25 +618,30 @@ fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) 
         IterationStrategy::SlicesIterator => {
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
-                buffer.extend_from_slice(&values[start..end]);
+                // SAFETY: indices were derived from the filter predicate
+                buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
             }
             buffer.into()
         }
         IterationStrategy::Slices(slices) => {
             let mut buffer = Vec::with_capacity(predicate.count);
             for (start, end) in slices {
-                buffer.extend_from_slice(&values[*start..*end]);
+                // SAFETY: indices were derived from the filter predicate
+                buffer.extend_from_slice(unsafe { values.get_unchecked(*start..*end) });
             }
             buffer.into()
         }
         IterationStrategy::IndexIterator => {
-            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
+            // SAFETY: indices were derived from the filter predicate
+            let iter = IndexIterator::new(&predicate.filter, predicate.count)
+                .map(|x| unsafe { *values.get_unchecked(x) });
 
             // SAFETY: IndexIterator is trusted length
             unsafe { MutableBuffer::from_trusted_len_iter(iter) }.into()
         }
         IterationStrategy::Indices(indices) => {
-            let iter = indices.iter().map(|x| values[*x]);
+            // SAFETY: indices were derived from the filter predicate
+            let iter = indices.iter().map(|x| unsafe { *values.get_unchecked(*x) });
             iter.collect::<Vec<_>>().into()
         }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
@@ -2277,5 +2286,23 @@ mod tests {
 
         // The filtered batch should have 2 rows (the 1st and 3rd)
         assert_eq!(filtered_batch.num_rows(), 2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_filter_bits_too_large() {
+        let buffer = BooleanBuffer::from(vec![false; 8]);
+        let predicate = BooleanArray::from(vec![true; 9]);
+        let filter = FilterBuilder::new(&predicate).build();
+        filter_bits(&buffer, &filter);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_filter_native_too_large() {
+        let values = vec![1; 8];
+        let predicate = BooleanArray::from(vec![false; 9]);
+        let filter = FilterBuilder::new(&predicate).build();
+        filter_native(&values, &filter);
     }
 }

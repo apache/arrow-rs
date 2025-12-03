@@ -605,7 +605,7 @@ impl ArrowReaderOptions {
     ///
     /// // Configure options with virtual columns
     /// let options = ArrowReaderOptions::new()
-    ///     .with_virtual_columns(vec![row_number_field]);
+    ///     .with_virtual_columns(vec![row_number_field])?;
     ///
     /// // Create a reader with the options
     /// let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
@@ -622,19 +622,20 @@ impl ArrowReaderOptions {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn with_virtual_columns(self, virtual_columns: Vec<FieldRef>) -> Self {
+    pub fn with_virtual_columns(self, virtual_columns: Vec<FieldRef>) -> Result<Self> {
         // Validate that all fields are virtual columns
         for field in &virtual_columns {
-            assert!(
-                is_virtual_column(field),
-                "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
-                field.name()
-            );
+            if !is_virtual_column(field) {
+                return Err(ParquetError::General(format!(
+                    "Field '{}' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'",
+                    field.name()
+                )));
+            }
         }
-        Self {
+        Ok(Self {
             virtual_columns,
             ..self
-        }
+        })
     }
 
     /// Retrieve the currently set page index behavior.
@@ -4007,8 +4008,8 @@ pub(crate) mod tests {
                 ),
             ])),
             "Arrow: Incompatible supplied Arrow schema: data type mismatch for field nested: \
-            requested Struct(\"nested1_valid\": Utf8, \"nested1_invalid\": Int32) \
-            but found Struct(\"nested1_valid\": Utf8, \"nested1_invalid\": Int64)",
+            requested Struct(\"nested1_valid\": non-null Utf8, \"nested1_invalid\": non-null Int32) \
+            but found Struct(\"nested1_valid\": non-null Utf8, \"nested1_invalid\": non-null Int64)",
         );
     }
 
@@ -5469,8 +5470,10 @@ pub(crate) mod tests {
             Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
         );
 
-        let options = ArrowReaderOptions::new().with_schema(Arc::new(Schema::new(supplied_fields)));
-        let options = options.with_virtual_columns(vec![row_number_field.clone()]);
+        let options = ArrowReaderOptions::new()
+            .with_schema(Arc::new(Schema::new(supplied_fields)))
+            .with_virtual_columns(vec![row_number_field.clone()])
+            .unwrap();
         let mut arrow_reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             options,
@@ -5515,8 +5518,9 @@ pub(crate) mod tests {
         let row_number_field = Arc::new(
             Field::new("row_number", ArrowDataType::Int64, false).with_extension_type(RowNumber),
         );
-        let options =
-            ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()]);
+        let options = ArrowReaderOptions::new()
+            .with_virtual_columns(vec![row_number_field.clone()])
+            .unwrap();
         let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
         let num_columns = metadata
             .metadata
@@ -5568,7 +5572,7 @@ pub(crate) mod tests {
         let buffer = Bytes::from(buffer);
 
         let options =
-            ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()]);
+            ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field.clone()])?;
 
         // read out with normal options
         let arrow_reader =
@@ -5637,11 +5641,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is not a virtual column")]
     fn test_with_virtual_columns_rejects_non_virtual_fields() {
         // Try to pass a regular field (not a virtual column) to with_virtual_columns
         let regular_field = Arc::new(Field::new("regular_column", ArrowDataType::Int64, false));
-        let _options = ArrowReaderOptions::new().with_virtual_columns(vec![regular_field]);
+        assert_eq!(
+            ArrowReaderOptions::new()
+                .with_virtual_columns(vec![regular_field])
+                .unwrap_err()
+                .to_string(),
+            "Parquet error: Field 'regular_column' is not a virtual column. Virtual columns must have extension type names starting with 'arrow.virtual.'"
+        );
     }
 
     #[test]
@@ -5654,8 +5663,9 @@ pub(crate) mod tests {
                     Field::new("row_number", ArrowDataType::Int64, false)
                         .with_extension_type(RowNumber),
                 );
-                let options =
-                    ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                let options = ArrowReaderOptions::new()
+                    .with_virtual_columns(vec![row_number_field])
+                    .unwrap();
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()
                     .with_row_selection(selection)
@@ -5679,8 +5689,9 @@ pub(crate) mod tests {
                     Field::new("row_number", ArrowDataType::Int64, false)
                         .with_extension_type(RowNumber),
                 );
-                let options =
-                    ArrowReaderOptions::new().with_virtual_columns(vec![row_number_field]);
+                let options = ArrowReaderOptions::new()
+                    .with_virtual_columns(vec![row_number_field])
+                    .unwrap();
                 let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                     .unwrap()
                     .with_row_selection(selection)
