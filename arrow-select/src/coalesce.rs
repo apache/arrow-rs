@@ -245,11 +245,16 @@ impl BatchCoalescer {
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
         // We only support primitve now, fallback to filter_record_batch for other types
+        // Also, skip optimization when filter is not very selective
         if batch
             .schema()
             .fields()
             .iter()
             .any(|field| !field.data_type().is_primitive())
+            || self
+                .biggest_coalesce_batch_size
+                .map(|biggest_size| filter.true_count() > biggest_size)
+                .unwrap_or(false)
         {
             let batch = filter_record_batch(&batch, filter)?;
 
