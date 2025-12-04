@@ -25,7 +25,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
-use arrow_schema::{ArrowError, DataType, Fields};
+use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -105,6 +105,8 @@ pub fn interleave(
             _ => unreachable!("illegal dictionary key type {k}")
         },
         DataType::Struct(fields) => interleave_struct(fields, values, indices),
+        DataType::List(field) => interleave_list::<i32>(values, indices, field),
+        DataType::LargeList(field) => interleave_list::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
 }
@@ -310,6 +312,47 @@ fn interleave_struct(
     let struct_array =
         StructArray::try_new(fields.clone(), struct_fields_array?, interleaved.nulls)?;
     Ok(Arc::new(struct_array))
+}
+
+fn interleave_list<O: OffsetSizeTrait>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, GenericListArray<O>>::new(values, indices);
+
+    let mut child_indices = Vec::new();
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
+    offsets.push(O::from_usize(0).unwrap());
+
+    for (a, b) in indices {
+        let list = interleaved.arrays[*a];
+        let start = list.value_offsets()[*b].as_usize();
+        let end = list.value_offsets()[*b + 1].as_usize();
+
+        for child_idx in start..end {
+            child_indices.push((*a, child_idx));
+        }
+        offsets.push(O::from_usize(child_indices.len()).expect("offset overflow"));
+    }
+
+    let child_arrays: Vec<&dyn Array> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_ref())
+        .collect();
+
+    let interleaved_values = interleave(&child_arrays, &child_indices)?;
+
+    let offsets = OffsetBuffer::new(offsets.into());
+    let list_array = GenericListArray::<O>::new(
+        field.clone(),
+        offsets,
+        interleaved_values,
+        interleaved.nulls,
+    );
+
+    Ok(Arc::new(list_array))
 }
 
 /// Fallback implementation of interleave using [`MutableArrayData`]
