@@ -257,6 +257,7 @@ harness = false
 
 [[bench]]
 name = "parquet_round_trip"
+required-features = ["arrow"]
 harness = false
 
 [[bench]]
