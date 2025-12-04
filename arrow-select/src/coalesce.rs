@@ -21,8 +21,7 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{
-    FilterBuilder, IndexIterator, IterationStrategy, SlicesIterator, filter_record_batch,
-    is_optimize_beneficial_record_batch,
+    FilterBuilder, FilterPredicate, IndexIterator, IterationStrategy, filter_record_batch, is_optimize_beneficial_record_batch
 };
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
@@ -292,35 +291,9 @@ impl BatchCoalescer {
             });
 
         // Choose iteration strategy based on the optimized predicate
-        match predicate.strategy() {
-            IterationStrategy::None => {
-                // Nothing to do
-            }
-            IterationStrategy::All => {
-                unreachable!("All case handled above")
-            }
-            IterationStrategy::Slices(slices) => {
-                // Use precomputed slices for high selectivity
-                for &(start, end) in slices {
-                    self.copy_rows_slice(start, end)?;
-                }
-            }
-            IterationStrategy::SlicesIterator => {
-                // Use lazy slices iterator
-                for (start, end) in SlicesIterator::new(predicate.filter_array()) {
-                    self.copy_rows_slice(start, end)?;
-                }
-            }
-            IterationStrategy::Indices(indices) => {
-                // Use precomputed indices for low selectivity
-                self.copy_indices(indices.iter().copied())?;
-            }
-            IterationStrategy::IndexIterator => {
-                // Use lazy index iterator
-                let iter = IndexIterator::new(predicate.filter_array(), selected_count);
-                self.copy_indices(iter)?;
-            }
-        }
+        self.copy_from_filter(
+            &predicate,
+        )?;
 
         // Clear sources to allow memory to be freed
         for in_progress in self.in_progress_arrays.iter_mut() {
@@ -330,59 +303,35 @@ impl BatchCoalescer {
         Ok(())
     }
 
-    /// Helper to copy a contiguous slice of rows from [start, end)
-    fn copy_rows_slice(&mut self, start: usize, end: usize) -> Result<(), ArrowError> {
-        let len = end - start;
-        let mut offset = start;
-        let mut remaining = len;
+    /// Helper to copy rows at the given indices, handling batch boundaries efficiently
+    ///
+    /// This method batches the index iteration to avoid per-row batch boundary checks.
+    fn copy_from_filter(
+        &mut self,
+        filter: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        let count = filter.count();
+        let mut remaining = count;
+        let mut offset = 0;
 
-        // Copy rows in chunks that fit the target batch size
+        // We need to process the filter in chunks that fit the target batch size
         while remaining > 0 {
             let space_in_batch = self.target_batch_size - self.buffered_rows;
             let to_copy = remaining.min(space_in_batch);
 
-            // Copy to_copy rows from each array
+            // Create a sliced filter for just this chunk
+            // We need to find where the offset-th true value is and where the (offset+to_copy)-th is
+            let sliced_filter = filter.filter_array().slice(offset, to_copy);
+            let chunk_predicate = FilterBuilder::new(&sliced_filter).optimize().build();
+
+            // Copy all collected indices in one call per array
             for in_progress in self.in_progress_arrays.iter_mut() {
-                in_progress.copy_rows(offset, to_copy)?;
+                in_progress.copy_rows_by_filter(&chunk_predicate)?;
             }
 
             self.buffered_rows += to_copy;
             offset += to_copy;
             remaining -= to_copy;
-
-            // If we've filled the batch, finish it
-            if self.buffered_rows >= self.target_batch_size {
-                self.finish_buffered_batch()?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Helper to copy rows at the given indices, handling batch boundaries efficiently
-    ///
-    /// This method batches the index iteration to avoid per-row batch boundary checks.
-    fn copy_indices(&mut self, mut indices: impl Iterator<Item = usize>) -> Result<(), ArrowError> {
-        // Reusable buffer for collecting indices to copy in each batch
-        let mut indices_buffer = Vec::with_capacity(self.target_batch_size);
-
-        loop {
-            // Calculate how many rows we can copy before hitting the batch boundary
-            let space_in_batch = self.target_batch_size - self.buffered_rows;
-
-            // Collect up to space_in_batch indices
-            indices_buffer.clear();
-            indices_buffer.extend(indices.by_ref().take(space_in_batch));
-
-            if indices_buffer.is_empty() {
-                break;
-            }
-
-            // Copy all collected indices in one call per array
-            for in_progress in self.in_progress_arrays.iter_mut() {
-                in_progress.copy_rows_by_indices(&indices_buffer)?;
-            }
-
-            self.buffered_rows += indices_buffer.len();
 
             // If we've filled the batch, finish it
             if self.buffered_rows >= self.target_batch_size {
@@ -722,8 +671,12 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
     /// Copy rows at the given indices from the current source array into the in-progress array
-    fn copy_rows_by_indices(&mut self, indices: &[usize]) -> Result<(), ArrowError> {
-        for &idx in indices {
+    fn copy_rows_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+    ) -> Result<(), ArrowError> {
+        // Default implementation: iterate over indices from the filter
+        for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
             self.copy_rows(idx, 1)?;
         }
         Ok(())
