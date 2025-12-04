@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
+use crate::filter::{FilterPredicate, IndexIterator, IterationStrategy, SlicesIterator};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
 use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
@@ -92,8 +93,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         Ok(())
     }
 
-    /// Copy rows by indices using an iterator (internal helper)
-    fn copy_rows_by_indices(&mut self, indices: &[usize]) -> Result<(), ArrowError> {
+    /// Copy rows by indices using a predicate
+    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
         self.ensure_capacity();
 
         let s = self
@@ -107,21 +108,86 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             .as_primitive::<T>();
 
         let values = s.values();
+        let count = filter.count();
 
-        // Copy values and nulls for each index
-        if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
-            for &idx in indices {
-                if nulls.is_null(idx) {
-                    self.nulls.append_null();
+        // Use the predicate's strategy for optimal iteration
+        match filter.strategy() {
+            IterationStrategy::SlicesIterator => {
+                // Copy values using slices
+                for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                    self.current.extend_from_slice(&values[start..end]);
+                }
+                // Copy nulls using slices
+                if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
+                    for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                        let slice = nulls.slice(start, end - start);
+                        self.nulls.append_buffer(&slice);
+                    }
                 } else {
-                    self.nulls.append_non_null();
+                    self.nulls.append_n_non_nulls(count);
                 }
             }
-        } else {
-            self.nulls.append_n_non_nulls(indices.len());
+            IterationStrategy::Slices(slices) => {
+                // Copy values using precomputed slices
+                for &(start, end) in slices {
+                    self.current.extend_from_slice(&values[start..end]);
+                }
+                // Copy nulls using slices
+                if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
+                    for &(start, end) in slices {
+                        let slice = nulls.slice(start, end - start);
+                        self.nulls.append_buffer(&slice);
+                    }
+                } else {
+                    self.nulls.append_n_non_nulls(count);
+                }
+            }
+            IterationStrategy::IndexIterator => {
+                // Copy values and nulls for each index
+                if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
+                    for idx in IndexIterator::new(filter.filter_array(), count) {
+                        if nulls.is_null(idx) {
+                            self.nulls.append_null();
+                        } else {
+                            self.nulls.append_non_null();
+                        }
+                        self.current.push(values[idx]);
+                    }
+                } else {
+                    self.nulls.append_n_non_nulls(count);
+                    for idx in IndexIterator::new(filter.filter_array(), count) {
+                        self.current.push(values[idx]);
+                    }
+                }
+            }
+            IterationStrategy::Indices(indices) => {
+                // Copy values and nulls using precomputed indices
+                if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
+                    for &idx in indices {
+                        if nulls.is_null(idx) {
+                            self.nulls.append_null();
+                        } else {
+                            self.nulls.append_non_null();
+                        }
+                    }
+                } else {
+                    self.nulls.append_n_non_nulls(count);
+                }
+                self.current.extend(indices.iter().map(|&idx| values[idx]));
+            }
+            IterationStrategy::All => {
+                // Copy all values
+                self.current.extend_from_slice(values);
+                if let Some(nulls) = s.nulls() {
+                    self.nulls.append_buffer(nulls);
+                } else {
+                    self.nulls.append_n_non_nulls(values.len());
+                }
+            }
+            IterationStrategy::None => {
+                // Nothing to copy
+            }
         }
-        self.current
-            .extend(indices.into_iter().map(|idx| values[*idx]));
 
         Ok(())
     }
