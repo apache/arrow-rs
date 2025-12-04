@@ -256,6 +256,10 @@ name = "metadata"
 harness = false
 
 [[bench]]
+name = "parquet_round_trip"
+harness = false
+
+[[bench]]
 name = "row_selector"
 harness = false
 required-features = ["arrow"]
