@@ -92,6 +92,40 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         Ok(())
     }
 
+    /// Copy rows by indices using an iterator (internal helper)
+    fn copy_rows_by_indices(&mut self, indices: &[usize]) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+
+        let s = self
+            .source
+            .as_ref()
+            .ok_or_else(|| {
+                ArrowError::InvalidArgumentError(
+                    "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
+                )
+            })?
+            .as_primitive::<T>();
+
+        let values = s.values();
+
+        // Copy values and nulls for each index
+        if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
+            for &idx in indices {
+                if nulls.is_null(idx) {
+                    self.nulls.append_null();
+                } else {
+                    self.nulls.append_non_null();
+                }
+            }
+        } else {
+            self.nulls.append_n_non_nulls(indices.len());
+        }
+        self.current
+            .extend(indices.into_iter().map(|idx| values[*idx]));
+
+        Ok(())
+    }
+
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
         // take and reset the current values and nulls
         let values = std::mem::take(&mut self.current);

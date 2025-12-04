@@ -80,13 +80,17 @@ impl Iterator for SlicesIterator<'_> {
 ///
 /// This provides the best performance on most predicates, apart from those which keep
 /// large runs and therefore favour [`SlicesIterator`]
-struct IndexIterator<'a> {
+pub struct IndexIterator<'a> {
     remaining: usize,
     iter: BitIndexIterator<'a>,
 }
 
 impl<'a> IndexIterator<'a> {
-    fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
+    /// Creates a new [`IndexIterator`] from a [`BooleanArray`]
+    ///
+    /// # Panics
+    /// Panics if `filter` has null values
+    pub fn new(filter: &'a BooleanArray, remaining: usize) -> Self {
         assert_eq!(filter.null_count(), 0);
         let iter = filter.values().set_indices();
         Self { remaining, iter }
@@ -167,6 +171,21 @@ pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, 
     filter_array(values, &predicate)
 }
 
+/// Determines if calling [FilterBuilder::optimize] is beneficial for the
+/// given [`RecordBatch`].
+pub fn is_optimize_beneficial_record_batch(record_batch: &RecordBatch) -> bool {
+    let num_cols = record_batch.num_columns();
+    if num_cols > 1 {
+        return true;
+    }
+    if num_cols == 1 {
+        return FilterBuilder::is_optimize_beneficial(
+            record_batch.schema_ref().field(0).data_type(),
+        );
+    }
+    false
+}
+
 /// Returns a filtered [RecordBatch] where the corresponding elements of
 /// `predicate` are true.
 ///
@@ -182,13 +201,7 @@ pub fn filter_record_batch(
     predicate: &BooleanArray,
 ) -> Result<RecordBatch, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
-    let num_cols = record_batch.num_columns();
-    if num_cols > 1
-        || (num_cols > 0
-            && FilterBuilder::is_optimize_beneficial(
-                record_batch.schema_ref().field(0).data_type(),
-            ))
-    {
+    if is_optimize_beneficial_record_batch(record_batch) {
         // Only optimize if filtering more than one column or if the column contains multiple internal arrays
         // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
@@ -276,15 +289,22 @@ impl FilterBuilder {
 }
 
 /// The iteration strategy used to evaluate [`FilterPredicate`]
-#[derive(Debug)]
-enum IterationStrategy {
-    /// A lazily evaluated iterator of ranges
+///
+/// This determines how the filter will iterate over the selected rows.
+/// The strategy is chosen based on the selectivity of the filter.
+#[derive(Debug, Clone)]
+pub enum IterationStrategy {
+    /// A lazily evaluated iterator of ranges (slices)
+    ///
+    /// Best for high selectivity filters (> 80% of rows selected)
     SlicesIterator,
     /// A lazily evaluated iterator of indices
+    ///
+    /// Best for low selectivity filters (< 80% of rows selected)
     IndexIterator,
     /// A precomputed list of indices
     Indices(Vec<usize>),
-    /// A precomputed array of ranges
+    /// A precomputed array of ranges (start, end)
     Slices(Vec<(usize, usize)>),
     /// Select all rows
     All,
@@ -295,7 +315,13 @@ enum IterationStrategy {
 impl IterationStrategy {
     /// The default [`IterationStrategy`] for a filter of length `filter_length`
     /// and selecting `filter_count` rows
-    fn default_strategy(filter_length: usize, filter_count: usize) -> Self {
+    ///
+    /// Returns:
+    /// - [`IterationStrategy::None`] if `filter_count` is 0
+    /// - [`IterationStrategy::All`] if `filter_count == filter_length`
+    /// - [`IterationStrategy::SlicesIterator`] if selectivity > 80%
+    /// - [`IterationStrategy::IndexIterator`] otherwise
+    pub fn default_strategy(filter_length: usize, filter_count: usize) -> Self {
         if filter_length == 0 || filter_count == 0 {
             return IterationStrategy::None;
         }
@@ -358,6 +384,16 @@ impl FilterPredicate {
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// Returns the iteration strategy used by this [`FilterPredicate`]
+    pub fn strategy(&self) -> &IterationStrategy {
+        &self.strategy
+    }
+
+    /// Returns the underlying filter array
+    pub fn filter_array(&self) -> &BooleanArray {
+        &self.filter
     }
 }
 

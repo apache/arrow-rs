@@ -20,12 +20,16 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::filter::filter_record_batch;
+use crate::filter::{
+    FilterBuilder, IndexIterator, IterationStrategy, SlicesIterator, filter_record_batch,
+    is_optimize_beneficial_record_batch,
+};
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
 use arrow_schema::{ArrowError, DataType, SchemaRef};
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::usize;
 // Originally From DataFusion's coalesce module:
 // https://github.com/apache/datafusion/blob/9d2f04996604e709ee440b65f41e7b882f50b788/datafusion/physical-plan/src/coalesce/mod.rs#L26-L25
 
@@ -211,7 +215,10 @@ impl BatchCoalescer {
     /// Push a batch into the Coalescer after applying a filter
     ///
     /// This is semantically equivalent of calling [`Self::push_batch`]
-    /// with the results from  [`filter_record_batch`]
+    /// with the results from  [`filter_record_batch`], but avoids
+    /// materializing the intermediate filtered batch.
+    ///
+    /// [`filter_record_batch`]: crate::filter::filter_record_batch
     ///
     /// # Example
     /// ```
@@ -237,10 +244,148 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        // TODO: optimize this to avoid materializing (copying the results
-        // of filter to a new batch)
-        let filtered_batch = filter_record_batch(&batch, filter)?;
-        self.push_batch(filtered_batch)
+        // We only support primitve now, fallback to filter_record_batch for other types
+        if batch
+            .schema()
+            .fields()
+            .iter()
+            .any(|field| !field.data_type().is_primitive())
+        {
+            let batch = filter_record_batch(&batch, filter)?;
+
+            self.push_batch(batch)?;
+            return Ok(());
+        }
+
+        // Build an optimized filter predicate that chooses the best iteration strategy
+        let mut predicate = FilterBuilder::new(filter);
+        if is_optimize_beneficial_record_batch(&batch) {
+            predicate = predicate.optimize();
+        }
+        let predicate = predicate.build();
+        let selected_count = predicate.count();
+
+        // Fast path: skip if no rows selected
+        if selected_count == 0 {
+            return Ok(());
+        }
+
+        // Fast path: if all rows selected, just push the batch
+        if matches!(predicate.strategy(), IterationStrategy::All) {
+            return self.push_batch(batch);
+        }
+
+        let (_schema, arrays, _num_rows) = batch.into_parts();
+
+        // Setup input arrays as sources
+        assert_eq!(arrays.len(), self.in_progress_arrays.len());
+        self.in_progress_arrays
+            .iter_mut()
+            .zip(&arrays)
+            .for_each(|(in_progress, array)| {
+                in_progress.set_source(Some(Arc::clone(array)));
+            });
+
+        // Choose iteration strategy based on the optimized predicate
+        match predicate.strategy() {
+            IterationStrategy::None => {
+                // Nothing to do
+            }
+            IterationStrategy::All => {
+                unreachable!("All case handled above")
+            }
+            IterationStrategy::Slices(slices) => {
+                // Use precomputed slices for high selectivity
+                for &(start, end) in slices {
+                    self.copy_rows_slice(start, end)?;
+                }
+            }
+            IterationStrategy::SlicesIterator => {
+                // Use lazy slices iterator
+                for (start, end) in SlicesIterator::new(predicate.filter_array()) {
+                    self.copy_rows_slice(start, end)?;
+                }
+            }
+            IterationStrategy::Indices(indices) => {
+                // Use precomputed indices for low selectivity
+                self.copy_indices(indices.iter().copied())?;
+            }
+            IterationStrategy::IndexIterator => {
+                // Use lazy index iterator
+                let iter = IndexIterator::new(predicate.filter_array(), selected_count);
+                self.copy_indices(iter)?;
+            }
+        }
+
+        // Clear sources to allow memory to be freed
+        for in_progress in self.in_progress_arrays.iter_mut() {
+            in_progress.set_source(None);
+        }
+
+        Ok(())
+    }
+
+    /// Helper to copy a contiguous slice of rows from [start, end)
+    fn copy_rows_slice(&mut self, start: usize, end: usize) -> Result<(), ArrowError> {
+        let len = end - start;
+        let mut offset = start;
+        let mut remaining = len;
+
+        // Copy rows in chunks that fit the target batch size
+        while remaining > 0 {
+            let space_in_batch = self.target_batch_size - self.buffered_rows;
+            let to_copy = remaining.min(space_in_batch);
+
+            // Copy to_copy rows from each array
+            for in_progress in self.in_progress_arrays.iter_mut() {
+                in_progress.copy_rows(offset, to_copy)?;
+            }
+
+            self.buffered_rows += to_copy;
+            offset += to_copy;
+            remaining -= to_copy;
+
+            // If we've filled the batch, finish it
+            if self.buffered_rows >= self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Helper to copy rows at the given indices, handling batch boundaries efficiently
+    ///
+    /// This method batches the index iteration to avoid per-row batch boundary checks.
+    fn copy_indices(&mut self, mut indices: impl Iterator<Item = usize>) -> Result<(), ArrowError> {
+        // Reusable buffer for collecting indices to copy in each batch
+        let mut indices_buffer = Vec::with_capacity(self.target_batch_size);
+
+        loop {
+            // Calculate how many rows we can copy before hitting the batch boundary
+            let space_in_batch = self.target_batch_size - self.buffered_rows;
+
+            // Collect up to space_in_batch indices
+            indices_buffer.clear();
+            indices_buffer.extend(indices.by_ref().take(space_in_batch));
+
+            if indices_buffer.is_empty() {
+                break;
+            }
+
+            // Copy all collected indices in one call per array
+            for in_progress in self.in_progress_arrays.iter_mut() {
+                in_progress.copy_rows_by_indices(&indices_buffer)?;
+            }
+
+            self.buffered_rows += indices_buffer.len();
+
+            // If we've filled the batch, finish it
+            if self.buffered_rows >= self.target_batch_size {
+                self.finish_buffered_batch()?;
+            }
+        }
+
+        Ok(())
     }
 
     /// Push all the rows from `batch` into the Coalescer
@@ -571,6 +716,14 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     /// Return an error if the source array is not set
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
+    /// Copy rows at the given indices from the current source array into the in-progress array
+    fn copy_rows_by_indices(&mut self, indices: &[usize]) -> Result<(), ArrowError> {
+        for &idx in indices {
+            self.copy_rows(idx, 1)?;
+        }
+        Ok(())
+    }
+
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
 }
@@ -579,6 +732,7 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 mod tests {
     use super::*;
     use crate::concat::concat_batches;
+    use crate::filter::filter_record_batch;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
     use arrow_array::{
