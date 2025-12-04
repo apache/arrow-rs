@@ -412,7 +412,7 @@ fn float_benches(c: &mut Criterion, column_type: ColumnType) {
 
 fn binary_benches(c: &mut Criterion, max_str_len: usize) {
     let spec = ParquetFileSpec::new(ColumnType::Binary(max_str_len))
-        .with_num_columns(10)
+        .with_num_columns(5)
         .with_num_row_groups(10)
         .with_use_dict(true);
     read_write(c, spec, &format!("Binary({max_str_len}) dict"));
@@ -429,7 +429,7 @@ fn binary_benches(c: &mut Criterion, max_str_len: usize) {
 
 fn flba_benches(c: &mut Criterion, len: i32) {
     let spec = ParquetFileSpec::new(ColumnType::FixedLen(len))
-        .with_num_columns(10)
+        .with_num_columns(5)
         .with_num_row_groups(10)
         .with_use_dict(true);
     read_write(c, spec, &format!("Fixed({len}) dict"));
@@ -449,7 +449,6 @@ fn flba_benches(c: &mut Criterion, len: i32) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    
     int_benches(c, ColumnType::Int32);
     int_benches(c, ColumnType::Int64);
     float_benches(c, ColumnType::Float);
