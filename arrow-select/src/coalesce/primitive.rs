@@ -155,9 +155,8 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                     }
                 } else {
                     self.nulls.append_n_non_nulls(count);
-                    for idx in IndexIterator::new(filter.filter_array(), count) {
-                        self.current.push(values[idx]);
-                    }
+                    let indices = IndexIterator::new(filter.filter_array(), count);
+                    self.current.extend(indices.map(|idx| values[idx]));
                 }
             }
             IterationStrategy::Indices(indices) => {
