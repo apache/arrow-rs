@@ -315,7 +315,12 @@ impl BatchCoalescer {
             let to_copy = remaining.min(space_in_batch);
 
             // Find how many filter positions we need to cover `to_copy` set bits
-            let chunk_len = find_nth_set_bit_position(filter, filter_pos, to_copy) - filter_pos;
+            // Skip the expensive search if all remaining rows fit in the current batch
+            let chunk_len = if remaining <= space_in_batch {
+                filter.len() - filter_pos
+            } else {
+                find_nth_set_bit_position(filter, filter_pos, to_copy) - filter_pos
+            };
 
             let chunk_filter = filter.slice(filter_pos, chunk_len);
             let mut filter_builder = FilterBuilder::new(&chunk_filter);
