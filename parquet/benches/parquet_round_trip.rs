@@ -228,6 +228,8 @@ pub struct ParquetFileSpec {
     use_dict: bool,
 }
 
+const DEFAULT_NUM_COLUMNS: usize = 10;
+const DEFAULT_NUM_ROWGROUPS: usize = 10;
 const DEFAULT_ROWS_PER_PAGE: usize = 2_000;
 const DEFAULT_ROWS_PER_ROWGROUP: usize = 10_000;
 
@@ -235,8 +237,8 @@ impl ParquetFileSpec {
     pub fn new(column_type: ColumnType) -> Self {
         Self {
             column_type,
-            num_columns: 1,
-            num_row_groups: 1,
+            num_columns: DEFAULT_NUM_COLUMNS,
+            num_row_groups: DEFAULT_NUM_ROWGROUPS,
             rows_per_row_group: DEFAULT_ROWS_PER_ROWGROUP,
             rows_per_page: DEFAULT_ROWS_PER_PAGE,
             encoding: Encoding::PLAIN,
@@ -374,10 +376,7 @@ fn int_benches(c: &mut Criterion, column_type: ColumnType) {
         _ => unreachable!(),
     };
 
-    let spec = ParquetFileSpec::new(column_type)
-        .with_num_columns(10)
-        .with_num_row_groups(10)
-        .with_use_dict(true);
+    let spec = ParquetFileSpec::new(column_type).with_use_dict(true);
     read_write(c, spec, &format!("{ctype} dict"));
 
     let spec = spec.with_use_dict(false).with_encoding(Encoding::PLAIN);
@@ -397,10 +396,7 @@ fn float_benches(c: &mut Criterion, column_type: ColumnType) {
         _ => unreachable!(),
     };
 
-    let spec = ParquetFileSpec::new(column_type)
-        .with_num_columns(10)
-        .with_num_row_groups(10)
-        .with_use_dict(true);
+    let spec = ParquetFileSpec::new(column_type).with_use_dict(true);
     read_write(c, spec, &format!("{ctype} dict"));
 
     let spec = spec.with_use_dict(false).with_encoding(Encoding::PLAIN);
@@ -413,7 +409,6 @@ fn float_benches(c: &mut Criterion, column_type: ColumnType) {
 fn binary_benches(c: &mut Criterion, max_str_len: usize) {
     let spec = ParquetFileSpec::new(ColumnType::Binary(max_str_len))
         .with_num_columns(5)
-        .with_num_row_groups(10)
         .with_use_dict(true);
     read_write(c, spec, &format!("Binary({max_str_len}) dict"));
 
@@ -430,21 +425,16 @@ fn binary_benches(c: &mut Criterion, max_str_len: usize) {
 fn flba_benches(c: &mut Criterion, len: i32) {
     let spec = ParquetFileSpec::new(ColumnType::FixedLen(len))
         .with_num_columns(5)
-        .with_num_row_groups(10)
         .with_use_dict(true);
     read_write(c, spec, &format!("Fixed({len}) dict"));
 
     let spec = spec.with_use_dict(false).with_encoding(Encoding::PLAIN);
     read_write(c, spec, &format!("Fixed({len}) plain"));
 
-    let spec = spec
-        .with_use_dict(false)
-        .with_encoding(Encoding::BYTE_STREAM_SPLIT);
+    let spec = spec.with_encoding(Encoding::BYTE_STREAM_SPLIT);
     read_write(c, spec, &format!("Fixed({len}) byte_stream_split"));
 
-    let spec = spec
-        .with_use_dict(false)
-        .with_encoding(Encoding::DELTA_BYTE_ARRAY);
+    let spec = spec.with_encoding(Encoding::DELTA_BYTE_ARRAY);
     read_write(c, spec, &format!("Fixed({len}) delta_byte_array"));
 }
 
