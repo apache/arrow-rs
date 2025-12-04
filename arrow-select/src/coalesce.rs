@@ -21,7 +21,8 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{
-    FilterBuilder, FilterPredicate, IndexIterator, IterationStrategy, filter_record_batch, is_optimize_beneficial_record_batch
+    FilterBuilder, FilterPredicate, IndexIterator, filter_record_batch,
+    is_optimize_beneficial_record_batch,
 };
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
@@ -262,12 +263,8 @@ impl BatchCoalescer {
         }
 
         // Build an optimized filter predicate that chooses the best iteration strategy
-        let mut predicate = FilterBuilder::new(filter);
-        if is_optimize_beneficial_record_batch(&batch) {
-            predicate = predicate.optimize();
-        }
-        let predicate = predicate.build();
-        let selected_count = predicate.count();
+        let is_optimize_beneficial = is_optimize_beneficial_record_batch(&batch);
+        let selected_count = filter.true_count();
 
         // Fast path: skip if no rows selected
         if selected_count == 0 {
@@ -275,7 +272,7 @@ impl BatchCoalescer {
         }
 
         // Fast path: if all rows selected, just push the batch
-        if matches!(predicate.strategy(), IterationStrategy::All) {
+        if selected_count == batch.num_rows() {
             return self.push_batch(batch);
         }
 
@@ -291,9 +288,7 @@ impl BatchCoalescer {
             });
 
         // Choose iteration strategy based on the optimized predicate
-        self.copy_from_filter(
-            &predicate,
-        )?;
+        self.copy_from_filter(&filter, is_optimize_beneficial, selected_count)?;
 
         // Clear sources to allow memory to be freed
         for in_progress in self.in_progress_arrays.iter_mut() {
@@ -308,9 +303,10 @@ impl BatchCoalescer {
     /// This method batches the index iteration to avoid per-row batch boundary checks.
     fn copy_from_filter(
         &mut self,
-        filter: &FilterPredicate,
+        filter: &BooleanArray,
+        is_optimize_beneficial: bool,
+        count: usize,
     ) -> Result<(), ArrowError> {
-        let count = filter.count();
         let mut remaining = count;
         let mut offset = 0;
 
@@ -319,10 +315,13 @@ impl BatchCoalescer {
             let space_in_batch = self.target_batch_size - self.buffered_rows;
             let to_copy = remaining.min(space_in_batch);
 
-            // Create a sliced filter for just this chunk
-            // We need to find where the offset-th true value is and where the (offset+to_copy)-th is
-            let sliced_filter = filter.filter_array().slice(offset, to_copy);
-            let chunk_predicate = FilterBuilder::new(&sliced_filter).optimize().build();
+            let sliced_filter = filter.slice(offset, to_copy);
+            let mut filter = FilterBuilder::new(&sliced_filter);
+
+            if is_optimize_beneficial {
+                filter = filter.optimize();
+            }
+            let chunk_predicate = filter.build();
 
             // Copy all collected indices in one call per array
             for in_progress in self.in_progress_arrays.iter_mut() {
@@ -671,10 +670,7 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
     /// Copy rows at the given indices from the current source array into the in-progress array
-    fn copy_rows_by_filter(
-        &mut self,
-        filter: &FilterPredicate,
-    ) -> Result<(), ArrowError> {
+    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
         // Default implementation: iterate over indices from the filter
         for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
             self.copy_rows(idx, 1)?;
