@@ -102,8 +102,8 @@ impl ExtensionType for WkbType {
     fn serialize_metadata(&self) -> Option<String> {
         use serde_json::Value;
 
-        // Detect common representations of lon/lat and convert them to the canonical Parquet
-        // representation for lon/lat (empty/omitted)
+        // Detect common representations of lon/lat on the standard WGS84 ellipsoid and convert
+        // them to the canonical Parquet representation for lon/lat (empty/omitted)
         let crs = &self.0.crs.as_ref().and_then(|crs| match crs {
             Value::String(s) if s == "EPSG:4326" || s == "OGC:CRS84" => None,
             Value::Object(_) => match (&crs["id"]["authority"], &crs["id"]["code"]) {
@@ -123,9 +123,18 @@ impl ExtensionType for WkbType {
             _ => Some(crs),
         });
 
-        let md = Metadata {
-            crs: (*crs).cloned(),
-            algorithm: self.0.algorithm.clone(),
+        // Use a local alias of our Metadata to avoid clones. CRS in particular may be large
+        // (multiple KiB) so cloning it should be avoided when possible.
+        #[derive(Serialize)]
+        struct MetadataAlias<'a> {
+            #[serde(skip_serializing_if = "Option::is_none")]
+            crs: Option<&'a serde_json::Value>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            algorithm: &'a Option<String>,
+        }
+        let md = MetadataAlias {
+            crs: *crs,
+            algorithm: &self.0.algorithm,
         };
 
         serde_json::to_string(&md).ok()
@@ -179,7 +188,7 @@ mod tests {
     /// Test metadata serialization with CRS as a simple string
     #[test]
     fn test_metadata_crs_string_roundtrip() -> ArrowResult<()> {
-        let metadata = Metadata::new(Some(String::from("srid:1234")), None);
+        let metadata = Metadata::new(Some("srid:1234"), None);
         let wkb = WkbType::new(Some(metadata));
 
         let serialized = wkb.serialize_metadata().unwrap();
@@ -199,7 +208,7 @@ mod tests {
     #[test]
     fn test_metadata_crs_json_object_roundtrip() -> ArrowResult<()> {
         let crs_json = r#"{"type":"custom_json","properties":{"name":"EPSG:4326"}}"#;
-        let metadata = Metadata::new(Some(crs_json.to_string()), None);
+        let metadata = Metadata::new(Some(crs_json), None);
         let wkb = WkbType::new(Some(metadata));
 
         let serialized = wkb.serialize_metadata().unwrap();
@@ -238,10 +247,7 @@ mod tests {
     /// Test metadata serialization with both CRS and algorithm
     #[test]
     fn test_metadata_full_roundtrip() -> ArrowResult<()> {
-        let metadata = Metadata::new(
-            Some(String::from("srid:1234")),
-            Some("spherical".to_string()),
-        );
+        let metadata = Metadata::new(Some("srid:1234"), Some("spherical".to_string()));
         let wkb = WkbType::new(Some(metadata));
 
         let serialized = wkb.serialize_metadata().unwrap();
@@ -305,7 +311,7 @@ mod tests {
     /// Test extension type integration using a Field
     #[test]
     fn test_extension_type_with_field() -> ArrowResult<()> {
-        let metadata = Metadata::new(Some(String::from("srid:1234")), None);
+        let metadata = Metadata::new(Some("srid:1234"), None);
         let wkb_type = WkbType::new(Some(metadata));
 
         let mut field = Field::new("geometry", DataType::Binary, false);
@@ -341,13 +347,13 @@ mod tests {
     #[test]
     fn test_crs_canonicalization() -> ArrowResult<()> {
         // EPSG:4326 as string should be omitted
-        let metadata = Metadata::new(Some(String::from("EPSG:4326")), None);
+        let metadata = Metadata::new(Some("EPSG:4326"), None);
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, "{}");
 
         // OGC:CRS84 as string should be omitted
-        let metadata = Metadata::new(Some(String::from("OGC:CRS84")), None);
+        let metadata = Metadata::new(Some("OGC:CRS84"), None);
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, "{}");
@@ -355,36 +361,33 @@ mod tests {
         // A JSON object that reasonably looks like PROJJSON for EPSG:4326 should be omitted
         // detect "4326" as a string
         let crs_json = r#"{"id":{"authority":"EPSG","code":"4326"}}"#;
-        let metadata = Metadata::new(Some(crs_json.to_string()), None);
+        let metadata = Metadata::new(Some(crs_json), None);
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, "{}");
 
         // detect 4326 as a number
         let crs_json = r#"{"id":{"authority":"EPSG","code":4326}}"#;
-        let metadata = Metadata::new(Some(crs_json.to_string()), None);
+        let metadata = Metadata::new(Some(crs_json), None);
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, "{}");
 
         // A JSON object that reasonably looks like PROJJSON for OGC:CRS84 should be omitted
         let crs_json = r#"{"id":{"authority":"OGC","code":"CRS84"}}"#;
-        let metadata = Metadata::new(Some(crs_json.to_string()), None);
+        let metadata = Metadata::new(Some(crs_json), None);
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, "{}");
 
         // Other input types should be preserved
-        let metadata = Metadata::new(Some(String::from("srid:1234")), None);
+        let metadata = Metadata::new(Some("srid:1234"), None);
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, r#"{"crs":"srid:1234"}"#);
 
         // Canonicalization should work with algorithm field
-        let metadata = Metadata::new(
-            Some(String::from("EPSG:4326")),
-            Some(String::from("spherical")),
-        );
+        let metadata = Metadata::new(Some("EPSG:4326"), Some(String::from("spherical")));
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, r#"{"algorithm":"spherical"}"#);
