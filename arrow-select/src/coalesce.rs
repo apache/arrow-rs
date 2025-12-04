@@ -288,7 +288,7 @@ impl BatchCoalescer {
             });
 
         // Choose iteration strategy based on the optimized predicate
-        self.copy_from_filter(&filter, is_optimize_beneficial, selected_count)?;
+        self.copy_from_filter(filter, is_optimize_beneficial, selected_count)?;
 
         // Clear sources to allow memory to be freed
         for in_progress in self.in_progress_arrays.iter_mut() {
