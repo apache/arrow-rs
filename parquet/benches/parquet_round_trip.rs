@@ -241,9 +241,10 @@ pub fn encode_row_group(
     spec: &ParquetFileSpec,
     mut column_writers: Vec<ArrowColumnWriter>,
 ) -> Vec<ArrowColumnChunk> {
+    const SEED: usize = 31;
     let num_rows = spec.rows_per_row_group.min(100);
     // use the same batch repeatedly otherwise the data generation will dominate the time
-    let batch = create_batch(schema, spec.column_type, 0, spec.num_columns, num_rows);
+    let batch = create_batch(schema, spec.column_type, SEED, spec.num_columns, num_rows);
     let mut rows_written = 0;
     while rows_written < spec.rows_per_row_group {
         let rows_left = spec.rows_per_row_group - rows_written;
@@ -268,8 +269,7 @@ pub fn encode_row_group(
         .collect()
 }
 
-pub fn file_from_spec(spec: ParquetFileSpec, buf_size: Option<usize>) -> Bytes {
-    let mut buf = Vec::<u8>::with_capacity(buf_size.unwrap_or(1_000_000));
+pub fn file_from_spec(spec: ParquetFileSpec, buffer: &mut Vec<u8>) {
     let schema = schema(spec.column_type, spec.num_columns);
     let props = WriterProperties::builder()
         .set_max_row_group_size(spec.rows_per_row_group)
@@ -278,37 +278,38 @@ pub fn file_from_spec(spec: ParquetFileSpec, buf_size: Option<usize>) -> Bytes {
         .set_dictionary_enabled(spec.use_dict)
         .set_compression(parquet::basic::Compression::UNCOMPRESSED)
         .build();
-    {
-        let writer = ArrowWriter::try_new(&mut buf, schema.clone(), Some(props)).unwrap();
-        let (mut file_writer, row_group_factory) = writer.into_serialized_writer().unwrap();
 
-        for rg in 0..spec.num_row_groups {
-            let col_writers = row_group_factory.create_column_writers(rg).unwrap();
+    let writer = ArrowWriter::try_new(buffer, schema.clone(), Some(props)).unwrap();
+    let (mut file_writer, row_group_factory) = writer.into_serialized_writer().unwrap();
 
-            let encoded_columns = encode_row_group(&schema, &spec, col_writers);
-            let mut rg_writer = file_writer.next_row_group().unwrap();
-            for col_chunk in encoded_columns.into_iter() {
-                col_chunk.append_to_row_group(&mut rg_writer).unwrap();
-            }
-            rg_writer.close().unwrap();
+    for rg in 0..spec.num_row_groups {
+        let col_writers = row_group_factory.create_column_writers(rg).unwrap();
+
+        let encoded_columns = encode_row_group(&schema, &spec, col_writers);
+        let mut rg_writer = file_writer.next_row_group().unwrap();
+        for col_chunk in encoded_columns.into_iter() {
+            col_chunk.append_to_row_group(&mut rg_writer).unwrap();
         }
-        file_writer.close().unwrap();
+        rg_writer.close().unwrap();
     }
-
-    buf.into()
+    file_writer.close().unwrap();
 }
 
 fn read_write(c: &mut Criterion, spec: ParquetFileSpec, msg: &str) {
-    let f = file_from_spec(spec, None);
-    let buf_size = Some(f.len());
+    let mut buffer = Vec::with_capacity(1_000_000);
+
+    // read once to size the buffer
+    file_from_spec(spec, &mut buffer);
 
     c.bench_function(&format!("write {msg}"), |b| {
-        b.iter(|| file_from_spec(spec, buf_size))
+        buffer.clear();
+        b.iter(|| file_from_spec(spec, &mut buffer))
     });
 
+    let file_bytes = Bytes::from(buffer);
     c.bench_function(&format!("read {msg}"), |b| {
         b.iter(|| {
-            let record_reader = ParquetRecordBatchReaderBuilder::try_new(f.clone())
+            let record_reader = ParquetRecordBatchReaderBuilder::try_new(file_bytes.clone())
                 .unwrap()
                 .build()
                 .unwrap();
