@@ -448,6 +448,9 @@ impl UnionFields {
     ///
     /// Panics if the number of fields exceeds 127 (the maximum value for i8 type IDs).
     ///
+    /// If you want to avoid panics, use [`UnionFields::try_from_fields`] instead, which
+    /// returns a `Result`.
+    ///
     /// # Examples
     ///
     /// ```
@@ -470,11 +473,65 @@ impl UnionFields {
             .into_iter()
             .enumerate()
             .map(|(i, field)| {
-                let id = i8::try_from(i).expect("UnionFields cannot contain more than 127 fields");
+                let id = i8::try_from(i).expect("UnionFields cannot contain more than 128 fields");
 
                 (id, field.into())
             })
             .collect()
+    }
+
+    /// Create a new [`UnionFields`] from a collection of fields with automatically
+    /// assigned type IDs starting from 0.
+    ///
+    /// The type IDs are assigned in increasing order: 0, 1, 2, 3, etc.
+    ///
+    /// This is the non-panicking version of [`UnionFields::from_fields`].
+    ///
+    /// See <https://arrow.apache.org/docs/format/Columnar.html#union-layout>
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the number of fields exceeds 127 (the maximum value for i8 type IDs).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, UnionFields};
+    /// // Create a new UnionFields with automatic type id assignment
+    /// // 0 -> DataType::UInt8
+    /// // 1 -> DataType::Utf8
+    /// let result = UnionFields::try_from_fields(vec![
+    ///     Field::new("field1", DataType::UInt8, false),
+    ///     Field::new("field2", DataType::Utf8, false),
+    /// ]);
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().len(), 2);
+    ///
+    /// // This will fail with too many fields
+    /// let many_fields: Vec<_> = (0..200)
+    ///     .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+    ///     .collect();
+    /// let result = UnionFields::try_from_fields(many_fields);
+    /// assert!(result.is_err());
+    /// ```
+    pub fn try_from_fields<F>(fields: F) -> Result<Self, ArrowError>
+    where
+        F: IntoIterator,
+        F::Item: Into<FieldRef>,
+    {
+        let mut out = Vec::with_capacity(i8::MAX as usize + 1);
+
+        for (i, field) in fields.into_iter().enumerate() {
+            let id = i8::try_from(i).map_err(|_| {
+                ArrowError::InvalidArgumentError(
+                    "UnionFields cannot contain more than 128 fields".into(),
+                )
+            })?;
+
+            out.push((id, field.into()));
+        }
+
+        Ok(Self(out.into()))
     }
 
     /// Create a new [`UnionFields`] from a [`Fields`] and array of type_ids
@@ -902,5 +959,84 @@ mod tests {
         let union_fields = res.unwrap();
         assert_eq!(union_fields.len(), 1);
         assert_eq!(union_fields.iter().next().unwrap().0, 42);
+    }
+
+    #[test]
+    fn test_union_fields_try_from_fields_empty() {
+        let res = UnionFields::try_from_fields(Vec::<Field>::new());
+        assert!(res.is_ok());
+        assert!(res.unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_union_fields_try_from_fields_single() {
+        let res = UnionFields::try_from_fields(vec![Field::new("only", DataType::Int64, false)]);
+        assert!(res.is_ok());
+        let union_fields = res.unwrap();
+        assert_eq!(union_fields.len(), 1);
+        assert_eq!(union_fields.iter().next().unwrap().0, 0);
+    }
+
+    #[test]
+    fn test_union_fields_try_from_fields_too_many() {
+        let many_fields: Vec<_> = (0..200)
+            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .collect();
+        let res = UnionFields::try_from_fields(many_fields);
+        assert!(res.is_err());
+        assert!(
+            res.unwrap_err()
+                .to_string()
+                .contains("UnionFields cannot contain more than 128 fields")
+        );
+    }
+
+    #[test]
+    fn test_union_fields_try_from_fields_max_valid() {
+        let fields: Vec<_> = (0..=i8::MAX)
+            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .collect();
+        let res = UnionFields::try_from_fields(fields);
+        assert!(res.is_ok());
+        let union_fields = res.unwrap();
+        assert_eq!(union_fields.len(), 128);
+        assert_eq!(union_fields.iter().map(|(id, _)| id).min().unwrap(), 0);
+        assert_eq!(union_fields.iter().map(|(id, _)| id).max().unwrap(), 127);
+    }
+
+    #[test]
+    fn test_union_fields_try_from_fields_over_max() {
+        // 129 fields should fail
+        let fields: Vec<_> = (0..129)
+            .map(|i| Field::new(format!("field{}", i), DataType::Int32, false))
+            .collect();
+        let res = UnionFields::try_from_fields(fields);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_union_fields_try_from_fields_complex_types() {
+        let res = UnionFields::try_from_fields(vec![
+            Field::new(
+                "struct_field",
+                DataType::Struct(Fields::from(vec![
+                    Field::new("a", DataType::Int32, false),
+                    Field::new("b", DataType::Utf8, true),
+                ])),
+                false,
+            ),
+            Field::new_list(
+                "list_field",
+                Field::new("item", DataType::Float64, true),
+                true,
+            ),
+            Field::new(
+                "dict_field",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]);
+        assert!(res.is_ok());
+        assert_eq!(res.unwrap().len(), 3);
     }
 }
