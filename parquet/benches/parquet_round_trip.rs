@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{ArrayRef, OffsetSizeTrait, RecordBatch};
+use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema};
 use arrow::util::bench_util::{
     create_primitive_array_with_seed, create_string_array_with_len_range_and_prefix_and_seed,
@@ -43,7 +43,7 @@ pub enum ColumnType {
 // arrow::util::bench_util::create_fsb_array with a seed
 
 /// Creates a random (but fixed-seeded) array of fixed size with a given null density and length
-fn create_fsb_array_with_seed<Offset: OffsetSizeTrait>(
+fn create_fsb_array_with_seed(
     size: usize,
     null_density: f32,
     fixed_len: i32,
@@ -112,12 +112,8 @@ fn create_batch(
         ColumnType::FixedLen(size) => {
             for i in 0..num_columns {
                 let array_seed = seed * num_columns + i;
-                let array = create_fsb_array_with_seed::<i32>(
-                    num_rows,
-                    null_density,
-                    size,
-                    array_seed as u64,
-                );
+                let array =
+                    create_fsb_array_with_seed(num_rows, null_density, size, array_seed as u64);
                 arrays.push(Arc::new(array));
             }
         }
