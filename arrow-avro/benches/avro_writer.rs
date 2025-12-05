@@ -688,14 +688,15 @@ static ENUM_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
 
 static UNION_DATA: Lazy<Vec<RecordBatch>> = Lazy::new(|| {
     // Basic Dense Union of three types: Utf8, Int32, Float64
-    let union_fields = UnionFields::new(
+    let union_fields = UnionFields::try_new(
         vec![0, 1, 2],
         vec![
             Field::new("u_str", DataType::Utf8, true),
             Field::new("u_int", DataType::Int32, true),
             Field::new("u_f64", DataType::Float64, true),
         ],
-    );
+    )
+    .expect("UnionFields should be valid");
     let union_dt = DataType::Union(union_fields.clone(), UnionMode::Dense);
     let schema = schema_single("field1", union_dt);
 

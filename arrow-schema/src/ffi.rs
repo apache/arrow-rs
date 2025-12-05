@@ -570,7 +570,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ));
                         }
 
-                        DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
+                        DataType::Union(UnionFields::try_new(type_ids, fields)?, UnionMode::Dense)
                     }
                     // SparseUnion
                     ["+us", extra] => {
@@ -598,7 +598,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ));
                         }
 
-                        DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Sparse)
+                        DataType::Union(UnionFields::try_new(type_ids, fields)?, UnionMode::Sparse)
                     }
 
                     // Timestamps in format "tts:" and "tts:America/New_York" for no timezones and timezones resp.
