@@ -21,19 +21,24 @@ use arrow::util::bench_util::{
     create_binary_array_with_len_range_and_prefix_and_seed, create_primitive_array_with_seed,
     create_string_array_with_len_range_and_prefix_and_seed,
 };
-use arrow_array::FixedSizeBinaryArray;
+use arrow_array::{FixedSizeBinaryArray, StringViewArray};
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
-use rand::{Rng, SeedableRng, distr::StandardUniform, prelude::StdRng};
+use rand::{
+    Rng, SeedableRng,
+    distr::{Alphanumeric, StandardUniform},
+    prelude::StdRng,
+};
 use std::sync::Arc;
 
 #[derive(Copy, Clone)]
 pub enum ColumnType {
     String(usize),
+    StringView(usize),
     Binary(usize),
     FixedLen(i32),
     Int32,
@@ -71,10 +76,37 @@ fn create_fsb_array_with_seed(
     .unwrap()
 }
 
+// arrow::util::bench_util::create_string_view_array_with_max_len with a seed
+
+/// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
+pub fn create_string_view_array_with_seed(
+    size: usize,
+    null_density: f32,
+    max_str_len: usize,
+    seed: u64,
+) -> StringViewArray {
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let rng = &mut rng;
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let str_len = rng.random_range(max_str_len / 2..max_str_len);
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect()
+}
+
 fn schema(column_type: ColumnType, num_columns: usize) -> Arc<Schema> {
     let field_type = match column_type {
         ColumnType::Binary(_) => DataType::Binary,
         ColumnType::String(_) => DataType::Utf8,
+        ColumnType::StringView(_) => DataType::Utf8View,
         ColumnType::FixedLen(size) => DataType::FixedSizeBinary(size),
         ColumnType::Int32 => DataType::Int32,
         ColumnType::Int64 => DataType::Int64,
@@ -121,6 +153,18 @@ fn create_batch(
                     max_str_len / 2,
                     max_str_len,
                     "",
+                    array_seed as u64,
+                );
+                arrays.push(Arc::new(array));
+            }
+        }
+        ColumnType::StringView(max_str_len) => {
+            for i in 0..num_columns {
+                let array_seed = seed * num_columns + i;
+                let array = create_string_view_array_with_seed(
+                    num_rows,
+                    null_density,
+                    max_str_len,
                     array_seed as u64,
                 );
                 arrays.push(Arc::new(array));
@@ -360,6 +404,24 @@ fn string_benches(c: &mut Criterion, max_str_len: usize) {
 
     let spec = spec.with_encoding(Encoding::DELTA_BYTE_ARRAY);
     read_write(c, spec, &format!("String({max_str_len}) delta_byte_array"));
+
+    let spec = ParquetFileSpec::new(ColumnType::StringView(max_str_len))
+        .with_num_columns(5)
+        .with_use_dict(true);
+    read_write(c, spec, &format!("StringView({max_str_len}) dict"));
+
+    let spec = spec.with_use_dict(false).with_encoding(Encoding::PLAIN);
+    read_write(c, spec, &format!("StringView({max_str_len}) plain"));
+
+    let spec = spec.with_encoding(Encoding::DELTA_LENGTH_BYTE_ARRAY);
+    read_write(c, spec, &format!("StringView({max_str_len}) delta_length"));
+
+    let spec = spec.with_encoding(Encoding::DELTA_BYTE_ARRAY);
+    read_write(
+        c,
+        spec,
+        &format!("StringView({max_str_len}) delta_byte_array"),
+    );
 }
 
 fn binary_benches(c: &mut Criterion, max_len: usize) {
