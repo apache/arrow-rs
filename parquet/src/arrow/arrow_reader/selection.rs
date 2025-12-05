@@ -200,7 +200,8 @@ impl RowSelection {
     /// Panics if any of the [`BooleanArray`] contain nulls
     pub fn from_filters(filters: &[BooleanArray]) -> Self {
         // TODO decide how to do this based on density or something??
-        Self::Selectors(RowSelectorSelection::from_filters(filters))
+        Self::Mask(BitmaskSelection::from_filters(filters))
+        //Self::Selectors(RowSelectorSelection::from_filters(filters))
     }
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
