@@ -113,66 +113,86 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         // Use the predicate's strategy for optimal iteration
         match filter.strategy() {
             IterationStrategy::SlicesIterator => {
-                // Copy values using slices
-                for (start, end) in SlicesIterator::new(filter.filter_array()) {
-                    self.current.extend_from_slice(&values[start..end]);
-                }
-                // Copy nulls using slices
+                // Copy values, nulls using slices
                 if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
                     for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                        // SAFETY: slices are derived from filter predicate
+                        self.current
+                            .extend_from_slice(unsafe { values.get_unchecked(start..end) });
                         let slice = nulls.slice(start, end - start);
                         self.nulls.append_buffer(&slice);
                     }
                 } else {
+                    for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                        // SAFETY: SlicesIterator produces valid ranges derived from filter
+                        self.current
+                            .extend_from_slice(unsafe { values.get_unchecked(start..end) });
+                    }
                     self.nulls.append_n_non_nulls(count);
                 }
             }
             IterationStrategy::Slices(slices) => {
-                // Copy values using precomputed slices
-                for &(start, end) in slices {
-                    self.current.extend_from_slice(&values[start..end]);
-                }
-                // Copy nulls using slices
+                // Copy values and nulls using precomputed slices - single iteration
                 if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
                     for &(start, end) in slices {
+                        // SAFETY: slices are derived from filter predicate
+                        self.current
+                            .extend_from_slice(unsafe { values.get_unchecked(start..end) });
                         let slice = nulls.slice(start, end - start);
                         self.nulls.append_buffer(&slice);
                     }
                 } else {
+                    for &(start, end) in slices {
+                        // SAFETY: slices are derived from filter predicate
+                        self.current
+                            .extend_from_slice(unsafe { values.get_unchecked(start..end) });
+                    }
                     self.nulls.append_n_non_nulls(count);
                 }
             }
             IterationStrategy::IndexIterator => {
                 // Copy values and nulls for each index
                 if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
-                    for idx in IndexIterator::new(filter.filter_array(), count) {
+                    let indices = IndexIterator::new(filter.filter_array(), count);
+                    self.current.extend(indices.map(|idx: usize| {
                         if nulls.is_null(idx) {
                             self.nulls.append_null();
                         } else {
                             self.nulls.append_non_null();
                         }
-                        self.current.push(values[idx]);
-                    }
+                        // SAFETY: idx is derived from filter predicate
+                        unsafe { *values.get_unchecked(idx) }
+                    }));
                 } else {
                     self.nulls.append_n_non_nulls(count);
                     let indices = IndexIterator::new(filter.filter_array(), count);
-                    self.current.extend(indices.map(|idx| values[idx]));
+                    // SAFETY: indices are derived from filter predicate
+                    self.current
+                        .extend(indices.map(|idx: usize| unsafe { *values.get_unchecked(idx) }));
                 }
             }
             IterationStrategy::Indices(indices) => {
                 // Copy values and nulls using precomputed indices
                 if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
-                    for &idx in indices {
+                    self.current.extend(indices.iter().map(|&idx| {
+                        // TODO: speed up
                         if nulls.is_null(idx) {
                             self.nulls.append_null();
                         } else {
                             self.nulls.append_non_null();
                         }
-                    }
+                        // SAFETY: indices are derived from filter predicate
+                        unsafe { *values.get_unchecked(idx) }
+                    }));
                 } else {
                     self.nulls.append_n_non_nulls(count);
-                }
-                self.current.extend(indices.iter().map(|&idx| values[idx]));
+                    // SAFETY: indices are derived from filter predicate
+                    self.current.extend(
+                        indices
+                            .iter()
+                            .map(|&idx| unsafe { *values.get_unchecked(idx) }),
+                    )
+                };
             }
             IterationStrategy::All => {
                 // Copy all values
