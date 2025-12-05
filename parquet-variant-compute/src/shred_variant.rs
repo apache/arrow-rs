@@ -27,7 +27,7 @@ use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
 use arrow::error::{ArrowError, Result};
-use parquet_variant::{Variant, VariantBuilderExt};
+use parquet_variant::{Variant, VariantBuilderExt, VariantPath, VariantPathElement};
 
 use indexmap::IndexMap;
 use std::collections::BTreeMap;
@@ -64,6 +64,9 @@ use std::sync::Arc;
 ///   }
 /// }
 /// ```
+///
+/// See [`ShreddedSchemaBuilder`] for a convenient way to build the `as_type`
+/// value passed to this function.
 pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray> {
     if array.typed_value_field().is_some() {
         return Err(ArrowError::InvalidArgumentError(
@@ -349,58 +352,126 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
     }
 }
 
-fn split_variant_path(path: &str) -> Vec<String> {
-    path.split('.')
-        .filter(|segment| !segment.is_empty())
-        .map(|segment| segment.to_string())
-        .collect()
+/// Field configuration captured by the builder (data type + nullability).
+#[derive(Clone)]
+pub struct ShreddingField {
+    data_type: DataType,
+    nullable: bool,
+}
+
+impl ShreddingField {
+    fn new(data_type: DataType, nullable: bool) -> Self {
+        Self {
+            data_type,
+            nullable,
+        }
+    }
+
+    fn null() -> Self {
+        Self::new(DataType::Null, true)
+    }
+}
+
+/// Convenience conversion to allow passing either `FieldRef`, `DataType`, or `(DataType, bool)`.
+pub trait IntoShreddingField {
+    fn into_shredding_field(self) -> ShreddingField;
+}
+
+impl IntoShreddingField for FieldRef {
+    fn into_shredding_field(self) -> ShreddingField {
+        ShreddingField::new(self.data_type().clone(), self.is_nullable())
+    }
+}
+
+impl IntoShreddingField for &DataType {
+    fn into_shredding_field(self) -> ShreddingField {
+        ShreddingField::new(self.clone(), true)
+    }
+}
+
+impl IntoShreddingField for DataType {
+    fn into_shredding_field(self) -> ShreddingField {
+        ShreddingField::new(self, true)
+    }
+}
+
+impl IntoShreddingField for (&DataType, bool) {
+    fn into_shredding_field(self) -> ShreddingField {
+        ShreddingField::new(self.0.clone(), self.1)
+    }
+}
+
+impl IntoShreddingField for (DataType, bool) {
+    fn into_shredding_field(self) -> ShreddingField {
+        ShreddingField::new(self.0, self.1)
+    }
 }
 
 /// Builder for constructing a variant shredding schema.
 ///
 /// The builder pattern makes it easy to incrementally define which fields
-/// should be shredded and with what types.
+/// should be shredded and with what types. Fields are nullable by default; pass
+/// a `(data_type, nullable)` pair or a `FieldRef` to control nullability.
+///
 ///
 /// # Example
 ///
 /// ```
-/// use arrow::datatypes::DataType;
-/// use parquet_variant_compute::ShredTypeBuilder;
+/// use std::sync::Arc;
+/// use arrow::datatypes::{DataType, Field, TimeUnit};
+/// use parquet_variant::{VariantPath, VariantPathElement};
+/// use parquet_variant_compute::ShreddedSchemaBuilder;
 ///
 /// // Define the shredding schema using the builder
-/// let shredding_type = ShredTypeBuilder::default()
-///     .with_path("time", &DataType::Int64)
-///     .with_path("hostname", &DataType::Utf8)
-///     .with_path("metrics.cpu", &DataType::Float64)
-///     .with_path("metrics.memory", &DataType::Float64)
+/// let shredding_type = ShreddedSchemaBuilder::default()
+///     // store the "time" field as a separate UTC timestamp
+///     .with_path("time", (&DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())), true))
+///     // store hostname as non-nullable Utf8
+///     .with_path("hostname", (&DataType::Utf8, false))
+///     // pass a FieldRef directly
+///     .with_path(
+///         "metadata.trace_id",
+///         Arc::new(Field::new("trace_id", DataType::FixedSizeBinary(16), false)),
+///     )
+///     // field name with a dot: use VariantPath to avoid splitting
+///     .with_path(
+///         VariantPath::from_iter([VariantPathElement::from("metrics.cpu")]),
+///         &DataType::Float64,
+///     )
 ///     .build();
 ///
 /// // The shredding_type can now be passed to shred_variant:
 /// // let shredded = shred_variant(&input, &shredding_type)?;
 /// ```
 #[derive(Default, Clone)]
-pub struct ShredTypeBuilder {
+pub struct ShreddedSchemaBuilder {
     root: VariantSchemaNode,
 }
 
-impl ShredTypeBuilder {
+impl ShreddedSchemaBuilder {
     /// Create a new empty schema builder.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Insert a typed path into the schema.
+    /// Insert a typed path into the schema using dot notation (or any
+    /// [`VariantPath`] convertible).
     ///
     /// The path uses dot notation to specify nested fields.
     /// For example, "a.b.c" will create a nested structure.
     ///
     /// # Arguments
     ///
-    /// * `path` - The dot-separated path (e.g., "user.name" or "metrics.cpu")
-    /// * `data_type` - The Arrow data type for this field
-    pub fn with_path(mut self, path: &str, data_type: &DataType) -> Self {
-        let segments = split_variant_path(path);
-        self.root.insert_path(&segments, data_type);
+    /// * `path` - Anything convertible to [`VariantPath`] (e.g., a `&str`)
+    /// * `field` - Anything convertible via [`IntoShreddingField`] (e.g. `FieldRef`,
+    ///   `&DataType`, or `(&DataType, bool)` to control nullability)
+    pub fn with_path<'a, P, F>(mut self, path: P, field: F) -> Self
+    where
+        P: Into<VariantPath<'a>>,
+        F: IntoShreddingField,
+    {
+        let path: VariantPath<'a> = path.into();
+        self.root.insert_path(&path, field.into_shredding_field());
         self
     }
 
@@ -417,43 +488,54 @@ impl ShredTypeBuilder {
 /// Internal tree node structure for building variant schemas.
 #[derive(Clone)]
 enum VariantSchemaNode {
-    /// A leaf node with a primitive/scalar type
-    Leaf(DataType),
-    /// An inner node with nested fields
-    Inner(BTreeMap<String, VariantSchemaNode>),
+    /// A leaf node with a primitive/scalar type (and nullability)
+    Leaf(ShreddingField),
+    /// An inner struct node with nested fields
+    Struct(BTreeMap<String, VariantSchemaNode>),
 }
 
 impl Default for VariantSchemaNode {
     fn default() -> Self {
-        Self::Leaf(DataType::Null)
+        Self::Leaf(ShreddingField::null())
     }
 }
 
 impl VariantSchemaNode {
     /// Insert a path into this node with the given data type.
-    fn insert_path(&mut self, segments: &[String], data_type: &DataType) {
+    fn insert_path(&mut self, path: &VariantPath<'_>, field: ShreddingField) {
+        self.insert_path_elements(path, field);
+    }
+
+    fn insert_path_elements(&mut self, segments: &[VariantPathElement<'_>], field: ShreddingField) {
         let Some((head, tail)) = segments.split_first() else {
-            *self = Self::Leaf(data_type.clone());
+            *self = Self::Leaf(field);
             return;
         };
 
-        // Ensure this node is an Inner node
-        let children = match self {
-            Self::Inner(children) => children,
-            Self::Leaf(_) => {
-                // Conflicting data type, override with inner node
-                *self = Self::Inner(BTreeMap::new());
-                match self {
-                    Self::Inner(children) => children,
-                    _ => unreachable!(),
-                }
-            }
-        };
+        match head {
+            VariantPathElement::Field { name } => {
+                // Ensure this node is a Struct node
+                let children = match self {
+                    Self::Struct(children) => children,
+                    _ => {
+                        *self = Self::Struct(BTreeMap::new());
+                        match self {
+                            Self::Struct(children) => children,
+                            _ => unreachable!(),
+                        }
+                    }
+                };
 
-        children
-            .entry(head.clone())
-            .or_default()
-            .insert_path(tail, data_type);
+                children
+                    .entry(name.to_string())
+                    .or_default()
+                    .insert_path_elements(tail, field);
+            }
+            VariantPathElement::Index { .. } => {
+                // List support to be added later; reject for now
+                unreachable!("List paths are not supported yet");
+            }
+        }
     }
 
     /// Convert this node to a shredding type.
@@ -461,8 +543,8 @@ impl VariantSchemaNode {
     /// Returns the [`DataType`] for passing to [`shred_variant`].
     fn to_shredding_type(&self) -> Option<DataType> {
         match self {
-            Self::Leaf(data_type) => Some(data_type.clone()),
-            Self::Inner(children) => {
+            Self::Leaf(field) => Some(field.data_type.clone()),
+            Self::Struct(children) => {
                 let child_fields: Vec<_> = children
                     .iter()
                     .filter_map(|(name, child)| child.to_shredding_field(name))
@@ -477,8 +559,16 @@ impl VariantSchemaNode {
     }
 
     fn to_shredding_field(&self, name: &str) -> Option<FieldRef> {
-        self.to_shredding_type()
-            .map(|data_type| Arc::new(Field::new(name, data_type, true)))
+        match self {
+            Self::Leaf(field) => Some(Arc::new(Field::new(
+                name,
+                field.data_type.clone(),
+                field.nullable,
+            ))),
+            Self::Struct(_) => self
+                .to_shredding_type()
+                .map(|data_type| Arc::new(Field::new(name, data_type, true))),
+        }
     }
 }
 
@@ -488,7 +578,10 @@ mod tests {
     use crate::VariantArrayBuilder;
     use arrow::array::{Array, FixedSizeBinaryArray, Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit, UnionFields, UnionMode};
-    use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
+    use parquet_variant::{
+        ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder, VariantPath,
+        VariantPathElement,
+    };
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -802,7 +895,7 @@ mod tests {
 
         // Create target schema: struct<score: float64, age: int64>
         // Both types are supported for shredding
-        let target_schema = ShredTypeBuilder::default()
+        let target_schema = ShreddedSchemaBuilder::default()
             .with_path("score", &DataType::Float64)
             .with_path("age", &DataType::Int64)
             .build();
@@ -1125,7 +1218,7 @@ mod tests {
         let input = builder.build();
 
         // Test with schema containing only id field
-        let schema1 = ShredTypeBuilder::default()
+        let schema1 = ShreddedSchemaBuilder::default()
             .with_path("id", &DataType::Int32)
             .build();
         let result1 = shred_variant(&input, &schema1).unwrap();
@@ -1133,7 +1226,7 @@ mod tests {
         assert!(!value_field1.is_null(0)); // should contain {"age": 25, "score": 95.5}
 
         // Test with schema containing id and age fields
-        let schema2 = ShredTypeBuilder::default()
+        let schema2 = ShreddedSchemaBuilder::default()
             .with_path("id", &DataType::Int32)
             .with_path("age", &DataType::Int64)
             .build();
@@ -1142,7 +1235,7 @@ mod tests {
         assert!(!value_field2.is_null(0)); // should contain {"score": 95.5}
 
         // Test with schema containing all fields
-        let schema3 = ShredTypeBuilder::default()
+        let schema3 = ShreddedSchemaBuilder::default()
             .with_path("id", &DataType::Int32)
             .with_path("age", &DataType::Int64)
             .with_path("score", &DataType::Float64)
@@ -1197,7 +1290,7 @@ mod tests {
 
         let input = builder.build();
 
-        let target_schema = ShredTypeBuilder::default()
+        let target_schema = ShreddedSchemaBuilder::default()
             .with_path("id", &DataType::FixedSizeBinary(16))
             .with_path("session_id", &DataType::FixedSizeBinary(16))
             .build();
@@ -1381,7 +1474,7 @@ mod tests {
 
     #[test]
     fn test_variant_schema_builder_simple() {
-        let shredding_type = ShredTypeBuilder::default()
+        let shredding_type = ShreddedSchemaBuilder::default()
             .with_path("a", &DataType::Int64)
             .with_path("b", &DataType::Float64)
             .build();
@@ -1397,7 +1490,7 @@ mod tests {
 
     #[test]
     fn test_variant_schema_builder_nested() {
-        let shredding_type = ShredTypeBuilder::default()
+        let shredding_type = ShreddedSchemaBuilder::default()
             .with_path("a", &DataType::Int64)
             .with_path("b.c", &DataType::Utf8)
             .with_path("b.d", &DataType::Float64)
@@ -1420,6 +1513,46 @@ mod tests {
     }
 
     #[test]
+    fn test_variant_schema_builder_with_path_variant_path_arg() {
+        let path = VariantPath::from_iter([VariantPathElement::from("a.b")]);
+        let shredding_type = ShreddedSchemaBuilder::default()
+            .with_path(path, &DataType::Int64)
+            .build();
+
+        match shredding_type {
+            DataType::Struct(fields) => {
+                assert_eq!(fields.len(), 1);
+                assert_eq!(fields[0].name(), "a.b");
+                assert_eq!(fields[0].data_type(), &DataType::Int64);
+            }
+            _ => panic!("expected struct data type"),
+        }
+    }
+
+    #[test]
+    fn test_variant_schema_builder_custom_nullability() {
+        let shredding_type = ShreddedSchemaBuilder::default()
+            .with_path(
+                "foo",
+                Arc::new(Field::new("should_be_renamed", DataType::Utf8, false)),
+            )
+            .with_path("bar", (&DataType::Int64, false))
+            .build();
+
+        let DataType::Struct(fields) = shredding_type else {
+            panic!("expected struct data type");
+        };
+
+        let foo = fields.iter().find(|f| f.name() == "foo").unwrap();
+        assert_eq!(foo.data_type(), &DataType::Utf8);
+        assert!(!foo.is_nullable());
+
+        let bar = fields.iter().find(|f| f.name() == "bar").unwrap();
+        assert_eq!(bar.data_type(), &DataType::Int64);
+        assert!(!bar.is_nullable());
+    }
+
+    #[test]
     fn test_variant_schema_builder_with_shred_variant() {
         let mut builder = VariantArrayBuilder::new(3);
         builder
@@ -1437,7 +1570,7 @@ mod tests {
 
         let input = builder.build();
 
-        let shredding_type = ShredTypeBuilder::default()
+        let shredding_type = ShreddedSchemaBuilder::default()
             .with_path("time", &DataType::Int64)
             .with_path("hostname", &DataType::Utf8)
             .build();
@@ -1520,7 +1653,7 @@ mod tests {
 
     #[test]
     fn test_variant_schema_builder_conflicting_path() {
-        let shredding_type = ShredTypeBuilder::default()
+        let shredding_type = ShreddedSchemaBuilder::default()
             .with_path("a", &DataType::Int64)
             .with_path("a", &DataType::Float64)
             .build();
@@ -1535,7 +1668,7 @@ mod tests {
 
     #[test]
     fn test_variant_schema_builder_empty_path() {
-        let shredding_type = ShredTypeBuilder::default()
+        let shredding_type = ShreddedSchemaBuilder::default()
             .with_path("", &DataType::Int64)
             .build();
 
@@ -1544,7 +1677,7 @@ mod tests {
 
     #[test]
     fn test_variant_schema_builder_default() {
-        let shredding_type = ShredTypeBuilder::default().build();
+        let shredding_type = ShreddedSchemaBuilder::default().build();
         assert_eq!(shredding_type, DataType::Null);
     }
 }
