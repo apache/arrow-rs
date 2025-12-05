@@ -53,6 +53,15 @@ use std::{borrow::Cow, ops::Deref};
 /// assert_eq!(path, path3);
 /// ```
 ///
+/// # Example: From Dot notation strings
+/// ```
+/// # use parquet_variant::{VariantPath, VariantPathElement};
+/// /// You can also convert strings directly into paths using dot notation
+/// let path = VariantPath::from("foo.bar.baz");
+/// let expected = VariantPath::from("foo").join("bar").join("baz");
+/// assert_eq!(path, expected);
+/// ```
+///
 /// # Example: Accessing Compound paths
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
