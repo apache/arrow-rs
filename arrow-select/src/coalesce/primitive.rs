@@ -93,7 +93,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         Ok(())
     }
 
-    /// Copy rows by indices using a predicate
+    /// Copy rows using a predicate
     fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
         self.ensure_capacity();
 
