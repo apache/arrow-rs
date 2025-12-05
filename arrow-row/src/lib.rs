@@ -1891,12 +1891,8 @@ unsafe fn decode_column(
             let mut rows_by_field: Vec<Vec<(usize, &[u8])>> = vec![Vec::new(); converters.len()];
 
             for (idx, row) in rows.iter_mut().enumerate() {
-                let mut cursor = 0;
-
                 let type_id_byte = {
-                    let id = row[cursor];
-                    cursor += 1;
-
+                    let id = row[0];
                     if options.descending { !id } else { id }
                 };
 
@@ -1905,7 +1901,7 @@ unsafe fn decode_column(
 
                 let field_idx = type_id as usize;
 
-                let child_row = &row[cursor..];
+                let child_row = &row[1..];
                 rows_by_field[field_idx].push((idx, child_row));
 
                 *row = &row[row.len()..];
