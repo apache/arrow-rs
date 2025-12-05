@@ -89,3 +89,4 @@ fn main() {
     drop(writer);
     println!("{}", String::from_utf8(buf).unwrap());
 }
+
