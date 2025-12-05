@@ -34,6 +34,23 @@ pub enum Hint {
     Geography,
 }
 
+/// The edge interpolation algorithms used with `GEOMETRY` logical types.
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Edges {
+    /// Edges are interpolated as geodesics on a sphere.
+    #[default]
+    Spherical,
+    /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
+    Vincenty,
+    /// Thomas, Paul D. Spheroidal geodesics, reference systems, & local geometry. US Naval Oceanographic Office, 1970
+    Thomas,
+    /// Thomas, Paul D. Mathematical models for navigation systems. US Naval Oceanographic Office, 1965.
+    Andoyer,
+    /// Karney, Charles FF. "Algorithms for geodesics." Journal of Geodesy 87 (2013): 43-55
+    Karney,
+}
+
 /// The metadata associated with a [`WkbType`].
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Metadata {
@@ -46,7 +63,7 @@ pub struct Metadata {
     pub crs: Option<serde_json::Value>,
     /// The edge interpolation algorithm of the [`WkbType`], if present.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub algorithm: Option<String>,
+    pub algorithm: Option<Edges>,
 }
 
 impl Metadata {
@@ -54,7 +71,7 @@ impl Metadata {
     ///
     /// If a CRS is provided, and can be parsed as JSON, it will be stored as a JSON object instead
     /// of its string representation.
-    pub fn new(crs: Option<&str>, algorithm: Option<String>) -> Self {
+    pub fn new(crs: Option<&str>, algorithm: Option<Edges>) -> Self {
         let crs = crs.map(|c| match serde_json::from_str(c) {
             Ok(crs) => crs,
             Err(_) => serde_json::Value::String(c.to_string()),
@@ -66,9 +83,36 @@ impl Metadata {
     /// Returns a [`Hint`] to the likely underlying Logical Type that this [`Metadata`] represents.
     pub fn type_hint(&self) -> Hint {
         match &self.algorithm {
-            Some(s) if s.to_lowercase() == "planar" => Hint::Geometry,
             Some(_) => Hint::Geography,
             None => Hint::Geometry,
+        }
+    }
+
+    /// Detect if the CRS is a common representation of lon/lat on the standard WGS84 ellipsoid
+    fn crs_is_lon_lat(&self) -> bool {
+        use serde_json::Value;
+
+        let Some(crs) = &self.crs else {
+            return false;
+        };
+
+        match crs {
+            Value::String(s) if s == "EPSG:4326" || s == "OGC:CRS84" => true,
+            Value::Object(_) => match (&crs["id"]["authority"], &crs["id"]["code"]) {
+                (Value::String(auth), Value::String(code)) if auth == "OGC" && code == "CRS84" => {
+                    true
+                }
+                (Value::String(auth), Value::String(code)) if auth == "EPSG" && code == "4326" => {
+                    true
+                }
+                (Value::String(auth), Value::Number(code))
+                    if auth == "EPSG" && code.as_i64() == Some(4326) =>
+                {
+                    true
+                }
+                _ => false,
+            },
+            _ => false,
         }
     }
 }
@@ -100,44 +144,16 @@ impl ExtensionType for WkbType {
     }
 
     fn serialize_metadata(&self) -> Option<String> {
-        use serde_json::Value;
-
-        // Detect common representations of lon/lat on the standard WGS84 ellipsoid and convert
-        // them to the canonical Parquet representation for lon/lat (empty/omitted)
-        let crs = &self.0.crs.as_ref().and_then(|crs| match crs {
-            Value::String(s) if s == "EPSG:4326" || s == "OGC:CRS84" => None,
-            Value::Object(_) => match (&crs["id"]["authority"], &crs["id"]["code"]) {
-                (Value::String(auth), Value::String(code)) if auth == "OGC" && code == "CRS84" => {
-                    None
-                }
-                (Value::String(auth), Value::String(code)) if auth == "EPSG" && code == "4326" => {
-                    None
-                }
-                (Value::String(auth), Value::Number(code))
-                    if auth == "EPSG" && code.as_i64() == Some(4326) =>
-                {
-                    None
-                }
-                _ => Some(crs),
-            },
-            _ => Some(crs),
-        });
-
-        // Use a local alias of our Metadata to avoid clones. CRS in particular may be large
-        // (multiple KiB) so cloning it should be avoided when possible.
-        #[derive(Serialize)]
-        struct MetadataAlias<'a> {
-            #[serde(skip_serializing_if = "Option::is_none")]
-            crs: Option<&'a serde_json::Value>,
-            #[serde(skip_serializing_if = "Option::is_none")]
-            algorithm: &'a Option<String>,
-        }
-        let md = MetadataAlias {
-            crs: *crs,
-            algorithm: &self.0.algorithm,
+        let md = if self.0.crs_is_lon_lat() {
+            &Metadata {
+                crs: None, // lon/lat CRS is canonicalized as omitted (None) for Parquet
+                algorithm: self.0.algorithm,
+            }
+        } else {
+            &self.0
         };
 
-        serde_json::to_string(&md).ok()
+        serde_json::to_string(md).ok()
     }
 
     fn deserialize_metadata(metadata: Option<&str>) -> ArrowResult<Self::Metadata> {
@@ -231,7 +247,7 @@ mod tests {
     /// Test metadata serialization with algorithm field
     #[test]
     fn test_metadata_algorithm_roundtrip() -> ArrowResult<()> {
-        let metadata = Metadata::new(None, Some("spherical".to_string()));
+        let metadata = Metadata::new(None, Some(Edges::Spherical));
         let wkb = WkbType::new(Some(metadata));
 
         let serialized = wkb.serialize_metadata().unwrap();
@@ -239,7 +255,7 @@ mod tests {
 
         let deserialized = WkbType::deserialize_metadata(Some(&serialized))?;
         assert!(deserialized.crs.is_none());
-        assert_eq!(deserialized.algorithm, Some("spherical".to_string()));
+        assert_eq!(deserialized.algorithm, Some(Edges::Spherical));
 
         Ok(())
     }
@@ -247,7 +263,7 @@ mod tests {
     /// Test metadata serialization with both CRS and algorithm
     #[test]
     fn test_metadata_full_roundtrip() -> ArrowResult<()> {
-        let metadata = Metadata::new(Some("srid:1234"), Some("spherical".to_string()));
+        let metadata = Metadata::new(Some("srid:1234"), Some(Edges::Spherical));
         let wkb = WkbType::new(Some(metadata));
 
         let serialized = wkb.serialize_metadata().unwrap();
@@ -258,7 +274,7 @@ mod tests {
             deserialized.crs.unwrap(),
             serde_json::Value::String("srid:1234".to_string())
         );
-        assert_eq!(deserialized.algorithm, Some("spherical".to_string()));
+        assert_eq!(deserialized.algorithm, Some(Edges::Spherical));
 
         Ok(())
     }
@@ -284,26 +300,20 @@ mod tests {
     fn test_type_hint_geometry() {
         let metadata = Metadata::new(None, None);
         assert!(matches!(metadata.type_hint(), Hint::Geometry));
-
-        // Case-insensitive "planar" should also result in a Geometry hint
-        let metadata = Metadata::new(None, Some("pLAnaR".to_string()));
-        assert!(matches!(metadata.type_hint(), Hint::Geometry));
     }
 
     /// Test metadata that results in a Geography type hint
     #[test]
-    fn test_type_hint_spherical_is_geography() {
-        // Ensure case doesn't impact the result
+    fn test_type_hint_edges_is_geography() {
         let algorithms = vec![
-            "spheRIcal",
-            "vINcenty",
-            "thomAS",
-            "anDOyer",
-            "karNEy",
-            "custom",
+            Edges::Spherical,
+            Edges::Vincenty,
+            Edges::Thomas,
+            Edges::Andoyer,
+            Edges::Karney,
         ];
         for algo in algorithms {
-            let metadata = Metadata::new(None, Some(algo.to_string()));
+            let metadata = Metadata::new(None, Some(algo));
             assert!(matches!(metadata.type_hint(), Hint::Geography));
         }
     }
@@ -387,7 +397,7 @@ mod tests {
         assert_eq!(serialized, r#"{"crs":"srid:1234"}"#);
 
         // Canonicalization should work with algorithm field
-        let metadata = Metadata::new(Some("EPSG:4326"), Some(String::from("spherical")));
+        let metadata = Metadata::new(Some("EPSG:4326"), Some(Edges::Spherical));
         let wkb = WkbType::new(Some(metadata));
         let serialized = wkb.serialize_metadata().unwrap();
         assert_eq!(serialized, r#"{"algorithm":"spherical"}"#);

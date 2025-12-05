@@ -42,7 +42,7 @@ mod test {
         geospatial::{bounding_box::BoundingBox, statistics::GeospatialStatistics},
         schema::types::SchemaDescriptor,
     };
-    use parquet_geospatial::{WkbMetadata, WkbType, testing::wkb_point_xy};
+    use parquet_geospatial::{WkbEdges, WkbMetadata, WkbType, testing::wkb_point_xy};
     use serde_json::Value;
 
     fn read_metadata(geospatial_test_file: &str) -> (Arc<ParquetMetaData>, SchemaRef) {
@@ -85,10 +85,7 @@ mod test {
                     crs: None,
                     algorithm: Some(EdgeInterpolationAlgorithm::SPHERICAL),
                 },
-                WkbMetadata::new(
-                    None,
-                    Some(EdgeInterpolationAlgorithm::SPHERICAL.to_string()),
-                ),
+                WkbMetadata::new(None, Some(WkbEdges::Spherical)),
             ),
         ];
 

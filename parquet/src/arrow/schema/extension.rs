@@ -62,7 +62,7 @@ pub(crate) fn try_add_extension_type(
         }
         #[cfg(feature = "geospatial")]
         LogicalType::Geography { crs, algorithm } => {
-            let algorithm = algorithm.map(|a| a.to_string());
+            let algorithm = algorithm.map(|a| a.try_as_edges()).transpose()?;
             let md = parquet_geospatial::WkbMetadata::new(crs.as_deref(), algorithm);
             arrow_field.try_with_extension_type(parquet_geospatial::WkbType::new(Some(md)))?;
         }
@@ -162,11 +162,7 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
                 }),
                 WkbTypeHint::Geography => Some(LogicalType::Geography {
                     crs: wkb_type.metadata().crs.as_ref().map(|c| c.to_string()),
-                    algorithm: wkb_type
-                        .metadata()
-                        .algorithm
-                        .clone()
-                        .and_then(|a| a.parse().ok()),
+                    algorithm: wkb_type.metadata().algorithm.map(|a| a.into()),
                 }),
             },
             Err(_e) => None,
