@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["maybe_prep_null_mask_filter","zip","zip_impl"],"struct":["BytesScalarImpl","FallbackImpl","PrimitiveScalarImpl","ScalarZipper"],"trait":["ZipImpl"]};
