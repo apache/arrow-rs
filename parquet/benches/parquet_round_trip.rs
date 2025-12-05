@@ -18,7 +18,8 @@
 use arrow::array::{ArrayRef, RecordBatch};
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema};
 use arrow::util::bench_util::{
-    create_primitive_array_with_seed, create_string_array_with_len_range_and_prefix_and_seed,
+    create_binary_array_with_len_range_and_prefix_and_seed, create_primitive_array_with_seed,
+    create_string_array_with_len_range_and_prefix_and_seed,
 };
 use arrow_array::FixedSizeBinaryArray;
 use bytes::Bytes;
@@ -32,6 +33,7 @@ use std::sync::Arc;
 
 #[derive(Copy, Clone)]
 pub enum ColumnType {
+    String(usize),
     Binary(usize),
     FixedLen(i32),
     Int32,
@@ -71,7 +73,8 @@ fn create_fsb_array_with_seed(
 
 fn schema(column_type: ColumnType, num_columns: usize) -> Arc<Schema> {
     let field_type = match column_type {
-        ColumnType::Binary(_) => DataType::Utf8,
+        ColumnType::Binary(_) => DataType::Binary,
+        ColumnType::String(_) => DataType::Utf8,
         ColumnType::FixedLen(size) => DataType::FixedSizeBinary(size),
         ColumnType::Int32 => DataType::Int32,
         ColumnType::Int64 => DataType::Int64,
@@ -95,7 +98,21 @@ fn create_batch(
     let null_density = 0.0001;
     let mut arrays: Vec<ArrayRef> = vec![];
     match column_type {
-        ColumnType::Binary(max_str_len) => {
+        ColumnType::Binary(max_len) => {
+            for i in 0..num_columns {
+                let array_seed = seed * num_columns + i;
+                let array = create_binary_array_with_len_range_and_prefix_and_seed::<i32>(
+                    num_rows,
+                    null_density,
+                    max_len / 2,
+                    max_len,
+                    &[],
+                    array_seed as u64,
+                );
+                arrays.push(Arc::new(array));
+            }
+        }
+        ColumnType::String(max_str_len) => {
             for i in 0..num_columns {
                 let array_seed = seed * num_columns + i;
                 let array = create_string_array_with_len_range_and_prefix_and_seed::<i32>(
@@ -329,20 +346,36 @@ fn float_benches(c: &mut Criterion, column_type: ColumnType) {
     read_write(c, spec, &format!("{ctype} byte_stream_split"));
 }
 
-fn binary_benches(c: &mut Criterion, max_str_len: usize) {
-    let spec = ParquetFileSpec::new(ColumnType::Binary(max_str_len))
+fn string_benches(c: &mut Criterion, max_str_len: usize) {
+    let spec = ParquetFileSpec::new(ColumnType::String(max_str_len))
         .with_num_columns(5)
         .with_use_dict(true);
-    read_write(c, spec, &format!("Binary({max_str_len}) dict"));
+    read_write(c, spec, &format!("String({max_str_len}) dict"));
 
     let spec = spec.with_use_dict(false).with_encoding(Encoding::PLAIN);
-    read_write(c, spec, &format!("Binary({max_str_len}) plain"));
+    read_write(c, spec, &format!("String({max_str_len}) plain"));
 
     let spec = spec.with_encoding(Encoding::DELTA_LENGTH_BYTE_ARRAY);
-    read_write(c, spec, &format!("Binary({max_str_len}) delta_length"));
+    read_write(c, spec, &format!("String({max_str_len}) delta_length"));
 
     let spec = spec.with_encoding(Encoding::DELTA_BYTE_ARRAY);
-    read_write(c, spec, &format!("Binary({max_str_len}) delta_byte_array"));
+    read_write(c, spec, &format!("String({max_str_len}) delta_byte_array"));
+}
+
+fn binary_benches(c: &mut Criterion, max_len: usize) {
+    let spec = ParquetFileSpec::new(ColumnType::Binary(max_len))
+        .with_num_columns(5)
+        .with_use_dict(true);
+    read_write(c, spec, &format!("Binary({max_len}) dict"));
+
+    let spec = spec.with_use_dict(false).with_encoding(Encoding::PLAIN);
+    read_write(c, spec, &format!("Binary({max_len}) plain"));
+
+    let spec = spec.with_encoding(Encoding::DELTA_LENGTH_BYTE_ARRAY);
+    read_write(c, spec, &format!("Binary({max_len}) delta_length"));
+
+    let spec = spec.with_encoding(Encoding::DELTA_BYTE_ARRAY);
+    read_write(c, spec, &format!("Binary({max_len}) delta_byte_array"));
 }
 
 fn flba_benches(c: &mut Criterion, len: i32) {
@@ -366,6 +399,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     int_benches(c, ColumnType::Int64);
     float_benches(c, ColumnType::Float);
     float_benches(c, ColumnType::Double);
+    string_benches(c, 20);
+    string_benches(c, 100);
     binary_benches(c, 20);
     binary_benches(c, 100);
     flba_benches(c, 2);
