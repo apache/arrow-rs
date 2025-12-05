@@ -22,13 +22,12 @@ use std::sync::Arc;
 
 use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
+use crate::bit_util::ceil;
+#[cfg(feature = "pool")]
+use crate::pool::MemoryPool;
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
-#[cfg(feature = "pool")]
-use crate::pool::MemoryPool;
-
-use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
 /// A contiguous memory region that can be shared with other buffers and across
@@ -113,6 +112,150 @@ impl Buffer {
     #[deprecated(since = "54.1.0", note = "Use Buffer::from instead")]
     pub fn from_bytes(bytes: Bytes) -> Self {
         Self::from(bytes)
+    }
+
+    /// Create a new [`Buffer`] by applying the bitwise operation `op` to two input buffers.
+    ///
+    /// This function is highly optimized for bitwise operations on large
+    /// bitmaps by processing input buffers in chunks of 64 bits (8 bytes) at a
+    /// time, and thus is much faster than applying the operation bit by bit.
+    ///
+    /// # Notes:
+    /// * `op` takes two `u64` inputs and produces one `u64` output,
+    ///   operating on 64 bits at a time. **It must only apply bitwise operations
+    ///   on the relevant bits, as the input `u64` may contain irrelevant bits
+    ///   and may be processed differently on different endian architectures.**
+    /// * The inputs are treated as bitmaps, meaning that offsets and length
+    ///   are specified in number of bits.
+    /// * The output always has zero offset
+    ///
+    /// # See Also
+    /// - [`Buffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
+    /// - [`apply_bitwise_binary_op`](bit_util::apply_bitwise_binary_op) for in-place binary bitwise operations
+    ///
+    /// # Example: Create new [`Buffer`] from bitwise `AND` of two [`Buffer`]s
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// let left = Buffer::from(&[0b11001100u8, 0b10111010u8]); // 2 bytes = 16 bits
+    /// let right = Buffer::from(&[0b10101010u8, 0b11011100u8, 0b11110000u8]); // 3 bytes = 24 bits
+    /// // AND of the first 12 bits
+    /// let result = Buffer::from_bitwise_binary_op(
+    ///   &left, 0, &right, 0, 12, |a, b| a & b
+    /// );
+    /// assert_eq!(result.as_slice(), &[0b10001000u8, 0b00001000u8]);
+    /// ```
+    ///
+    /// # Example: Create new [`Buffer`] from bitwise `OR` of two byte slices
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// let left = [0b11001100u8, 0b10111010u8];
+    /// let right = [0b10101010u8, 0b11011100u8];
+    /// // OR of bits 4..16 from left and bits 0..12 from right
+    /// let result = Buffer::from_bitwise_binary_op(
+    ///  &left, 4, &right, 0, 12, |a, b| a | b
+    /// );
+    /// assert_eq!(result.as_slice(), &[0b10101110u8, 0b00001111u8]);
+    /// ```
+    pub fn from_bitwise_binary_op<F>(
+        left: impl AsRef<[u8]>,
+        left_offset_in_bits: usize,
+        right: impl AsRef<[u8]>,
+        right_offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) -> Buffer
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
+        let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
+
+        let chunks = left_chunks
+            .iter()
+            .zip(right_chunks.iter())
+            .map(|(left, right)| op(left, right));
+        // Soundness: `BitChunks` is a `BitChunks` iterator which
+        // correctly reports its upper bound
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+
+        let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
+        let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
+        // we are counting its starting from the least significant bit, to to_le_bytes should be correct
+        let rem = &rem.to_le_bytes()[0..remainder_bytes];
+        buffer.extend_from_slice(rem);
+
+        buffer.into()
+    }
+
+    /// Create a new [`Buffer`] by applying the bitwise operation to `op` to an input buffer.
+    ///
+    /// This function is highly optimized for bitwise operations on large
+    /// bitmaps by processing input buffers in chunks of 64 bits (8 bytes) at a
+    /// time, and thus is much faster than applying the operation bit by bit.
+    ///
+    /// # Notes:
+    /// * `op` takes two `u64` inputs and produces one `u64` output,
+    ///   operating on 64 bits at a time. **It must only apply bitwise operations
+    ///   on the relevant bits, as the input `u64` may contain irrelevant bits
+    ///   and may be processed differently on different endian architectures.**
+    /// * The inputs are treated as bitmaps, meaning that offsets and length
+    ///   are specified in number of bits.
+    /// * The output always has zero offset
+    ///
+    /// # See Also
+    /// - [`Buffer::from_bitwise_binary_op`] for binary operations on a single input buffer.
+    /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
+    ///
+    /// # Example: Create new [`Buffer`] from bitwise `NOT` of an input [`Buffer`]
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// let input = Buffer::from(&[0b11001100u8, 0b10111010u8]); // 2 bytes = 16 bits
+    /// // NOT of the first 12 bits
+    /// let result = Buffer::from_bitwise_unary_op(
+    ///  &input, 0, 12, |a| !a
+    /// );
+    /// assert_eq!(result.as_slice(), &[0b00110011u8, 0b11110101u8]);
+    /// ```
+    ///
+    /// # Example: Create a new [`Buffer`] copying a bit slice from in input slice
+    /// ```
+    /// # use arrow_buffer::Buffer;
+    /// let input = [0b11001100u8, 0b10111010u8];
+    /// // // Copy bits 4..16 from input
+    /// let result = Buffer::from_bitwise_unary_op(
+    ///    &input, 4, 12, |a| a
+    /// );
+    /// assert_eq!(result.as_slice(), &[0b10101100u8, 0b00001011u8], "[{:08b}, {:08b}]", result.as_slice()[0], result.as_slice()[1]);
+    pub fn from_bitwise_unary_op<F>(
+        left: impl AsRef<[u8]>,
+        offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) -> Buffer
+    where
+        F: FnMut(u64) -> u64,
+    {
+        // reserve capacity and set length so we can get a typed view of u64 chunks
+        let mut result =
+            MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
+
+        let left_chunks = BitChunks::new(left.as_ref(), offset_in_bits, len_in_bits);
+
+        let result_chunks = result.typed_data_mut::<u64>().iter_mut();
+
+        result_chunks
+            .zip(left_chunks.iter())
+            .for_each(|(res, left)| {
+                *res = op(left);
+            });
+
+        let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
+        let rem = op(left_chunks.remainder_bits());
+        // we are counting its starting from the least significant bit, to to_le_bytes should be correct
+        let rem = &rem.to_le_bytes()[0..remainder_bytes];
+        result.extend_from_slice(rem);
+
+        result.into()
     }
 
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
@@ -344,10 +487,10 @@ impl Buffer {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
-        bitwise_unary_op_helper(self, offset, len, |a| a)
+        Self::from_bitwise_unary_op(self, offset, len, |a| a)
     }
 
-    /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
+    /// Returns a `BitChunks` instance which can be used to iterate over this buffer's bits
     /// in larger chunks and starting at arbitrary bit offsets.
     /// Note that both `offset` and `length` are measured in bits.
     pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks<'_> {
