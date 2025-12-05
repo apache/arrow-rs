@@ -20,6 +20,7 @@ import contextlib
 import datetime
 import decimal
 import string
+from typing import Union, Tuple, Protocol
 
 import pytest
 import pyarrow as pa
@@ -130,28 +131,50 @@ if PYARROW_MAJOR_VER >= 16:
 # This defines that Arrow consumers should allow any object that has specific "dunder"
 # methods, `__arrow_c_*_`. These wrapper classes ensure that arrow-rs is able to handle
 # _any_ class, without pyarrow-specific handling.
-class SchemaWrapper:
-    def __init__(self, schema):
+
+
+class ArrowSchemaExportable(Protocol):
+    def __arrow_c_schema__(self) -> object: ...
+
+
+class ArrowArrayExportable(Protocol):
+    def __arrow_c_array__(
+        self,
+        requested_schema: Union[object, None] = None
+    ) -> Tuple[object, object]:
+        ...
+
+
+class ArrowStreamExportable(Protocol):
+    def __arrow_c_stream__(
+        self,
+        requested_schema: Union[object, None] = None
+    ) -> object:
+        ...
+
+
+class SchemaWrapper(ArrowSchemaExportable):
+    def __init__(self, schema: ArrowSchemaExportable) -> None:
         self.schema = schema
 
-    def __arrow_c_schema__(self):
+    def __arrow_c_schema__(self) -> object:
         return self.schema.__arrow_c_schema__()
 
 
-class ArrayWrapper:
-    def __init__(self, array):
+class ArrayWrapper(ArrowArrayExportable):
+    def __init__(self, array: ArrowArrayExportable) -> None:
         self.array = array
 
-    def __arrow_c_array__(self):
-        return self.array.__arrow_c_array__()
+    def __arrow_c_array__(self, requested_schema: Union[object, None] = None) -> Tuple[object, object]:
+        return self.array.__arrow_c_array__(requested_schema=requested_schema)
 
 
-class StreamWrapper:
-    def __init__(self, stream):
+class StreamWrapper(ArrowStreamExportable):
+    def __init__(self, stream: ArrowStreamExportable) -> None:
         self.stream = stream
 
-    def __arrow_c_stream__(self):
-        return self.stream.__arrow_c_stream__()
+    def __arrow_c_stream__(self, requested_schema: Union[object, None] = None) -> object:
+        return self.stream.__arrow_c_stream__(requested_schema=requested_schema)
 
 
 @pytest.mark.parametrize("pyarrow_type", _supported_pyarrow_types, ids=str)
@@ -630,6 +653,67 @@ def test_table_pycapsule():
     assert table.schema == new_table.schema
     assert table == new_table
     assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_empty():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    table = pa.Table.from_batches([], schema=schema)
+    new_table = rust.build_table([], schema=schema)
+
+    assert table.schema == new_table.schema
+    assert table == new_table
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_roundtrip():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))])
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    table = pa.Table.from_batches(batches, schema=schema)
+    new_table = rust.round_trip_table(table)
+
+    assert table.schema == new_table.schema
+    assert table == new_table
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_from_batches():
+    """
+    Python -> Rust -> Python
+    """
+    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema),
+        pa.record_batch([[None, [], [5, 6]]], schema),
+    ]
+    table = pa.Table.from_batches(batches)
+    new_table = rust.build_table(batches, schema)
+
+    assert table.schema == new_table.schema
+    assert table == new_table
+    assert len(table.to_batches()) == len(new_table.to_batches())
+
+
+def test_table_error_inconsistent_schema():
+    """
+    Python -> Rust -> Python
+    """
+    schema_1 = pa.schema([('ints', pa.list_(pa.int32()))])
+    schema_2 = pa.schema([('floats', pa.list_(pa.float32()))])
+    batches = [
+        pa.record_batch([[[1], [2, 42]]], schema_1),
+        pa.record_batch([[None, [], [5.6, 6.4]]], schema_2),
+    ]
+    with pytest.raises(pa.ArrowException, match="Schema error: All record batches must have the same schema."):
+        rust.build_table(batches, schema_1)
 
 
 def test_reject_other_classes():
