@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::ops::Deref;
 use std::sync::Arc;
-use std::{collections::HashSet, ops::Deref};
 
 use crate::{ArrowError, DataType, Field, FieldRef};
 
@@ -343,7 +343,6 @@ impl UnionFields {
     ///
     /// This function returns an error if:
     /// - Any type_id appears more than once (duplicate type ids)
-    /// - Any field appears more than once (duplicate fields)
     /// - The number of type_ids doesn't match the number of fields
     ///
     /// # Examples
@@ -362,7 +361,7 @@ impl UnionFields {
     /// );
     /// assert!(result.is_ok());
     ///
-    /// // This will fail due to duplicate type id
+    /// // This will fail due to duplicate type ids
     /// let result = UnionFields::try_new(
     ///     vec![1, 1],
     ///     vec![
@@ -381,10 +380,7 @@ impl UnionFields {
         let mut type_ids_iter = type_ids.into_iter();
         let mut fields_iter = fields.into_iter().map(Into::into);
 
-        let fields_capacity = fields_iter.size_hint().0;
-
         let mut seen_type_ids = 0u128;
-        let mut seen_fields = HashSet::with_capacity(fields_capacity);
 
         let mut out = Vec::new();
 
@@ -408,13 +404,6 @@ impl UnionFields {
                     }
 
                     seen_type_ids |= mask;
-
-                    // check field id uniqueness
-                    if !seen_fields.insert(Arc::clone(&field)) {
-                        return Err(ArrowError::InvalidArgumentError(format!(
-                            "duplicate field: {field}"
-                        )));
-                    }
 
                     out.push((type_id, field));
                 }
@@ -764,8 +753,7 @@ mod tests {
     fn test_union_fields_try_new_duplicate_field() {
         let field = Field::new("field", DataType::UInt8, false);
         let res = UnionFields::try_new(vec![1, 2], vec![field.clone(), field]);
-        assert!(res.is_err());
-        assert!(res.unwrap_err().to_string().contains("duplicate field"));
+        assert!(res.is_ok());
     }
 
     #[test]
