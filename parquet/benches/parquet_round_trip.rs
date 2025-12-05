@@ -25,7 +25,6 @@ use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use parquet::arrow::arrow_writer::{ArrowColumnChunk, ArrowColumnWriter, compute_leaves};
 use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
 use rand::{Rng, SeedableRng, distr::StandardUniform, prelude::StdRng};
@@ -44,7 +43,7 @@ pub enum ColumnType {
 // arrow::util::bench_util::create_fsb_array with a seed
 
 /// Creates a random (but fixed-seeded) array of fixed size with a given null density and length
-pub fn create_fsb_array_with_seed<Offset: OffsetSizeTrait>(
+fn create_fsb_array_with_seed<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
     fixed_len: i32,
@@ -70,7 +69,7 @@ pub fn create_fsb_array_with_seed<Offset: OffsetSizeTrait>(
     .unwrap()
 }
 
-pub fn schema(column_type: ColumnType, num_columns: usize) -> Arc<Schema> {
+fn schema(column_type: ColumnType, num_columns: usize) -> Arc<Schema> {
     let field_type = match column_type {
         ColumnType::Binary(_) => DataType::Utf8,
         ColumnType::FixedLen(size) => DataType::FixedSizeBinary(size),
@@ -86,7 +85,7 @@ pub fn schema(column_type: ColumnType, num_columns: usize) -> Arc<Schema> {
     Arc::new(Schema::new(fields))
 }
 
-pub fn create_batch(
+fn create_batch(
     schema: &Arc<Schema>,
     column_type: ColumnType,
     seed: usize,
@@ -236,40 +235,11 @@ impl ParquetFileSpec {
     }
 }
 
-pub fn encode_row_group(
-    schema: &Arc<Schema>,
-    spec: &ParquetFileSpec,
-    mut column_writers: Vec<ArrowColumnWriter>,
-) -> Vec<ArrowColumnChunk> {
+fn file_from_spec(spec: ParquetFileSpec, buffer: &mut Vec<u8>) {
     const SEED: usize = 31;
     let num_rows = spec.rows_per_row_group.min(100);
-    // use the same batch repeatedly otherwise the data generation will dominate the time
-    let batch = create_batch(schema, spec.column_type, SEED, spec.num_columns, num_rows);
-    let mut rows_written = 0;
-    while rows_written < spec.rows_per_row_group {
-        let rows_left = spec.rows_per_row_group - rows_written;
-        let batch = if rows_left < batch.num_rows() {
-            batch.slice(0, rows_left)
-        } else {
-            batch.clone()
-        };
+    let rows_to_write = spec.num_row_groups * spec.rows_per_row_group;
 
-        let mut writers = column_writers.iter_mut();
-        for (field, column) in batch.schema().fields().iter().zip(batch.columns()) {
-            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
-                writers.next().unwrap().write(&leaf).unwrap()
-            }
-        }
-        rows_written += batch.num_rows();
-    }
-
-    column_writers
-        .into_iter()
-        .map(|writer| writer.close().unwrap())
-        .collect()
-}
-
-pub fn file_from_spec(spec: ParquetFileSpec, buffer: &mut Vec<u8>) {
     let schema = schema(spec.column_type, spec.num_columns);
     let props = WriterProperties::builder()
         .set_max_row_group_size(spec.rows_per_row_group)
@@ -279,20 +249,23 @@ pub fn file_from_spec(spec: ParquetFileSpec, buffer: &mut Vec<u8>) {
         .set_compression(parquet::basic::Compression::UNCOMPRESSED)
         .build();
 
-    let writer = ArrowWriter::try_new(buffer, schema.clone(), Some(props)).unwrap();
-    let (mut file_writer, row_group_factory) = writer.into_serialized_writer().unwrap();
+    let mut writer = ArrowWriter::try_new(buffer, schema.clone(), Some(props)).unwrap();
 
-    for rg in 0..spec.num_row_groups {
-        let col_writers = row_group_factory.create_column_writers(rg).unwrap();
+    // use the same batch repeatedly otherwise the data generation will dominate the time
+    let batch = create_batch(&schema, spec.column_type, SEED, spec.num_columns, num_rows);
 
-        let encoded_columns = encode_row_group(&schema, &spec, col_writers);
-        let mut rg_writer = file_writer.next_row_group().unwrap();
-        for col_chunk in encoded_columns.into_iter() {
-            col_chunk.append_to_row_group(&mut rg_writer).unwrap();
-        }
-        rg_writer.close().unwrap();
+    let mut rows_written = 0;
+    while rows_written < rows_to_write {
+        writer.write(&batch).unwrap();
+        rows_written += num_rows;
     }
-    file_writer.close().unwrap();
+
+    let parquet_metadata = writer.close().unwrap();
+    assert_eq!(parquet_metadata.num_row_groups(), spec.num_row_groups);
+    assert_eq!(
+        parquet_metadata.file_metadata().num_rows() as usize,
+        rows_to_write
+    );
 }
 
 fn read_write(c: &mut Criterion, spec: ParquetFileSpec, msg: &str) {
