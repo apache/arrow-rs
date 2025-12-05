@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    ArrayRef, ArrowPrimitiveType, GenericStringArray, OffsetSizeTrait, PrimitiveArray, RecordBatch,
-};
+use arrow::array::{ArrayRef, OffsetSizeTrait, RecordBatch};
 use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type, Int64Type, Schema};
+use arrow::util::bench_util::{
+    create_primitive_array_with_seed, create_string_array_with_len_range_and_prefix_and_seed,
+};
 use arrow_array::FixedSizeBinaryArray;
 use bytes::Bytes;
 use criterion::{Criterion, criterion_group, criterion_main};
@@ -27,11 +28,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::arrow_writer::{ArrowColumnChunk, ArrowColumnWriter, compute_leaves};
 use parquet::basic::Encoding;
 use parquet::file::properties::WriterProperties;
-use rand::{
-    Rng, SeedableRng,
-    distr::{Alphanumeric, Distribution, StandardUniform},
-    prelude::StdRng,
-};
+use rand::{Rng, SeedableRng, distr::StandardUniform, prelude::StdRng};
 use std::sync::Arc;
 
 #[derive(Copy, Clone)]
@@ -44,56 +41,10 @@ pub enum ColumnType {
     Double,
 }
 
-/// Creates a [`PrimitiveArray`] of a given `size` and `null_density`
-/// filling it with random numbers generated using the provided `seed`.
-pub fn create_primitive_array_with_seed<T>(
-    size: usize,
-    null_density: f32,
-    seed: u64,
-) -> PrimitiveArray<T>
-where
-    T: ArrowPrimitiveType,
-    StandardUniform: Distribution<T::Native>,
-{
-    let mut rng = StdRng::seed_from_u64(seed);
-
-    (0..size)
-        .map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                Some(rng.random())
-            }
-        })
-        .collect()
-}
-
-/// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
-pub fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
-    size: usize,
-    null_density: f32,
-    max_str_len: usize,
-    seed: u64,
-) -> GenericStringArray<Offset> {
-    let mut rng = StdRng::seed_from_u64(seed);
-
-    let rng = &mut rng;
-    (0..size)
-        .map(|_| {
-            if rng.random::<f32>() < null_density {
-                None
-            } else {
-                let str_len = rng.random_range(max_str_len / 2..max_str_len);
-                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
-                let value = String::from_utf8(value).unwrap();
-                Some(value)
-            }
-        })
-        .collect()
-}
+// arrow::util::bench_util::create_fsb_array with a seed
 
 /// Creates a random (but fixed-seeded) array of fixed size with a given null density and length
-pub fn create_string_array_with_fixed_len<Offset: OffsetSizeTrait>(
+pub fn create_fsb_array_with_seed<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
     fixed_len: i32,
@@ -148,10 +99,12 @@ pub fn create_batch(
         ColumnType::Binary(max_str_len) => {
             for i in 0..num_columns {
                 let array_seed = seed * num_columns + i;
-                let array = create_string_array_with_max_len::<i32>(
+                let array = create_string_array_with_len_range_and_prefix_and_seed::<i32>(
                     num_rows,
                     null_density,
+                    max_str_len / 2,
                     max_str_len,
+                    "",
                     array_seed as u64,
                 );
                 arrays.push(Arc::new(array));
@@ -160,7 +113,7 @@ pub fn create_batch(
         ColumnType::FixedLen(size) => {
             for i in 0..num_columns {
                 let array_seed = seed * num_columns + i;
-                let array = create_string_array_with_fixed_len::<i32>(
+                let array = create_fsb_array_with_seed::<i32>(
                     num_rows,
                     null_density,
                     size,
