@@ -19,7 +19,7 @@ use crate::coalesce::InProgressArray;
 use crate::filter::{FilterPredicate, IndexIterator, IterationStrategy, SlicesIterator};
 use arrow_array::cast::AsArray;
 use arrow_array::{Array, ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::{NullBufferBuilder, ScalarBuffer};
+use arrow_buffer::{NullBufferBuilder, ScalarBuffer, bit_util};
 use arrow_schema::{ArrowError, DataType};
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -153,16 +153,28 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             IterationStrategy::IndexIterator => {
                 // Copy values and nulls for each index
                 if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
-                    let indices = IndexIterator::new(filter.filter_array(), count);
-                    self.current.extend(indices.map(|idx: usize| {
-                        if nulls.is_null(idx) {
-                            self.nulls.append_null();
-                        } else {
-                            self.nulls.append_non_null();
-                        }
-                        // SAFETY: idx is derived from filter predicate
-                        unsafe { *values.get_unchecked(idx) }
-                    }));
+                    let null_buffer = nulls.inner();
+                    let null_ptr = null_buffer.values().as_ptr();
+                    let null_offset = null_buffer.offset();
+
+                    // Collect indices for reuse (values + nulls)
+                    let indices: Vec<usize> =
+                        IndexIterator::new(filter.filter_array(), count).collect();
+
+                    // Efficiently extend null buffer
+                    // SAFETY: indices iterator reports correct length
+                    unsafe {
+                        self.nulls.extend_from_trusted_len_iter(
+                            indices
+                                .iter()
+                                .map(|&idx| bit_util::get_bit_raw(null_ptr, idx + null_offset)),
+                        );
+                    }
+
+                    // Copy values
+                    // SAFETY: indices are derived from filter predicate
+                    self.current
+                        .extend(indices.iter().map(|&idx| unsafe { *values.get_unchecked(idx) }));
                 } else {
                     self.nulls.append_n_non_nulls(count);
                     let indices = IndexIterator::new(filter.filter_array(), count);
@@ -174,16 +186,24 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             IterationStrategy::Indices(indices) => {
                 // Copy values and nulls using precomputed indices
                 if let Some(nulls) = s.nulls().filter(|n| n.null_count() > 0) {
-                    self.current.extend(indices.iter().map(|&idx| {
-                        // TODO: speed up
-                        if nulls.is_null(idx) {
-                            self.nulls.append_null();
-                        } else {
-                            self.nulls.append_non_null();
-                        }
-                        // SAFETY: indices are derived from filter predicate
-                        unsafe { *values.get_unchecked(idx) }
-                    }));
+                    let null_buffer = nulls.inner();
+                    let null_ptr = null_buffer.values().as_ptr();
+                    let null_offset = null_buffer.offset();
+
+                    // Efficiently extend null buffer
+                    // SAFETY: indices iterator reports correct length
+                    unsafe {
+                        self.nulls.extend_from_trusted_len_iter(
+                            indices
+                                .iter()
+                                .map(|&idx| bit_util::get_bit_raw(null_ptr, idx + null_offset)),
+                        );
+                    }
+
+                    // Copy values
+                    // SAFETY: indices are derived from filter predicate
+                    self.current
+                        .extend(indices.iter().map(|&idx| unsafe { *values.get_unchecked(idx) }));
                 } else {
                     self.nulls.append_n_non_nulls(count);
                     // SAFETY: indices are derived from filter predicate
