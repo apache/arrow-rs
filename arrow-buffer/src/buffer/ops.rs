@@ -60,73 +60,39 @@ where
 
 /// Apply a bitwise operation `op` to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+#[deprecated(note = "use Buffer::bitwise_binary instead")]
 pub fn bitwise_bin_op_helper<F>(
     left: &Buffer,
     left_offset_in_bits: usize,
     right: &Buffer,
     right_offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
-    F: FnMut(u64, u64) -> u64,
+    F: Fn(u64, u64) -> u64 + Copy,
 {
-    let left_chunks = left.bit_chunks(left_offset_in_bits, len_in_bits);
-    let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
-
-    let chunks = left_chunks
-        .iter()
-        .zip(right_chunks.iter())
-        .map(|(left, right)| op(left, right));
-    // Soundness: `BitChunks` is a `BitChunks` iterator which
-    // correctly reports its upper bound
-    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    buffer.extend_from_slice(rem);
-
-    buffer.into()
+    left.bitwise_binary(right, left_offset_in_bits, right_offset_in_bits, len_in_bits, op)
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
+#[deprecated(note = "use Buffer::bitwise_unary instead")]
 pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
-    F: FnMut(u64) -> u64,
+    F: Fn(u64) -> u64 + Copy,
 {
-    // reserve capacity and set length so we can get a typed view of u64 chunks
-    let mut result =
-        MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
-
-    let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
-
-    let result_chunks = result.typed_data_mut::<u64>().iter_mut();
-
-    result_chunks
-        .zip(left_chunks.iter())
-        .for_each(|(res, left)| {
-            *res = op(left);
-        });
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    result.extend_from_slice(rem);
-
-    result.into()
+    left.bitwise_unary(offset_in_bits, len_in_bits, op)
 }
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+#[deprecated(note = "use Buffer::bitwise_binary with |a, b| a & b or BooleanArray::binary instead")]
 pub fn buffer_bin_and(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -134,18 +100,12 @@ pub fn buffer_bin_and(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
-        left,
-        left_offset_in_bits,
-        right,
-        right_offset_in_bits,
-        len_in_bits,
-        |a, b| a & b,
-    )
+    left.bitwise_binary(right, left_offset_in_bits, right_offset_in_bits, len_in_bits, |a, b| a & b)
 }
 
 /// Apply a bitwise or to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+#[deprecated(note = "use Buffer::bitwise_binary with |a, b| a | b or BooleanArray::binary instead")]
 pub fn buffer_bin_or(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -153,18 +113,12 @@ pub fn buffer_bin_or(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
-        left,
-        left_offset_in_bits,
-        right,
-        right_offset_in_bits,
-        len_in_bits,
-        |a, b| a | b,
-    )
+    left.bitwise_binary(right, left_offset_in_bits, right_offset_in_bits, len_in_bits, |a, b| a | b)
 }
 
 /// Apply a bitwise xor to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+#[deprecated(note = "use Buffer::bitwise_binary with |a, b| a ^ b or BooleanArray::binary instead")]
 pub fn buffer_bin_xor(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -172,18 +126,12 @@ pub fn buffer_bin_xor(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
-        left,
-        left_offset_in_bits,
-        right,
-        right_offset_in_bits,
-        len_in_bits,
-        |a, b| a ^ b,
-    )
+    left.bitwise_binary(right, left_offset_in_bits, right_offset_in_bits, len_in_bits, |a, b| a ^ b)
 }
 
 /// Apply a bitwise and_not to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+#[deprecated(note = "use Buffer::bitwise_binary with |a, b| a & !b or BooleanArray::binary instead")]
 pub fn buffer_bin_and_not(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -191,18 +139,12 @@ pub fn buffer_bin_and_not(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
-        left,
-        left_offset_in_bits,
-        right,
-        right_offset_in_bits,
-        len_in_bits,
-        |a, b| a & !b,
-    )
+    left.bitwise_binary(right, left_offset_in_bits, right_offset_in_bits, len_in_bits, |a, b| a & !b)
 }
 
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
+#[deprecated(note = "use Buffer::bitwise_unary with |a| !a or BooleanArray::unary instead")]
 pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {
-    bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
+    left.bitwise_unary(offset_in_bits, len_in_bits, |a| !a)
 }
