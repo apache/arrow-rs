@@ -1345,7 +1345,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 },
                 ArrowDataType::RunEndEncoded(_run_ends, _values) => {
                     Err(ParquetError::NYI(
-                        "Int64ColumnWriter: Attempting to write an Arrow REE type that is not yet implemented"
+                        "Int64ColumnWriter: Attempting to write an Arrow RunEndEncoded type that is not yet implemented"
                             .to_string(),
                     ))
                 }
@@ -1425,7 +1425,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 }
                 ArrowDataType::RunEndEncoded(_run_ends, _values) => {
                     return Err(ParquetError::NYI(
-                        "FixedLenByteArrayColumnWriter: Attempting to write an Arrow REE type that is not yet implemented"
+                        "FixedLenByteArrayColumnWriter: Attempting to write an Arrow RunEndEncoded type that is not yet implemented"
                             .to_string(),
                     ));
                 }

@@ -103,7 +103,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
             }
         }
 
-        // Potentially preserve run end encoded encoding
+        // Potentially preserve run-end encoding
         (_, DataType::RunEndEncoded(_, value)) => {
             // Apply hint to inner type
             let hinted = apply_hint(parquet, value.data_type().clone());

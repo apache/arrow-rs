@@ -119,7 +119,13 @@ macro_rules! downcast_op {
                 DataType::LargeUtf8 => {
                     downcast_ree_op!(run_end, LargeStringArray, $array, $op$(, $arg)*)
                 }
+                DataType::Utf8View => {
+                    downcast_ree_op!(run_end, StringViewArray, $array, $op$(, $arg)*)
+                }
                 DataType::Binary => downcast_ree_op!(run_end, BinaryArray, $array, $op$(, $arg)*),
+                DataType::BinaryView => {
+                    downcast_ree_op!(run_end, BinaryViewArray, $array, $op$(, $arg)*)
+                }
                 DataType::LargeBinary => {
                     downcast_ree_op!(run_end, LargeBinaryArray, $array, $op$(, $arg)*)
                 }
