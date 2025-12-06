@@ -113,6 +113,65 @@ pub fn make_fixed_len_byte_array_reader(
                 ));
             }
         }
+        // TODO eventually add a dedicated [`ArrayReader`] for REE
+        ArrowType::RunEndEncoded(_, val_field) => match val_field.data_type() {
+            ArrowType::FixedSizeBinary(_) => {}
+            ArrowType::Decimal32(_, _) => {
+                if byte_length > 4 {
+                    return Err(general_err!(
+                        "decimal 32 type too large, must be less then 4 bytes, got {}",
+                        byte_length
+                    ));
+                }
+            }
+            ArrowType::Decimal64(_, _) => {
+                if byte_length > 8 {
+                    return Err(general_err!(
+                        "decimal 64 type too large, must be less then 8 bytes, got {}",
+                        byte_length
+                    ));
+                }
+            }
+            ArrowType::Decimal128(_, _) => {
+                if byte_length > 16 {
+                    return Err(general_err!(
+                        "decimal 128 type too large, must be less than 16 bytes, got {}",
+                        byte_length
+                    ));
+                }
+            }
+            ArrowType::Decimal256(_, _) => {
+                if byte_length > 32 {
+                    return Err(general_err!(
+                        "decimal 256 type too large, must be less than 32 bytes, got {}",
+                        byte_length
+                    ));
+                }
+            }
+            ArrowType::Interval(_) => {
+                if byte_length != 12 {
+                    // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#interval
+                    return Err(general_err!(
+                        "interval type must consist of 12 bytes got {}",
+                        byte_length
+                    ));
+                }
+            }
+            ArrowType::Float16 => {
+                if byte_length != 2 {
+                    return Err(general_err!(
+                        "float 16 type must be 2 bytes, got {}",
+                        byte_length
+                    ));
+                }
+            }
+            _ => {
+                return Err(general_err!(
+                    "invalid RunEndEncoded value type for fixed length byte array reader - {}",
+                    data_type
+                ));
+            }
+        },
         _ => {
             return Err(general_err!(
                 "invalid data type for fixed length byte array reader - {}",
