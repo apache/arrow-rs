@@ -1343,12 +1343,34 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         write_primitive(typed, array.values(), levels)
                     }
                 },
-                ArrowDataType::RunEndEncoded(_run_ends, _values) => {
-                    Err(ParquetError::NYI(
-                        "Int64ColumnWriter: Attempting to write an Arrow RunEndEncoded type that is not yet implemented"
-                            .to_string(),
-                    ))
-                }
+                ArrowDataType::RunEndEncoded(_, values_field) => match values_field.data_type() {
+                    ArrowDataType::Decimal64(_, _) => {
+                        let array = arrow_cast::cast(column, values_field.data_type())?;
+                        let array = array
+                            .as_primitive::<Decimal64Type>()
+                            .unary::<_, Int64Type>(|v| v);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    ArrowDataType::Decimal128(_, _) => {
+                        let array = arrow_cast::cast(column, values_field.data_type())?;
+                        let array = array
+                            .as_primitive::<Decimal128Type>()
+                            .unary::<_, Int64Type>(|v| v as i64);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    ArrowDataType::Decimal256(_, _) => {
+                        let array = arrow_cast::cast(column, values_field.data_type())?;
+                        let array = array
+                            .as_primitive::<Decimal256Type>()
+                            .unary::<_, Int64Type>(|v| v.as_i128() as i64);
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    _ => {
+                        let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
+                        let array = array.as_primitive::<Int64Type>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                },
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
                     let array = array.as_primitive::<Int64Type>();
@@ -4687,5 +4709,135 @@ mod tests {
 
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(run_array)]).unwrap();
         roundtrip(batch, None);
+    }
+
+    #[test]
+    fn arrow_writer_run_end_encoded_decimal32() {
+        // Create a run array of Decimal32 values
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Decimal32Type>::new();
+        builder.extend(
+            vec![Some(12345i32); 100000]
+                .into_iter()
+                .chain(vec![Some(56789i32); 100000]),
+        );
+        let run_array: RunArray<Int32Type> = builder.finish();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            run_array.data_type().clone(),
+            run_array.is_nullable(),
+        )]));
+
+        // Write to parquet
+        let mut parquet_bytes: Vec<u8> = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut parquet_bytes, schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(run_array)]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Read back and verify
+        let bytes = Bytes::from(parquet_bytes);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+
+        // Check if dictionary was used by examining the metadata
+        let metadata = reader.metadata();
+        let row_group = &metadata.row_groups()[0];
+        let col_meta = &row_group.columns()[0];
+        let has_dict_encoding = col_meta.encodings().any(|e| e == Encoding::RLE_DICTIONARY);
+        let has_dict_page = col_meta.dictionary_page_offset().is_some();
+
+        // Verify the schema is REE encoded when we read it back
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", arrow_schema::DataType::Int32, false)),
+                Arc::new(Field::new(
+                    "values",
+                    arrow_schema::DataType::Decimal32(9, 2),
+                    true,
+                )),
+            ),
+            false,
+        )]));
+        assert_eq!(&expected_schema, reader.schema());
+
+        // Read the data back
+        let batches: Vec<_> = reader
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 196);
+        // Count rows in total
+        let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        assert_eq!(total_rows, 200000);
+
+        // Ensure dictionary encoding
+        assert!(has_dict_encoding, "RunArray should be dictionary encoded");
+        assert!(has_dict_page, "RunArray should have dictionary page");
+    }
+
+    #[test]
+    fn arrow_writer_run_end_encoded_decimal64() {
+        // Create a run array of Decimal64 values
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Decimal64Type>::new();
+        builder.extend(
+            vec![Some(12345i64); 100000]
+                .into_iter()
+                .chain(vec![Some(56789i64); 100000]),
+        );
+        let run_array: RunArray<Int32Type> = builder.finish();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            run_array.data_type().clone(),
+            run_array.is_nullable(),
+        )]));
+
+        // Write to parquet
+        let mut parquet_bytes: Vec<u8> = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut parquet_bytes, schema.clone(), None).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(run_array)]).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+
+        // Read back and verify
+        let bytes = Bytes::from(parquet_bytes);
+        let reader = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
+
+        // Check if dictionary was used by examining the metadata
+        let metadata = reader.metadata();
+        let row_group = &metadata.row_groups()[0];
+        let col_meta = &row_group.columns()[0];
+        let has_dict_encoding = col_meta.encodings().any(|e| e == Encoding::RLE_DICTIONARY);
+        let has_dict_page = col_meta.dictionary_page_offset().is_some();
+
+        // Verify the schema is REE encoded when we read it back
+        let expected_schema = Arc::new(Schema::new(vec![Field::new(
+            "ree",
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", arrow_schema::DataType::Int32, false)),
+                Arc::new(Field::new(
+                    "values",
+                    arrow_schema::DataType::Decimal64(18, 6),
+                    true,
+                )),
+            ),
+            false,
+        )]));
+        assert_eq!(&expected_schema, reader.schema());
+
+        // Read the data back
+        let batches: Vec<_> = reader
+            .build()
+            .unwrap()
+            .collect::<ArrowResult<Vec<_>>>()
+            .unwrap();
+        assert_eq!(batches.len(), 196);
+        // Count rows in total
+        let total_rows = batches.iter().map(|b| b.num_rows()).sum::<usize>();
+        assert_eq!(total_rows, 200000);
+
+        // Ensure dictionary encoding
+        assert!(has_dict_encoding, "RunArray should be dictionary encoded");
+        assert!(has_dict_page, "RunArray should have dictionary page");
     }
 }
