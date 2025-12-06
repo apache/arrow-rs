@@ -4720,11 +4720,10 @@ mod tests {
         let metadata = reader.metadata();
         let row_group = &metadata.row_groups()[0];
         let col_meta = &row_group.columns()[0];
-        let has_dict_encoding = col_meta.encodings().any(|e| e == Encoding::RLE_DICTIONARY);
 
         // If dictionary encoding worked, we should see RLE_DICTIONARY encoding
         // and have a dictionary page offset
-        // let has_dict_encoding = col_meta.encodings().contains(&Encoding::RLE_DICTIONARY);
+        let has_dict_encoding = col_meta.encodings().any(|e| e == Encoding::RLE_DICTIONARY);
         let has_dict_page = col_meta.dictionary_page_offset().is_some();
 
         // Verify the schema is REE encoded when we read it back
