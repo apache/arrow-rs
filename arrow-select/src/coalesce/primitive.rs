@@ -158,26 +158,21 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                     let null_offset = null_buffer.offset();
 
                     // Collect indices for reuse (values + nulls)
-                    let indices: Vec<usize> =
-                        IndexIterator::new(filter.filter_array(), count).collect();
+                    let indices = IndexIterator::new(filter.filter_array(), count);
 
                     // Efficiently extend null buffer
                     // SAFETY: indices iterator reports correct length
                     unsafe {
                         self.nulls.extend_from_trusted_len_iter(
-                            indices
-                                .iter()
-                                .map(|&idx| bit_util::get_bit_raw(null_ptr, idx + null_offset)),
+                            indices.map(|idx| bit_util::get_bit_raw(null_ptr, idx + null_offset)),
                         );
                     }
+                    let indices = IndexIterator::new(filter.filter_array(), count);
 
                     // Copy values
                     // SAFETY: indices are derived from filter predicate
-                    self.current.extend(
-                        indices
-                            .iter()
-                            .map(|&idx| unsafe { *values.get_unchecked(idx) }),
-                    );
+                    self.current
+                        .extend(indices.map(|idx| unsafe { *values.get_unchecked(idx) }));
                 } else {
                     self.nulls.append_n_non_nulls(count);
                     let indices = IndexIterator::new(filter.filter_array(), count);
