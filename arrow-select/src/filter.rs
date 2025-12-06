@@ -39,7 +39,7 @@ use arrow_schema::*;
 ///
 /// Threshold of 0.8 chosen based on <https://dl.acm.org/doi/abs/10.1145/3465998.3466009>
 ///
-const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
+const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.9;
 
 /// An iterator of `(usize, usize)` each representing an interval
 /// `[start, end)` whose slots of a bitmap [Buffer] are true.
