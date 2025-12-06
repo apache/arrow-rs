@@ -37,7 +37,7 @@ use arrow_schema::*;
 /// [`SlicesIterator`] to copy ranges of values. Otherwise iterate
 /// over individual rows using [`IndexIterator`]
 ///
-/// Threshold of 0.8 chosen based on <https://dl.acm.org/doi/abs/10.1145/3465998.3466009>
+/// Threshold of 0.9 chosen based on benchmarking results
 ///
 const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.9;
 
