@@ -193,6 +193,57 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Extends this builder with validity values from a trusted length iterator.
+    ///
+    /// This is more efficient than calling `append` in a loop as it processes
+    /// 64 bits at a time internally.
+    ///
+    /// # Safety
+    ///
+    /// The iterator must report its length correctly via `size_hint()`.
+    /// Using an iterator that reports an incorrect length is undefined behavior.
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::NullBufferBuilder;
+    /// let mut builder = NullBufferBuilder::new(8);
+    /// let validities = [true, false, true, true];
+    /// // SAFETY: slice iterator reports correct length
+    /// unsafe { builder.extend_from_trusted_len_iter(validities.iter().copied()) };
+    /// assert_eq!(builder.len(), 4);
+    /// ```
+    pub unsafe fn extend_from_trusted_len_iter<I: Iterator<Item = bool>>(&mut self, iter: I) {
+        let (_, upper) = iter.size_hint();
+        let len = upper.expect("extend_from_trusted_len_iter requires an upper limit");
+
+        if len == 0 {
+            return;
+        }
+
+        // Materialize since we're about to append bits
+        self.materialize_if_needed();
+
+        let buf = self.bitmap_builder.as_mut().unwrap();
+        let start_len = buf.len();
+        // Advance to allocate space, initializing new bits to 0
+        buf.advance(len);
+
+        let slice = buf.as_slice_mut();
+        let mut bit_idx = start_len;
+
+        // Process bits - set bit if true (buffer initialized to 0, so false bits are already correct)
+        for valid in iter {
+            if valid {
+                let byte_idx = bit_idx / 8;
+                let bit_offset = bit_idx % 8;
+                slice[byte_idx] |= 1 << bit_offset;
+            }
+            bit_idx += 1;
+        }
+
+        debug_assert_eq!(bit_idx, start_len + len);
+    }
+
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<NullBuffer> {
