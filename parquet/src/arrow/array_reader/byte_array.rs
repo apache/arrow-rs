@@ -85,7 +85,7 @@ pub fn make_byte_array_reader(
                 )))
             }
             _ => Err(general_err!(
-                "invalid run end encoded value type for byte array reader - {}",
+                "invalid RunEndEncoded value type for byte array reader - {}",
                 data_type
             )),
         },
