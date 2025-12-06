@@ -173,8 +173,11 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
 
                     // Copy values
                     // SAFETY: indices are derived from filter predicate
-                    self.current
-                        .extend(indices.iter().map(|&idx| unsafe { *values.get_unchecked(idx) }));
+                    self.current.extend(
+                        indices
+                            .iter()
+                            .map(|&idx| unsafe { *values.get_unchecked(idx) }),
+                    );
                 } else {
                     self.nulls.append_n_non_nulls(count);
                     let indices = IndexIterator::new(filter.filter_array(), count);
@@ -202,8 +205,11 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
 
                     // Copy values
                     // SAFETY: indices are derived from filter predicate
-                    self.current
-                        .extend(indices.iter().map(|&idx| unsafe { *values.get_unchecked(idx) }));
+                    self.current.extend(
+                        indices
+                            .iter()
+                            .map(|&idx| unsafe { *values.get_unchecked(idx) }),
+                    );
                 } else {
                     self.nulls.append_n_non_nulls(count);
                     // SAFETY: indices are derived from filter predicate
