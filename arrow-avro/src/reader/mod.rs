@@ -499,11 +499,11 @@ mod header;
 mod record;
 mod vlq;
 
-#[cfg(feature = "object_store")]
+#[cfg(feature = "async")]
 mod async_reader;
 
-#[cfg(feature = "object_store")]
-pub use async_reader::AsyncAvroReader;
+#[cfg(feature = "async")]
+pub use async_reader::*;
 
 fn is_incomplete_data(err: &ArrowError) -> bool {
     matches!(

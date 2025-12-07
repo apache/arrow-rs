@@ -75,7 +75,7 @@
 //!
 //! ## `async` Reading and Writing Arrow (`arrow` feature + `async` feature)
 //!
-//! The [`async_reader`] and [`async_writer`] modules provide async APIs to
+//! The [`mod`] and [`async_writer`] modules provide async APIs to
 //! read and write [`RecordBatch`]es  asynchronously.
 //!
 //! Most users will use [`AsyncArrowWriter`] for writing and [`ParquetRecordBatchStreamBuilder`]
@@ -83,7 +83,7 @@
 //! provides efficient integration with object storage services such as S3 via the [object_store]
 //! crate, automatically optimizing IO based on any predicates or projections provided.
 //!
-//! [`async_reader`]: arrow::async_reader
+//! [`mod`]: arrow::async_reader
 //! [`async_writer`]: arrow::async_writer
 //! [`AsyncArrowWriter`]: arrow::async_writer::AsyncArrowWriter
 //! [`ParquetRecordBatchStreamBuilder`]: arrow::async_reader::ParquetRecordBatchStreamBuilder
