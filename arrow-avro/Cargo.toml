@@ -88,7 +88,6 @@ criterion = { workspace = true, default-features = false }
 tempfile = "3.3"
 arrow = { workspace = true }
 futures = "0.3.31"
-bytes = "1.10.1"
 async-stream = "0.3.6"
 apache-avro = "0.21.0"
 num-bigint = "0.4"
