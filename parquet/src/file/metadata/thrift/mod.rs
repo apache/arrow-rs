@@ -1354,43 +1354,42 @@ pub(super) fn serialize_column_meta_data<W: Write>(
         if let Some(page_encoding_stats) = column_chunk.page_encoding_stats() {
             last_field_id = page_encoding_stats.write_thrift_field(w, 13, last_field_id)?;
         }
-    }
-    if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
-        last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
-    }
-    if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
-        last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
-    }
+        if let Some(bloom_filter_offset) = column_chunk.bloom_filter_offset {
+            last_field_id = bloom_filter_offset.write_thrift_field(w, 14, last_field_id)?;
+        }
+        if let Some(bloom_filter_length) = column_chunk.bloom_filter_length {
+            last_field_id = bloom_filter_length.write_thrift_field(w, 15, last_field_id)?;
+        }
 
-    // SizeStatistics
-    let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
-        || column_chunk.repetition_level_histogram.is_some()
-        || column_chunk.definition_level_histogram.is_some()
-    {
-        let repetition_level_histogram = column_chunk
-            .repetition_level_histogram()
-            .map(|hist| hist.clone().into_inner());
+        // SizeStatistics
+        let size_stats = if column_chunk.unencoded_byte_array_data_bytes.is_some()
+            || column_chunk.repetition_level_histogram.is_some()
+            || column_chunk.definition_level_histogram.is_some()
+        {
+            let repetition_level_histogram = column_chunk
+                .repetition_level_histogram()
+                .map(|hist| hist.clone().into_inner());
 
-        let definition_level_histogram = column_chunk
-            .definition_level_histogram()
-            .map(|hist| hist.clone().into_inner());
+            let definition_level_histogram = column_chunk
+                .definition_level_histogram()
+                .map(|hist| hist.clone().into_inner());
 
-        Some(SizeStatistics {
-            unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
-            repetition_level_histogram,
-            definition_level_histogram,
-        })
-    } else {
-        None
-    };
-    if let Some(size_stats) = size_stats {
-        last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
+            Some(SizeStatistics {
+                unencoded_byte_array_data_bytes: column_chunk.unencoded_byte_array_data_bytes,
+                repetition_level_histogram,
+                definition_level_histogram,
+            })
+        } else {
+            None
+        };
+        if let Some(size_stats) = size_stats {
+            last_field_id = size_stats.write_thrift_field(w, 16, last_field_id)?;
+        }
+
+        if let Some(geo_stats) = column_chunk.geo_statistics() {
+            geo_stats.write_thrift_field(w, 17, last_field_id)?;
+        }
     }
-
-    if let Some(geo_stats) = column_chunk.geo_statistics() {
-        geo_stats.write_thrift_field(w, 17, last_field_id)?;
-    }
-
     w.write_struct_end()
 }
 
