@@ -1,12 +1,23 @@
 version: 2
 updates:
   - package-ecosystem: cargo
-    directory: "/"
+    directories:
+      - "/"
+      - "/arrow-pyarrow-integration-testing"
     schedule:
       interval: daily
     open-pull-requests-limit: 10
-    target-branch: master
-    labels: [auto-dependencies]
+    target-branch: main
+    labels: [auto-dependencies, arrow]
+    groups:
+      prost:
+        applies-to: version-updates
+        patterns:
+          - "prost*"
+      tonic:
+        applies-to: version-updates
+        patterns:
+          - "tonic*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

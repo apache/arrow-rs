@@ -56,8 +56,7 @@ fn main() {
     for filename in args.file_paths {
         let path = Path::new(&filename);
         let file = File::open(path).expect("Unable to open file");
-        let parquet_reader =
-            SerializedFileReader::new(file).expect("Unable to read file");
+        let parquet_reader = SerializedFileReader::new(file).expect("Unable to read file");
         let row_group_metadata = parquet_reader.metadata().row_groups();
         let mut total_num_rows = 0;
 

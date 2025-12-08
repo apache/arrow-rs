@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::builder::{ArrayBuilder, BooleanBufferBuilder};
-use crate::{ArrayRef, BooleanArray};
+use crate::{Array, ArrayRef, BooleanArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
 use arrow_data::ArrayData;
@@ -123,15 +123,18 @@ impl BooleanBuilder {
         self.null_buffer_builder.append_n_non_nulls(v.len());
     }
 
+    /// Appends n `additional` bits of value `v` into the buffer
+    #[inline]
+    pub fn append_n(&mut self, additional: usize, v: bool) {
+        self.values_builder.append_n(additional, v);
+        self.null_buffer_builder.append_n_non_nulls(additional);
+    }
+
     /// Appends values from a slice of type `T` and a validity boolean slice.
     ///
     /// Returns an error if the slices are of different lengths
     #[inline]
-    pub fn append_values(
-        &mut self,
-        values: &[bool],
-        is_valid: &[bool],
-    ) -> Result<(), ArrowError> {
+    pub fn append_values(&mut self, values: &[bool], is_valid: &[bool]) -> Result<(), ArrowError> {
         if values.len() != is_valid.len() {
             Err(ArrowError::InvalidArgumentError(
                 "Value and validity lengths must be equal".to_string(),
@@ -140,6 +143,18 @@ impl BooleanBuilder {
             self.null_buffer_builder.append_slice(is_valid);
             self.values_builder.append_slice(values);
             Ok(())
+        }
+    }
+
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    #[inline]
+    pub fn append_array(&mut self, array: &BooleanArray) {
+        self.values_builder.append_buffer(array.values());
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
         }
     }
 
@@ -169,6 +184,19 @@ impl BooleanBuilder {
         let array_data = unsafe { builder.build_unchecked() };
         BooleanArray::from(array_data)
     }
+
+    /// Returns the current values buffer as a slice
+    ///
+    /// Boolean values are bit-packed into bytes. To extract the i-th boolean
+    /// from the bytes, you can use `arrow_buffer::bit_util::get_bit()`.
+    pub fn values_slice(&self) -> &[u8] {
+        self.values_builder.as_slice()
+    }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
+    }
 }
 
 impl ArrayBuilder for BooleanBuilder {
@@ -192,11 +220,6 @@ impl ArrayBuilder for BooleanBuilder {
         self.values_builder.len()
     }
 
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
-    }
-
     /// Builds the array and reset this builder.
     fn finish(&mut self) -> ArrayRef {
         Arc::new(self.finish())
@@ -211,9 +234,12 @@ impl ArrayBuilder for BooleanBuilder {
 impl Extend<Option<bool>> for BooleanBuilder {
     #[inline]
     fn extend<T: IntoIterator<Item = Option<bool>>>(&mut self, iter: T) {
-        for v in iter {
-            self.append_option(v)
-        }
+        let buffered = iter.into_iter().collect::<Vec<_>>();
+        let array = unsafe {
+            // SAFETY: std::vec::IntoIter implements TrustedLen
+            BooleanArray::from_trusted_len_iter(buffered.into_iter())
+        };
+        self.append_array(&array)
     }
 }
 
@@ -221,7 +247,7 @@ impl Extend<Option<bool>> for BooleanBuilder {
 mod tests {
     use super::*;
     use crate::Array;
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{BooleanBuffer, NullBuffer};
 
     #[test]
     fn test_boolean_array_builder() {
@@ -250,8 +276,7 @@ mod tests {
 
     #[test]
     fn test_boolean_array_builder_append_slice() {
-        let arr1 =
-            BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
+        let arr1 = BooleanArray::from(vec![Some(true), Some(false), None, None, Some(false)]);
 
         let mut builder = BooleanArray::builder(0);
         builder.append_slice(&[true, false]);
@@ -322,5 +347,65 @@ mod tests {
             &values,
             &[false, false, true, false, false, true, true, false]
         )
+    }
+
+    #[test]
+    fn test_boolean_array_builder_append_n() {
+        let mut builder = BooleanBuilder::new();
+        builder.append_n(3, true);
+        builder.append_n(2, false);
+        let array = builder.finish();
+        assert_eq!(3, array.true_count());
+        assert_eq!(2, array.false_count());
+        assert_eq!(0, array.null_count());
+
+        let values = array.iter().map(|x| x.unwrap()).collect::<Vec<_>>();
+        assert_eq!(&values, &[true, true, true, false, false])
+    }
+
+    #[test]
+    fn test_append_array() {
+        let input = vec![
+            Some(true),
+            None,
+            Some(true),
+            None,
+            Some(false),
+            None,
+            None,
+            None,
+            Some(false),
+            Some(false),
+            Some(false),
+            Some(true),
+            Some(false),
+        ];
+        let arr1 = BooleanArray::from(input[..5].to_vec());
+        let arr2 = BooleanArray::from(input[5..8].to_vec());
+        let arr3 = BooleanArray::from(input[8..].to_vec());
+
+        let mut builder = BooleanBuilder::new();
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+        let actual = builder.finish();
+        let expected = BooleanArray::from(input);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_append_array_add_underlying_null_values() {
+        let array = BooleanArray::new(
+            BooleanBuffer::from(vec![true, false, true, false]),
+            Some(NullBuffer::from(&[true, true, false, false])),
+        );
+
+        let mut builder = BooleanBuilder::new();
+        builder.append_array(&array);
+        let actual = builder.finish();
+
+        assert_eq!(actual, array);
+        assert_eq!(actual.values(), array.values())
     }
 }

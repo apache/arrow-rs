@@ -15,12 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Cast kernel for [Apache Arrow](https://docs.rs/arrow)
+//! Functions for converting from one data type to another in [Apache Arrow](https://docs.rs/arrow)
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 pub mod cast;
 pub use cast::*;
 pub mod display;
 pub mod parse;
-
 #[cfg(feature = "prettyprint")]
 pub mod pretty;
+
+pub mod base64;

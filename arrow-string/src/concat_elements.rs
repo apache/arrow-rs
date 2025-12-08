@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Provides utility functions for concatenation of elements in arrays.
 use std::sync::Arc;
 
 use arrow_array::builder::BufferBuilder;
@@ -54,11 +55,8 @@ pub fn concat_elements_bytes<T: ByteArrayType>(
     let mut output_offsets = BufferBuilder::<T::Offset>::new(left_offsets.len());
     output_offsets.append(T::Offset::usize_as(0));
     for (left_idx, right_idx) in left_offsets.windows(2).zip(right_offsets.windows(2)) {
-        output_values
-            .append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
-        output_values.append_slice(
-            &right_values[right_idx[0].as_usize()..right_idx[1].as_usize()],
-        );
+        output_values.append_slice(&left_values[left_idx[0].as_usize()..left_idx[1].as_usize()]);
+        output_values.append_slice(&right_values[right_idx[0].as_usize()..right_idx[1].as_usize()]);
         output_offsets.append(T::Offset::from_usize(output_values.len()).unwrap());
     }
 
@@ -170,10 +168,12 @@ pub fn concat_elements_utf8_many<Offset: OffsetSizeTrait>(
     Ok(unsafe { builder.build_unchecked() }.into())
 }
 
-pub fn concat_elements_dyn(
-    left: &dyn Array,
-    right: &dyn Array,
-) -> Result<ArrayRef, ArrowError> {
+/// Returns the elementwise concatenation of [`Array`]s.
+///
+/// # Errors
+///
+/// This function errors if the arrays are of different types.
+pub fn concat_elements_dyn(left: &dyn Array, right: &dyn Array) -> Result<ArrayRef, ArrowError> {
     if left.data_type() != right.data_type() {
         return Err(ArrowError::ComputeError(format!(
             "Cannot concat arrays of different types: {} != {}",
@@ -213,7 +213,6 @@ pub fn concat_elements_dyn(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::StringArray;
     #[test]
     fn test_string_concat() {
         let left = [Some("foo"), Some("bar"), None]
@@ -392,8 +391,7 @@ mod tests {
 
         // test for LargeBinaryArray
         let left = LargeBinaryArray::from_opt_vec(vec![Some(b"foo"), Some(b"bar"), None]);
-        let right =
-            LargeBinaryArray::from_opt_vec(vec![None, Some(b"yyy"), Some(b"zzz")]);
+        let right = LargeBinaryArray::from_opt_vec(vec![None, Some(b"yyy"), Some(b"zzz")]);
         let output: LargeBinaryArray = concat_elements_dyn(&left, &right)
             .unwrap()
             .into_data()
@@ -410,8 +408,7 @@ mod tests {
         let output = concat_elements_dyn(&left, &right);
         assert_eq!(
             output.unwrap_err().to_string(),
-            "Compute error: Cannot concat arrays of different types: Utf8 != LargeUtf8"
-                .to_string()
+            "Compute error: Cannot concat arrays of different types: Utf8 != LargeUtf8".to_string()
         );
     }
 }

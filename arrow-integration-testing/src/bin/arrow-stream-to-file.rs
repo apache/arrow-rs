@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
+
 use std::io;
 
 use arrow::error::Result;

@@ -21,24 +21,64 @@
 
 [![Crates.io](https://img.shields.io/crates/v/arrow-flight.svg)](https://crates.io/crates/arrow-flight)
 
+See the [API documentation](https://docs.rs/arrow_flight/latest) for examples and the full API.
+
+The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/arrow_flight/index.html).
+
 ## Usage
 
 Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-arrow-flight = "39.0.0"
+arrow-flight = "54.0.0"
 ```
 
 Apache Arrow Flight is a gRPC based protocol for exchanging Arrow data between processes. See the blog post [Introducing Apache Arrow Flight: A Framework for Fast Data Transport](https://arrow.apache.org/blog/2019/10/13/introducing-arrow-flight/) for more information.
 
 This crate provides a Rust implementation of the
 [Flight.proto](../format/Flight.proto) gRPC protocol and
-[examples](https://github.com/apache/arrow-rs/tree/master/arrow-flight/examples)
+[examples](https://github.com/apache/arrow-rs/tree/main/arrow-flight/examples)
 that demonstrate how to build a Flight server implemented with [tonic](https://docs.rs/crate/tonic/latest).
 
 ## Feature Flags
 
-- `flight-sql-experimental`: Enables experimental support for
-  [Apache Arrow FlightSQL](https://arrow.apache.org/docs/format/FlightSql.html),
-  a protocol for interacting with SQL databases.
+- `flight-sql`: Support for [Apache Arrow FlightSQL], a protocol for interacting with SQL databases.
+
+You can enable TLS using the following features (not enabled by default)
+
+- `tls-aws-lc`: enables [tonic feature] `tls-aws-lc`
+- `tls-native-roots`: enables [tonic feature] `tls-native-roots`
+- `tls-ring`: enables [tonic feature] `tls-ring`
+- `tls-webpki`: enables [tonic feature] `tls-webpki-roots`
+
+[tonic feature]: https://docs.rs/tonic/latest/tonic/#feature-flags
+
+## CLI
+
+This crates offers a basic [Apache Arrow FlightSQL] command line interface.
+
+The client can be installed from the repository:
+
+```console
+$ cargo install --features=cli,flight-sql,tls --bin=flight_sql_client --path=. --locked
+```
+
+The client comes with extensive help text:
+
+```console
+$ flight_sql_client help
+```
+
+A query can be executed using:
+
+```console
+$ flight_sql_client --host example.com statement-query "SELECT 1;"
++----------+
+| Int64(1) |
++----------+
+| 1        |
++----------+
+```
+
+[apache arrow flightsql]: https://arrow.apache.org/docs/format/FlightSql.html

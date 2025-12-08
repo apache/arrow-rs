@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Module contains bitwise operations on arrays
+
 use crate::arity::{binary, unary};
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
-use num::traits::{WrappingShl, WrappingShr};
+use num_traits::{WrappingShl, WrappingShr};
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// The helper function for bitwise operation with two array
@@ -114,6 +116,20 @@ where
     T::Native: Not<Output = T::Native>,
 {
     Ok(unary(array, |value| !value))
+}
+
+/// Perform `left & !right` operation on two arrays. If either left or right value is null
+/// then the result is also null.
+pub fn bitwise_and_not<T>(
+    left: &PrimitiveArray<T>,
+    right: &PrimitiveArray<T>,
+) -> Result<PrimitiveArray<T>, ArrowError>
+where
+    T: ArrowNumericType,
+    T::Native: BitAnd<Output = T::Native>,
+    T::Native: Not<Output = T::Native>,
+{
+    bitwise_op(left, right, |a, b| a & !b)
 }
 
 /// Perform bitwise `and` every value in an array with the scalar. If any value in the array is null then the
@@ -212,10 +228,8 @@ mod tests {
     #[test]
     fn test_bitwise_shift_left() {
         let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(8)]);
-        let right =
-            UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(u64::MAX)]);
-        let expected =
-            UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(0)]);
+        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(u64::MAX)]);
+        let expected = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(0)]);
         let result = bitwise_shift_left(&left, &right).unwrap();
         assert_eq!(expected, result);
     }
@@ -224,18 +238,15 @@ mod tests {
     fn test_bitwise_shift_left_scalar() {
         let left = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(8)]);
         let scalar = 2;
-        let expected =
-            UInt64Array::from(vec![Some(4), Some(8), None, Some(16), Some(32)]);
+        let expected = UInt64Array::from(vec![Some(4), Some(8), None, Some(16), Some(32)]);
         let result = bitwise_shift_left_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
     }
 
     #[test]
     fn test_bitwise_shift_right() {
-        let left =
-            UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(3)]);
-        let right =
-            UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(65)]);
+        let left = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(3)]);
+        let right = UInt64Array::from(vec![Some(5), Some(10), Some(8), Some(12), Some(65)]);
         let expected = UInt64Array::from(vec![Some(1), Some(2), None, Some(4), Some(1)]);
         let result = bitwise_shift_right(&left, &right).unwrap();
         assert_eq!(expected, result);
@@ -243,11 +254,9 @@ mod tests {
 
     #[test]
     fn test_bitwise_shift_right_scalar() {
-        let left =
-            UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(3)]);
+        let left = UInt64Array::from(vec![Some(32), Some(2048), None, Some(16384), Some(3)]);
         let scalar = 2;
-        let expected =
-            UInt64Array::from(vec![Some(8), Some(512), None, Some(4096), Some(0)]);
+        let expected = UInt64Array::from(vec![Some(8), Some(512), None, Some(4096), Some(0)]);
         let result = bitwise_shift_right_scalar(&left, scalar).unwrap();
         assert_eq!(expected, result);
     }
@@ -303,6 +312,31 @@ mod tests {
         let expected = Int32Array::from(vec![Some(-2), Some(-3), None, Some(-5)]);
         let result = bitwise_not(&array).unwrap();
         assert_eq!(expected, result);
+    }
+
+    #[test]
+    fn test_bitwise_and_not_array() {
+        // unsigned value
+        let left = UInt64Array::from(vec![Some(8), Some(2), None, Some(4)]);
+        let right = UInt64Array::from(vec![Some(7), Some(5), Some(8), Some(13)]);
+        let expected = UInt64Array::from(vec![Some(8), Some(2), None, Some(0)]);
+        let result = bitwise_and_not(&left, &right).unwrap();
+        assert_eq!(expected, result);
+        assert_eq!(
+            bitwise_and(&left, &bitwise_not(&right).unwrap()).unwrap(),
+            result
+        );
+
+        // signed value
+        let left = Int32Array::from(vec![Some(2), Some(1), None, Some(3)]);
+        let right = Int32Array::from(vec![Some(-7), Some(-5), Some(8), Some(13)]);
+        let expected = Int32Array::from(vec![Some(2), Some(0), None, Some(2)]);
+        let result = bitwise_and_not(&left, &right).unwrap();
+        assert_eq!(expected, result);
+        assert_eq!(
+            bitwise_and(&left, &bitwise_not(&right).unwrap()).unwrap(),
+            result
+        );
     }
 
     #[test]

@@ -18,14 +18,12 @@
 use arrow::array::StringRunBuilder;
 use arrow::datatypes::Int32Type;
 use arrow::util::bench_util::create_string_array_for_runs;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("string_run_builder");
 
-    let mut do_bench = |physical_array_len: usize,
-                        logical_array_len: usize,
-                        string_len: usize| {
+    let mut do_bench = |physical_array_len: usize, logical_array_len: usize, string_len: usize| {
         group.bench_function(
                 format!(
                     "(run_array_len:{logical_array_len}, physical_array_len:{physical_array_len}, string_len: {string_len})",

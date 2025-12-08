@@ -17,11 +17,10 @@
 
 use crate::reader::tape::TapeElement;
 use lexical_core::FormattedSize;
-use serde::ser::{
-    Impossible, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple,
-    SerializeTupleStruct,
+use serde_core::ser::{
+    Impossible, SerializeMap, SerializeSeq, SerializeStruct, SerializeTuple, SerializeTupleStruct,
 };
-use serde::{Serialize, Serializer};
+use serde_core::{Serialize, Serializer};
 
 #[derive(Debug)]
 pub struct SerializerError(String);
@@ -34,7 +33,7 @@ impl std::fmt::Display for SerializerError {
     }
 }
 
-impl serde::ser::Error for SerializerError {
+impl serde_core::ser::Error for SerializerError {
     fn custom<T>(msg: T) -> Self
     where
         T: std::fmt::Display,
@@ -77,22 +76,6 @@ impl<'a> TapeSerializer<'a> {
     }
 }
 
-/// The tape stores all values as strings, and so must serialize numeric types
-///
-/// Formatting to a string only to parse it back again is rather wasteful,
-/// it may be possible to tweak the tape representation to avoid this
-///
-/// Need to use macro as const generic expressions are unstable
-/// <https://github.com/rust-lang/rust/issues/76560>
-macro_rules! serialize_numeric {
-    ($s:ident, $t:ty, $v:ident) => {{
-        let mut buffer = [0_u8; <$t>::FORMATTED_SIZE];
-        let s = lexical_core::write($v, &mut buffer);
-        $s.serialize_number(s);
-        Ok(())
-    }};
-}
-
 impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
     type Ok = ();
 
@@ -115,43 +98,63 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
     }
 
     fn serialize_i8(self, v: i8) -> Result<(), SerializerError> {
-        serialize_numeric!(self, i8, v)
+        self.serialize_i32(v as _)
     }
 
     fn serialize_i16(self, v: i16) -> Result<(), SerializerError> {
-        serialize_numeric!(self, i16, v)
+        self.serialize_i32(v as _)
     }
 
     fn serialize_i32(self, v: i32) -> Result<(), SerializerError> {
-        serialize_numeric!(self, i32, v)
+        self.elements.push(TapeElement::I32(v));
+        Ok(())
     }
 
     fn serialize_i64(self, v: i64) -> Result<(), SerializerError> {
-        serialize_numeric!(self, i64, v)
+        let low = v as i32;
+        let high = (v >> 32) as i32;
+        self.elements.push(TapeElement::I64(high));
+        self.elements.push(TapeElement::I32(low));
+        Ok(())
     }
 
     fn serialize_u8(self, v: u8) -> Result<(), SerializerError> {
-        serialize_numeric!(self, u8, v)
+        self.serialize_i32(v as _)
     }
 
     fn serialize_u16(self, v: u16) -> Result<(), SerializerError> {
-        serialize_numeric!(self, u16, v)
+        self.serialize_i32(v as _)
     }
 
     fn serialize_u32(self, v: u32) -> Result<(), SerializerError> {
-        serialize_numeric!(self, u32, v)
+        match i32::try_from(v) {
+            Ok(v) => self.serialize_i32(v),
+            Err(_) => self.serialize_i64(v as _),
+        }
     }
 
     fn serialize_u64(self, v: u64) -> Result<(), SerializerError> {
-        serialize_numeric!(self, u64, v)
+        match i64::try_from(v) {
+            Ok(v) => self.serialize_i64(v),
+            Err(_) => {
+                let mut buffer = [0_u8; u64::FORMATTED_SIZE];
+                let s = lexical_core::write(v, &mut buffer);
+                self.serialize_number(s);
+                Ok(())
+            }
+        }
     }
 
     fn serialize_f32(self, v: f32) -> Result<(), SerializerError> {
-        serialize_numeric!(self, f32, v)
+        self.elements.push(TapeElement::F32(v.to_bits()));
+        Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<(), SerializerError> {
-        serialize_numeric!(self, f64, v)
+        let bits = v.to_bits();
+        self.elements.push(TapeElement::F64((bits >> 32) as u32));
+        self.elements.push(TapeElement::F32(bits as u32));
+        Ok(())
     }
 
     fn serialize_char(self, v: char) -> Result<(), SerializerError> {
@@ -227,17 +230,11 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
         Ok(())
     }
 
-    fn serialize_seq(
-        self,
-        _len: Option<usize>,
-    ) -> Result<Self::SerializeSeq, SerializerError> {
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, SerializerError> {
         Ok(ListSerializer::new(self))
     }
 
-    fn serialize_tuple(
-        self,
-        len: usize,
-    ) -> Result<Self::SerializeTuple, SerializerError> {
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, SerializerError> {
         self.serialize_seq(Some(len))
     }
 
@@ -262,10 +259,7 @@ impl<'a, 'b> Serializer for &'a mut TapeSerializer<'b> {
     }
 
     // Maps are represented in JSON as `{ K: V, K: V, ... }`.
-    fn serialize_map(
-        self,
-        _len: Option<usize>,
-    ) -> Result<Self::SerializeMap, SerializerError> {
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, SerializerError> {
         Ok(ObjectSerializer::new(self))
     }
 
@@ -311,20 +305,20 @@ impl<'a, 'b> ObjectSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeMap for ObjectSerializer<'a, 'b> {
+impl SerializeMap for ObjectSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_key<T: ?Sized>(&mut self, key: &T) -> Result<(), Self::Error>
+    fn serialize_key<T>(&mut self, key: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         key.serialize(&mut *self.serializer)
     }
 
-    fn serialize_value<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_value<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }
@@ -335,17 +329,13 @@ impl<'a, 'b> SerializeMap for ObjectSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeStruct for ObjectSerializer<'a, 'b> {
+impl SerializeStruct for ObjectSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_field<T: ?Sized>(
-        &mut self,
-        key: &'static str,
-        value: &T,
-    ) -> Result<(), Self::Error>
+    fn serialize_field<T>(&mut self, key: &'static str, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         key.serialize(&mut *self.serializer)?;
         value.serialize(&mut *self.serializer)
@@ -378,13 +368,13 @@ impl<'a, 'b> ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeSeq for ListSerializer<'a, 'b> {
+impl SerializeSeq for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }
@@ -395,13 +385,13 @@ impl<'a, 'b> SerializeSeq for ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeTuple for ListSerializer<'a, 'b> {
+impl SerializeTuple for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_element<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_element<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }
@@ -412,13 +402,13 @@ impl<'a, 'b> SerializeTuple for ListSerializer<'a, 'b> {
     }
 }
 
-impl<'a, 'b> SerializeTupleStruct for ListSerializer<'a, 'b> {
+impl SerializeTupleStruct for ListSerializer<'_, '_> {
     type Ok = ();
     type Error = SerializerError;
 
-    fn serialize_field<T: ?Sized>(&mut self, value: &T) -> Result<(), Self::Error>
+    fn serialize_field<T>(&mut self, value: &T) -> Result<(), Self::Error>
     where
-        T: Serialize,
+        T: Serialize + ?Sized,
     {
         value.serialize(&mut *self.serializer)
     }

@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::{count_nulls, ArrayData};
+use crate::data::{ArrayData, contains_nulls};
 use arrow_buffer::ArrowNativeType;
-use num::Integer;
+use num_integer::Integer;
 
 use super::utils::equal_len;
 
@@ -32,17 +32,18 @@ fn offset_value_equal<T: ArrowNativeType + Integer>(
 ) -> bool {
     let lhs_start = lhs_offsets[lhs_pos].as_usize();
     let rhs_start = rhs_offsets[rhs_pos].as_usize();
-    let lhs_len = lhs_offsets[lhs_pos + len] - lhs_offsets[lhs_pos];
-    let rhs_len = rhs_offsets[rhs_pos + len] - rhs_offsets[rhs_pos];
+    let lhs_len = (lhs_offsets[lhs_pos + len] - lhs_offsets[lhs_pos])
+        .to_usize()
+        .unwrap();
+    let rhs_len = (rhs_offsets[rhs_pos + len] - rhs_offsets[rhs_pos])
+        .to_usize()
+        .unwrap();
 
-    lhs_len == rhs_len
-        && equal_len(
-            lhs_values,
-            rhs_values,
-            lhs_start,
-            rhs_start,
-            lhs_len.to_usize().unwrap(),
-        )
+    if lhs_len == 0 && rhs_len == 0 {
+        return true;
+    }
+
+    lhs_len == rhs_len && equal_len(lhs_values, rhs_values, lhs_start, rhs_start, lhs_len)
 }
 
 pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
@@ -59,14 +60,9 @@ pub(super) fn variable_sized_equal<T: ArrowNativeType + Integer>(
     let lhs_values = lhs.buffers()[1].as_slice();
     let rhs_values = rhs.buffers()[1].as_slice();
 
-    let lhs_null_count = count_nulls(lhs.nulls(), lhs_start, len);
-    let rhs_null_count = count_nulls(rhs.nulls(), rhs_start, len);
-
-    if lhs_null_count == 0
-        && rhs_null_count == 0
-        && !lhs_values.is_empty()
-        && !rhs_values.is_empty()
-    {
+    // Only checking one null mask here because by the time the control flow reaches
+    // this point, the equality of the two masks would have already been verified.
+    if !contains_nulls(lhs.nulls(), lhs_start, len) {
         offset_value_equal(
             lhs_values,
             rhs_values,

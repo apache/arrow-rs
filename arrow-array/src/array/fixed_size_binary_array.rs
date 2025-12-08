@@ -17,9 +17,9 @@
 
 use crate::array::print_long_array;
 use crate::iterator::FixedSizeBinaryIter;
-use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray};
+use crate::{Array, ArrayAccessor, ArrayRef, FixedSizeListArray, Scalar};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{bit_util, ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -68,12 +68,22 @@ impl FixedSizeBinaryArray {
         Self::try_new(size, values, nulls).unwrap()
     }
 
+    /// Create a new [`Scalar`] from `value`
+    pub fn new_scalar(value: impl AsRef<[u8]>) -> Scalar<Self> {
+        let v = value.as_ref();
+        Scalar::new(Self::new(v.len() as _, Buffer::from(v), None))
+    }
+
     /// Create a new [`FixedSizeBinaryArray`] from the provided parts, returning an error on failure
+    ///
+    /// Creating an arrow with `size == 0` will try to get the length from the null buffer. If
+    /// no null buffer is provided, the resulting array will have length zero.
     ///
     /// # Errors
     ///
     /// * `size < 0`
     /// * `values.len() / size != nulls.len()`
+    /// * `size == 0 && values.len() != 0`
     pub fn try_new(
         size: i32,
         values: Buffer,
@@ -81,13 +91,21 @@ impl FixedSizeBinaryArray {
     ) -> Result<Self, ArrowError> {
         let data_type = DataType::FixedSizeBinary(size);
         let s = size.to_usize().ok_or_else(|| {
-            ArrowError::InvalidArgumentError(format!(
-                "Size cannot be negative, got {}",
-                size
-            ))
+            ArrowError::InvalidArgumentError(format!("Size cannot be negative, got {size}"))
         })?;
 
-        let len = values.len() / s;
+        let len = if s == 0 {
+            if !values.is_empty() {
+                return Err(ArrowError::InvalidArgumentError(
+                    "Buffer cannot have non-zero length if the item size is zero".to_owned(),
+                ));
+            }
+
+            // If the item size is zero, try to determine the length from the null buffer
+            nulls.as_ref().map(|n| n.len()).unwrap_or(0)
+        } else {
+            values.len() / s
+        };
         if let Some(n) = nulls.as_ref() {
             if n.len() != len {
                 return Err(ArrowError::InvalidArgumentError(format!(
@@ -116,10 +134,11 @@ impl FixedSizeBinaryArray {
     /// * `size < 0`
     /// * `size * len` would overflow `usize`
     pub fn new_null(size: i32, len: usize) -> Self {
-        let capacity = size.to_usize().unwrap().checked_mul(len).unwrap();
+        const BITS_IN_A_BYTE: usize = 8;
+        let capacity_in_bytes = size.to_usize().unwrap().checked_mul(len).unwrap();
         Self {
             data_type: DataType::FixedSizeBinary(size),
-            value_data: MutableBuffer::new(capacity).into(),
+            value_data: MutableBuffer::new_null(capacity_in_bytes * BITS_IN_A_BYTE).into(),
             nulls: Some(NullBuffer::new_null(len)),
             value_length: size,
             len,
@@ -132,6 +151,10 @@ impl FixedSizeBinaryArray {
     }
 
     /// Returns the element at index `i` as a byte slice.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &[u8] {
@@ -152,15 +175,23 @@ impl FixedSizeBinaryArray {
     }
 
     /// Returns the element at index `i` as a byte slice.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
-    /// Caller is responsible for ensuring that the index is within the bounds of the array
+    ///
+    /// Caller is responsible for ensuring that the index is within the bounds
+    /// of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &[u8] {
         let offset = i + self.offset();
         let pos = self.value_offset_at(offset);
-        std::slice::from_raw_parts(
-            self.value_data.as_ptr().offset(pos as isize),
-            (self.value_offset_at(offset + 1) - pos) as usize,
-        )
+        unsafe {
+            std::slice::from_raw_parts(
+                self.value_data.as_ptr().offset(pos as isize),
+                (self.value_offset_at(offset + 1) - pos) as usize,
+            )
+        }
     }
 
     /// Returns the offset for the element at index `i`.
@@ -179,9 +210,18 @@ impl FixedSizeBinaryArray {
         self.value_length
     }
 
-    /// Returns a clone of the value data buffer
-    pub fn value_data(&self) -> Buffer {
-        self.value_data.clone()
+    /// Returns the values of this array.
+    ///
+    /// Unlike [`Self::value_data`] this returns the [`Buffer`]
+    /// allowing for zero-copy cloning.
+    #[inline]
+    pub fn values(&self) -> &Buffer {
+        &self.value_data
+    }
+
+    /// Returns the raw value data.
+    pub fn value_data(&self) -> &[u8] {
+        self.value_data.as_slice()
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
@@ -225,6 +265,7 @@ impl FixedSizeBinaryArray {
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
     #[deprecated(
+        since = "28.0.0",
         note = "This function will fail if the iterator produces only None values; prefer `try_from_sparse_iter_with_size`"
     )]
     pub fn try_from_sparse_iter<T, U>(mut iter: T) -> Result<Self, ArrowError>
@@ -324,10 +365,7 @@ impl FixedSizeBinaryArray {
     /// # Errors
     ///
     /// Returns error if argument has length zero, or sizes of nested slices don't match.
-    pub fn try_from_sparse_iter_with_size<T, U>(
-        mut iter: T,
-        size: i32,
-    ) -> Result<Self, ArrowError>
+    pub fn try_from_sparse_iter_with_size<T, U>(mut iter: T, size: i32) -> Result<Self, ArrowError>
     where
         T: Iterator<Item = Option<U>>,
         U: AsRef<[u8]>,
@@ -548,6 +586,12 @@ impl From<Vec<&[u8]>> for FixedSizeBinaryArray {
     }
 }
 
+impl<const N: usize> From<Vec<&[u8; N]>> for FixedSizeBinaryArray {
+    fn from(v: Vec<&[u8; N]>) -> Self {
+        Self::try_from_iter(v.into_iter()).unwrap()
+    }
+}
+
 impl std::fmt::Debug for FixedSizeBinaryArray {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "FixedSizeBinaryArray<{}>\n[\n", self.value_length())?;
@@ -587,12 +631,24 @@ impl Array for FixedSizeBinaryArray {
         self.len == 0
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.value_data.shrink_to_fit();
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -616,7 +672,7 @@ impl<'a> ArrayAccessor for &'a FixedSizeBinaryArray {
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        FixedSizeBinaryArray::value_unchecked(self, index)
+        unsafe { FixedSizeBinaryArray::value_unchecked(self, index) }
     }
 }
 
@@ -631,11 +687,9 @@ impl<'a> IntoIterator for &'a FixedSizeBinaryArray {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::RecordBatch;
     use arrow_schema::{Field, Schema};
-    use std::sync::Arc;
-
-    use super::*;
 
     #[test]
     fn test_fixed_size_binary_array() {
@@ -643,7 +697,7 @@ mod tests {
 
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
@@ -672,7 +726,7 @@ mod tests {
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(2)
             .offset(1)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let fixed_size_binary_array = FixedSizeBinaryArray::from(array_data);
@@ -702,7 +756,7 @@ mod tests {
         // [null, [10, 11, 12, 13]]
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new_list_field(DataType::UInt8, false)),
                 4,
             ))
             .len(2)
@@ -738,7 +792,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::Binary, false)),
+                Arc::new(Field::new_list_field(DataType::Binary, false)),
                 4,
             ))
             .len(3)
@@ -762,7 +816,7 @@ mod tests {
 
         let array_data = unsafe {
             ArrayData::builder(DataType::FixedSizeList(
-                Arc::new(Field::new("item", DataType::UInt8, false)),
+                Arc::new(Field::new_list_field(DataType::UInt8, false)),
                 4,
             ))
             .len(3)
@@ -779,7 +833,7 @@ mod tests {
 
         let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(3)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .build()
             .unwrap();
         let arr = FixedSizeBinaryArray::from(array_data);
@@ -803,8 +857,7 @@ mod tests {
         let none_option: Option<[u8; 32]> = None;
         let input_arg = vec![none_option, none_option, none_option];
         #[allow(deprecated)]
-        let arr =
-            FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.into_iter()).unwrap();
         assert_eq!(0, arr.value_length());
         assert_eq!(3, arr.len())
     }
@@ -819,16 +872,12 @@ mod tests {
             Some(vec![13, 14]),
         ];
         #[allow(deprecated)]
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned())
-            .unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter(input_arg.iter().cloned()).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
 
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            input_arg.into_iter(),
-            2,
-        )
-        .unwrap();
+        let arr =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 2).unwrap();
         assert_eq!(2, arr.value_length());
         assert_eq!(5, arr.len());
     }
@@ -837,11 +886,8 @@ mod tests {
     fn test_fixed_size_binary_array_from_sparse_iter_with_size_all_none() {
         let input_arg = vec![None, None, None, None, None] as Vec<Option<Vec<u8>>>;
 
-        let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
-            input_arg.into_iter(),
-            16,
-        )
-        .unwrap();
+        let arr = FixedSizeBinaryArray::try_from_sparse_iter_with_size(input_arg.into_iter(), 16)
+            .unwrap();
         assert_eq!(16, arr.value_length());
         assert_eq!(5, arr.len())
     }
@@ -852,6 +898,7 @@ mod tests {
         let array = FixedSizeBinaryArray::from(values);
         assert_eq!(array.len(), 4);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         assert_eq!(array.value(0), b"one");
         assert_eq!(array.value(1), b"two");
         assert_eq!(array.value(2), b"six");
@@ -908,8 +955,7 @@ mod tests {
     fn fixed_size_binary_array_all_null() {
         let data = vec![None] as Vec<Option<String>>;
         let array =
-            FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0)
-                .unwrap();
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(data.into_iter(), 0).unwrap();
         array
             .into_data()
             .validate_full()
@@ -919,8 +965,7 @@ mod tests {
     #[test]
     // Test for https://github.com/apache/arrow-rs/issues/1390
     fn fixed_size_binary_array_all_null_in_batch_with_schema() {
-        let schema =
-            Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
+        let schema = Schema::new(vec![Field::new("a", DataType::FixedSizeBinary(2), true)]);
 
         let none_option: Option<[u8; 2]> = None;
         let item = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
@@ -953,6 +998,10 @@ mod tests {
         let nulls = NullBuffer::new_null(5);
         FixedSizeBinaryArray::new(2, buffer.clone(), Some(nulls));
 
+        let null_array = FixedSizeBinaryArray::new_null(4, 3);
+        assert_eq!(null_array.len(), 3);
+        assert_eq!(null_array.values().len(), 12);
+
         let a = FixedSizeBinaryArray::new(3, buffer.clone(), None);
         assert_eq!(a.len(), 3);
 
@@ -967,7 +1016,24 @@ mod tests {
         );
 
         let nulls = NullBuffer::new_null(3);
-        let err = FixedSizeBinaryArray::try_new(2, buffer, Some(nulls)).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3");
+        let err = FixedSizeBinaryArray::try_new(2, buffer.clone(), Some(nulls)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for FixedSizeBinaryArray, expected 5 got 3"
+        );
+
+        let zero_sized = FixedSizeBinaryArray::new(0, Buffer::default(), None);
+        assert_eq!(zero_sized.len(), 0);
+
+        let nulls = NullBuffer::new_null(3);
+        let zero_sized_with_nulls = FixedSizeBinaryArray::new(0, Buffer::default(), Some(nulls));
+        assert_eq!(zero_sized_with_nulls.len(), 3);
+
+        let zero_sized_with_non_empty_buffer_err =
+            FixedSizeBinaryArray::try_new(0, buffer, None).unwrap_err();
+        assert_eq!(
+            zero_sized_with_non_empty_buffer_err.to_string(),
+            "Invalid argument error: Buffer cannot have non-zero length if the item size is zero"
+        );
     }
 }

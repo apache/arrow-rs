@@ -15,33 +15,31 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Rle/Bit-Packing Hybrid Encoding
+//! The grammar for this encoding looks like the following (copied verbatim
+//! from <https://github.com/Parquet/parquet-format/blob/master/Encodings.md>):
+//!
+//! rle-bit-packed-hybrid: `<length>` `<encoded-data>`
+//! length := length of the `<encoded-data>` in bytes stored as 4 bytes little endian
+//! encoded-data := `<run>`*
+//! run := `<bit-packed-run>` | `<rle-run>`
+//! bit-packed-run := `<bit-packed-header>` `<bit-packed-values>`
+//! bit-packed-header := varint-encode(`<bit-pack-count>` << 1 | 1)
+//! we always bit-pack a multiple of 8 values at a time, so we only store the number of
+//! values / 8
+//! bit-pack-count := (number of values in this run) / 8
+//! bit-packed-values := *see 1 below*
+//! rle-run := `<rle-header>` `<repeated-value>`
+//! rle-header := varint-encode( (number of times repeated) << 1)
+//! repeated-value := value that is repeated, using a fixed-width of
+//! round-up-to-next-byte(bit-width)
+
 use std::{cmp, mem::size_of};
 
-use crate::errors::{ParquetError, Result};
-use crate::util::bit_util::from_le_slice;
-use crate::util::{
-    bit_util::{self, BitReader, BitWriter, FromBytes},
-    memory::ByteBufferPtr,
-};
+use bytes::Bytes;
 
-/// Rle/Bit-Packing Hybrid Encoding
-/// The grammar for this encoding looks like the following (copied verbatim
-/// from <https://github.com/Parquet/parquet-format/blob/master/Encodings.md>):
-///
-/// rle-bit-packed-hybrid: `<length>` `<encoded-data>`
-/// length := length of the `<encoded-data>` in bytes stored as 4 bytes little endian
-/// encoded-data := `<run>`*
-/// run := `<bit-packed-run>` | `<rle-run>`
-/// bit-packed-run := `<bit-packed-header>` `<bit-packed-values>`
-/// bit-packed-header := varint-encode(`<bit-pack-count>` << 1 | 1)
-/// we always bit-pack a multiple of 8 values at a time, so we only store the number of
-/// values / 8
-/// bit-pack-count := (number of values in this run) / 8
-/// bit-packed-values := *see 1 below*
-/// rle-run := `<rle-header>` `<repeated-value>`
-/// rle-header := varint-encode( (number of times repeated) << 1)
-/// repeated-value := value that is repeated, using a fixed-width of
-/// round-up-to-next-byte(bit-width)
+use crate::errors::{ParquetError, Result};
+use crate::util::bit_util::{self, BitReader, BitWriter, FromBytes};
 
 /// Maximum groups of 8 values per bit-packed run. Current value is 64.
 const MAX_GROUPS_PER_BIT_PACKED_RUN: usize = 1 << 6;
@@ -86,6 +84,7 @@ impl RleEncoder {
 
     /// Initialize the encoder from existing `buffer`
     pub fn new_from_buf(bit_width: u8, buffer: Vec<u8>) -> Self {
+        assert!(bit_width <= 64);
         let bit_writer = BitWriter::new_from_buf(buffer);
         RleEncoder {
             bit_width,
@@ -137,7 +136,7 @@ impl RleEncoder {
         } else {
             if self.repeat_count >= 8 {
                 // The current RLE run has ended and we've gathered enough. Flush first.
-                assert_eq!(self.bit_packed_count, 0);
+                debug_assert_eq!(self.bit_packed_count, 0);
                 self.flush_rle_run();
             }
             self.repeat_count = 1;
@@ -148,7 +147,7 @@ impl RleEncoder {
         self.num_buffered_values += 1;
         if self.num_buffered_values == 8 {
             // Buffered values are full. Flush them.
-            assert_eq!(self.bit_packed_count % 8, 0);
+            debug_assert_eq!(self.bit_packed_count % 8, 0);
             self.flush_buffered_values();
         }
     }
@@ -201,13 +200,9 @@ impl RleEncoder {
     /// internal writer.
     #[inline]
     pub fn flush(&mut self) {
-        if self.bit_packed_count > 0
-            || self.repeat_count > 0
-            || self.num_buffered_values > 0
-        {
+        if self.bit_packed_count > 0 || self.repeat_count > 0 || self.num_buffered_values > 0 {
             let all_repeat = self.bit_packed_count == 0
-                && (self.repeat_count == self.num_buffered_values
-                    || self.num_buffered_values == 0);
+                && (self.repeat_count == self.num_buffered_values || self.num_buffered_values == 0);
             if self.repeat_count > 0 && all_repeat {
                 self.flush_rle_run();
             } else {
@@ -226,12 +221,12 @@ impl RleEncoder {
     }
 
     fn flush_rle_run(&mut self) {
-        assert!(self.repeat_count > 0);
+        debug_assert!(self.repeat_count > 0);
         let indicator_value = self.repeat_count << 1;
         self.bit_writer.put_vlq_int(indicator_value as u64);
         self.bit_writer.put_aligned(
             self.current_value,
-            bit_util::ceil(self.bit_width as i64, 8) as usize,
+            bit_util::ceil(self.bit_width as usize, 8),
         );
         self.num_buffered_values = 0;
         self.repeat_count = 0;
@@ -243,33 +238,28 @@ impl RleEncoder {
         }
 
         // Write all buffered values as bit-packed literals
-        for i in 0..self.num_buffered_values {
-            self.bit_writer
-                .put_value(self.buffered_values[i], self.bit_width as usize);
+        for v in &self.buffered_values[..self.num_buffered_values] {
+            self.bit_writer.put_value(*v, self.bit_width as usize);
         }
         self.num_buffered_values = 0;
         if update_indicator_byte {
             // Write the indicator byte to the reserved position in `bit_writer`
             let num_groups = self.bit_packed_count / 8;
             let indicator_byte = ((num_groups << 1) | 1) as u8;
-            self.bit_writer.put_aligned_offset(
-                indicator_byte,
-                1,
-                self.indicator_byte_pos as usize,
-            );
+            self.bit_writer
+                .put_aligned_offset(indicator_byte, 1, self.indicator_byte_pos as usize);
             self.indicator_byte_pos = -1;
             self.bit_packed_count = 0;
         }
     }
 
-    #[inline(never)]
     fn flush_buffered_values(&mut self) {
         if self.repeat_count >= 8 {
             self.num_buffered_values = 0;
             if self.bit_packed_count > 0 {
                 // In this case we choose RLE encoding. Flush the current buffered values
                 // as bit-packed encoding.
-                assert_eq!(self.bit_packed_count % 8, 0);
+                debug_assert_eq!(self.bit_packed_count % 8, 0);
                 self.flush_bit_packed_run(true)
             }
             return;
@@ -280,12 +270,17 @@ impl RleEncoder {
         if num_groups + 1 >= MAX_GROUPS_PER_BIT_PACKED_RUN {
             // We've reached the maximum value that can be hold in a single bit-packed
             // run.
-            assert!(self.indicator_byte_pos >= 0);
+            debug_assert!(self.indicator_byte_pos >= 0);
             self.flush_bit_packed_run(true);
         } else {
             self.flush_bit_packed_run(false);
         }
         self.repeat_count = 0;
+    }
+
+    /// return the estimated memory size of this encoder.
+    pub(crate) fn estimated_memory_size(&self) -> usize {
+        self.bit_writer.estimated_memory_size() + std::mem::size_of::<Self>()
     }
 }
 
@@ -326,14 +321,18 @@ impl RleDecoder {
     }
 
     #[inline]
-    pub fn set_data(&mut self, data: ByteBufferPtr) {
+    pub fn set_data(&mut self, data: Bytes) -> Result<()> {
         if let Some(ref mut bit_reader) = self.bit_reader {
             bit_reader.reset(data);
         } else {
             self.bit_reader = Some(BitReader::new(data));
         }
 
-        let _ = self.reload();
+        // Initialize decoder state. The boolean only reports whether the first run contained data,
+        // and `get`/`get_batch` already interpret that result to drive iteration. We only need
+        // errors propagated here, so the flag returned is intentionally ignored.
+        let _ = self.reload()?;
+        Ok(())
     }
 
     // These functions inline badly, they tend to inline and then create very large loop unrolls
@@ -344,24 +343,27 @@ impl RleDecoder {
         assert!(size_of::<T>() <= 8);
 
         while self.rle_left == 0 && self.bit_packed_left == 0 {
-            if !self.reload() {
+            if !self.reload()? {
                 return Ok(None);
             }
         }
 
         let value = if self.rle_left > 0 {
-            let rle_value = from_le_slice(
+            let rle_value = T::try_from_le_slice(
                 &self
                     .current_value
                     .as_mut()
-                    .expect("current_value should be Some")
+                    .ok_or_else(|| general_err!("current_value should be Some"))?
                     .to_ne_bytes(),
-            );
+            )?;
             self.rle_left -= 1;
             rle_value
         } else {
             // self.bit_packed_left > 0
-            let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be Some");
+            let bit_reader = self
+                .bit_reader
+                .as_mut()
+                .ok_or_else(|| general_err!("bit_reader should be Some"))?;
             let bit_packed_value = bit_reader
                 .get_value(self.bit_width as usize)
                 .ok_or_else(|| eof_err!("Not enough data for 'bit_packed_value'"))?;
@@ -373,27 +375,25 @@ impl RleDecoder {
     }
 
     #[inline(never)]
-    pub fn get_batch<T: FromBytes>(&mut self, buffer: &mut [T]) -> Result<usize> {
+    pub fn get_batch<T: FromBytes + Clone>(&mut self, buffer: &mut [T]) -> Result<usize> {
         assert!(size_of::<T>() <= 8);
 
         let mut values_read = 0;
         while values_read < buffer.len() {
             if self.rle_left > 0 {
-                let num_values =
-                    cmp::min(buffer.len() - values_read, self.rle_left as usize);
-                for i in 0..num_values {
-                    let repeated_value = from_le_slice(
-                        &self.current_value.as_mut().unwrap().to_ne_bytes(),
-                    );
-                    buffer[values_read + i] = repeated_value;
-                }
+                let num_values = cmp::min(buffer.len() - values_read, self.rle_left as usize);
+                let repeated_value =
+                    T::try_from_le_slice(&self.current_value.as_mut().unwrap().to_ne_bytes())?;
+                buffer[values_read..values_read + num_values].fill(repeated_value);
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {
                 let mut num_values =
                     cmp::min(buffer.len() - values_read, self.bit_packed_left as usize);
-                let bit_reader =
-                    self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| ParquetError::General("bit_reader should be set".into()))?;
 
                 num_values = bit_reader.get_batch::<T>(
                     &mut buffer[values_read..values_read + num_values],
@@ -406,7 +406,7 @@ impl RleDecoder {
                 }
                 self.bit_packed_left -= num_values as u32;
                 values_read += num_values;
-            } else if !self.reload() {
+            } else if !self.reload()? {
                 break;
             }
         }
@@ -419,15 +419,16 @@ impl RleDecoder {
         let mut values_skipped = 0;
         while values_skipped < num_values {
             if self.rle_left > 0 {
-                let num_values =
-                    cmp::min(num_values - values_skipped, self.rle_left as usize);
+                let num_values = cmp::min(num_values - values_skipped, self.rle_left as usize);
                 self.rle_left -= num_values as u32;
                 values_skipped += num_values;
             } else if self.bit_packed_left > 0 {
                 let mut num_values =
                     cmp::min(num_values - values_skipped, self.bit_packed_left as usize);
-                let bit_reader =
-                    self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
                 num_values = bit_reader.skip(num_values, self.bit_width as usize);
                 if num_values == 0 {
@@ -437,7 +438,7 @@ impl RleDecoder {
                 }
                 self.bit_packed_left -= num_values as u32;
                 values_skipped += num_values;
-            } else if !self.reload() {
+            } else if !self.reload()? {
                 break;
             }
         }
@@ -462,17 +463,19 @@ impl RleDecoder {
             let index_buf = self.index_buf.get_or_insert_with(|| Box::new([0; 1024]));
 
             if self.rle_left > 0 {
-                let num_values =
-                    cmp::min(max_values - values_read, self.rle_left as usize);
+                let num_values = cmp::min(max_values - values_read, self.rle_left as usize);
                 let dict_idx = self.current_value.unwrap() as usize;
-                for i in 0..num_values {
-                    buffer[values_read + i].clone_from(&dict[dict_idx]);
-                }
+                let dict_value = dict[dict_idx].clone();
+
+                buffer[values_read..values_read + num_values].fill(dict_value);
+
                 self.rle_left -= num_values as u32;
                 values_read += num_values;
             } else if self.bit_packed_left > 0 {
-                let bit_reader =
-                    self.bit_reader.as_mut().expect("bit_reader should be set");
+                let bit_reader = self
+                    .bit_reader
+                    .as_mut()
+                    .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
                 loop {
                     let to_read = index_buf
@@ -484,25 +487,24 @@ impl RleDecoder {
                         break;
                     }
 
-                    let num_values = bit_reader.get_batch::<i32>(
-                        &mut index_buf[..to_read],
-                        self.bit_width as usize,
-                    );
+                    let num_values = bit_reader
+                        .get_batch::<i32>(&mut index_buf[..to_read], self.bit_width as usize);
                     if num_values == 0 {
                         // Handle writers which truncate the final block
                         self.bit_packed_left = 0;
                         break;
                     }
-                    for i in 0..num_values {
-                        buffer[values_read + i].clone_from(&dict[index_buf[i] as usize])
-                    }
+                    buffer[values_read..values_read + num_values]
+                        .iter_mut()
+                        .zip(index_buf[..num_values].iter())
+                        .for_each(|(b, i)| b.clone_from(&dict[*i as usize]));
                     self.bit_packed_left -= num_values as u32;
                     values_read += num_values;
                     if num_values < to_read {
                         break;
                     }
                 }
-            } else if !self.reload() {
+            } else if !self.reload()? {
                 break;
             }
         }
@@ -511,27 +513,32 @@ impl RleDecoder {
     }
 
     #[inline]
-    fn reload(&mut self) -> bool {
-        let bit_reader = self.bit_reader.as_mut().expect("bit_reader should be set");
+    fn reload(&mut self) -> Result<bool> {
+        let bit_reader = self
+            .bit_reader
+            .as_mut()
+            .ok_or_else(|| general_err!("bit_reader should be set"))?;
 
         if let Some(indicator_value) = bit_reader.get_vlq_int() {
             // fastparquet adds padding to the end of pages. This is not spec-compliant
             // but is handled by the C++ implementation
             // <https://github.com/apache/arrow/blob/8074496cb41bc8ec8fe9fc814ca5576d89a6eb94/cpp/src/arrow/util/rle_encoding.h#L653>
             if indicator_value == 0 {
-                return false;
+                return Ok(false);
             }
             if indicator_value & 1 == 1 {
                 self.bit_packed_left = ((indicator_value >> 1) * 8) as u32;
             } else {
                 self.rle_left = (indicator_value >> 1) as u32;
-                let value_width = bit_util::ceil(self.bit_width as i64, 8);
-                self.current_value = bit_reader.get_aligned::<u64>(value_width as usize);
-                assert!(self.current_value.is_some());
+                let value_width = bit_util::ceil(self.bit_width as usize, 8);
+                self.current_value = bit_reader.get_aligned::<u64>(value_width);
+                self.current_value.ok_or_else(|| {
+                    general_err!("parquet_data_error: not enough data for RLE decoding")
+                })?;
             }
-            true
+            Ok(true)
         } else {
-            false
+            Ok(false)
         }
     }
 }
@@ -541,9 +548,7 @@ mod tests {
     use super::*;
 
     use crate::util::bit_util::ceil;
-    use rand::{self, distributions::Standard, thread_rng, Rng, SeedableRng};
-
-    use crate::util::memory::ByteBufferPtr;
+    use rand::{self, Rng, SeedableRng, distr::StandardUniform, rng};
 
     const MAX_WIDTH: usize = 32;
 
@@ -551,9 +556,9 @@ mod tests {
     fn test_rle_decode_int32() {
         // Test data: 0-7 with bit width 3
         // 00000011 10001000 11000110 11111010
-        let data = ByteBufferPtr::new(vec![0x03, 0x88, 0xC6, 0xFA]);
+        let data = vec![0x03, 0x88, 0xC6, 0xFA];
         let mut decoder: RleDecoder = RleDecoder::new(3);
-        decoder.set_data(data);
+        decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![0; 8];
         let expected = vec![0, 1, 2, 3, 4, 5, 6, 7];
         let result = decoder.get_batch::<i32>(&mut buffer);
@@ -565,9 +570,9 @@ mod tests {
     fn test_rle_skip_int32() {
         // Test data: 0-7 with bit width 3
         // 00000011 10001000 11000110 11111010
-        let data = ByteBufferPtr::new(vec![0x03, 0x88, 0xC6, 0xFA]);
+        let data = vec![0x03, 0x88, 0xC6, 0xFA];
         let mut decoder: RleDecoder = RleDecoder::new(3);
-        decoder.set_data(data);
+        decoder.set_data(data.into()).unwrap();
         let expected = vec![2, 3, 4, 5, 6, 7];
         let skipped = decoder.skip(2).expect("skipping values");
         assert_eq!(skipped, 2);
@@ -598,18 +603,17 @@ mod tests {
     fn test_rle_decode_bool() {
         // RLE test data: 50 1s followed by 50 0s
         // 01100100 00000001 01100100 00000000
-        let data1 = ByteBufferPtr::new(vec![0x64, 0x01, 0x64, 0x00]);
+        let data1 = vec![0x64, 0x01, 0x64, 0x00];
 
         // Bit-packing test data: alternating 1s and 0s, 100 total
         // 100 / 8 = 13 groups
         // 00011011 10101010 ... 00001010
-        let data2 = ByteBufferPtr::new(vec![
-            0x1B, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
-            0x0A,
-        ]);
+        let data2 = vec![
+            0x1B, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x0A,
+        ];
 
         let mut decoder: RleDecoder = RleDecoder::new(1);
-        decoder.set_data(data1);
+        decoder.set_data(data1.into()).unwrap();
         let mut buffer = vec![false; 100];
         let mut expected = vec![];
         for i in 0..100 {
@@ -623,7 +627,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(buffer, expected);
 
-        decoder.set_data(data2);
+        decoder.set_data(data2.into()).unwrap();
         let mut buffer = vec![false; 100];
         let mut expected = vec![];
         for i in 0..100 {
@@ -642,18 +646,17 @@ mod tests {
     fn test_rle_skip_bool() {
         // RLE test data: 50 1s followed by 50 0s
         // 01100100 00000001 01100100 00000000
-        let data1 = ByteBufferPtr::new(vec![0x64, 0x01, 0x64, 0x00]);
+        let data1 = vec![0x64, 0x01, 0x64, 0x00];
 
         // Bit-packing test data: alternating 1s and 0s, 100 total
         // 100 / 8 = 13 groups
         // 00011011 10101010 ... 00001010
-        let data2 = ByteBufferPtr::new(vec![
-            0x1B, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
-            0x0A,
-        ]);
+        let data2 = vec![
+            0x1B, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0x0A,
+        ];
 
         let mut decoder: RleDecoder = RleDecoder::new(1);
-        decoder.set_data(data1);
+        decoder.set_data(data1.into()).unwrap();
         let mut buffer = vec![true; 50];
         let expected = vec![false; 50];
 
@@ -665,7 +668,7 @@ mod tests {
         assert_eq!(remainder, 50);
         assert_eq!(buffer, expected);
 
-        decoder.set_data(data2);
+        decoder.set_data(data2.into()).unwrap();
         let mut buffer = vec![false; 50];
         let mut expected = vec![];
         for i in 0..50 {
@@ -689,9 +692,9 @@ mod tests {
         // Test RLE encoding: 3 0s followed by 4 1s followed by 5 2s
         // 00000110 00000000 00001000 00000001 00001010 00000010
         let dict = vec![10, 20, 30];
-        let data = ByteBufferPtr::new(vec![0x06, 0x00, 0x08, 0x01, 0x0A, 0x02]);
+        let data = vec![0x06, 0x00, 0x08, 0x01, 0x0A, 0x02];
         let mut decoder: RleDecoder = RleDecoder::new(3);
-        decoder.set_data(data);
+        decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![0; 12];
         let expected = vec![10, 10, 10, 20, 20, 20, 20, 30, 30, 30, 30, 30];
         let result = decoder.get_batch_with_dict::<i32>(&dict, &mut buffer, 12);
@@ -702,19 +705,15 @@ mod tests {
         // 011 100 101 011 100 101 011 100 101 100 101 101
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
-        let data = ByteBufferPtr::new(vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B]);
+        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
         let mut decoder: RleDecoder = RleDecoder::new(3);
-        decoder.set_data(data);
+        decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; 12];
         let expected = vec![
-            "ddd", "eee", "fff", "ddd", "eee", "fff", "ddd", "eee", "fff", "eee", "fff",
-            "fff",
+            "ddd", "eee", "fff", "ddd", "eee", "fff", "ddd", "eee", "fff", "eee", "fff", "fff",
         ];
-        let result = decoder.get_batch_with_dict::<&str>(
-            dict.as_slice(),
-            buffer.as_mut_slice(),
-            12,
-        );
+        let result =
+            decoder.get_batch_with_dict::<&str>(dict.as_slice(), buffer.as_mut_slice(), 12);
         assert!(result.is_ok());
         assert_eq!(buffer, expected);
     }
@@ -724,9 +723,9 @@ mod tests {
         // Test RLE encoding: 3 0s followed by 4 1s followed by 5 2s
         // 00000110 00000000 00001000 00000001 00001010 00000010
         let dict = vec![10, 20, 30];
-        let data = ByteBufferPtr::new(vec![0x06, 0x00, 0x08, 0x01, 0x0A, 0x02]);
+        let data = vec![0x06, 0x00, 0x08, 0x01, 0x0A, 0x02];
         let mut decoder: RleDecoder = RleDecoder::new(3);
-        decoder.set_data(data);
+        decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![0; 10];
         let expected = vec![10, 20, 20, 20, 20, 30, 30, 30, 30, 30];
         let skipped = decoder.skip(2).expect("skipping two values");
@@ -741,9 +740,9 @@ mod tests {
         // 011 100 101 011 100 101 011 100 101 100 101 101
         // 00000011 01100011 11000111 10001110 00000011 01100101 00001011
         let dict = vec!["aaa", "bbb", "ccc", "ddd", "eee", "fff"];
-        let data = ByteBufferPtr::new(vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B]);
+        let data = vec![0x03, 0x63, 0xC7, 0x8E, 0x03, 0x65, 0x0B];
         let mut decoder: RleDecoder = RleDecoder::new(3);
-        decoder.set_data(data);
+        decoder.set_data(data.into()).unwrap();
         let mut buffer = vec![""; 8];
         let expected = vec!["eee", "fff", "ddd", "eee", "fff", "eee", "fff", "fff"];
         let skipped = decoder.skip(4).expect("skipping four values");
@@ -766,7 +765,7 @@ mod tests {
         for v in values {
             encoder.put(*v as u64)
         }
-        let buffer = ByteBufferPtr::new(encoder.consume());
+        let buffer: Bytes = encoder.consume().into();
         if expected_len != -1 {
             assert_eq!(buffer.len(), expected_len as usize);
         }
@@ -776,7 +775,7 @@ mod tests {
 
         // Verify read
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(buffer.all());
+        decoder.set_data(buffer.clone()).unwrap();
         for v in values {
             let val: i64 = decoder
                 .get()
@@ -786,7 +785,7 @@ mod tests {
         }
 
         // Verify batch read
-        decoder.set_data(buffer);
+        decoder.set_data(buffer).unwrap();
         let mut values_read: Vec<i64> = vec![0; values.len()];
         decoder
             .get_batch(&mut values_read[..])
@@ -887,11 +886,11 @@ mod tests {
         let mut data: Vec<u8> = vec![
             (3 << 1) | 1, // bit-packed run of 3 * 8
         ];
-        data.extend(std::iter::repeat(0xFF).take(20));
-        let data = ByteBufferPtr::new(data);
+        data.extend(std::iter::repeat_n(0xFF, 20));
+        let data: Bytes = data.into();
 
         let mut decoder = RleDecoder::new(8);
-        decoder.set_data(data.clone());
+        decoder.set_data(data.clone()).unwrap();
 
         let mut output = vec![0_u16; 100];
         let read = decoder.get_batch(&mut output).unwrap();
@@ -900,7 +899,7 @@ mod tests {
         assert!(output.iter().take(20).all(|x| *x == 255));
 
         // Reset decoder
-        decoder.set_data(data);
+        decoder.set_data(data).unwrap();
 
         let dict: Vec<u16> = (0..256).collect();
         let mut output = vec![0_u16; 100];
@@ -926,7 +925,7 @@ mod tests {
         buffer.push(0);
 
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(ByteBufferPtr::new(buffer));
+        decoder.set_data(buffer.into()).unwrap();
 
         // We don't always reliably know how many non-null values are contained in a page
         // and so the decoder must work correctly without a precise value count
@@ -959,21 +958,21 @@ mod tests {
 
         // bit-packed header
         let run_bytes = ceil(num_values * bit_width, 8) as u64;
-        writer.put_vlq_int(run_bytes << 1 | 1);
+        writer.put_vlq_int((run_bytes << 1) | 1);
         for _ in 0..run_bytes {
             writer.put_aligned(0xFF_u8, 1);
         }
-        let buffer = ByteBufferPtr::new(writer.consume());
+        let buffer: Bytes = writer.consume().into();
 
         let mut decoder = RleDecoder::new(1);
-        decoder.set_data(buffer.clone());
+        decoder.set_data(buffer.clone()).unwrap();
 
         let mut decoded: Vec<i16> = vec![0; num_values];
         let r = decoder.get_batch(&mut decoded).unwrap();
         assert_eq!(r, num_values);
         assert_eq!(vec![1; num_values], decoded);
 
-        decoder.set_data(buffer);
+        decoder.set_data(buffer).unwrap();
         let r = decoder
             .get_batch_with_dict(&[0, 23], &mut decoded, num_values)
             .unwrap();
@@ -992,7 +991,7 @@ mod tests {
         }
         let buffer = encoder.consume();
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(ByteBufferPtr::new(buffer));
+        decoder.set_data(Bytes::from(buffer)).unwrap();
         let mut actual_values: Vec<i16> = vec![0; values.len()];
         decoder
             .get_batch(&mut actual_values)
@@ -1007,11 +1006,11 @@ mod tests {
             encoder.put(*v as u64)
         }
 
-        let buffer = ByteBufferPtr::new(encoder.consume());
+        let buffer = Bytes::from(encoder.consume());
 
         // Verify read
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(buffer.all());
+        decoder.set_data(buffer.clone()).unwrap();
         for v in values {
             let val = decoder
                 .get::<i32>()
@@ -1022,7 +1021,7 @@ mod tests {
 
         // Verify batch read
         let mut decoder = RleDecoder::new(bit_width);
-        decoder.set_data(buffer);
+        decoder.set_data(buffer).unwrap();
         let mut values_read: Vec<i32> = vec![0; values.len()];
         decoder
             .get_batch(&mut values_read[..])
@@ -1040,16 +1039,18 @@ mod tests {
 
         for _ in 0..niters {
             values.clear();
-            let rng = thread_rng();
-            let seed_vec: Vec<u8> =
-                rng.sample_iter::<u8, _>(&Standard).take(seed_len).collect();
+            let rng = rng();
+            let seed_vec: Vec<u8> = rng
+                .sample_iter::<u8, _>(&StandardUniform)
+                .take(seed_len)
+                .collect();
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&seed_vec[0..seed_len]);
-            let mut gen = rand::rngs::StdRng::from_seed(seed);
+            let mut r#gen = rand::rngs::StdRng::from_seed(seed);
 
             let mut parity = false;
             for _ in 0..ngroups {
-                let mut group_size = gen.gen_range(1..20);
+                let mut group_size = r#gen.random_range(1..20);
                 if group_size > max_group_size {
                     group_size = 1;
                 }

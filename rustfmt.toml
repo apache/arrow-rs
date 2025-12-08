@@ -15,10 +15,4 @@
 # specific language governing permissions and limitations
 # under the License.
 
-edition = "2021"
-max_width = 90
-
-# ignore generated files
-# ignore = [
-#    "arrow/src/ipc/gen",
-#]
+style_edition = "2024"

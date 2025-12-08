@@ -16,8 +16,8 @@
 // under the License.
 
 use arrow::array::{
-    make_array, Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder,
-    Int64Array, StringArray, StructBuilder, UInt64Array,
+    Array, BooleanBuilder, Decimal128Builder, Int32Array, Int32Builder, Int64Array, StringArray,
+    StructBuilder, UInt64Array, make_array,
 };
 use arrow_array::Decimal128Array;
 use arrow_buffer::{ArrowNativeType, Buffer};
@@ -27,9 +27,7 @@ use std::ptr::NonNull;
 use std::sync::Arc;
 
 #[test]
-#[should_panic(
-    expected = "Need at least 80 bytes in buffers[0] in array of type Int64, but got 8"
-)]
+#[should_panic(expected = "Need at least 80 bytes in buffers[0] in array of type Int64, but got 8")]
 fn test_buffer_too_small() {
     let buffer = Buffer::from_slice_ref([0i32, 2i32]);
     // should fail as the declared size (10*8 = 80) is larger than the underlying bfufer (8)
@@ -37,9 +35,7 @@ fn test_buffer_too_small() {
 }
 
 #[test]
-#[should_panic(
-    expected = "Need at least 16 bytes in buffers[0] in array of type Int64, but got 8"
-)]
+#[should_panic(expected = "Need at least 16 bytes in buffers[0] in array of type Int64, but got 8")]
 fn test_buffer_too_small_offset() {
     let buffer = Buffer::from_slice_ref([0i32, 2i32]);
     // should fail -- size is ok, but also has offset
@@ -51,23 +47,23 @@ fn test_buffer_too_small_offset() {
 fn test_bad_number_of_buffers() {
     let buffer1 = Buffer::from_slice_ref([0i32, 2i32]);
     let buffer2 = Buffer::from_slice_ref([0i32, 2i32]);
-    ArrayData::try_new(DataType::Int64, 1, None, 0, vec![buffer1, buffer2], vec![])
-        .unwrap();
+    ArrayData::try_new(DataType::Int64, 1, None, 0, vec![buffer1, buffer2], vec![]).unwrap();
 }
 
 #[test]
-#[should_panic(expected = "integer overflow computing min buffer size")]
+#[should_panic(
+    expected = "Need at least 18446744073709551615 bytes in buffers[0] in array of type Int64, but got 8"
+)]
 fn test_fixed_width_overflow() {
     let buffer = Buffer::from_slice_ref([0i32, 2i32]);
-    ArrayData::try_new(DataType::Int64, usize::MAX, None, 0, vec![buffer], vec![])
-        .unwrap();
+    ArrayData::try_new(DataType::Int64, usize::MAX, None, 0, vec![buffer], vec![]).unwrap();
 }
 
 #[test]
 #[should_panic(expected = "null_bit_buffer size too small. got 1 needed 2")]
 fn test_bitmap_too_small() {
     let buffer = make_i32_buffer(9);
-    let null_bit_buffer = Buffer::from(vec![0b11111111]);
+    let null_bit_buffer = Buffer::from([0b11111111]);
 
     ArrayData::try_new(
         DataType::Int32,
@@ -85,8 +81,7 @@ fn test_bitmap_too_small() {
 #[should_panic(expected = "Dictionary key type must be integer, but was Utf8")]
 fn test_non_int_dictionary() {
     let i32_buffer = Buffer::from_slice_ref([0i32, 2i32]);
-    let data_type =
-        DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
+    let data_type = DataType::Dictionary(Box::new(DataType::Utf8), Box::new(DataType::Int32));
     let child_data = ArrayData::try_new(
         DataType::Int32,
         1,
@@ -114,11 +109,9 @@ fn test_mismatched_dictionary_types() {
     let string_array: StringArray = vec![Some("foo"), Some("bar")].into_iter().collect();
     let i32_buffer = Buffer::from_slice_ref([0i32, 1i32]);
     // Dict says LargeUtf8 but array is Utf8
-    let data_type =
-        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::LargeUtf8));
+    let data_type = DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::LargeUtf8));
     let child_data = string_array.into_data();
-    ArrayData::try_new(data_type, 1, None, 0, vec![i32_buffer], vec![child_data])
-        .unwrap();
+    ArrayData::try_new(data_type, 1, None, 0, vec![i32_buffer], vec![child_data]).unwrap();
 }
 
 #[test]
@@ -183,9 +176,7 @@ fn test_empty_utf8_array_with_non_zero_offset() {
 }
 
 #[test]
-#[should_panic(
-    expected = "Buffer 0 of LargeUtf8 isn't large enough. Expected 8 bytes got 4"
-)]
+#[should_panic(expected = "Buffer 0 of LargeUtf8 isn't large enough. Expected 8 bytes got 4")]
 fn test_empty_large_utf8_array_with_wrong_type_offsets() {
     let data_buffer = Buffer::from(&[]);
     let offsets_buffer = Buffer::from_slice_ref([0i32]);
@@ -217,9 +208,7 @@ fn test_validate_offsets_i32() {
 }
 
 #[test]
-#[should_panic(
-    expected = "Buffer 0 of LargeUtf8 isn't large enough. Expected 24 bytes got 16"
-)]
+#[should_panic(expected = "Buffer 0 of LargeUtf8 isn't large enough. Expected 24 bytes got 16")]
 fn test_validate_offsets_i64() {
     let data_buffer = Buffer::from_slice_ref("abcdef".as_bytes());
     let offsets_buffer = Buffer::from_slice_ref([0i64, 2i64]);
@@ -353,9 +342,97 @@ fn test_validate_offsets_last_too_large() {
     .unwrap();
 }
 
+/// Test that the list of type `data_type` generates correct offset and size out of bounds errors
+fn check_list_view_offsets_sizes<T: ArrowNativeType>(
+    data_type: DataType,
+    offsets: Vec<T>,
+    sizes: Vec<T>,
+) {
+    let values: Int32Array = [Some(1), Some(2), Some(3), Some(4)].into_iter().collect();
+    let offsets_buffer = Buffer::from_slice_ref(offsets);
+    let sizes_buffer = Buffer::from_slice_ref(sizes);
+    ArrayData::try_new(
+        data_type,
+        4,
+        None,
+        0,
+        vec![offsets_buffer, sizes_buffer],
+        vec![values.into_data()],
+    )
+    .unwrap();
+}
+
+#[test]
+#[should_panic(expected = "Size 3 at index 3 is larger than the remaining values for ListView")]
+fn test_validate_list_view_offsets_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i32>(
+        DataType::ListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
 #[test]
 #[should_panic(
-    expected = "Values length 4 is less than the length (2) multiplied by the value size (2) for FixedSizeList"
+    expected = "Size 3 at index 3 is larger than the remaining values for LargeListView"
+)]
+fn test_validate_large_list_view_offsets_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i64>(
+        DataType::LargeListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting offset[1] (-1) to usize for ListView")]
+fn test_validate_list_view_negative_offsets() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i32>(
+        DataType::ListView(Arc::new(field_type)),
+        vec![0, -1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting size[2] (-1) to usize for ListView")]
+fn test_validate_list_view_negative_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i32>(
+        DataType::ListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, -1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting offset[1] (-1) to usize for LargeListView")]
+fn test_validate_large_list_view_negative_offsets() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i64>(
+        DataType::LargeListView(Arc::new(field_type)),
+        vec![0, -1, 1, 2],
+        vec![1, 1, 1, 3],
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error converting size[2] (-1) to usize for LargeListView")]
+fn test_validate_large_list_view_negative_sizes() {
+    let field_type = Field::new("f", DataType::Int32, true);
+    check_list_view_offsets_sizes::<i64>(
+        DataType::LargeListView(Arc::new(field_type)),
+        vec![0, 1, 1, 2],
+        vec![1, 1, -1, 3],
+    );
+}
+
+#[test]
+#[should_panic(
+    expected = "Values length 4 is less than the length (3) multiplied by the value size (2) for FixedSizeList"
 )]
 fn test_validate_fixed_size_list() {
     // child has 4 elements,
@@ -504,33 +581,25 @@ fn check_index_out_of_bounds_validation<T: ArrowNativeType>(data_type: DataType)
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
-)]
+#[should_panic(expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4")]
 fn test_validate_utf8_out_of_bounds() {
     check_index_out_of_bounds_validation::<i32>(DataType::Utf8);
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
-)]
+#[should_panic(expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4")]
 fn test_validate_large_utf8_out_of_bounds() {
     check_index_out_of_bounds_validation::<i64>(DataType::LargeUtf8);
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
-)]
+#[should_panic(expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4")]
 fn test_validate_binary_out_of_bounds() {
     check_index_out_of_bounds_validation::<i32>(DataType::Binary);
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4"
-)]
+#[should_panic(expected = "Offset invariant failure: offset at position 3 out of bounds: 5 > 4")]
 fn test_validate_large_binary_out_of_bounds() {
     check_index_out_of_bounds_validation::<i64>(DataType::LargeBinary);
 }
@@ -557,33 +626,25 @@ fn check_index_backwards_validation<T: ArrowNativeType>(data_type: DataType) {
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1"
-)]
+#[should_panic(expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1")]
 fn test_validate_utf8_index_backwards() {
     check_index_backwards_validation::<i32>(DataType::Utf8);
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1"
-)]
+#[should_panic(expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1")]
 fn test_validate_large_utf8_index_backwards() {
     check_index_backwards_validation::<i64>(DataType::LargeUtf8);
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1"
-)]
+#[should_panic(expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1")]
 fn test_validate_binary_index_backwards() {
     check_index_backwards_validation::<i32>(DataType::Binary);
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1"
-)]
+#[should_panic(expected = "Offset invariant failure: non-monotonic offset at slot 3: 2 > 1")]
 fn test_validate_large_binary_index_backwards() {
     check_index_backwards_validation::<i64>(DataType::LargeBinary);
 }
@@ -710,18 +771,14 @@ fn check_list_offsets<T: ArrowNativeType>(data_type: DataType) {
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4"
-)]
+#[should_panic(expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4")]
 fn test_validate_list_offsets() {
     let field_type = Field::new("f", DataType::Int32, true);
     check_list_offsets::<i32>(DataType::List(Arc::new(field_type)));
 }
 
 #[test]
-#[should_panic(
-    expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4"
-)]
+#[should_panic(expected = "Offset invariant failure: offset at position 2 out of bounds: 5 > 4")]
 fn test_validate_large_list_offsets() {
     let field_type = Field::new("f", DataType::Int32, true);
     check_list_offsets::<i64>(DataType::LargeList(Arc::new(field_type)));
@@ -992,18 +1049,26 @@ fn test_string_data_from_foreign() {
     let array = make_array(data);
     let array = array.as_any().downcast_ref::<StringArray>().unwrap();
 
-    let expected =
-        StringArray::from(vec![None, Some("foo"), Some("bar"), Some("foobar")]);
+    let expected = StringArray::from(vec![None, Some("foo"), Some("bar"), Some("foobar")]);
 
     assert_eq!(array, &expected);
 }
 
 #[test]
 fn test_decimal_full_validation() {
+    let array = Decimal128Array::from(vec![123456_i128])
+        .with_precision_and_scale(5, 2)
+        .unwrap();
+    let error = array.validate_decimal_precision(5).unwrap_err();
+    assert_eq!(
+        "Invalid argument error: 1234.56 is too large to store in a Decimal128 of precision 5. Max is 999.99",
+        error.to_string()
+    );
+
     let array = Decimal128Array::from(vec![123456_i128]);
     let error = array.validate_decimal_precision(5).unwrap_err();
     assert_eq!(
-        "Invalid argument error: 123456 is too large to store in a Decimal128 of precision 5. Max is 99999",
+        "Invalid argument error: Decimal precision 5 is less than scale 10",
         error.to_string()
     );
 }
@@ -1041,5 +1106,8 @@ fn test_sliced_array_child() {
     };
 
     let err = data.validate_values().unwrap_err();
-    assert_eq!(err.to_string(), "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2");
+    assert_eq!(
+        err.to_string(),
+        "Invalid argument error: Offset invariant failure: offset at position 1 out of bounds: 3 > 2"
+    );
 }

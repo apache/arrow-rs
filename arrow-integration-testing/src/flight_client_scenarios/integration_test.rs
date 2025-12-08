@@ -15,23 +15,27 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{read_json_file, ArrowFile};
+//! Integration tests for the Flight client.
+
+use crate::open_json_file;
 use std::collections::HashMap;
 
 use arrow::{
     array::ArrayRef,
     buffer::Buffer,
     datatypes::SchemaRef,
-    ipc::{self, reader, writer},
+    ipc::{
+        self, reader,
+        writer::{self, CompressionContext},
+    },
     record_batch::RecordBatch,
 };
 use arrow_flight::{
-    flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
-    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, Location,
-    SchemaAsIpc, Ticket,
+    FlightData, FlightDescriptor, IpcMessage, Location, Ticket, flight_descriptor::DescriptorType,
+    flight_service_client::FlightServiceClient, utils::flight_data_to_arrow_batch,
 };
-use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
-use tonic::{Request, Streaming};
+use futures::{StreamExt, channel::mpsc, sink::SinkExt, stream};
+use tonic::{Request, Streaming, transport::Endpoint};
 
 use arrow::datatypes::Schema;
 use std::sync::Arc;
@@ -41,28 +45,24 @@ type Result<T = (), E = Error> = std::result::Result<T, E>;
 
 type Client = FlightServiceClient<tonic::transport::Channel>;
 
+/// Run a scenario that uploads data to a Flight server and then downloads it back
 pub async fn run_scenario(host: &str, port: u16, path: &str) -> Result {
     let url = format!("http://{host}:{port}");
 
-    let client = FlightServiceClient::connect(url).await?;
+    let endpoint = Endpoint::new(url)?;
+    let channel = endpoint.connect().await?;
+    let client = FlightServiceClient::new(channel);
 
-    let ArrowFile {
-        schema, batches, ..
-    } = read_json_file(path)?;
+    let json_file = open_json_file(path)?;
 
-    let schema = Arc::new(schema);
+    let batches = json_file.read_batches()?;
+    let schema = Arc::new(json_file.schema);
 
     let mut descriptor = FlightDescriptor::default();
     descriptor.set_type(DescriptorType::Path);
     descriptor.path = vec![path.to_string()];
 
-    upload_data(
-        client.clone(),
-        schema.clone(),
-        descriptor.clone(),
-        batches.clone(),
-    )
-    .await?;
+    upload_data(client.clone(), schema, descriptor.clone(), batches.clone()).await?;
     verify_data(client, descriptor, &batches).await?;
 
     Ok(())
@@ -77,17 +77,38 @@ async fn upload_data(
     let (mut upload_tx, upload_rx) = mpsc::channel(10);
 
     let options = arrow::ipc::writer::IpcWriteOptions::default();
-    let mut schema_flight_data: FlightData = SchemaAsIpc::new(&schema, &options).into();
+    let mut dict_tracker = writer::DictionaryTracker::new(false);
+    let data_gen = writer::IpcDataGenerator::default();
+    let data = IpcMessage(
+        data_gen
+            .schema_to_bytes_with_dictionary_tracker(&schema, &mut dict_tracker, &options)
+            .ipc_message
+            .into(),
+    );
+    let mut schema_flight_data = FlightData {
+        data_header: data.0,
+        ..Default::default()
+    };
     // arrow_flight::utils::flight_data_from_arrow_schema(&schema, &options);
     schema_flight_data.flight_descriptor = Some(descriptor.clone());
     upload_tx.send(schema_flight_data).await?;
 
     let mut original_data_iter = original_data.iter().enumerate();
 
+    let mut compression_context = CompressionContext::default();
+
     if let Some((counter, first_batch)) = original_data_iter.next() {
         let metadata = counter.to_string().into_bytes();
         // Preload the first batch into the channel before starting the request
-        send_batch(&mut upload_tx, &metadata, first_batch, &options).await?;
+        send_batch(
+            &mut upload_tx,
+            &metadata,
+            first_batch,
+            &options,
+            &mut dict_tracker,
+            &mut compression_context,
+        )
+        .await?;
 
         let outer = client.do_put(Request::new(upload_rx)).await?;
         let mut inner = outer.into_inner();
@@ -102,7 +123,15 @@ async fn upload_data(
         // Stream the rest of the batches
         for (counter, batch) in original_data_iter {
             let metadata = counter.to_string().into_bytes();
-            send_batch(&mut upload_tx, &metadata, batch, &options).await?;
+            send_batch(
+                &mut upload_tx,
+                &metadata,
+                batch,
+                &options,
+                &mut dict_tracker,
+                &mut compression_context,
+            )
+            .await?;
 
             let r = inner
                 .next()
@@ -129,12 +158,13 @@ async fn send_batch(
     metadata: &[u8],
     batch: &RecordBatch,
     options: &writer::IpcWriteOptions,
+    dictionary_tracker: &mut writer::DictionaryTracker,
+    compression_context: &mut CompressionContext,
 ) -> Result {
     let data_gen = writer::IpcDataGenerator::default();
-    let mut dictionary_tracker = writer::DictionaryTracker::new(false);
 
     let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, &mut dictionary_tracker, options)
+        .encode(batch, dictionary_tracker, options, compression_context)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let dictionary_flight_data: Vec<FlightData> =
@@ -191,7 +221,9 @@ async fn consume_flight_location(
     // more details: https://github.com/apache/arrow-rs/issues/1398
     location.uri = location.uri.replace("grpc+tcp://", "http://");
 
-    let mut client = FlightServiceClient::connect(location.uri).await?;
+    let endpoint = Endpoint::new(location.uri)?;
+    let channel = endpoint.connect().await?;
+    let mut client = FlightServiceClient::new(channel);
     let resp = client.do_get(ticket).await?;
     let mut resp = resp.into_inner();
 
@@ -203,19 +235,16 @@ async fn consume_flight_location(
     let mut dictionaries_by_id = HashMap::new();
 
     for (counter, expected_batch) in expected_data.iter().enumerate() {
-        let data = receive_batch_flight_data(
-            &mut resp,
-            actual_schema.clone(),
-            &mut dictionaries_by_id,
-        )
-        .await
-        .unwrap_or_else(|| {
-            panic!(
-                "Got fewer batches than expected, received so far: {} expected: {}",
-                counter,
-                expected_data.len(),
-            )
-        });
+        let data =
+            receive_batch_flight_data(&mut resp, actual_schema.clone(), &mut dictionaries_by_id)
+                .await
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Got fewer batches than expected, received so far: {} expected: {}",
+                        counter,
+                        expected_data.len(),
+                    )
+                });
 
         let metadata = counter.to_string().into_bytes();
         assert_eq!(metadata, data.app_metadata);
@@ -250,8 +279,8 @@ async fn consume_flight_location(
 
 async fn receive_schema_flight_data(resp: &mut Streaming<FlightData>) -> Option<Schema> {
     let data = resp.next().await?.ok()?;
-    let message = arrow::ipc::root_as_message(&data.data_header[..])
-        .expect("Error parsing message");
+    let message =
+        arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing message");
 
     // message header is a Schema, so read it
     let ipc_schema: ipc::Schema = message
@@ -268,12 +297,12 @@ async fn receive_batch_flight_data(
     dictionaries_by_id: &mut HashMap<i64, ArrayRef>,
 ) -> Option<FlightData> {
     let mut data = resp.next().await?.ok()?;
-    let mut message = arrow::ipc::root_as_message(&data.data_header[..])
-        .expect("Error parsing first message");
+    let mut message =
+        arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing first message");
 
     while message.header_type() == ipc::MessageHeader::DictionaryBatch {
         reader::read_dictionary(
-            &Buffer::from(&data.data_body),
+            &Buffer::from(data.data_body.as_ref()),
             message
                 .header_as_dictionary_batch()
                 .expect("Error parsing dictionary"),
@@ -284,8 +313,8 @@ async fn receive_batch_flight_data(
         .expect("Error reading dictionary");
 
         data = resp.next().await?.ok()?;
-        message = arrow::ipc::root_as_message(&data.data_header[..])
-            .expect("Error parsing message");
+        message =
+            arrow::ipc::root_as_message(&data.data_header[..]).expect("Error parsing message");
     }
 
     Some(data)

@@ -38,7 +38,9 @@ pub(crate) enum Deallocation {
     Standard(Layout),
     /// An allocation from an external source like the FFI interface
     /// Deallocation will happen on `Allocation::drop`
-    Custom(Arc<dyn Allocation>),
+    /// The size of the allocation is tracked here separately only
+    /// for memory usage reporting via `Array::get_buffer_memory_size`
+    Custom(Arc<dyn Allocation>, usize),
 }
 
 impl Debug for Deallocation {
@@ -47,9 +49,22 @@ impl Debug for Deallocation {
             Deallocation::Standard(layout) => {
                 write!(f, "Deallocation::Standard {layout:?}")
             }
-            Deallocation::Custom(_) => {
-                write!(f, "Deallocation::Custom {{ capacity: unknown }}")
+            Deallocation::Custom(_, size) => {
+                write!(f, "Deallocation::Custom {{ capacity: {size} }}")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::alloc::Deallocation;
+
+    #[test]
+    fn test_size_of_deallocation() {
+        assert_eq!(
+            std::mem::size_of::<Deallocation>(),
+            3 * std::mem::size_of::<usize>()
+        );
     }
 }

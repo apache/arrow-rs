@@ -25,7 +25,41 @@ We welcome and encourage contributions of all kinds, such as:
 2. Documentation improvements
 3. Code (PR or PR Review)
 
-In addition to submitting new PRs, we have a healthy tradition of community members helping review each other's PRs. Doing so is a great way to help the community as well as get more familiar with Rust and the relevant codebases.
+In addition to submitting new PRs, we have a healthy tradition of community
+members helping review each other's PRs. Doing so is a great way to help the
+community as well as get more familiar with Rust and the relevant codebases.
+
+## Finding and Creating Issues to Work On
+
+You can find a curated [good-first-issue] list to help you get started.
+
+Arrow-rs is an open contribution project, and thus there is no particular
+project imposed deadline for completing any issue or any restriction on who can
+work on an issue, nor how many people can work on an issue at the same time.
+
+Contributors drive the project forward based on their own priorities and
+interests and thus you are free to work on any issue that interests you.
+
+If someone is already working on an issue that you want or need but hasn't
+been able to finish it yet, you should feel free to work on it as well. In
+general it is both polite and will help avoid unnecessary duplication of work if
+you leave a note on an issue when you start working on it.
+
+If you want to work on an issue which is not already assigned to someone else
+and there are no comment indicating that someone is already working on that
+issue then you can assign the issue to yourself by submitting a single word
+comment `take`. This will assign the issue to yourself. However, if you are
+unable to make progress you should unassign the issue by using the `unassign me`
+link at the top of the issue page (and ask for help if are stuck) so that
+someone else can get involved in the work.
+
+If you plan to work on a new feature that doesn't have an existing ticket, it is
+a good idea to open a ticket to discuss the feature. Advanced discussion often
+helps avoid wasted effort by determining early if the feature is a good fit for
+Arrow-rs before too much time is invested. It also often helps to discuss your
+ideas with the community to get feedback on implementation.
+
+[good-first-issue]: https://github.com/apache/arrow-rs/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22
 
 ## Developer's guide to Arrow Rust
 
@@ -55,8 +89,7 @@ You can also use rust's official docker image:
 docker run --rm -v $(pwd):/arrow-rs -it rust /bin/bash -c "cd /arrow-rs && rustup component add rustfmt && cargo build"
 ```
 
-The command above assumes that are in the root directory of the project, not in the same
-directory as this README.md.
+The command above assumes that are in the root directory of the project.
 
 You can also compile specific workspaces:
 
@@ -78,31 +111,43 @@ git submodule update --init
 
 This populates data in two git submodules:
 
-- `../parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
-- `../testing` (sourced from https://github.com/apache/arrow-testing)
+- `./parquet-testing/data` (sourced from https://github.com/apache/parquet-testing.git)
+- `./testing` (sourced from https://github.com/apache/arrow-testing)
 
 By default, `cargo test` will look for these directories at their
 standard location. The following environment variables can be used to override the location:
 
 ```bash
 # Optionally specify a different location for test data
-export PARQUET_TEST_DATA=$(cd ../parquet-testing/data; pwd)
-export ARROW_TEST_DATA=$(cd ../testing/data; pwd)
+export PARQUET_TEST_DATA=$(cd ./parquet-testing/data; pwd)
+export ARROW_TEST_DATA=$(cd ./testing/data; pwd)
 ```
 
 From here on, this is a pure Rust project and `cargo` can be used to run tests, benchmarks, docs and examples as usual.
 
-### Running the tests
+## Running the tests
 
 Run tests using the Rust standard `cargo test` command:
 
 ```bash
-# run all tests.
+# run all unit and integration tests
 cargo test
 
-
-# run only tests for the arrow crate
+# run tests for the arrow crate
 cargo test -p arrow
+```
+
+For some changes, you may want to run additional tests. You can find up-to-date information on the current CI tests in [.github/workflows](https://github.com/apache/arrow-rs/tree/main/.github/workflows). Here are some examples of additional tests you may want to run:
+
+```bash
+# run tests for the parquet crate
+cargo test -p parquet
+
+# run arrow tests with all features enabled
+cargo test -p arrow --all-features
+
+# run the doc tests
+cargo test --doc
 ```
 
 ## Code Formatting
@@ -114,14 +159,33 @@ PR be sure to run the following and check for lint issues:
 cargo +stable fmt --all -- --check
 ```
 
-## Clippy Lints
-
-We recommend using `clippy` for checking lints during development. While we do not yet enforce `clippy` checks, we recommend not introducing new `clippy` errors or warnings.
-
-Run the following to check for clippy lints.
+Note that currently the above will not check all source files in the parquet crate. To check all
+parquet files run the following from the top-level `arrow-rs` directory:
 
 ```bash
-cargo clippy
+cargo fmt -p parquet -- --check --config skip_children=true `find ./parquet -name "*.rs" \! -name format.rs`
+```
+
+## Breaking Changes
+
+Our [release schedule] allows breaking API changes only in major releases.
+This means that if your PR has a breaking API change, it should be marked as
+`api-change` and it will not be merged until development opens for the next
+major release. See [this ticket] for details.
+
+[release schedule]: README.md#release-versioning-and-schedule
+[this ticket]: https://github.com/apache/arrow-rs/issues/5907
+
+## Clippy Lints
+
+We use `clippy` for checking lints during development, and CI runs `clippy` checks.
+
+Run the following to check for `clippy` lints:
+
+```bash
+# run clippy with default settings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+
 ```
 
 If you use Visual Studio Code with the `rust-analyzer` plugin, you can enable `clippy` to run each time you save a file. See https://users.rust-lang.org/t/how-to-use-clippy-in-vs-code-with-rust-analyzer/41881.
@@ -133,6 +197,33 @@ Search for `allow(clippy::` in the codebase to identify lints that are ignored/a
 - If you are introducing a line that returns a lint warning or error, you may disable the lint on that line.
 - If you have several lints on a function or module, you may disable the lint on the function or module.
 - If a lint is pervasive across multiple modules, you may disable it at the crate level.
+
+## Running Benchmarks
+
+Running benchmarks are a good way to test the performance of a change. As benchmarks usually take a long time to run, we recommend running targeted tests instead of the full suite.
+
+```bash
+# run all benchmarks
+cargo bench
+
+# run arrow benchmarks
+cargo bench -p arrow
+
+# run benchmark for the parse_time function within the arrow-cast crate
+cargo bench -p arrow-cast --bench parse_time
+```
+
+To set the baseline for your benchmarks, use the --save-baseline flag:
+
+```bash
+git checkout main
+
+cargo bench --bench parse_time -- --save-baseline main
+
+git checkout feature
+
+cargo bench --bench parse_time -- --baseline main
+```
 
 ## Git Pre-Commit Hook
 

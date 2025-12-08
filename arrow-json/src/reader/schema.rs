@@ -52,10 +52,7 @@ impl InferredType {
             }
             (_, InferredType::Any) => {}
             // convert a scalar type to a single-item scalar array type.
-            (
-                InferredType::Array(self_inner_type),
-                other_scalar @ InferredType::Scalar(_),
-            ) => {
+            (InferredType::Array(self_inner_type), other_scalar @ InferredType::Scalar(_)) => {
                 self_inner_type.merge(other_scalar)?;
             }
             (s @ InferredType::Scalar(_), InferredType::Array(mut other_inner_type)) => {
@@ -72,6 +69,15 @@ impl InferredType {
 
         Ok(())
     }
+
+    fn is_none_or_any(ty: Option<&Self>) -> bool {
+        matches!(ty, Some(Self::Any) | None)
+    }
+}
+
+/// Shorthand for building list data type of `ty`
+fn list_type_of(ty: DataType) -> DataType {
+    DataType::List(Arc::new(Field::new_list_field(ty, true)))
 }
 
 /// Coerce data type during inference
@@ -84,23 +90,18 @@ fn coerce_data_type(dt: Vec<&DataType>) -> DataType {
     let dt_init = dt_iter.next().unwrap_or(DataType::Utf8);
 
     dt_iter.fold(dt_init, |l, r| match (l, r) {
+        (DataType::Null, o) | (o, DataType::Null) => o,
         (DataType::Boolean, DataType::Boolean) => DataType::Boolean,
         (DataType::Int64, DataType::Int64) => DataType::Int64,
         (DataType::Float64, DataType::Float64)
         | (DataType::Float64, DataType::Int64)
         | (DataType::Int64, DataType::Float64) => DataType::Float64,
-        (DataType::List(l), DataType::List(r)) => DataType::List(Arc::new(Field::new(
-            "item",
-            coerce_data_type(vec![l.data_type(), r.data_type()]),
-            true,
-        ))),
+        (DataType::List(l), DataType::List(r)) => {
+            list_type_of(coerce_data_type(vec![l.data_type(), r.data_type()]))
+        }
         // coerce scalar and scalar array into scalar array
         (DataType::List(e), not_list) | (not_list, DataType::List(e)) => {
-            DataType::List(Arc::new(Field::new(
-                "item",
-                coerce_data_type(vec![e.data_type(), &not_list]),
-                true,
-            )))
+            list_type_of(coerce_data_type(vec![e.data_type(), &not_list]))
         }
         _ => DataType::Utf8,
     })
@@ -110,11 +111,7 @@ fn generate_datatype(t: &InferredType) -> Result<DataType, ArrowError> {
     Ok(match t {
         InferredType::Scalar(hs) => coerce_data_type(hs.iter().collect()),
         InferredType::Object(spec) => DataType::Struct(generate_fields(spec)?),
-        InferredType::Array(ele_type) => DataType::List(Arc::new(Field::new(
-            "item",
-            generate_datatype(ele_type)?,
-            true,
-        ))),
+        InferredType::Array(ele_type) => list_type_of(generate_datatype(ele_type)?),
         InferredType::Any => DataType::Null,
     })
 }
@@ -197,9 +194,10 @@ impl<R: BufRead> Iterator for ValueIter<R> {
                     }
 
                     self.record_count += 1;
-                    return Some(serde_json::from_str(trimmed_s).map_err(|e| {
-                        ArrowError::JsonError(format!("Not valid JSON: {e}"))
-                    }));
+                    return Some(
+                        serde_json::from_str(trimmed_s)
+                            .map_err(|e| ArrowError::JsonError(format!("Not valid JSON: {e}"))),
+                    );
                 }
             }
         }
@@ -210,6 +208,8 @@ impl<R: BufRead> Iterator for ValueIter<R> {
 /// `max_read_records` controlling the maximum number of records to read.
 ///
 /// If `max_read_records` is not set, the whole file is read to infer its field types.
+///
+/// Returns inferred schema and number of records read.
 ///
 /// Contrary to [`infer_json_schema`], this function will seek back to the start of the `reader`.
 /// That way, the `reader` can be used immediately afterwards to create a [`Reader`].
@@ -231,7 +231,7 @@ impl<R: BufRead> Iterator for ValueIter<R> {
 pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
     mut reader: R,
     max_read_records: Option<usize>,
-) -> Result<Schema, ArrowError> {
+) -> Result<(Schema, usize), ArrowError> {
     let schema = infer_json_schema(&mut reader, max_read_records);
     // return the reader seek back to the start
     reader.rewind()?;
@@ -244,9 +244,20 @@ pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
 ///
 /// If `max_read_records` is not set, the whole file is read to infer its field types.
 ///
+/// Returns inferred schema and number of records read.
+///
 /// This function will not seek back to the start of the `reader`. The user has to manage the
 /// original file's cursor. This function is useful when the `reader`'s cursor is not available
 /// (does not implement [`Seek`]), such is the case for compressed streams decoders.
+///
+///
+/// Note that JSON is not able to represent all Arrow data types exactly. So the inferred schema
+/// might be different from the schema of the original data that was encoded as JSON. For example,
+/// JSON does not have different integer types, so all integers are inferred as `Int64`. Another
+/// example is binary data, which is encoded as a [Base16] string in JSON and therefore inferred
+/// as String type by this function.
+///
+/// [Base16]: https://en.wikipedia.org/wiki/Base16#Base16
 ///
 /// # Examples
 /// ```
@@ -268,8 +279,10 @@ pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
 pub fn infer_json_schema<R: BufRead>(
     reader: R,
     max_read_records: Option<usize>,
-) -> Result<Schema, ArrowError> {
-    infer_json_schema_from_iterator(ValueIter::new(reader, max_read_records))
+) -> Result<(Schema, usize), ArrowError> {
+    let mut values = ValueIter::new(reader, max_read_records);
+    let schema = infer_json_schema_from_iterator(&mut values)?;
+    Ok((schema, values.record_count))
 }
 
 fn set_object_scalar_field_type(
@@ -277,7 +290,7 @@ fn set_object_scalar_field_type(
     key: &str,
     ftype: DataType,
 ) -> Result<(), ArrowError> {
-    if !field_types.contains_key(key) {
+    if InferredType::is_none_or_any(field_types.get(key)) {
         field_types.insert(key.to_string(), InferredType::Scalar(HashSet::new()));
     }
 
@@ -388,22 +401,18 @@ fn collect_field_types_from_object(
             Value::Array(array) => {
                 let ele_type = infer_array_element_type(array)?;
 
-                if !field_types.contains_key(k) {
+                if InferredType::is_none_or_any(field_types.get(k)) {
                     match ele_type {
                         InferredType::Scalar(_) => {
                             field_types.insert(
                                 k.to_string(),
-                                InferredType::Array(Box::new(InferredType::Scalar(
-                                    HashSet::new(),
-                                ))),
+                                InferredType::Array(Box::new(InferredType::Scalar(HashSet::new()))),
                             );
                         }
                         InferredType::Object(_) => {
                             field_types.insert(
                                 k.to_string(),
-                                InferredType::Array(Box::new(InferredType::Object(
-                                    HashMap::new(),
-                                ))),
+                                InferredType::Array(Box::new(InferredType::Object(HashMap::new()))),
                             );
                         }
                         InferredType::Any | InferredType::Array(_) => {
@@ -438,8 +447,11 @@ fn collect_field_types_from_object(
                 set_object_scalar_field_type(field_types, k, DataType::Boolean)?;
             }
             Value::Null => {
-                // do nothing, we treat json as nullable by default when
-                // inferring
+                // we treat json as nullable by default when inferring, so just
+                // mark existence of a field if it wasn't known before
+                if !field_types.contains_key(k) {
+                    field_types.insert(k.to_string(), InferredType::Any);
+                }
             }
             Value::Number(n) => {
                 if n.is_i64() {
@@ -452,9 +464,8 @@ fn collect_field_types_from_object(
                 set_object_scalar_field_type(field_types, k, DataType::Utf8)?;
             }
             Value::Object(inner_map) => {
-                if !field_types.contains_key(k) {
-                    field_types
-                        .insert(k.to_string(), InferredType::Object(HashMap::new()));
+                if let InferredType::Any = field_types.get(k).unwrap_or(&InferredType::Any) {
+                    field_types.insert(k.to_string(), InferredType::Object(HashMap::new()));
                 }
                 match field_types.get_mut(k).unwrap() {
                     InferredType::Object(inner_field_types) => {
@@ -520,34 +531,34 @@ mod tests {
     fn test_json_infer_schema() {
         let schema = Schema::new(vec![
             Field::new("a", DataType::Int64, true),
-            Field::new(
-                "b",
-                DataType::List(Arc::new(Field::new("item", DataType::Float64, true))),
-                true,
-            ),
-            Field::new(
-                "c",
-                DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
-                true,
-            ),
-            Field::new(
-                "d",
-                DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-                true,
-            ),
+            Field::new("b", list_type_of(DataType::Float64), true),
+            Field::new("c", list_type_of(DataType::Boolean), true),
+            Field::new("d", list_type_of(DataType::Utf8), true),
         ]);
 
-        let mut reader =
-            BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
-        let inferred_schema = infer_json_schema_from_seekable(&mut reader, None).unwrap();
+        let mut reader = BufReader::new(File::open("test/data/mixed_arrays.json").unwrap());
+        let (inferred_schema, n_rows) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
+        assert_eq!(n_rows, 4);
 
         let file = File::open("test/data/mixed_arrays.json.gz").unwrap();
         let mut reader = BufReader::new(GzDecoder::new(&file));
-        let inferred_schema = infer_json_schema(&mut reader, None).unwrap();
+        let (inferred_schema, n_rows) = infer_json_schema(&mut reader, None).unwrap();
 
         assert_eq!(inferred_schema, schema);
+        assert_eq!(n_rows, 4);
+    }
+
+    #[test]
+    fn test_row_limit() {
+        let mut reader = BufReader::new(File::open("test/data/basic.json").unwrap());
+
+        let (_, n_rows) = infer_json_schema_from_seekable(&mut reader, None).unwrap();
+        assert_eq!(n_rows, 12);
+
+        let (_, n_rows) = infer_json_schema_from_seekable(&mut reader, Some(5)).unwrap();
+        assert_eq!(n_rows, 5);
     }
 
     #[test]
@@ -559,9 +570,7 @@ mod tests {
                     Field::new("a", DataType::Boolean, true),
                     Field::new(
                         "b",
-                        DataType::Struct(
-                            vec![Field::new("c", DataType::Utf8, true)].into(),
-                        ),
+                        DataType::Struct(vec![Field::new("c", DataType::Utf8, true)].into()),
                         true,
                     ),
                 ])),
@@ -577,9 +586,9 @@ mod tests {
                 Ok(serde_json::json!({"c1": {"a": false, "b": null}, "c2": 0})),
                 Ok(serde_json::json!({"c1": {"a": true, "b": {"c": "text"}}, "c3": "ok"})),
             ]
-                .into_iter(),
+            .into_iter(),
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(inferred_schema, schema);
     }
@@ -589,22 +598,18 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new(
                 "c1",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::Struct(Fields::from(vec![
-                        Field::new("a", DataType::Utf8, true),
-                        Field::new("b", DataType::Int64, true),
-                        Field::new("c", DataType::Boolean, true),
-                    ])),
-                    true,
-                ))),
+                list_type_of(DataType::Struct(Fields::from(vec![
+                    Field::new("a", DataType::Utf8, true),
+                    Field::new("b", DataType::Int64, true),
+                    Field::new("c", DataType::Boolean, true),
+                ]))),
                 true,
             ),
             Field::new("c2", DataType::Float64, true),
             Field::new(
                 "c3",
                 // empty json array's inner types are inferred as null
-                DataType::List(Arc::new(Field::new("item", DataType::Null, true))),
+                list_type_of(DataType::Null),
                 true,
             ),
         ]);
@@ -619,9 +624,9 @@ mod tests {
                 })),
                 Ok(serde_json::json!({"c1": [], "c2": 0.5, "c3": []})),
             ]
-                .into_iter(),
+            .into_iter(),
         )
-            .unwrap();
+        .unwrap();
 
         assert_eq!(inferred_schema, schema);
     }
@@ -629,15 +634,7 @@ mod tests {
     #[test]
     fn test_json_infer_schema_nested_list() {
         let schema = Schema::new(vec![
-            Field::new(
-                "c1",
-                DataType::List(Arc::new(Field::new(
-                    "item",
-                    DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
-                    true,
-                ))),
-                true,
-            ),
+            Field::new("c1", list_type_of(list_type_of(DataType::Utf8)), true),
             Field::new("c2", DataType::Float64, true),
         ]);
 
@@ -667,11 +664,10 @@ mod tests {
         let bigger_than_i64_max = (i64::MAX as i128) + 1;
         let smaller_than_i64_min = (i64::MIN as i128) - 1;
         let json = format!(
-            "{{ \"bigger_than_i64_max\": {}, \"smaller_than_i64_min\": {} }}",
-            bigger_than_i64_max, smaller_than_i64_min
+            "{{ \"bigger_than_i64_max\": {bigger_than_i64_max}, \"smaller_than_i64_min\": {smaller_than_i64_min} }}",
         );
         let mut buf_reader = BufReader::new(json.as_bytes());
-        let inferred_schema = infer_json_schema(&mut buf_reader, Some(1)).unwrap();
+        let (inferred_schema, _) = infer_json_schema(&mut buf_reader, Some(1)).unwrap();
         let fields = inferred_schema.fields();
 
         let (_, big_field) = fields.find("bigger_than_i64_max").unwrap();
@@ -682,36 +678,22 @@ mod tests {
 
     #[test]
     fn test_coercion_scalar_and_list() {
-        use arrow_schema::DataType::*;
-
         assert_eq!(
-            List(Arc::new(Field::new("item", Float64, true))),
-            coerce_data_type(vec![
-                &Float64,
-                &List(Arc::new(Field::new("item", Float64, true)))
-            ])
+            list_type_of(DataType::Float64),
+            coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Float64)])
         );
         assert_eq!(
-            List(Arc::new(Field::new("item", Float64, true))),
-            coerce_data_type(vec![
-                &Float64,
-                &List(Arc::new(Field::new("item", Int64, true)))
-            ])
+            list_type_of(DataType::Float64),
+            coerce_data_type(vec![&DataType::Float64, &list_type_of(DataType::Int64)])
         );
         assert_eq!(
-            List(Arc::new(Field::new("item", Int64, true))),
-            coerce_data_type(vec![
-                &Int64,
-                &List(Arc::new(Field::new("item", Int64, true)))
-            ])
+            list_type_of(DataType::Int64),
+            coerce_data_type(vec![&DataType::Int64, &list_type_of(DataType::Int64)])
         );
         // boolean and number are incompatible, return utf8
         assert_eq!(
-            List(Arc::new(Field::new("item", Utf8, true))),
-            coerce_data_type(vec![
-                &Boolean,
-                &List(Arc::new(Field::new("item", Float64, true)))
-            ])
+            list_type_of(DataType::Utf8),
+            coerce_data_type(vec![&DataType::Boolean, &list_type_of(DataType::Float64)])
         );
     }
 
@@ -722,5 +704,47 @@ mod tests {
             re.err().unwrap().to_string(),
             "Json error: Not valid JSON: expected value at line 1 column 1",
         );
+    }
+
+    #[test]
+    fn test_null_field_inferred_as_null() {
+        let data = r#"
+            {"in":1,    "ni":null, "ns":null, "sn":"4",  "n":null, "an":[],   "na": null, "nas":null}
+            {"in":null, "ni":2,    "ns":"3",  "sn":null, "n":null, "an":null, "na": [],   "nas":["8"]}
+            {"in":1,    "ni":null, "ns":null, "sn":"4",  "n":null, "an":[],   "na": null, "nas":[]}
+        "#;
+        let (inferred_schema, _) =
+            infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
+        let schema = Schema::new(vec![
+            Field::new("an", list_type_of(DataType::Null), true),
+            Field::new("in", DataType::Int64, true),
+            Field::new("n", DataType::Null, true),
+            Field::new("na", list_type_of(DataType::Null), true),
+            Field::new("nas", list_type_of(DataType::Utf8), true),
+            Field::new("ni", DataType::Int64, true),
+            Field::new("ns", DataType::Utf8, true),
+            Field::new("sn", DataType::Utf8, true),
+        ]);
+        assert_eq!(inferred_schema, schema);
+    }
+
+    #[test]
+    fn test_infer_from_null_then_object() {
+        let data = r#"
+            {"obj":null}
+            {"obj":{"foo":1}}
+        "#;
+        let (inferred_schema, _) =
+            infer_json_schema_from_seekable(Cursor::new(data), None).expect("infer");
+        let schema = Schema::new(vec![Field::new(
+            "obj",
+            DataType::Struct(
+                [Field::new("foo", DataType::Int64, true)]
+                    .into_iter()
+                    .collect(),
+            ),
+            true,
+        )]);
+        assert_eq!(inferred_schema, schema);
     }
 }

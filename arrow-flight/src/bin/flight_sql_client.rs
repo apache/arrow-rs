@@ -17,44 +17,57 @@
 
 use std::{sync::Arc, time::Duration};
 
-use arrow_array::RecordBatch;
-use arrow_cast::pretty::pretty_format_batches;
+use anyhow::{Context, Result, bail};
+use arrow_array::{ArrayRef, Datum, RecordBatch, StringArray};
+use arrow_cast::{CastOptions, cast_with_options, pretty::pretty_format_batches};
 use arrow_flight::{
-    sql::client::FlightSqlServiceClient, utils::flight_data_to_batches, FlightData,
+    FlightInfo,
+    flight_service_client::FlightServiceClient,
+    sql::{CommandGetDbSchemas, CommandGetTables, client::FlightSqlServiceClient},
 };
-use arrow_schema::{ArrowError, Schema};
-use clap::Parser;
+use arrow_schema::Schema;
+use clap::{Parser, Subcommand, ValueEnum};
+use core::str;
 use futures::TryStreamExt;
-use tonic::transport::{Channel, ClientTlsConfig, Endpoint};
+use tonic::{
+    metadata::MetadataMap,
+    transport::{Channel, ClientTlsConfig, Endpoint},
+};
 use tracing_log::log::info;
 
-/// A ':' separated key value pair
-#[derive(Debug, Clone)]
-struct KeyValue<K, V> {
-    pub key: K,
-    pub value: V,
+/// Logging CLI config.
+#[derive(Debug, Parser)]
+pub struct LoggingArgs {
+    /// Log verbosity.
+    ///
+    /// Defaults to "warn".
+    ///
+    /// Use `-v` for "info", `-vv` for "debug", `-vvv` for "trace".
+    ///
+    /// Note you can also set logging level using `RUST_LOG` environment variable:
+    /// `RUST_LOG=debug`.
+    #[clap(
+        short = 'v',
+        long = "verbose",
+        action = clap::ArgAction::Count,
+    )]
+    log_verbose_count: u8,
 }
 
-impl<K, V> std::str::FromStr for KeyValue<K, V>
-where
-    K: std::str::FromStr,
-    V: std::str::FromStr,
-    K::Err: std::fmt::Display,
-    V::Err: std::fmt::Display,
-{
-    type Err = String;
+/// gRPC/HTTP compression algorithms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum CompressionEncoding {
+    Gzip,
+    Deflate,
+    Zstd,
+}
 
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let parts = s.splitn(2, ':').collect::<Vec<_>>();
-        match parts.as_slice() {
-            [key, value] => {
-                let key = K::from_str(key).map_err(|e| e.to_string())?;
-                let value = V::from_str(value.trim()).map_err(|e| e.to_string())?;
-                Ok(Self { key, value })
-            }
-            _ => Err(format!(
-                "Invalid key value pair - expected 'KEY:VALUE' got '{s}'"
-            )),
+impl From<CompressionEncoding> for tonic::codec::CompressionEncoding {
+    fn from(encoding: CompressionEncoding) -> Self {
+        match encoding {
+            CompressionEncoding::Gzip => Self::Gzip,
+            CompressionEncoding::Deflate => Self::Deflate,
+            CompressionEncoding::Zstd => Self::Zstd,
         }
     }
 }
@@ -63,16 +76,22 @@ where
 struct ClientArgs {
     /// Additional headers.
     ///
-    /// Values should be key value pairs separated by ':'
-    #[clap(long, value_delimiter = ',')]
-    headers: Vec<KeyValue<String, String>>,
+    /// Can be given multiple times. Headers and values are separated by '='.
+    ///
+    /// Example: `-H foo=bar -H baz=42`
+    #[clap(long = "header", short = 'H', value_parser = parse_key_val)]
+    headers: Vec<(String, String)>,
 
-    /// Username
-    #[clap(long)]
+    /// Username.
+    ///
+    /// Optional. If given, `password` must also be set.
+    #[clap(long, requires = "password")]
     username: Option<String>,
 
-    /// Password
-    #[clap(long)]
+    /// Password.
+    ///
+    /// Optional. If given, `username` must also be set.
+    #[clap(long, requires = "username")]
     password: Option<String>,
 
     /// Auth token.
@@ -80,78 +99,310 @@ struct ClientArgs {
     token: Option<String>,
 
     /// Use TLS.
+    ///
+    /// If not provided, use cleartext connection.
     #[clap(long)]
     tls: bool,
 
+    /// Dump TLS key log.
+    ///
+    /// The target file is specified by the `SSLKEYLOGFILE` environment variable.
+    ///
+    /// Requires `--tls`.
+    #[clap(long, requires = "tls")]
+    key_log: bool,
+
     /// Server host.
+    ///
+    /// Required.
     #[clap(long)]
     host: String,
 
     /// Server port.
+    ///
+    /// Defaults to `443` if `tls` is set, otherwise defaults to `80`.
     #[clap(long)]
     port: Option<u16>,
+
+    /// Compression accepted by the client for responses sent by the server.
+    ///
+    /// The client will send this information to the server as part of the request. The server is free to pick an
+    /// algorithm from that list or use no compression (called "identity" encoding).
+    ///
+    /// You may define multiple algorithms by using a comma-separated list.
+    #[clap(long, value_delimiter = ',')]
+    accept_compression: Vec<CompressionEncoding>,
+
+    /// Compression of requests sent by the client to the server.
+    ///
+    /// Since the client needs to decide on the compression before sending the request, there is no client<->server
+    /// negotiation. If the server does NOT support the chosen compression, it will respond with an error a la:
+    ///
+    /// ```
+    /// Ipc error: Status {
+    ///     code: Unimplemented,
+    ///     message: "Content is compressed with `zstd` which isn't supported",
+    ///     metadata: MetadataMap { headers: {"grpc-accept-encoding": "identity", ...} },
+    ///     ...
+    /// }
+    /// ```
+    ///
+    /// Based on the algorithms listed in the `grpc-accept-encoding` header, you may make a more educated guess for
+    /// your next request. Note that `identity` is a synonym for "no compression".
+    #[clap(long)]
+    send_compression: Option<CompressionEncoding>,
 }
 
 #[derive(Debug, Parser)]
 struct Args {
+    /// Logging args.
+    #[clap(flatten)]
+    logging_args: LoggingArgs,
+
     /// Client args.
     #[clap(flatten)]
     client_args: ClientArgs,
 
-    /// SQL query.
-    query: String,
+    #[clap(subcommand)]
+    cmd: Command,
+}
+
+/// Different available commands.
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Get catalogs.
+    Catalogs,
+    /// Get db schemas for a catalog.
+    DbSchemas {
+        /// Name of a catalog.
+        ///
+        /// Required.
+        catalog: String,
+        /// Specifies a filter pattern for schemas to search for.
+        /// When no schema_filter is provided, the pattern will not be used to narrow the search.
+        /// In the pattern string, two special characters can be used to denote matching rules:
+        ///     - "%" means to match any substring with 0 or more characters.
+        ///     - "_" means to match any one character.
+        #[clap(short, long)]
+        db_schema_filter: Option<String>,
+    },
+    /// Get tables for a catalog.
+    Tables {
+        /// Name of a catalog.
+        ///
+        /// Required.
+        catalog: String,
+        /// Specifies a filter pattern for schemas to search for.
+        /// When no schema_filter is provided, the pattern will not be used to narrow the search.
+        /// In the pattern string, two special characters can be used to denote matching rules:
+        ///     - "%" means to match any substring with 0 or more characters.
+        ///     - "_" means to match any one character.
+        #[clap(short, long)]
+        db_schema_filter: Option<String>,
+        /// Specifies a filter pattern for tables to search for.
+        /// When no table_filter is provided, all tables matching other filters are searched.
+        /// In the pattern string, two special characters can be used to denote matching rules:
+        ///     - "%" means to match any substring with 0 or more characters.
+        ///     - "_" means to match any one character.
+        #[clap(short, long)]
+        table_filter: Option<String>,
+        /// Specifies a filter of table types which must match.
+        /// The table types depend on vendor/implementation. It is usually used to separate tables from views or system tables.
+        /// TABLE, VIEW, and SYSTEM TABLE are commonly supported.
+        #[clap(long)]
+        table_types: Vec<String>,
+    },
+    /// Get table types.
+    TableTypes,
+
+    /// Execute given statement.
+    StatementQuery {
+        /// SQL query.
+        ///
+        /// Required.
+        query: String,
+    },
+
+    /// Prepare given statement and then execute it.
+    PreparedStatementQuery {
+        /// SQL query.
+        ///
+        /// Required.
+        ///
+        /// Can contains placeholders like `$1`.
+        ///
+        /// Example: `SELECT * FROM t WHERE x = $1`
+        query: String,
+
+        /// Additional parameters.
+        ///
+        /// Can be given multiple times. Names and values are separated by '='. Values will be
+        /// converted to the type that the server reported for the prepared statement.
+        ///
+        /// Example: `-p $1=42`
+        #[clap(short, value_parser = parse_key_val)]
+        params: Vec<(String, String)>,
+    },
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     let args = Args::parse();
-    setup_logging();
-    let mut client = setup_client(args.client_args).await.expect("setup client");
-
-    let info = client
-        .execute(args.query, None)
+    setup_logging(args.logging_args)?;
+    let mut client = setup_client(args.client_args)
         .await
-        .expect("prepare statement");
-    info!("got flight info");
+        .context("setup client")?;
 
-    let schema = Arc::new(Schema::try_from(info.clone()).expect("valid schema"));
+    let flight_info = match args.cmd {
+        Command::Catalogs => client.get_catalogs().await.context("get catalogs")?,
+        Command::DbSchemas {
+            catalog,
+            db_schema_filter,
+        } => client
+            .get_db_schemas(CommandGetDbSchemas {
+                catalog: Some(catalog),
+                db_schema_filter_pattern: db_schema_filter,
+            })
+            .await
+            .context("get db schemas")?,
+        Command::Tables {
+            catalog,
+            db_schema_filter,
+            table_filter,
+            table_types,
+        } => client
+            .get_tables(CommandGetTables {
+                catalog: Some(catalog),
+                db_schema_filter_pattern: db_schema_filter,
+                table_name_filter_pattern: table_filter,
+                table_types,
+                // Schema is returned as ipc encoded bytes.
+                // We do not support returning the schema as there is no trivial mechanism
+                // to display the information to the user.
+                include_schema: false,
+            })
+            .await
+            .context("get tables")?,
+        Command::TableTypes => client.get_table_types().await.context("get table types")?,
+        Command::StatementQuery { query } => client
+            .execute(query, None)
+            .await
+            .context("execute statement")?,
+        Command::PreparedStatementQuery { query, params } => {
+            let mut prepared_stmt = client
+                .prepare(query, None)
+                .await
+                .context("prepare statement")?;
+
+            if !params.is_empty() {
+                prepared_stmt
+                    .set_parameters(
+                        construct_record_batch_from_params(
+                            &params,
+                            prepared_stmt
+                                .parameter_schema()
+                                .context("get parameter schema")?,
+                        )
+                        .context("construct parameters")?,
+                    )
+                    .context("bind parameters")?;
+            }
+
+            prepared_stmt
+                .execute()
+                .await
+                .context("execute prepared statement")?
+        }
+    };
+
+    let batches = execute_flight(&mut client, flight_info)
+        .await
+        .context("read flight data")?;
+
+    let res = pretty_format_batches(batches.as_slice()).context("format results")?;
+    println!("{res}");
+
+    Ok(())
+}
+
+async fn execute_flight(
+    client: &mut FlightSqlServiceClient<Channel>,
+    info: FlightInfo,
+) -> Result<Vec<RecordBatch>> {
+    let schema = Arc::new(Schema::try_from(info.clone()).context("valid schema")?);
     let mut batches = Vec::with_capacity(info.endpoint.len() + 1);
     batches.push(RecordBatch::new_empty(schema));
     info!("decoded schema");
 
     for endpoint in info.endpoint {
         let Some(ticket) = &endpoint.ticket else {
-            panic!("did not get ticket");
+            bail!("did not get ticket");
         };
-        let flight_data = client.do_get(ticket.clone()).await.expect("do get");
-        let flight_data: Vec<FlightData> = flight_data
+
+        let mut flight_data = client.do_get(ticket.clone()).await.context("do get")?;
+        log_metadata(flight_data.headers(), "header");
+
+        let mut endpoint_batches: Vec<_> = (&mut flight_data)
             .try_collect()
             .await
-            .expect("collect data stream");
-        let mut endpoint_batches = flight_data_to_batches(&flight_data)
-            .expect("convert flight data to record batches");
+            .context("collect data stream")?;
         batches.append(&mut endpoint_batches);
+
+        if let Some(trailers) = flight_data.trailers() {
+            log_metadata(&trailers, "trailer");
+        }
     }
     info!("received data");
 
-    let res = pretty_format_batches(batches.as_slice()).expect("format results");
-    println!("{res}");
+    Ok(batches)
 }
 
-fn setup_logging() {
-    tracing_log::LogTracer::init().expect("tracing log init");
-    tracing_subscriber::fmt::init();
+fn construct_record_batch_from_params(
+    params: &[(String, String)],
+    parameter_schema: &Schema,
+) -> Result<RecordBatch> {
+    let mut items = Vec::<(&String, ArrayRef)>::new();
+
+    for (name, value) in params {
+        let field = parameter_schema.field_with_name(name)?;
+        let value_as_array = StringArray::new_scalar(value);
+        let casted = cast_with_options(
+            value_as_array.get().0,
+            field.data_type(),
+            &CastOptions::default(),
+        )?;
+        items.push((name, casted))
+    }
+
+    Ok(RecordBatch::try_from_iter(items)?)
 }
 
-async fn setup_client(
-    args: ClientArgs,
-) -> Result<FlightSqlServiceClient<Channel>, ArrowError> {
+fn setup_logging(args: LoggingArgs) -> Result<()> {
+    use tracing_subscriber::{EnvFilter, FmtSubscriber, util::SubscriberInitExt};
+
+    tracing_log::LogTracer::init().context("tracing log init")?;
+
+    let filter = match args.log_verbose_count {
+        0 => "warn",
+        1 => "info",
+        2 => "debug",
+        _ => "trace",
+    };
+    let filter = EnvFilter::try_new(filter).context("set up log env filter")?;
+
+    let subscriber = FmtSubscriber::builder().with_env_filter(filter).finish();
+    subscriber.try_init().context("init logging subscriber")?;
+
+    Ok(())
+}
+
+async fn setup_client(args: ClientArgs) -> Result<FlightSqlServiceClient<Channel>> {
     let port = args.port.unwrap_or(if args.tls { 443 } else { 80 });
 
     let protocol = if args.tls { "https" } else { "http" };
 
     let mut endpoint = Endpoint::new(format!("{}://{}:{}", protocol, args.host, port))
-        .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+        .context("create endpoint")?
         .connect_timeout(Duration::from_secs(20))
         .timeout(Duration::from_secs(20))
         .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
@@ -161,22 +412,30 @@ async fn setup_client(
         .keep_alive_while_idle(true);
 
     if args.tls {
-        let tls_config = ClientTlsConfig::new();
+        let mut tls_config = ClientTlsConfig::new().with_enabled_roots();
+        if args.key_log {
+            tls_config = tls_config.use_key_log();
+        }
+
         endpoint = endpoint
             .tls_config(tls_config)
-            .map_err(|_| ArrowError::IoError("Cannot create TLS endpoint".to_string()))?;
+            .context("create TLS endpoint")?;
     }
 
-    let channel = endpoint
-        .connect()
-        .await
-        .map_err(|e| ArrowError::IoError(format!("Cannot connect to endpoint: {e}")))?;
+    let channel = endpoint.connect().await.context("connect to endpoint")?;
 
-    let mut client = FlightSqlServiceClient::new(channel);
+    let mut client = FlightServiceClient::new(channel);
+    for encoding in args.accept_compression {
+        client = client.accept_compressed(encoding.into());
+    }
+    if let Some(encoding) = args.send_compression {
+        client = client.send_compressed(encoding.into());
+    }
+    let mut client = FlightSqlServiceClient::new_from_inner(client);
     info!("connected");
 
-    for kv in args.headers {
-        client.set_header(kv.key, kv.value);
+    for (k, v) in args.headers {
+        client.set_header(k, v);
     }
 
     if let Some(token) = args.token {
@@ -190,16 +449,48 @@ async fn setup_client(
             client
                 .handshake(&username, &password)
                 .await
-                .expect("handshake");
+                .context("handshake")?;
             info!("performed handshake");
         }
         (Some(_), None) => {
-            panic!("when username is set, you also need to set a password")
+            bail!("when username is set, you also need to set a password")
         }
         (None, Some(_)) => {
-            panic!("when password is set, you also need to set a username")
+            bail!("when password is set, you also need to set a username")
         }
     }
 
     Ok(client)
+}
+
+/// Parse a single key-value pair
+fn parse_key_val(s: &str) -> Result<(String, String), String> {
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].to_owned(), s[pos + 1..].to_owned()))
+}
+
+/// Log headers/trailers.
+fn log_metadata(map: &MetadataMap, what: &'static str) {
+    for k_v in map.iter() {
+        match k_v {
+            tonic::metadata::KeyAndValueRef::Ascii(k, v) => {
+                info!(
+                    "{}: {}={}",
+                    what,
+                    k.as_str(),
+                    v.to_str().unwrap_or("<invalid>"),
+                );
+            }
+            tonic::metadata::KeyAndValueRef::Binary(k, v) => {
+                info!(
+                    "{}: {}={}",
+                    what,
+                    k.as_str(),
+                    String::from_utf8_lossy(v.as_ref()),
+                );
+            }
+        }
+    }
 }

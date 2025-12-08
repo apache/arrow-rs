@@ -15,19 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Basic auth test for the Flight server.
+
 use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow_flight::{
+    Action, ActionType, BasicAuth, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaResult, Ticket,
     flight_service_server::FlightService, flight_service_server::FlightServiceServer,
-    Action, ActionType, BasicAuth, Criteria, Empty, FlightData, FlightDescriptor,
-    FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, SchemaResult, Ticket,
 };
-use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
+use futures::{Stream, StreamExt, channel::mpsc, sink::SinkExt};
 use tokio::sync::Mutex;
-use tonic::{
-    metadata::MetadataMap, transport::Server, Request, Response, Status, Streaming,
-};
+use tonic::{Request, Response, Status, Streaming, metadata::MetadataMap, transport::Server};
 type TonicStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync + 'static>>;
 
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -37,6 +37,7 @@ use prost::Message;
 
 use crate::{AUTH_PASSWORD, AUTH_USERNAME};
 
+/// Run a scenario that tests basic auth.
 pub async fn scenario_setup(port: u16) -> Result {
     let service = AuthBasicProtoScenarioImpl {
         username: AUTH_USERNAME.into(),
@@ -54,6 +55,7 @@ pub async fn scenario_setup(port: u16) -> Result {
     Ok(())
 }
 
+/// Scenario for testing basic auth.
 #[derive(Clone)]
 pub struct AuthBasicProtoScenarioImpl {
     username: Arc<str>,
@@ -63,10 +65,7 @@ pub struct AuthBasicProtoScenarioImpl {
 }
 
 impl AuthBasicProtoScenarioImpl {
-    async fn check_auth(
-        &self,
-        metadata: &MetadataMap,
-    ) -> Result<GrpcServerCallContext, Status> {
+    async fn check_auth(&self, metadata: &MetadataMap) -> Result<GrpcServerCallContext, Status> {
         let token = metadata
             .get_bin("auth-token-bin")
             .and_then(|v| v.to_bytes().ok())
@@ -74,10 +73,7 @@ impl AuthBasicProtoScenarioImpl {
         self.is_valid(token).await
     }
 
-    async fn is_valid(
-        &self,
-        token: Option<String>,
-    ) -> Result<GrpcServerCallContext, Status> {
+    async fn is_valid(&self, token: Option<String>) -> Result<GrpcServerCallContext, Status> {
         match token {
             Some(t) if t == *self.username => Ok(GrpcServerCallContext {
                 peer_identity: self.username.to_string(),
@@ -142,12 +138,10 @@ impl FlightService for AuthBasicProtoScenarioImpl {
                         let req = req.expect("Error reading handshake request");
                         let HandshakeRequest { payload, .. } = req;
 
-                        let auth = BasicAuth::decode(&*payload)
-                            .expect("Error parsing handshake request");
+                        let auth =
+                            BasicAuth::decode(&*payload).expect("Error parsing handshake request");
 
-                        let resp = if *auth.username == *username
-                            && *auth.password == *password
-                        {
+                        let resp = if *auth.username == *username && *auth.password == *password {
                             Ok(HandshakeResponse {
                                 payload: username.as_bytes().to_vec().into(),
                                 ..HandshakeResponse::default()
@@ -184,6 +178,14 @@ impl FlightService for AuthBasicProtoScenarioImpl {
         &self,
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
+        self.check_auth(request.metadata()).await?;
+        Err(Status::unimplemented("Not yet implemented"))
+    }
+
+    async fn poll_flight_info(
+        &self,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
         self.check_auth(request.metadata()).await?;
         Err(Status::unimplemented("Not yet implemented"))
     }

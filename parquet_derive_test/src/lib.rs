@@ -15,9 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
+#![doc(
+    html_logo_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg",
+    html_favicon_url = "https://raw.githubusercontent.com/apache/parquet-format/25f05e73d8cd7f5c83532ce51cb4f4de8ba5f2a2/logo/parquet-logos_1.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(clippy::approx_constant)]
 
-use parquet_derive::ParquetRecordWriter;
+use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
 
 #[derive(ParquetRecordWriter)]
 struct ACompleteRecord<'a> {
@@ -42,6 +47,7 @@ struct ACompleteRecord<'a> {
     pub borrowed_maybe_a_string: &'a Option<String>,
     pub borrowed_maybe_a_str: &'a Option<&'a str>,
     pub now: chrono::NaiveDateTime,
+    pub uuid: uuid::Uuid,
     pub byte_vec: Vec<u8>,
     pub maybe_byte_vec: Option<Vec<u8>>,
     pub borrowed_byte_vec: &'a [u8],
@@ -49,14 +55,67 @@ struct ACompleteRecord<'a> {
     pub borrowed_maybe_borrowed_byte_vec: &'a Option<&'a [u8]>,
 }
 
+#[derive(PartialEq, ParquetRecordWriter, ParquetRecordReader, Debug)]
+struct APartiallyCompleteRecord {
+    pub bool: bool,
+    pub string: String,
+    pub i16: i16,
+    pub i32: i32,
+    pub u64: u64,
+    pub isize: isize,
+    pub float: f32,
+    pub double: f64,
+    pub now: chrono::NaiveDateTime,
+    pub date: chrono::NaiveDate,
+    pub uuid: uuid::Uuid,
+    pub byte_vec: Vec<u8>,
+}
+
+// This struct has OPTIONAL columns
+// If these fields are guaranteed to be valid
+// we can load this struct into APartiallyCompleteRecord
+#[derive(PartialEq, ParquetRecordWriter, Debug)]
+struct APartiallyOptionalRecord {
+    pub bool: bool,
+    pub string: String,
+    pub i16: Option<i16>,
+    pub i32: Option<i32>,
+    pub u64: Option<u64>,
+    pub isize: isize,
+    pub float: f32,
+    pub double: f64,
+    pub now: chrono::NaiveDateTime,
+    pub date: chrono::NaiveDate,
+    pub uuid: uuid::Uuid,
+    pub byte_vec: Vec<u8>,
+}
+
+// This struct removes several fields from the "APartiallyCompleteRecord",
+// and it shuffles the fields.
+// we should still be able to load it from APartiallyCompleteRecord parquet file
+#[derive(PartialEq, ParquetRecordReader, Debug)]
+struct APrunedRecord {
+    pub bool: bool,
+    pub string: String,
+    pub byte_vec: Vec<u8>,
+    pub float: f32,
+    pub double: f64,
+    pub i16: i16,
+    pub i32: i32,
+    pub u64: u64,
+    pub isize: isize,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    use chrono::SubsecRound;
     use std::{env, fs, io::Write, sync::Arc};
 
     use parquet::{
-        file::writer::SerializedFileWriter, record::RecordWriter,
+        file::writer::SerializedFileWriter,
+        record::{RecordReader, RecordWriter},
         schema::parser::parse_message_type,
     };
 
@@ -88,6 +147,7 @@ mod tests {
             OPTIONAL BINARY          borrowed_maybe_a_string (STRING);
             OPTIONAL BINARY          borrowed_maybe_a_str (STRING);
             REQUIRED INT64           now (TIMESTAMP_MILLIS);
+            REQUIRED FIXED_LEN_BYTE_ARRAY (16) uuid (UUID);
             REQUIRED BINARY          byte_vec;
             OPTIONAL BINARY          maybe_byte_vec;
             REQUIRED BINARY          borrowed_byte_vec;
@@ -121,12 +181,13 @@ mod tests {
             maybe_usize: Some(4456),
             isize: -365,
             float: 3.5,
-            double: std::f64::NAN,
+            double: f64::NAN,
             maybe_float: None,
-            maybe_double: Some(std::f64::MAX),
+            maybe_double: Some(f64::MAX),
             borrowed_maybe_a_string: &maybe_a_string,
             borrowed_maybe_a_str: &maybe_a_str,
             now: chrono::Utc::now().naive_local(),
+            uuid: uuid::Uuid::new_v4(),
             byte_vec: vec![0x65, 0x66, 0x67],
             maybe_byte_vec: Some(vec![0x88, 0x89, 0x90]),
             borrowed_byte_vec: &borrowed_byte_vec,
@@ -139,13 +200,189 @@ mod tests {
         assert_eq!(&schema, &generated_schema);
 
         let props = Default::default();
-        let mut writer =
-            SerializedFileWriter::new(file, generated_schema, props).unwrap();
+        let mut writer = SerializedFileWriter::new(file, generated_schema, props).unwrap();
 
         let mut row_group = writer.next_row_group().unwrap();
         drs.as_slice().write_to_row_group(&mut row_group).unwrap();
         row_group.close().unwrap();
         writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_parquet_derive_read_write_combined() {
+        let file = get_temp_file("test_parquet_derive_combined", &[]);
+
+        let mut drs: Vec<APartiallyCompleteRecord> = vec![APartiallyCompleteRecord {
+            bool: true,
+            string: "a string".into(),
+            i16: -45,
+            i32: 456,
+            u64: 4563424,
+            isize: -365,
+            float: 3.5,
+            double: f64::NAN,
+            now: chrono::Utc::now().naive_local(),
+            date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
+            uuid: uuid::Uuid::new_v4(),
+            byte_vec: vec![0x65, 0x66, 0x67],
+        }];
+
+        let mut out: Vec<APartiallyCompleteRecord> = Vec::new();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        let props = Default::default();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        let mut row_group = reader.get_row_group(0).unwrap();
+        out.read_from_row_group(&mut *row_group, 1).unwrap();
+
+        // correct for rounding error when writing milliseconds
+
+        drs[0].now = drs[0].now.trunc_subsecs(3);
+
+        assert!(out[0].double.is_nan()); // these three lines are necessary because NAN != NAN
+        out[0].double = 0.;
+        drs[0].double = 0.;
+
+        assert_eq!(drs[0], out[0]);
+    }
+
+    #[test]
+    fn test_parquet_derive_read_optional_but_valid_column() {
+        let file = get_temp_file("test_parquet_derive_read_optional", &[]);
+        let drs = vec![APartiallyOptionalRecord {
+            bool: true,
+            string: "a string".into(),
+            i16: Some(-45),
+            i32: Some(456),
+            u64: Some(4563424),
+            isize: -365,
+            float: 3.5,
+            double: f64::NAN,
+            now: chrono::Utc::now().naive_local(),
+            date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
+            uuid: uuid::Uuid::new_v4(),
+            byte_vec: vec![0x65, 0x66, 0x67],
+        }];
+
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        let props = Default::default();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut out: Vec<APartiallyCompleteRecord> = Vec::new();
+
+        let mut row_group = reader.get_row_group(0).unwrap();
+        out.read_from_row_group(&mut *row_group, 1).unwrap();
+
+        assert_eq!(drs[0].i16.unwrap(), out[0].i16);
+        assert_eq!(drs[0].i32.unwrap(), out[0].i32);
+        assert_eq!(drs[0].u64.unwrap(), out[0].u64);
+    }
+
+    #[test]
+    fn test_parquet_derive_read_pruned_and_shuffled_columns() {
+        let file = get_temp_file("test_parquet_derive_read_pruned", &[]);
+        let drs = vec![APartiallyCompleteRecord {
+            bool: true,
+            string: "a string".into(),
+            i16: -45,
+            i32: 456,
+            u64: 4563424,
+            isize: -365,
+            float: 3.5,
+            double: f64::NAN,
+            now: chrono::Utc::now().naive_local(),
+            date: chrono::naive::NaiveDate::from_ymd_opt(2015, 3, 14).unwrap(),
+            uuid: uuid::Uuid::new_v4(),
+            byte_vec: vec![0x65, 0x66, 0x67],
+        }];
+
+        let generated_schema = drs.as_slice().schema().unwrap();
+
+        let props = Default::default();
+        let mut writer =
+            SerializedFileWriter::new(file.try_clone().unwrap(), generated_schema, props).unwrap();
+
+        let mut row_group = writer.next_row_group().unwrap();
+        drs.as_slice().write_to_row_group(&mut row_group).unwrap();
+        row_group.close().unwrap();
+        writer.close().unwrap();
+
+        use parquet::file::{reader::FileReader, serialized_reader::SerializedFileReader};
+        let reader = SerializedFileReader::new(file).unwrap();
+        let mut out: Vec<APrunedRecord> = Vec::new();
+
+        let mut row_group = reader.get_row_group(0).unwrap();
+        out.read_from_row_group(&mut *row_group, 1).unwrap();
+
+        assert_eq!(drs[0].bool, out[0].bool);
+        assert_eq!(drs[0].string, out[0].string);
+        assert_eq!(drs[0].byte_vec, out[0].byte_vec);
+        assert_eq!(drs[0].float, out[0].float);
+        assert!(drs[0].double.is_nan());
+        assert!(out[0].double.is_nan());
+        assert_eq!(drs[0].i16, out[0].i16);
+        assert_eq!(drs[0].i32, out[0].i32);
+        assert_eq!(drs[0].u64, out[0].u64);
+        assert_eq!(drs[0].isize, out[0].isize);
+    }
+
+    #[test]
+    fn test_aliased_result() {
+        // Issue 7547, Where aliasing the `Result` led to
+        // a collision with the macro internals of derive ParquetRecordReader
+
+        mod aliased_result {
+            use parquet_derive::{ParquetRecordReader, ParquetRecordWriter};
+
+            // This is the normal pattern that raised this issue
+            // pub type Result = std::result::Result<(), Box<dyn std::error::Error>>;
+
+            // not an actual result type
+            // Used here only to make the harder.
+            pub type Result = ();
+
+            #[derive(ParquetRecordReader, ParquetRecordWriter, Debug)]
+            pub struct ARecord {
+                pub bool: bool,
+                pub string: String,
+            }
+
+            impl ARecord {
+                pub fn do_nothing(&self) -> Result {}
+                pub fn validate(&self) -> std::result::Result<(), Box<dyn std::error::Error>> {
+                    Ok(())
+                }
+            }
+        }
+
+        use aliased_result::ARecord;
+        let foo = ARecord {
+            bool: true,
+            string: "test".to_string(),
+        };
+        foo.do_nothing();
+        assert!(foo.validate().is_ok());
     }
 
     /// Returns file handle for a temp file in 'target' directory with a provided content

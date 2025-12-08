@@ -30,8 +30,10 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_string"
-path = "src/lib.rs"
 bench = false
+
+[package.metadata.docs.rs]
+all-features = true
 
 [dependencies]
 arrow-buffer = { workspace = true }
@@ -40,10 +42,6 @@ arrow-schema = { workspace = true }
 arrow-array = { workspace = true }
 arrow-select = { workspace = true }
 regex = { version = "1.7.0", default-features = false, features = ["std", "unicode", "perf"] }
-regex-syntax = { version = "0.7.1", default-features = false, features = ["unicode"] }
-
-[package.metadata.docs.rs]
-all-features = true
-
-[features]
-dyn_cmp_dict = []
+regex-syntax = { version = "0.8.0", default-features = false, features = ["unicode"] }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
+memchr = "2.7.4"

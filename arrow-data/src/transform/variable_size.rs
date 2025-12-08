@@ -17,11 +17,11 @@
 
 use crate::ArrayData;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
-use num::traits::AsPrimitive;
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::{AsPrimitive, CheckedAdd};
 
 use super::{
-    Extend, _MutableArrayData,
+    _MutableArrayData, Extend,
     utils::{extend_offsets, get_last_offset},
 };
 
@@ -34,16 +34,14 @@ fn extend_offset_values<T: ArrowNativeType + AsPrimitive<usize>>(
     len: usize,
 ) {
     let start_values = offsets[start].as_();
-    let end_values = offsets[start + len].as_();
+    let end_values: usize = offsets[start + len].as_();
     let new_values = &values[start_values..end_values];
     buffer.extend_from_slice(new_values);
 }
 
-pub(super) fn build_extend<
-    T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>,
->(
+pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd + AsPrimitive<usize>>(
     array: &ArrayData,
-) -> Extend {
+) -> Extend<'_> {
     let offsets = array.buffer::<T>(0);
     let values = array.buffers()[1].as_slice();
     Box::new(
@@ -54,21 +52,14 @@ pub(super) fn build_extend<
             // this is safe due to how offset is built. See details on `get_last_offset`
             let last_offset = unsafe { get_last_offset(offset_buffer) };
 
-            extend_offsets::<T>(
-                offset_buffer,
-                last_offset,
-                &offsets[start..start + len + 1],
-            );
+            extend_offsets::<T>(offset_buffer, last_offset, &offsets[start..start + len + 1]);
             // values
             extend_offset_values::<T>(values_buffer, offsets, values, start, len);
         },
     )
 }
 
-pub(super) fn extend_nulls<T: ArrowNativeType>(
-    mutable: &mut _MutableArrayData,
-    len: usize,
-) {
+pub(super) fn extend_nulls<T: ArrowNativeType>(mutable: &mut _MutableArrayData, len: usize) {
     let offset_buffer = &mut mutable.buffer1;
 
     // this is safe due to how offset is built. See details on `get_last_offset`

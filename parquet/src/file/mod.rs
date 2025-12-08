@@ -15,14 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Main entrypoint for working with Parquet API.
+//! APIs for reading parquet data.
 //!
 //! Provides access to file and row group readers and writers, record API, metadata, etc.
 //!
-//! See [`serialized_reader::SerializedFileReader`](serialized_reader/struct.SerializedFileReader.html) or
-//! [`writer::SerializedFileWriter`](writer/struct.SerializedFileWriter.html) for a
-//! starting reference, [`metadata::ParquetMetaData`](metadata/index.html) for file
-//! metadata, and [`statistics`](statistics/index.html) for working with statistics.
+//! # See Also:
+//! * [`SerializedFileReader`] and [`SerializedFileWriter`] for reading / writing parquet
+//! * [`metadata`]: for working with metadata such as schema
+//! * [`statistics`]: for working with statistics in metadata
+//!
+//! [`SerializedFileReader`]: serialized_reader::SerializedFileReader
+//! [`SerializedFileWriter`]: writer::SerializedFileWriter
 //!
 //! # Example of writing a new file
 //!
@@ -91,12 +94,12 @@
 //!     .flat_map(|r| r.into_iter());
 //!
 //! for row in rows {
-//!     println!("{}", row);
+//!     println!("{}", row.unwrap());
 //! }
 //! ```
-pub mod footer;
+#[cfg(feature = "encryption")]
+pub mod column_crypto_metadata;
 pub mod metadata;
-pub mod page_encoding_stats;
 pub mod page_index;
 pub mod properties;
 pub mod reader;
@@ -107,3 +110,4 @@ pub mod writer;
 /// The length of the parquet footer in bytes
 pub const FOOTER_SIZE: usize = 8;
 const PARQUET_MAGIC: [u8; 4] = [b'P', b'A', b'R', b'1'];
+const PARQUET_MAGIC_ENCR_FOOTER: [u8; 4] = [b'P', b'A', b'R', b'E'];

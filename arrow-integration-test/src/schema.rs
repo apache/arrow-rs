@@ -40,7 +40,7 @@ pub fn schema_from_json(json: &serde_json::Value) -> Result<Schema> {
                 _ => {
                     return Err(ArrowError::ParseError(
                         "Schema fields should be an array".to_string(),
-                    ))
+                    ));
                 }
             };
 
@@ -65,11 +65,9 @@ fn from_metadata(json: &serde_json::Value) -> Result<HashMap<String, String>> {
     match json {
         Value::Array(_) => {
             let mut hashmap = HashMap::new();
-            let values: Vec<MetadataKeyValue> = serde_json::from_value(json.clone())
-                .map_err(|_| {
-                    ArrowError::JsonError(
-                        "Unable to parse object into key-value pair".to_string(),
-                    )
+            let values: Vec<MetadataKeyValue> =
+                serde_json::from_value(json.clone()).map_err(|_| {
+                    ArrowError::JsonError("Unable to parse object into key-value pair".to_string())
                 })?;
             for meta in values {
                 hashmap.insert(meta.key.clone(), meta.value);
@@ -103,18 +101,17 @@ struct MetadataKeyValue {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, Fields, IntervalUnit, TimeUnit};
+    use arrow::datatypes::{DataType, Field, IntervalUnit, TimeUnit};
     use serde_json::Value;
     use std::sync::Arc;
 
     #[test]
     fn schema_json() {
         // Add some custom metadata
-        let metadata: HashMap<String, String> =
-            [("Key".to_string(), "Value".to_string())]
-                .iter()
-                .cloned()
-                .collect();
+        let metadata: HashMap<String, String> = [("Key".to_string(), "Value".to_string())]
+            .iter()
+            .cloned()
+            .collect();
 
         let schema = Schema::new_with_metadata(
             vec![
@@ -140,10 +137,7 @@ mod tests {
                 ),
                 Field::new(
                     "c17",
-                    DataType::Timestamp(
-                        TimeUnit::Microsecond,
-                        Some("Africa/Johannesburg".into()),
-                    ),
+                    DataType::Timestamp(TimeUnit::Microsecond, Some("Africa/Johannesburg".into())),
                     false,
                 ),
                 Field::new(
@@ -156,7 +150,7 @@ mod tests {
                 Field::new("c21", DataType::Interval(IntervalUnit::MonthDayNano), false),
                 Field::new(
                     "c22",
-                    DataType::List(Arc::new(Field::new("item", DataType::Boolean, true))),
+                    DataType::List(Arc::new(Field::new_list_field(DataType::Boolean, true))),
                     false,
                 ),
                 Field::new(
@@ -195,12 +189,10 @@ mod tests {
                 Field::new("c30", DataType::Duration(TimeUnit::Millisecond), false),
                 Field::new("c31", DataType::Duration(TimeUnit::Microsecond), false),
                 Field::new("c32", DataType::Duration(TimeUnit::Nanosecond), false),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "c33",
-                    DataType::Dictionary(
-                        Box::new(DataType::Int32),
-                        Box::new(DataType::Utf8),
-                    ),
+                    DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
                     true,
                     123,
                     true,

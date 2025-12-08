@@ -15,6 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
+
 use arrow_integration_testing::flight_client_scenarios;
 use clap::Parser;
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -62,8 +65,7 @@ async fn main() -> Result {
         }
         None => {
             let path = args.path.expect("No path is given");
-            flight_client_scenarios::integration_test::run_scenario(&host, port, &path)
-                .await?;
+            flight_client_scenarios::integration_test::run_scenario(&host, port, &path).await?;
         }
     }
 

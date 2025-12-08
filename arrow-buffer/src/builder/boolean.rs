@@ -15,10 +15,17 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
+use crate::bit_util::apply_bitwise_binary_op;
+use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_util};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
+///
+/// # See Also
+///
+/// * [`NullBuffer`] for building [`BooleanBuffer`]s for representing nulls
+///
+/// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,
@@ -26,7 +33,11 @@ pub struct BooleanBufferBuilder {
 }
 
 impl BooleanBufferBuilder {
-    /// Creates a new `BooleanBufferBuilder`
+    /// Creates a new `BooleanBufferBuilder` with sufficient space for
+    /// `capacity` bits (not bytes).
+    ///
+    /// The capacity is rounded up to the nearest multiple of 8 for the
+    /// allocation.
     #[inline]
     pub fn new(capacity: usize) -> Self {
         let byte_capacity = bit_util::ceil(capacity, 8);
@@ -73,7 +84,24 @@ impl BooleanBufferBuilder {
         self.len == 0
     }
 
-    /// Returns the capacity of the buffer
+    /// Returns the capacity of the buffer, in bits (not bytes)
+    ///
+    /// Note this
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::builder::BooleanBufferBuilder;
+    /// // empty requires 0 bytes
+    /// let b = BooleanBufferBuilder::new(0);
+    /// assert_eq!(0, b.capacity());
+    /// // Creating space for 1 bit results in 64 bytes (space for 512 bits)
+    /// // (64 is the minimum allocation size for 64 bit architectures)
+    /// let mut b = BooleanBufferBuilder::new(1);
+    /// assert_eq!(512, b.capacity());
+    /// // 1000 bits requires 128 bytes (space for 1024 bits)
+    /// b.append_n(1000, true);
+    /// assert_eq!(1024, b.capacity());
+    /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
         self.buffer.capacity() * 8
@@ -154,14 +182,12 @@ impl BooleanBufferBuilder {
 
                 if cur_remainder != 0 {
                     // Pad last byte with 1s
-                    *self.buffer.as_slice_mut().last_mut().unwrap() |=
-                        !((1 << cur_remainder) - 1)
+                    *self.buffer.as_slice_mut().last_mut().unwrap() |= !((1 << cur_remainder) - 1)
                 }
                 self.buffer.resize(new_len_bytes, 0xFF);
                 if new_remainder != 0 {
                     // Clear remaining bits
-                    *self.buffer.as_slice_mut().last_mut().unwrap() &=
-                        (1 << new_remainder) - 1
+                    *self.buffer.as_slice_mut().last_mut().unwrap() &= (1 << new_remainder) - 1
                 }
                 self.len = new_len;
             }
@@ -193,14 +219,23 @@ impl BooleanBufferBuilder {
     pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
         let offset_write = self.len;
         let len = range.end - range.start;
+        // allocate new bits as 0
         self.advance(len);
-        bit_mask::set_bits(
+        // copy bits from to_set into self.buffer a word at a time
+        apply_bitwise_binary_op(
             self.buffer.as_slice_mut(),
-            to_set,
             offset_write,
+            to_set,
             range.start,
             len,
+            |_a, b| b, // copy bits from to_set
         );
+    }
+
+    /// Append [`BooleanBuffer`] to this [`BooleanBufferBuilder`]
+    pub fn append_buffer(&mut self, buffer: &BooleanBuffer) {
+        let range = buffer.offset()..buffer.offset() + buffer.len();
+        self.append_packed_range(range, buffer.values())
     }
 
     /// Returns the packed bits
@@ -385,7 +420,7 @@ mod tests {
 
         let mut buffer = BooleanBufferBuilder::new(12);
         let mut all_bools = vec![];
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let src_len = 32;
         let (src, compacted_src) = {

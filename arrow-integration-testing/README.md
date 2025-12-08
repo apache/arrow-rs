@@ -48,12 +48,12 @@ ln -s <path_to_arrow_rs> arrow/rust
 
 ```shell
 cd arrow
-pip install -e dev/archery[docker]
+pip install -e dev/archery[integration]
 ```
 
 ### Build the C++ binaries:
 
-Follow the [C++ Direction](https://github.com/apache/arrow/tree/master/docs/source/developers/cpp) and build the integration test binaries with a command like this:
+Follow the [C++ Direction](https://github.com/apache/arrow/tree/main/docs/source/developers/cpp) and build the integration test binaries with a command like this:
 
 ```
 # build cpp binaries

@@ -17,19 +17,57 @@
 
 use std::alloc::Layout;
 use std::fmt::Debug;
-use std::iter::FromIterator;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::alloc::{Allocation, Deallocation, ALIGNMENT};
+use crate::BufferBuilder;
+use crate::alloc::{Allocation, Deallocation};
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::{bytes::Bytes, native::ArrowNativeType};
+use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
+
+#[cfg(feature = "pool")]
+use crate::pool::MemoryPool;
 
 use super::ops::bitwise_unary_op_helper;
-use super::MutableBuffer;
+use super::{MutableBuffer, ScalarBuffer};
 
-/// Buffer represents a contiguous memory region that can be shared with other buffers and across
-/// thread boundaries.
+/// A contiguous memory region that can be shared with other buffers and across
+/// thread boundaries that stores Arrow data.
+///
+/// `Buffer`s can be sliced and cloned without copying the underlying data and can
+/// be created from memory allocated by non-Rust sources such as C/C++.
+///
+/// # Example: Create a `Buffer` from a `Vec` (without copying)
+/// ```
+/// # use arrow_buffer::Buffer;
+/// let vec: Vec<u32> = vec![1, 2, 3];
+/// let buffer = Buffer::from(vec);
+/// ```
+///
+/// # Example: Convert a `Buffer` to a `Vec` (without copying)
+///
+/// Use [`Self::into_vec`] to convert a `Buffer` back into a `Vec` if there are
+/// no other references and the types are aligned correctly.
+/// ```
+/// # use arrow_buffer::Buffer;
+/// # let vec: Vec<u32> = vec![1, 2, 3];
+/// # let buffer = Buffer::from(vec);
+/// // convert the buffer back into a Vec of u32
+/// // note this will fail if the buffer is shared or not aligned correctly
+/// let vec: Vec<u32> = buffer.into_vec().unwrap();
+/// ```
+///
+/// # Example: Create a `Buffer` from a [`bytes::Bytes`] (without copying)
+///
+/// [`bytes::Bytes`] is a common type in the Rust ecosystem for shared memory
+/// regions. You can create a buffer from a `Bytes` instance using the `From`
+/// implementation, also without copying.
+///
+/// ```
+/// # use arrow_buffer::Buffer;
+/// let bytes = bytes::Bytes::from("hello");
+/// let buffer = Buffer::from(bytes);
+///```
 #[derive(Clone, Debug)]
 pub struct Buffer {
     /// the internal byte buffer.
@@ -47,6 +85,13 @@ pub struct Buffer {
     length: usize,
 }
 
+impl Default for Buffer {
+    #[inline]
+    fn default() -> Self {
+        MutableBuffer::default().into()
+    }
+}
+
 impl PartialEq for Buffer {
     fn eq(&self, other: &Self) -> bool {
         self.as_slice().eq(other.as_slice())
@@ -59,22 +104,43 @@ unsafe impl Send for Buffer where Bytes: Send {}
 unsafe impl Sync for Buffer where Bytes: Sync {}
 
 impl Buffer {
-    /// Auxiliary method to create a new Buffer
-    #[inline]
+    /// Create a new Buffer from a (internal) `Bytes`
+    ///
+    /// NOTE despite the same name, `Bytes` is an internal struct in arrow-rs
+    /// and is different than [`bytes::Bytes`].
+    ///
+    /// See examples on [`Buffer`] for ways to create a buffer from a [`bytes::Bytes`].
+    #[deprecated(since = "54.1.0", note = "Use Buffer::from instead")]
     pub fn from_bytes(bytes: Bytes) -> Self {
-        let length = bytes.len();
-        let ptr = bytes.as_ptr();
-        Buffer {
-            data: Arc::new(bytes),
-            ptr,
-            length,
-        }
+        Self::from(bytes)
+    }
+
+    /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
+    ///
+    /// self.ptr and self.data can be different after slicing or advancing the buffer.
+    pub fn ptr_offset(&self) -> usize {
+        // Safety: `ptr` is always in bounds of `data`.
+        unsafe { self.ptr.offset_from(self.data.ptr().as_ptr()) as usize }
+    }
+
+    /// Returns the pointer to the start of the buffer without the offset.
+    pub fn data_ptr(&self) -> NonNull<u8> {
+        self.data.ptr()
+    }
+
+    /// Returns the number of strong references to the buffer.
+    ///
+    /// This method is safe but if the buffer is shared across multiple threads
+    /// the underlying value could change between calling this method and using
+    /// the result.
+    pub fn strong_count(&self) -> usize {
+        Arc::strong_count(&self.data)
     }
 
     /// Create a [`Buffer`] from the provided [`Vec`] without copying
     #[inline]
     pub fn from_vec<T: ArrowNativeType>(vec: Vec<T>) -> Self {
-        MutableBuffer::from_vec(vec).into()
+        MutableBuffer::from(vec).into()
     }
 
     /// Initializes a [Buffer] from a slice of items.
@@ -86,28 +152,11 @@ impl Buffer {
         buffer.into()
     }
 
-    /// Creates a buffer from an existing aligned memory region (must already be byte-aligned), this
-    /// `Buffer` will free this piece of memory when dropped.
+    /// Creates a buffer from an existing memory region.
     ///
-    /// # Arguments
-    ///
-    /// * `ptr` - Pointer to raw parts
-    /// * `len` - Length of raw parts in **bytes**
-    /// * `capacity` - Total allocated memory for the pointer `ptr`, in **bytes**
-    ///
-    /// # Safety
-    ///
-    /// This function is unsafe as there is no guarantee that the given pointer is valid for `len`
-    /// bytes. If the `ptr` and `capacity` come from a `Buffer`, then this is guaranteed.
-    #[deprecated(note = "Use From<Vec<T>>")]
-    pub unsafe fn from_raw_parts(ptr: NonNull<u8>, len: usize, capacity: usize) -> Self {
-        assert!(len <= capacity);
-        let layout = Layout::from_size_align(capacity, ALIGNMENT).unwrap();
-        Buffer::build_with_arguments(ptr, len, Deallocation::Standard(layout))
-    }
-
-    /// Creates a buffer from an existing memory region. Ownership of the memory is tracked via reference counting
-    /// and the memory will be freed using the `drop` method of [crate::alloc::Allocation] when the reference count reaches zero.
+    /// Ownership of the memory is tracked via reference counting
+    /// and the memory will be freed using the `drop` method of
+    /// [crate::alloc::Allocation] when the reference count reaches zero.
     ///
     /// # Arguments
     ///
@@ -123,7 +172,7 @@ impl Buffer {
         len: usize,
         owner: Arc<dyn Allocation>,
     ) -> Self {
-        Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner))
+        unsafe { Buffer::build_with_arguments(ptr, len, Deallocation::Custom(owner, len)) }
     }
 
     /// Auxiliary method to create a new Buffer
@@ -132,7 +181,7 @@ impl Buffer {
         len: usize,
         deallocation: Deallocation,
     ) -> Self {
-        let bytes = Bytes::new(ptr, len, deallocation);
+        let bytes = unsafe { Bytes::new(ptr, len, deallocation) };
         let ptr = bytes.as_ptr();
         Buffer {
             ptr,
@@ -154,7 +203,42 @@ impl Buffer {
         self.data.capacity()
     }
 
-    /// Returns whether the buffer is empty.
+    /// Tries to shrink the capacity of the buffer as much as possible, freeing unused memory.
+    ///
+    /// If the buffer is shared, this is a no-op.
+    ///
+    /// If the memory was allocated with a custom allocator, this is a no-op.
+    ///
+    /// If the capacity is already less than or equal to the desired capacity, this is a no-op.
+    ///
+    /// The memory region will be reallocated using `std::alloc::realloc`.
+    pub fn shrink_to_fit(&mut self) {
+        let offset = self.ptr_offset();
+        let is_empty = self.is_empty();
+        let desired_capacity = if is_empty {
+            0
+        } else {
+            // For realloc to work, we cannot free the elements before the offset
+            offset + self.len()
+        };
+        if desired_capacity < self.capacity() {
+            if let Some(bytes) = Arc::get_mut(&mut self.data) {
+                if bytes.try_realloc(desired_capacity).is_ok() {
+                    // Realloc complete - update our pointer into `bytes`:
+                    self.ptr = if is_empty {
+                        bytes.as_ptr()
+                    } else {
+                        // SAFETY: we kept all elements leading up to the offset
+                        unsafe { bytes.as_ptr().add(offset) }
+                    }
+                } else {
+                    // Failure to reallocate is fine; we just failed to free up memory.
+                }
+            }
+        }
+    }
+
+    /// Returns true if the buffer is empty.
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.length == 0
@@ -165,36 +249,58 @@ impl Buffer {
         unsafe { std::slice::from_raw_parts(self.ptr, self.length) }
     }
 
+    pub(crate) fn deallocation(&self) -> &Deallocation {
+        self.data.deallocation()
+    }
+
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`.
-    /// Doing so allows the same memory region to be shared between buffers.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the
+    /// same memory region to be shared between buffers.
+    ///
     /// # Panics
+    ///
     /// Panics iff `offset` is larger than `len`.
     pub fn slice(&self, offset: usize) -> Self {
+        let mut s = self.clone();
+        s.advance(offset);
+        s
+    }
+
+    /// Increases the offset of this buffer by `offset`
+    ///
+    /// # Panics
+    ///
+    /// Panics iff `offset` is larger than `len`.
+    #[inline]
+    pub fn advance(&mut self, offset: usize) {
         assert!(
             offset <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: offset={} length={}",
+            offset,
+            self.length
         );
+        self.length -= offset;
         // Safety:
         // This cannot overflow as
         // `self.offset + self.length < self.data.len()`
         // `offset < self.length`
-        let ptr = unsafe { self.ptr.add(offset) };
-        Self {
-            data: self.data.clone(),
-            length: self.length - offset,
-            ptr,
-        }
+        self.ptr = unsafe { self.ptr.add(offset) };
     }
 
     /// Returns a new [Buffer] that is a slice of this buffer starting at `offset`,
     /// with `length` bytes.
-    /// Doing so allows the same memory region to be shared between buffers.
+    ///
+    /// This function is `O(1)` and does not copy any data, allowing the same
+    /// memory region to be shared between buffers.
+    ///
     /// # Panics
     /// Panics iff `(offset + length)` is larger than the existing length.
     pub fn slice_with_length(&self, offset: usize, length: usize) -> Self {
         assert!(
             offset.saturating_add(length) <= self.length,
-            "the offset of the new Buffer cannot exceed the existing length"
+            "the offset of the new Buffer cannot exceed the existing length: slice offset={offset} length={length} selflen={}",
+            self.length
         );
         // Safety:
         // offset + length <= self.length
@@ -235,7 +341,7 @@ impl Buffer {
     /// otherwise a new buffer is allocated and filled with a copy of the bits in the range.
     pub fn bit_slice(&self, offset: usize, len: usize) -> Self {
         if offset % 8 == 0 {
-            return self.slice(offset / 8);
+            return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
         bitwise_unary_op_helper(self, offset, len, |a| a)
@@ -244,16 +350,8 @@ impl Buffer {
     /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
     /// in larger chunks and starting at arbitrary bit offsets.
     /// Note that both `offset` and `length` are measured in bits.
-    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks {
+    pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks<'_> {
         BitChunks::new(self.as_slice(), offset, len)
-    }
-
-    /// Returns the number of 1-bits in this buffer.
-    #[deprecated(note = "use count_set_bits_offset instead")]
-    pub fn count_set_bits(&self) -> usize {
-        let len_in_bits = self.len() * 8;
-        // self.offset is already taken into consideration by the bit_chunks implementation
-        self.count_set_bits_offset(0, len_in_bits)
     }
 
     /// Returns the number of 1-bits in this buffer, starting from `offset` with `length` bits
@@ -265,6 +363,25 @@ impl Buffer {
     /// Returns `MutableBuffer` for mutating the buffer if this buffer is not shared.
     /// Returns `Err` if this is shared or its allocation is from an external source or
     /// it is not allocated with alignment [`ALIGNMENT`]
+    ///
+    /// # Example: Creating a [`MutableBuffer`] from a [`Buffer`]
+    /// ```
+    /// # use arrow_buffer::buffer::{Buffer, MutableBuffer};
+    /// let buffer: Buffer = Buffer::from(&[1u8, 2, 3, 4][..]);
+    /// // Only possible to convert a Buffer into a MutableBuffer if uniquely owned
+    /// // (i.e., there are no other references to it).
+    /// let mut mutable_buffer = match buffer.into_mutable() {
+    ///    Ok(mutable) => mutable,
+    ///    Err(orig_buffer) => {
+    ///      panic!("buffer was not uniquely owned");
+    ///    }
+    /// };
+    /// mutable_buffer.push(5u8);
+    /// let buffer = Buffer::from(mutable_buffer);
+    /// assert_eq!(buffer.as_slice(), &[1u8, 2, 3, 4, 5])
+    /// ```
+    ///
+    /// [`ALIGNMENT`]: crate::alloc::ALIGNMENT
     pub fn into_mutable(self) -> Result<MutableBuffer, Self> {
         let ptr = self.ptr;
         let length = self.length;
@@ -281,10 +398,16 @@ impl Buffer {
             })
     }
 
-    /// Returns `Vec` for mutating the buffer
+    /// Converts self into a `Vec`, if possible.
     ///
-    /// Returns `Err(self)` if this buffer does not have the same [`Layout`] as
-    /// the destination Vec or contains a non-zero offset
+    /// This can be used to reuse / mutate the underlying data.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Err(self)` if
+    /// 1. The buffer does not have the same [`Layout`] as the destination Vec
+    /// 2. The buffer contains a non-zero offset
+    /// 3. The buffer is shared
     pub fn into_vec<T: ArrowNativeType>(self) -> Result<Vec<T>, Self> {
         let layout = match self.data.deallocation() {
             Deallocation::Standard(l) => l,
@@ -319,22 +442,88 @@ impl Buffer {
                 length,
             })
     }
-}
 
-/// Creating a `Buffer` instance by copying the memory from a `AsRef<[u8]>` into a newly
-/// allocated memory region.
-impl<T: AsRef<[u8]>> From<T> for Buffer {
-    fn from(p: T) -> Self {
-        // allocate aligned memory buffer
-        let slice = p.as_ref();
-        let len = slice.len();
-        let mut buffer = MutableBuffer::new(len);
-        buffer.extend_from_slice(slice);
-        buffer.into()
+    /// Returns true if this [`Buffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.ptr == other.ptr && self.length == other.length
+    }
+
+    /// Register this [`Buffer`] with the provided [`MemoryPool`]
+    ///
+    /// This claims the memory used by this buffer in the pool, allowing for
+    /// accurate accounting of memory usage. Any prior reservation will be
+    /// released so this works well when the buffer is being shared among
+    /// multiple arrays.
+    #[cfg(feature = "pool")]
+    pub fn claim(&self, pool: &dyn MemoryPool) {
+        self.data.claim(pool)
     }
 }
 
-/// Creating a `Buffer` instance by storing the boolean values into the buffer
+/// Note that here we deliberately do not implement
+/// `impl<T: AsRef<[u8]>> From<T> for Buffer`
+/// As it would accept `Buffer::from(vec![...])` that would cause an unexpected copy.
+/// Instead, we ask user to be explicit when copying is occurring, e.g., `Buffer::from(vec![...].to_byte_slice())`.
+/// For zero-copy conversion, user should use `Buffer::from_vec(vec![...])`.
+///
+/// Since we removed impl for `AsRef<u8>`, we added the following three specific implementations to reduce API breakage.
+/// See <https://github.com/apache/arrow-rs/issues/6033> for more discussion on this.
+impl From<&[u8]> for Buffer {
+    fn from(p: &[u8]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<const N: usize> From<[u8; N]> for Buffer {
+    fn from(p: [u8; N]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<const N: usize> From<&[u8; N]> for Buffer {
+    fn from(p: &[u8; N]) -> Self {
+        Self::from_slice_ref(p)
+    }
+}
+
+impl<T: ArrowNativeType> From<Vec<T>> for Buffer {
+    fn from(value: Vec<T>) -> Self {
+        Self::from_vec(value)
+    }
+}
+
+impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Buffer {
+    fn from(value: ScalarBuffer<T>) -> Self {
+        value.into_inner()
+    }
+}
+
+/// Convert from internal `Bytes` (not [`bytes::Bytes`]) to `Buffer`
+impl From<Bytes> for Buffer {
+    #[inline]
+    fn from(bytes: Bytes) -> Self {
+        let length = bytes.len();
+        let ptr = bytes.as_ptr();
+        Self {
+            data: Arc::new(bytes),
+            ptr,
+            length,
+        }
+    }
+}
+
+/// Convert from [`bytes::Bytes`], not internal `Bytes` to `Buffer`
+impl From<bytes::Bytes> for Buffer {
+    fn from(bytes: bytes::Bytes) -> Self {
+        let bytes: Bytes = bytes.into();
+        Self::from(bytes)
+    }
+}
+
+/// Create a `Buffer` instance by storing the boolean values into the buffer
 impl FromIterator<bool> for Buffer {
     fn from_iter<I>(iter: I) -> Self
     where
@@ -352,6 +541,12 @@ impl std::ops::Deref for Buffer {
     }
 }
 
+impl AsRef<[u8]> for &Buffer {
+    fn as_ref(&self) -> &[u8] {
+        self.as_slice()
+    }
+}
+
 impl From<MutableBuffer> for Buffer {
     #[inline]
     fn from(buffer: MutableBuffer) -> Self {
@@ -359,9 +554,17 @@ impl From<MutableBuffer> for Buffer {
     }
 }
 
+impl<T: ArrowNativeType> From<BufferBuilder<T>> for Buffer {
+    fn from(mut value: BufferBuilder<T>) -> Self {
+        value.finish()
+    }
+}
+
 impl Buffer {
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length.
+    ///
     /// Prefer this to `collect` whenever possible, as it is ~60% faster.
+    ///
     /// # Example
     /// ```
     /// # use arrow_buffer::buffer::Buffer;
@@ -381,7 +584,7 @@ impl Buffer {
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
-        MutableBuffer::from_trusted_len_iter(iterator).into()
+        unsafe { MutableBuffer::from_trusted_len_iter(iterator).into() }
     }
 
     /// Creates a [`Buffer`] from an [`Iterator`] with a trusted (upper) length or errors
@@ -398,31 +601,14 @@ impl Buffer {
     >(
         iterator: I,
     ) -> Result<Self, E> {
-        Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into())
+        unsafe { Ok(MutableBuffer::try_from_trusted_len_iter(iterator)?.into()) }
     }
 }
 
 impl<T: ArrowNativeType> FromIterator<T> for Buffer {
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
-        let mut iterator = iter.into_iter();
-        let size = std::mem::size_of::<T>();
-
-        // first iteration, which will likely reserve sufficient space for the buffer.
-        let mut buffer = match iterator.next() {
-            None => MutableBuffer::new(0),
-            Some(element) => {
-                let (lower, _) = iterator.size_hint();
-                let mut buffer = MutableBuffer::new(lower.saturating_add(1) * size);
-                unsafe {
-                    std::ptr::write(buffer.as_mut_ptr() as *mut T, element);
-                    buffer.set_len(size);
-                }
-                buffer
-            }
-        };
-
-        buffer.extend_from_iter(iterator);
-        buffer.into()
+        let vec = Vec::from_iter(iter);
+        Buffer::from_vec(vec)
     }
 }
 
@@ -511,9 +697,35 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    fn test_shrink_to_fit() {
+        let original = Buffer::from(&[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.as_slice(), &[0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(original.capacity(), 64);
+
+        let slice = original.slice_with_length(2, 3);
+        drop(original); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(slice.as_slice(), &[2, 3, 4]);
+        assert_eq!(slice.capacity(), 64);
+
+        let mut shrunk = slice;
+        shrunk.shrink_to_fit();
+        assert_eq!(shrunk.as_slice(), &[2, 3, 4]);
+        assert_eq!(shrunk.capacity(), 5); // shrink_to_fit is allowed to keep the elements before the offset
+
+        // Test that we can handle empty slices:
+        let empty_slice = shrunk.slice_with_length(1, 0);
+        drop(shrunk); // Make sure the buffer isn't shared (or shrink_to_fit won't work)
+        assert_eq!(empty_slice.as_slice(), &[]);
+        assert_eq!(empty_slice.capacity(), 5);
+
+        let mut shrunk_empty = empty_slice;
+        shrunk_empty.shrink_to_fit();
+        assert_eq!(shrunk_empty.as_slice(), &[]);
+        assert_eq!(shrunk_empty.capacity(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_slice_offset_out_of_bound() {
         let buf = Buffer::from(&[2, 4, 6, 8, 10]);
         buf.slice(6);
@@ -521,7 +733,7 @@ mod tests {
 
     #[test]
     fn test_access_concurrently() {
-        let buffer = Buffer::from(vec![1, 2, 3, 4, 5]);
+        let buffer = Buffer::from([1, 2, 3, 4, 5]);
         let buffer2 = buffer.clone();
         assert_eq!([1, 2, 3, 4, 5], buffer.as_slice());
 
@@ -676,9 +888,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn slice_overflow() {
         let buffer = Buffer::from(MutableBuffer::from_len_zeroed(12));
         buffer.slice_with_length(2, usize::MAX);
@@ -804,5 +1014,72 @@ mod tests {
         let b = Buffer::from(b);
         let b = b.into_vec::<u32>().unwrap();
         assert_eq!(b, &[1, 3, 5]);
+    }
+
+    #[test]
+    #[should_panic(expected = "capacity overflow")]
+    fn test_from_iter_overflow() {
+        let iter_len = usize::MAX / std::mem::size_of::<u64>() + 1;
+        let _ = Buffer::from_iter(std::iter::repeat_n(0_u64, iter_len));
+    }
+
+    #[test]
+    fn bit_slice_length_preserved() {
+        // Create a boring buffer
+        let buf = Buffer::from_iter(std::iter::repeat_n(true, 64));
+
+        let assert_preserved = |offset: usize, len: usize| {
+            let new_buf = buf.bit_slice(offset, len);
+            assert_eq!(new_buf.len(), bit_util::ceil(len, 8));
+
+            // if the offset is not byte-aligned, we have to create a deep copy to a new buffer
+            // (since the `offset` value inside a Buffer is byte-granular, not bit-granular), so
+            // checking the offset should always return 0 if so. If the offset IS byte-aligned, we
+            // want to make sure it doesn't unnecessarily create a deep copy.
+            if offset % 8 == 0 {
+                assert_eq!(new_buf.ptr_offset(), offset / 8);
+            } else {
+                assert_eq!(new_buf.ptr_offset(), 0);
+            }
+        };
+
+        // go through every available value for offset
+        for o in 0..=64 {
+            // and go through every length that could accompany that offset - we can't have a
+            // situation where offset + len > 64, because that would go past the end of the buffer,
+            // so we use the map to ensure it's in range.
+            for l in (o..=64).map(|l| l - o) {
+                // and we just want to make sure every one of these keeps its offset and length
+                // when neeeded
+                assert_preserved(o, l);
+            }
+        }
+    }
+
+    #[test]
+    fn test_strong_count() {
+        let buffer = Buffer::from_iter(std::iter::repeat_n(0_u8, 100));
+        assert_eq!(buffer.strong_count(), 1);
+
+        let buffer2 = buffer.clone();
+        assert_eq!(buffer.strong_count(), 2);
+
+        let buffer3 = buffer2.clone();
+        assert_eq!(buffer.strong_count(), 3);
+
+        drop(buffer);
+        assert_eq!(buffer2.strong_count(), 2);
+        assert_eq!(buffer3.strong_count(), 2);
+
+        // Strong count does not increase on move
+        let capture = move || {
+            assert_eq!(buffer3.strong_count(), 2);
+        };
+
+        capture();
+        assert_eq!(buffer2.strong_count(), 2);
+
+        drop(capture);
+        assert_eq!(buffer2.strong_count(), 1);
     }
 }

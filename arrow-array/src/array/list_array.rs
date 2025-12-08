@@ -18,13 +18,13 @@
 use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
-    ArrowPrimitiveType, FixedSizeListArray,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
+    iterator::GenericListArrayIter, new_empty_array,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use num::Integer;
+use num_integer::Integer;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,28 +37,137 @@ use std::sync::Arc;
 /// [`LargeBinaryArray`]: crate::array::LargeBinaryArray
 /// [`StringArray`]: crate::array::StringArray
 /// [`LargeStringArray`]: crate::array::LargeStringArray
-pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
+pub trait OffsetSizeTrait:
+    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd
+{
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
     /// Prefix for the offset size
     const PREFIX: &'static str;
+    /// The max `usize` offset
+    const MAX_OFFSET: usize;
 }
 
 impl OffsetSizeTrait for i32 {
     const IS_LARGE: bool = false;
     const PREFIX: &'static str = "";
+    const MAX_OFFSET: usize = i32::MAX as usize;
 }
 
 impl OffsetSizeTrait for i64 {
     const IS_LARGE: bool = true;
     const PREFIX: &'static str = "Large";
+    const MAX_OFFSET: usize = i64::MAX as usize;
 }
 
-/// An array of [variable length arrays](https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout)
+/// An array of [variable length lists], similar to JSON arrays
+/// (e.g. `["A", "B", "C"]`). This struct specifically represents
+/// the [list layout]. Refer to [`GenericListViewArray`] for the
+/// [list-view layout].
 ///
-/// See [`ListArray`] and [`LargeListArray`]`
+/// Lists are represented using `offsets` into a `values` child
+/// array. Offsets are stored in two adjacent entries of an
+/// [`OffsetBuffer`].
 ///
-/// See [`GenericListBuilder`](crate::builder::GenericListBuilder) for how to construct a [`GenericListArray`]
+/// Arrow defines [`ListArray`] with `i32` offsets and
+/// [`LargeListArray`] with `i64` offsets.
+///
+/// Use [`GenericListBuilder`] to construct a [`GenericListArray`].
+///
+/// # Representation
+///
+/// A [`ListArray`] can represent a list of values of any other
+/// supported Arrow type. Each element of the `ListArray` itself is
+/// a list which may be empty, may contain NULL and non-null values,
+/// or may itself be NULL.
+///
+/// For example, the `ListArray` shown in the following diagram stores
+/// lists of strings. Note that `[]` represents an empty (length
+/// 0), but non NULL list.
+///
+/// ```text
+/// ┌─────────────┐
+/// │   [A,B,C]   │
+/// ├─────────────┤
+/// │     []      │
+/// ├─────────────┤
+/// │    NULL     │
+/// ├─────────────┤
+/// │     [D]     │
+/// ├─────────────┤
+/// │  [NULL, F]  │
+/// └─────────────┘
+/// ```
+///
+/// The `values` are stored in a child [`StringArray`] and the offsets
+/// are stored in an [`OffsetBuffer`] as shown in the following
+/// diagram. The logical values and offsets are shown on the left, and
+/// the actual `ListArray` encoding on the right.
+///
+/// ```text
+///                                         ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                                 ┌ ─ ─ ─ ─ ─ ─ ┐    │
+///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐       ┌───┐ ┌───┐
+///  │   [A,B,C]   │  │ (0,3) │                   │ 1 │   │ 0 │     │ │ 1 │ │ A │ │ 0  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │ [] (empty)  │  │ (3,3) │                   │ 1 │   │ 3 │     │ │ 1 │ │ B │ │ 1  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │    NULL     │  │ (3,3) │                   │ 0 │   │ 3 │     │ │ 1 │ │ C │ │ 2  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │     [D]     │  │ (3,4) │                   │ 1 │   │ 3 │     │ │ 1 │ │ D │ │ 3  │
+///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
+///  │  [NULL, F]  │  │ (4,6) │                   │ 1 │   │ 4 │     │ │ 0 │ │ ? │ │ 4  │
+///  └─────────────┘  └───────┘             │     └───┘   ├───┤       ├───┤ ├───┤
+///                                                       │ 6 │     │ │ 1 │ │ F │ │ 5  │
+///                                         │  Validity   └───┘       └───┘ └───┘
+///     Logical       Logical                  (nulls)   Offsets    │    Values   │    │
+///      Values       Offsets               │                           (Array)
+///                                                                 └ ─ ─ ─ ─ ─ ─ ┘    │
+///                 (offsets[i],            │   ListArray
+///                offsets[i+1])                                                       │
+///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
+///
+/// # Slicing
+///
+/// Slicing a `ListArray` creates a new `ListArray` without copying any data,
+/// but this means the [`Self::values`] and [`Self::offsets`] may have "unused" data
+///
+/// For example, calling `slice(1, 3)` on the `ListArray` in the above example
+/// would result in the following. Note
+///
+/// 1. `Values` array is unchanged
+/// 2. `Offsets` do not start at `0`, nor cover all values in the Values array.
+///
+/// ```text
+///                                 ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+///                                                         ┌ ─ ─ ─ ─ ─ ─ ┐    │  ╔═══╗
+///                                 │                         ╔═══╗ ╔═══╗         ║   ║  Not used
+///                                                         │ ║ 1 ║ ║ A ║ │ 0  │  ╚═══╝
+///  ┌─────────────┐  ┌───────┐     │     ┌───┐   ┌───┐       ╠═══╣ ╠═══╣
+///  │ [] (empty)  │  │ (3,3) │           │ 1 │   │ 3 │     │ ║ 1 ║ ║ B ║ │ 1  │
+///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╠═══╣ ╠═══╣
+///  │    NULL     │  │ (3,3) │           │ 0 │   │ 3 │     │ ║ 1 ║ ║ C ║ │ 2  │
+///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╚═══╝ ╚═══╝
+///  │     [D]     │  │ (3,4) │           │ 1 │   │ 3 │     │ │ 1 │ │ D │ │ 3  │
+///  └─────────────┘  └───────┘     │     └───┘   ├───┤       ╔═══╗ ╔═══╗
+///                                               │ 4 │     │ ║ 0 ║ ║ ? ║ │ 4  │
+///                                 │             └───┘       ╠═══╣ ╠═══╣
+///                                                         │ ║ 1 ║ ║ F ║ │ 5  │
+///                                 │  Validity               ╚═══╝ ╚═══╝
+///     Logical       Logical          (nulls)   Offsets    │    Values   │    │
+///      Values       Offsets       │                           (Array)
+///                                                         └ ─ ─ ─ ─ ─ ─ ┘    │
+///                 (offsets[i],    │   ListArray
+///                offsets[i+1])                                               │
+///                                 └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
+/// ```
+///
+/// [`StringArray`]: crate::array::StringArray
+/// [`GenericListViewArray`]: crate::array::GenericListViewArray
+/// [variable length lists]: https://arrow.apache.org/docs/format/Columnar.html#variable-size-list-layout
+/// [list layout]: https://arrow.apache.org/docs/format/Columnar.html#list-layout
+/// [list-view layout]: https://arrow.apache.org/docs/format/Columnar.html#listview-layout
 pub struct GenericListArray<OffsetSize: OffsetSizeTrait> {
     data_type: DataType,
     nulls: Option<NullBuffer>,
@@ -95,7 +204,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     ///
     /// * `offsets.len() - 1 != nulls.len()`
     /// * `offsets.last() > values.len()`
-    /// * `!field.is_nullable() && values.null_count() != 0`
+    /// * `!field.is_nullable() && values.is_nullable()`
     /// * `field.data_type() != values.data_type()`
     pub fn try_new(
         field: FieldRef,
@@ -123,7 +232,7 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
                 )));
             }
         }
-        if !field.is_nullable() && values.null_count() != 0 {
+        if !field.is_nullable() && values.is_nullable() {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "Non-nullable field of {}ListArray {:?} cannot contain nulls",
                 OffsetSize::PREFIX,
@@ -193,13 +302,22 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     /// Returns a reference to the offsets of this list
     ///
     /// Unlike [`Self::value_offsets`] this returns the [`OffsetBuffer`]
-    /// allowing for zero-copy cloning
+    /// allowing for zero-copy cloning.
+    ///
+    /// Notes: The `offsets` may not start at 0 and may not cover all values in
+    /// [`Self::values`]. This can happen when the list array was sliced via
+    /// [`Self::slice`]. See documentation for [`Self`] for more details.
     #[inline]
     pub fn offsets(&self) -> &OffsetBuffer<OffsetSize> {
         &self.value_offsets
     }
 
     /// Returns a reference to the values of this list
+    ///
+    /// Note: The list array may not refer to all values in the `values` array.
+    /// For example if the list array was sliced via [`Self::slice`] values will
+    /// still contain values both before and after the slice. See documentation
+    /// for [`Self`] for more details.
     #[inline]
     pub fn values(&self) -> &ArrayRef {
         &self.values
@@ -211,22 +329,34 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
-        let end = self.value_offsets().get_unchecked(i + 1).as_usize();
-        let start = self.value_offsets().get_unchecked(i).as_usize();
+        let end = unsafe { self.value_offsets().get_unchecked(i + 1).as_usize() };
+        let start = unsafe { self.value_offsets().get_unchecked(i).as_usize() };
         self.values.slice(start, end - start)
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
         let end = self.value_offsets()[i + 1].as_usize();
         let start = self.value_offsets()[i].as_usize();
         self.values.slice(start, end - start)
     }
 
-    /// Returns the offset values in the offsets buffer
+    /// Returns the offset values in the offsets buffer.
+    ///
+    /// See [`Self::offsets`] for more details.
     #[inline]
     pub fn value_offsets(&self) -> &[OffsetSize] {
         &self.value_offsets
@@ -255,6 +385,10 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// Notes: this method does *NOT* slice the underlying values array or modify
+    /// the values in the offsets buffer. See [`Self::values`] and
+    /// [`Self::offsets`] for more information.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -307,9 +441,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
 
 impl<OffsetSize: OffsetSizeTrait> From<ArrayData> for GenericListArray<OffsetSize> {
     fn from(data: ArrayData) -> Self {
-        Self::try_new_from_array_data(data).expect(
-            "Expected infallible creation of GenericListArray from ArrayDataRef failed",
-        )
+        Self::try_new_from_array_data(data)
+            .expect("Expected infallible creation of GenericListArray from ArrayDataRef failed")
     }
 }
 
@@ -326,17 +459,14 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>> for ArrayDa
     }
 }
 
-impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray>
-    for GenericListArray<OffsetSize>
-{
+impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListArray<OffsetSize> {
     fn from(value: FixedSizeListArray) -> Self {
         let (field, size) = match value.data_type() {
             DataType::FixedSizeList(f, size) => (f, *size as usize),
             _ => unreachable!(),
         };
 
-        let offsets =
-            OffsetBuffer::from_lengths(std::iter::repeat(size).take(value.len()));
+        let offsets = OffsetBuffer::from_repeated_length(size, value.len());
 
         Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field.clone()),
@@ -350,9 +480,10 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray>
 impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
         if data.buffers().len() != 1 {
-            return Err(ArrowError::InvalidArgumentError(
-                format!("ListArray data should contain a single buffer only (value offsets), had {}",
-                        data.buffers().len())));
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "ListArray data should contain a single buffer only (value offsets), had {}",
+                data.buffers().len()
+            )));
         }
 
         if data.child_data().len() != 1 {
@@ -423,12 +554,25 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
         self.value_offsets.len() <= 1
     }
 
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.values.shrink_to_fit();
+        self.value_offsets.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         0
     }
 
     fn nulls(&self) -> Option<&NullBuffer> {
         self.nulls.as_ref()
+    }
+
+    fn logical_null_count(&self) -> usize {
+        // More efficient that the default implementation
+        self.null_count()
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -450,7 +594,7 @@ impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     }
 }
 
-impl<'a, OffsetSize: OffsetSizeTrait> ArrayAccessor for &'a GenericListArray<OffsetSize> {
+impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListArray<OffsetSize> {
     type Item = ArrayRef;
 
     fn value(&self, index: usize) -> Self::Item {
@@ -476,29 +620,29 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListArray<OffsetSiz
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i32`.
 ///
-// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
+/// See [`ListBuilder`](crate::builder::ListBuilder) for how to construct a [`ListArray`]
 pub type ListArray = GenericListArray<i32>;
 
 /// A [`GenericListArray`] of variable size lists, storing offsets as `i64`.
 ///
-// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
+/// See [`LargeListBuilder`](crate::builder::LargeListBuilder) for how to construct a [`LargeListArray`]
 pub type LargeListArray = GenericListArray<i64>;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListBuilder};
+    use crate::builder::{FixedSizeListBuilder, Int32Builder, ListBuilder, UnionBuilder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, Int64Array};
-    use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
+    use arrow_buffer::{Buffer, ScalarBuffer, bit_util};
     use arrow_schema::Field;
 
     fn create_from_buffers() -> ListArray {
         //  [[0, 1, 2], [3, 4, 5], [6, 7]]
         let values = Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7]);
         let offsets = OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 6, 8]));
-        let field = Arc::new(Field::new("item", DataType::Int32, true));
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
         ListArray::new(field, offsets, Arc::new(values), None)
     }
 
@@ -529,7 +673,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(0)
             .add_buffer(value_offsets)
@@ -556,7 +700,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -572,21 +716,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_length(2));
-        assert_eq!(
-            0,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         for i in 0..3 {
@@ -612,21 +746,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[1]);
         assert_eq!(2, list_array.value_length(1));
-        assert_eq!(
-            3,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             3,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
     }
@@ -645,8 +769,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8]);
 
         // Construct a list array from the above two
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type = DataType::new_large_list(DataType::Int32, false);
         let list_data = ArrayData::builder(list_data_type.clone())
             .len(3)
             .add_buffer(value_offsets.clone())
@@ -662,21 +785,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[2]);
         assert_eq!(2, list_array.value_length(2));
-        assert_eq!(
-            0,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(0, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             0,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
         for i in 0..3 {
@@ -702,21 +815,11 @@ mod tests {
         assert_eq!(0, list_array.null_count());
         assert_eq!(6, list_array.value_offsets()[1]);
         assert_eq!(2, list_array.value_length(1));
-        assert_eq!(
-            3,
-            list_array
-                .value(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .value(0)
-        );
+        assert_eq!(3, list_array.value(0).as_primitive::<Int32Type>().value(0));
         assert_eq!(
             3,
             unsafe { list_array.value_unchecked(0) }
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
+                .as_primitive::<Int32Type>()
                 .value(0)
         );
     }
@@ -743,7 +846,7 @@ mod tests {
 
         // Construct a list array from the above two
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -774,8 +877,7 @@ mod tests {
         }
 
         // Check offset and length for each non-null value.
-        let sliced_list_array =
-            sliced_array.as_any().downcast_ref::<ListArray>().unwrap();
+        let sliced_list_array = sliced_array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(2, sliced_list_array.value_offsets()[2]);
         assert_eq!(2, sliced_list_array.value_length(2));
         assert_eq!(4, sliced_list_array.value_offsets()[3]);
@@ -805,8 +907,7 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 8);
 
         // Construct a list array from the above two
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type = DataType::new_large_list(DataType::Int32, false);
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -871,8 +972,7 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 8);
 
         // Construct a list array from the above two
-        let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+        let list_data_type = DataType::new_large_list(DataType::Int32, false);
         let list_data = ArrayData::builder(list_data_type)
             .len(9)
             .add_buffer(value_offsets)
@@ -886,9 +986,7 @@ mod tests {
         list_array.value(10);
     }
     #[test]
-    #[should_panic(
-        expected = "ListArray data should contain a single buffer only (value offsets)"
-    )]
+    #[should_panic(expected = "ListArray data should contain a single buffer only (value offsets)")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
@@ -900,7 +998,7 @@ mod tests {
                 .build_unchecked()
         };
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -911,16 +1009,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "ListArray should contain a single child array (values array)"
-    )]
+    #[should_panic(expected = "ListArray should contain a single child array (values array)")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
     fn test_list_array_invalid_child_array_len() {
         let value_offsets = Buffer::from_slice_ref([0, 2, 5, 7]);
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .len(3)
@@ -931,9 +1027,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "[Large]ListArray's datatype must be [Large]ListArray(). It is List"
-    )]
+    #[should_panic(expected = "[Large]ListArray's datatype must be [Large]ListArray(). It is List")]
     fn test_from_array_data_validation() {
         let mut builder = ListBuilder::new(Int32Builder::new());
         builder.values().append_value(1);
@@ -953,7 +1047,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([2, 2, 5, 7]);
 
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_buffer(value_offsets)
@@ -968,19 +1062,23 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
+    // Different error messages, so skip for now
+    // https://github.com/apache/arrow-rs/issues/1545
+    #[cfg(not(feature = "force_validate"))]
     fn test_primitive_array_alignment() {
         let buf = Buffer::from_slice_ref([0_u64]);
         let buf2 = buf.slice(1);
-        let array_data = ArrayData::builder(DataType::Int32)
-            .add_buffer(buf2)
-            .build()
-            .unwrap();
+        let array_data = unsafe {
+            ArrayData::builder(DataType::Int32)
+                .add_buffer(buf2)
+                .build_unchecked()
+        };
         drop(Int32Array::from(array_data));
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
     // Different error messages, so skip for now
     // https://github.com/apache/arrow-rs/issues/1545
     #[cfg(not(feature = "force_validate"))]
@@ -996,7 +1094,7 @@ mod tests {
         };
 
         let list_data_type =
-            DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = unsafe {
             ArrayData::builder(list_data_type)
                 .add_buffer(buf2)
@@ -1114,9 +1212,8 @@ mod tests {
 
         let nulls = NullBuffer::new_null(3);
         let offsets = OffsetBuffer::new(vec![0, 1, 2, 4, 5].into());
-        let err =
-            LargeListArray::try_new(field, offsets.clone(), values.clone(), Some(nulls))
-                .unwrap_err();
+        let err = LargeListArray::try_new(field, offsets.clone(), values.clone(), Some(nulls))
+            .unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -1124,9 +1221,8 @@ mod tests {
         );
 
         let field = Arc::new(Field::new("element", DataType::Int64, false));
-        let err =
-            LargeListArray::try_new(field.clone(), offsets.clone(), values.clone(), None)
-                .unwrap_err();
+        let err = LargeListArray::try_new(field.clone(), offsets.clone(), values.clone(), None)
+            .unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -1137,8 +1233,8 @@ mod tests {
         let values = Int64Array::new(vec![0; 7].into(), Some(nulls));
         let values = Arc::new(values);
 
-        let err = LargeListArray::try_new(field, offsets.clone(), values.clone(), None)
-            .unwrap_err();
+        let err =
+            LargeListArray::try_new(field, offsets.clone(), values.clone(), None).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -1149,8 +1245,7 @@ mod tests {
         LargeListArray::new(field.clone(), offsets.clone(), values, None);
 
         let values = Int64Array::new(vec![0; 2].into(), None);
-        let err =
-            LargeListArray::try_new(field, offsets, Arc::new(values), None).unwrap_err();
+        let err = LargeListArray::try_new(field, offsets, Arc::new(values), None).unwrap_err();
 
         assert_eq!(
             err.to_string(),
@@ -1174,5 +1269,26 @@ mod tests {
             .map(|x| x.map(|x| x.as_primitive::<Int32Type>().values().to_vec()))
             .collect();
         assert_eq!(values, vec![Some(vec![1, 2, 3]), None, Some(vec![4, 5, 6])])
+    }
+
+    #[test]
+    fn test_nullable_union() {
+        let offsets = OffsetBuffer::new(vec![0, 1, 4, 5].into());
+        let mut builder = UnionBuilder::new_dense();
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Int32Type>("b", 2).unwrap();
+        builder.append::<Int32Type>("b", 3).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+        builder.append::<Int32Type>("a", 5).unwrap();
+        let values = builder.build().unwrap();
+        let field = Arc::new(Field::new("element", values.data_type().clone(), false));
+        ListArray::new(field.clone(), offsets, Arc::new(values), None);
+    }
+
+    #[test]
+    fn test_list_new_null_len() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let array = ListArray::new_null(field, 5);
+        assert_eq!(array.len(), 5);
     }
 }

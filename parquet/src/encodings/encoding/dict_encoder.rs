@@ -18,21 +18,23 @@
 // ----------------------------------------------------------------------
 // Dictionary encoding
 
+use bytes::Bytes;
+
 use crate::basic::{Encoding, Type};
-use crate::data_type::private::ParquetValueType;
 use crate::data_type::DataType;
+use crate::data_type::private::ParquetValueType;
 use crate::encodings::encoding::{Encoder, PlainEncoder};
 use crate::encodings::rle::RleEncoder;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
 use crate::util::bit_util::num_required_bits;
 use crate::util::interner::{Interner, Storage};
-use crate::util::memory::ByteBufferPtr;
 
 #[derive(Debug)]
 struct KeyStorage<T: DataType> {
     uniques: Vec<T::T>,
 
+    /// size of unique values (keys) in the dictionary, in bytes.
     size_in_bytes: usize,
 
     type_length: usize,
@@ -59,6 +61,10 @@ impl<T: DataType> Storage for KeyStorage<T> {
         let key = self.uniques.len() as u64;
         self.uniques.push(value.clone());
         key
+    }
+
+    fn estimated_memory_size(&self) -> usize {
+        self.size_in_bytes + self.uniques.capacity() * std::mem::size_of::<T::T>()
     }
 }
 
@@ -112,7 +118,7 @@ impl<T: DataType> DictEncoder<T> {
 
     /// Writes out the dictionary values with PLAIN encoding in a byte buffer, and return
     /// the result.
-    pub fn write_dict(&self) -> Result<ByteBufferPtr> {
+    pub fn write_dict(&self) -> Result<Bytes> {
         let mut plain_encoder = PlainEncoder::<T>::new();
         plain_encoder.put(&self.interner.storage().uniques)?;
         plain_encoder.flush_buffer()
@@ -120,7 +126,7 @@ impl<T: DataType> DictEncoder<T> {
 
     /// Writes out the dictionary values with RLE encoding in a byte buffer, and return
     /// the result.
-    pub fn write_indices(&mut self) -> Result<ByteBufferPtr> {
+    pub fn write_indices(&mut self) -> Result<Bytes> {
         let buffer_len = self.estimated_data_encoded_size();
         let mut buffer = Vec::with_capacity(buffer_len);
         buffer.push(self.bit_width());
@@ -131,7 +137,7 @@ impl<T: DataType> DictEncoder<T> {
             encoder.put(*index)
         }
         self.indices.clear();
-        Ok(ByteBufferPtr::new(encoder.consume()))
+        Ok(encoder.consume().into())
     }
 
     fn put_one(&mut self, value: &T::T) {
@@ -160,12 +166,23 @@ impl<T: DataType> Encoder<T> for DictEncoder<T> {
         Encoding::PLAIN_DICTIONARY
     }
 
+    /// Returns an estimate of the data page size in bytes
+    ///
+    /// This includes:
+    /// <already_written_encoded_byte_size> + <estimated_encoded_size_of_unflushed_bytes>
     fn estimated_data_encoded_size(&self) -> usize {
         let bit_width = self.bit_width();
         RleEncoder::max_buffer_size(bit_width, self.indices.len())
     }
 
-    fn flush_buffer(&mut self) -> Result<ByteBufferPtr> {
+    fn flush_buffer(&mut self) -> Result<Bytes> {
         self.write_indices()
+    }
+
+    /// Returns the estimated total memory usage
+    ///
+    /// For this encoder, the indices are unencoded bytes (refer to [`Self::write_indices`]).
+    fn estimated_memory_size(&self) -> usize {
+        self.interner.storage().size_in_bytes + self.indices.len() * std::mem::size_of::<usize>()
     }
 }

@@ -17,6 +17,7 @@
 
 use arrow_array::{Array, ArrayRef};
 use arrow_schema::DataType as ArrowType;
+use bytes::Bytes;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -24,10 +25,9 @@ use crate::arrow::array_reader::ArrayReader;
 use crate::basic::{ConvertedType, Encoding, Type as PhysicalType};
 use crate::column::page::{PageIterator, PageReader};
 use crate::data_type::{ByteArray, ByteArrayType};
-use crate::encodings::encoding::{get_encoder, DictEncoder, Encoder};
+use crate::encodings::encoding::{DictEncoder, Encoder, get_encoder};
 use crate::errors::Result;
 use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type};
-use crate::util::memory::ByteBufferPtr;
 
 /// Returns a descriptor for a UTF-8 column
 pub fn utf8_column() -> ColumnDescPtr {
@@ -45,15 +45,16 @@ pub fn utf8_column() -> ColumnDescPtr {
 }
 
 /// Encode `data` with the provided `encoding`
-pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> ByteBufferPtr {
-    let mut encoder = get_encoder::<ByteArrayType>(encoding).unwrap();
+pub fn encode_byte_array(encoding: Encoding, data: &[ByteArray]) -> Bytes {
+    let desc = utf8_column();
+    let mut encoder = get_encoder::<ByteArrayType>(encoding, &desc).unwrap();
 
     encoder.put(data).unwrap();
     encoder.flush_buffer().unwrap()
 }
 
 /// Returns the encoded dictionary and value data
-pub fn encode_dictionary(data: &[ByteArray]) -> (ByteBufferPtr, ByteBufferPtr) {
+pub fn encode_dictionary(data: &[ByteArray]) -> (Bytes, Bytes) {
     let mut dict_encoder = DictEncoder::<ByteArrayType>::new(utf8_column());
 
     dict_encoder.put(data).unwrap();
@@ -68,7 +69,7 @@ pub fn encode_dictionary(data: &[ByteArray]) -> (ByteBufferPtr, ByteBufferPtr) {
 /// Returns an array of data with its associated encoding, along with an encoded dictionary
 pub fn byte_array_all_encodings(
     data: Vec<impl Into<ByteArray>>,
-) -> (Vec<(Encoding, ByteBufferPtr)>, ByteBufferPtr) {
+) -> (Vec<(Encoding, Bytes)>, Bytes) {
     let data: Vec<_> = data.into_iter().map(Into::into).collect();
     let (encoded_dictionary, encoded_rle) = encode_dictionary(&data);
 
@@ -108,15 +109,19 @@ impl InMemoryArrayReader {
         def_levels: Option<Vec<i16>>,
         rep_levels: Option<Vec<i16>>,
     ) -> Self {
-        assert!(def_levels
-            .as_ref()
-            .map(|d| d.len() == array.len())
-            .unwrap_or(true));
+        assert!(
+            def_levels
+                .as_ref()
+                .map(|d| d.len() == array.len())
+                .unwrap_or(true)
+        );
 
-        assert!(rep_levels
-            .as_ref()
-            .map(|r| r.len() == array.len())
-            .unwrap_or(true));
+        assert!(
+            rep_levels
+                .as_ref()
+                .map(|r| r.len() == array.len())
+                .unwrap_or(true)
+        );
 
         Self {
             data_type,

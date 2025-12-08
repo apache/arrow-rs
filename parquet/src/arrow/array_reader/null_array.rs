@@ -15,15 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
-use crate::arrow::record_reader::buffer::ScalarValue;
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::record_reader::RecordReader;
 use crate::column::page::PageIterator;
 use crate::data_type::DataType;
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::ArrayRef;
-use arrow_buffer::Buffer;
+use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
@@ -33,19 +32,19 @@ use std::sync::Arc;
 pub struct NullArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: ArrowNativeType,
 {
     data_type: ArrowType,
     pages: Box<dyn PageIterator>,
-    def_levels_buffer: Option<Buffer>,
-    rep_levels_buffer: Option<Buffer>,
+    def_levels_buffer: Option<Vec<i16>>,
+    rep_levels_buffer: Option<Vec<i16>>,
     record_reader: RecordReader<T>,
 }
 
 impl<T> NullArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: ArrowNativeType,
 {
     /// Construct null array reader.
     pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
@@ -65,7 +64,7 @@ where
 impl<T> ArrayReader for NullArrayReader<T>
 where
     T: DataType,
-    T::T: ScalarValue,
+    T::T: ArrowNativeType,
 {
     fn as_any(&self) -> &dyn Any {
         self
@@ -100,10 +99,10 @@ where
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        self.def_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.def_levels_buffer.as_deref()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        self.rep_levels_buffer.as_ref().map(|buf| buf.typed_data())
+        self.rep_levels_buffer.as_deref()
     }
 }

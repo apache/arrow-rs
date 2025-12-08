@@ -17,6 +17,7 @@
 
 //! Contains the `NullArray` type.
 
+use crate::builder::NullBuilder;
 use crate::{Array, ArrayRef};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -35,8 +36,11 @@ use std::sync::Arc;
 ///
 /// let array = NullArray::new(10);
 ///
+/// assert!(array.is_nullable());
 /// assert_eq!(array.len(), 10);
-/// assert_eq!(array.null_count(), 10);
+/// assert_eq!(array.null_count(), 0);
+/// assert_eq!(array.logical_null_count(), 10);
+/// assert_eq!(array.logical_nulls().unwrap().null_count(), 10);
 /// ```
 #[derive(Clone)]
 pub struct NullArray {
@@ -61,6 +65,14 @@ impl NullArray {
         );
 
         Self { len }
+    }
+
+    /// Returns a new null array builder
+    ///
+    /// Note that the `capacity` parameter to this function is _deprecated_. It
+    /// now does nothing, and will be removed in a future version.
+    pub fn builder(_capacity: usize) -> NullBuilder {
+        NullBuilder::new()
     }
 }
 
@@ -101,22 +113,16 @@ impl Array for NullArray {
         None
     }
 
-    /// Returns whether the element at `index` is null.
-    /// All elements of a `NullArray` are always null.
-    fn is_null(&self, _index: usize) -> bool {
-        true
+    fn logical_nulls(&self) -> Option<NullBuffer> {
+        (self.len != 0).then(|| NullBuffer::new_null(self.len))
     }
 
-    /// Returns whether the element at `index` is valid.
-    /// All elements of a `NullArray` are always invalid.
-    fn is_valid(&self, _index: usize) -> bool {
-        false
+    fn is_nullable(&self) -> bool {
+        !self.is_empty()
     }
 
-    /// Returns the total number of null values in this array.
-    /// The null count of a `NullArray` always equals its length.
-    fn null_count(&self) -> usize {
-        self.len()
+    fn logical_null_count(&self) -> usize {
+        self.len
     }
 
     fn get_buffer_memory_size(&self) -> usize {
@@ -164,14 +170,20 @@ impl std::fmt::Debug for NullArray {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Int64Array, StructArray, make_array};
+    use arrow_data::transform::MutableArrayData;
+    use arrow_schema::Field;
 
     #[test]
     fn test_null_array() {
         let null_arr = NullArray::new(32);
 
         assert_eq!(null_arr.len(), 32);
-        assert_eq!(null_arr.null_count(), 32);
-        assert!(!null_arr.is_valid(0));
+        assert_eq!(null_arr.null_count(), 0);
+        assert_eq!(null_arr.logical_null_count(), 32);
+        assert_eq!(null_arr.logical_nulls().unwrap().null_count(), 32);
+        assert!(null_arr.is_valid(0));
+        assert!(null_arr.is_nullable());
     }
 
     #[test]
@@ -180,12 +192,44 @@ mod tests {
 
         let array2 = array1.slice(8, 16);
         assert_eq!(array2.len(), 16);
-        assert_eq!(array2.null_count(), 16);
+        assert_eq!(array2.null_count(), 0);
+        assert_eq!(array2.logical_null_count(), 16);
+        assert_eq!(array2.logical_nulls().unwrap().null_count(), 16);
+        assert!(array2.is_valid(0));
+        assert!(array2.is_nullable());
     }
 
     #[test]
     fn test_debug_null_array() {
         let array = NullArray::new(1024 * 1024);
         assert_eq!(format!("{array:?}"), "NullArray(1048576)");
+    }
+
+    #[test]
+    fn test_null_array_with_parent_null_buffer() {
+        let null_array = NullArray::new(1);
+        let int_array = Int64Array::from(vec![42]);
+
+        let fields = vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new("b", DataType::Null, true),
+        ];
+
+        let struct_array_data = ArrayData::builder(DataType::Struct(fields.into()))
+            .len(1)
+            .add_child_data(int_array.to_data())
+            .add_child_data(null_array.to_data())
+            .build()
+            .unwrap();
+
+        let mut mutable = MutableArrayData::new(vec![&struct_array_data], true, 1);
+
+        // Simulate a NULL value in the parent array, for instance, if array being queried by
+        // invalid index
+        mutable.extend_nulls(1);
+        let data = mutable.freeze();
+
+        let struct_array = Arc::new(StructArray::from(data.clone()));
+        assert!(make_array(data) == struct_array);
     }
 }

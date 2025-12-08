@@ -17,6 +17,20 @@
 
 //! Parquet schema definitions and methods to print and parse schema.
 //!
+//! * [`SchemaDescriptor`] describes the data types of the columns stored in a file
+//! * [`ColumnDescriptor`]: Describes the schema of a single (leaf) column.
+//! * [`ColumnPath`]: Represents the location of a column in the schema (e.g. a nested field)
+//!
+//! Parquet distinguishes
+//! between "logical" and "physical" data types.
+//! For instance, strings (logical type) are stored as byte arrays (physical type).
+//! Likewise, temporal types like dates, times, timestamps, etc. (logical type)
+//! are stored as integers (physical type).
+//!
+//! [`SchemaDescriptor`]: types::SchemaDescriptor
+//! [`ColumnDescriptor`]: types::ColumnDescriptor
+//! [`ColumnPath`]: types::ColumnPath
+//!
 //! # Example
 //!
 //! ```rust
@@ -45,7 +59,7 @@
 //!     .unwrap();
 //!
 //! let schema = Type::group_type_builder("schema")
-//!     .with_fields(&mut vec![Arc::new(field_a), Arc::new(field_b)])
+//!     .with_fields(vec![Arc::new(field_a), Arc::new(field_b)])
 //!     .build()
 //!     .unwrap();
 //!

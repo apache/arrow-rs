@@ -15,11 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::types::*;
-use crate::{ArrayRef, ArrowPrimitiveType, PrimitiveArray};
-use arrow_buffer::NullBufferBuilder;
-use arrow_buffer::{Buffer, MutableBuffer};
+use crate::{Array, ArrayRef, PrimitiveArray};
+use arrow_buffer::{Buffer, MutableBuffer, NullBufferBuilder, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
@@ -87,6 +86,10 @@ pub type DurationMicrosecondBuilder = PrimitiveBuilder<DurationMicrosecondType>;
 /// An elapsed time in nanoseconds array builder.
 pub type DurationNanosecondBuilder = PrimitiveBuilder<DurationNanosecondType>;
 
+/// A decimal 32 array builder
+pub type Decimal32Builder = PrimitiveBuilder<Decimal32Type>;
+/// A decimal 64 array builder
+pub type Decimal64Builder = PrimitiveBuilder<Decimal64Type>;
 /// A decimal 128 array builder
 pub type Decimal128Builder = PrimitiveBuilder<Decimal128Type>;
 /// A decimal 256 array builder
@@ -95,7 +98,7 @@ pub type Decimal256Builder = PrimitiveBuilder<Decimal256Type>;
 /// Builder for [`PrimitiveArray`]
 #[derive(Debug)]
 pub struct PrimitiveBuilder<T: ArrowPrimitiveType> {
-    values_builder: BufferBuilder<T::Native>,
+    values_builder: Vec<T::Native>,
     null_buffer_builder: NullBufferBuilder,
     data_type: DataType,
 }
@@ -119,11 +122,6 @@ impl<T: ArrowPrimitiveType> ArrayBuilder for PrimitiveBuilder<T> {
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.values_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.values_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -152,7 +150,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Creates a new primitive array builder with capacity no of items
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            values_builder: BufferBuilder::<T::Native>::new(capacity),
+            values_builder: Vec::with_capacity(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
             data_type: T::DATA_TYPE,
         }
@@ -163,12 +161,10 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         values_buffer: MutableBuffer,
         null_buffer: Option<MutableBuffer>,
     ) -> Self {
-        let values_builder = BufferBuilder::<T::Native>::new_from_buffer(values_buffer);
+        let values_builder: Vec<T::Native> = ScalarBuffer::<T::Native>::from(values_buffer).into();
 
         let null_buffer_builder = null_buffer
-            .map(|buffer| {
-                NullBufferBuilder::new_from_buffer(buffer, values_builder.len())
-            })
+            .map(|buffer| NullBufferBuilder::new_from_buffer(buffer, values_builder.len()))
             .unwrap_or_else(|| NullBufferBuilder::new_with_len(values_builder.len()));
 
         Self {
@@ -182,7 +178,8 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// data type of the generated array.
     ///
     /// This method allows overriding the data type, to allow specifying timezones
-    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal128`] and [`DataType::Decimal256`]
+    /// for [`DataType::Timestamp`] or precision and scale for [`DataType::Decimal32`],
+    /// [`DataType::Decimal64`], [`DataType::Decimal128`] and [`DataType::Decimal256`]
     ///
     /// # Panics
     ///
@@ -206,21 +203,29 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     #[inline]
     pub fn append_value(&mut self, v: T::Native) {
         self.null_buffer_builder.append_non_null();
-        self.values_builder.append(v);
+        self.values_builder.push(v);
+    }
+
+    /// Appends a value of type `T` into the builder `n` times
+    #[inline]
+    pub fn append_value_n(&mut self, v: T::Native, n: usize) {
+        self.null_buffer_builder.append_n_non_nulls(n);
+        self.values_builder.extend(std::iter::repeat_n(v, n));
     }
 
     /// Appends a null slot into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append_null();
-        self.values_builder.advance(1);
+        self.values_builder.push(T::Native::default());
     }
 
     /// Appends `n` no. of null's into the builder
     #[inline]
     pub fn append_nulls(&mut self, n: usize) {
         self.null_buffer_builder.append_n_nulls(n);
-        self.values_builder.advance(n);
+        self.values_builder
+            .extend(std::iter::repeat_n(T::Native::default(), n));
     }
 
     /// Appends an `Option<T>` into the builder
@@ -236,7 +241,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     #[inline]
     pub fn append_slice(&mut self, v: &[T::Native]) {
         self.null_buffer_builder.append_n_non_nulls(v.len());
-        self.values_builder.append_slice(v);
+        self.values_builder.extend_from_slice(v);
     }
 
     /// Appends values from a slice of type `T` and a validity boolean slice
@@ -252,7 +257,29 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             "Value and validity lengths must be equal"
         );
         self.null_buffer_builder.append_slice(is_valid);
-        self.values_builder.append_slice(values);
+        self.values_builder.extend_from_slice(values);
+    }
+
+    /// Appends array values and null to this builder as is
+    /// (this means that underlying null values are copied as is).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `array` and `self` data types are different
+    #[inline]
+    pub fn append_array(&mut self, array: &PrimitiveArray<T>) {
+        assert_eq!(
+            &self.data_type,
+            array.data_type(),
+            "array data type mismatch"
+        );
+
+        self.values_builder.extend_from_slice(array.values());
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
+        }
     }
 
     /// Appends values from a trusted length iterator.
@@ -261,10 +288,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// This requires the iterator be a trusted length. This could instead require
     /// the iterator implement `TrustedLen` once that is stabilized.
     #[inline]
-    pub unsafe fn append_trusted_len_iter(
-        &mut self,
-        iter: impl IntoIterator<Item = T::Native>,
-    ) {
+    pub unsafe fn append_trusted_len_iter(&mut self, iter: impl IntoIterator<Item = T::Native>) {
         let iter = iter.into_iter();
         let len = iter
             .size_hint()
@@ -272,7 +296,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
             .expect("append_trusted_len_iter requires an upper bound");
 
         self.null_buffer_builder.append_n_non_nulls(len);
-        self.values_builder.append_trusted_len_iter(iter);
+        self.values_builder.extend(iter);
     }
 
     /// Builds the [`PrimitiveArray`] and reset this builder.
@@ -281,7 +305,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
         let nulls = self.null_buffer_builder.finish();
         let builder = ArrayData::builder(self.data_type.clone())
             .len(len)
-            .add_buffer(self.values_builder.finish())
+            .add_buffer(std::mem::take(&mut self.values_builder).into())
             .nulls(nulls);
 
         let array_data = unsafe { builder.build_unchecked() };
@@ -309,7 +333,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
     /// Returns the current values buffer as a mutable slice
     pub fn values_slice_mut(&mut self) -> &mut [T::Native] {
-        self.values_builder.as_slice_mut()
+        self.values_builder.as_mut_slice()
     }
 
     /// Returns the current null buffer as a slice
@@ -325,7 +349,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
     /// Returns the current values buffer and null buffer as a slice
     pub fn slices_mut(&mut self) -> (&mut [T::Native], Option<&mut [u8]>) {
         (
-            self.values_builder.as_slice_mut(),
+            self.values_builder.as_mut_slice(),
             self.null_buffer_builder.as_slice_mut(),
         )
     }
@@ -333,11 +357,7 @@ impl<T: ArrowPrimitiveType> PrimitiveBuilder<T> {
 
 impl<P: DecimalType> PrimitiveBuilder<P> {
     /// Sets the precision and scale
-    pub fn with_precision_and_scale(
-        self,
-        precision: u8,
-        scale: i8,
-    ) -> Result<Self, ArrowError> {
+    pub fn with_precision_and_scale(self, precision: u8, scale: i8) -> Result<Self, ArrowError> {
         validate_decimal_precision_and_scale::<P>(precision, scale)?;
         Ok(Self {
             data_type: P::TYPE_CONSTRUCTOR(precision, scale),
@@ -373,7 +393,7 @@ impl<P: ArrowPrimitiveType> Extend<Option<P::Native>> for PrimitiveBuilder<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_buffer::Buffer;
+    use arrow_buffer::{NullBuffer, ScalarBuffer};
     use arrow_schema::TimeUnit;
 
     use crate::array::Array;
@@ -381,7 +401,6 @@ mod tests {
     use crate::array::Date32Array;
     use crate::array::Int32Array;
     use crate::array::TimestampSecondArray;
-    use crate::builder::Int32Builder;
 
     #[test]
     fn test_primitive_array_builder_i32() {
@@ -597,25 +616,21 @@ mod tests {
 
     #[test]
     fn test_primitive_array_builder_with_data_type() {
-        let mut builder =
-            Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
         builder.append_value(1);
         let array = builder.finish();
         assert_eq!(array.precision(), 1);
         assert_eq!(array.scale(), 2);
 
         let data_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into()));
-        let mut builder =
-            TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
+        let mut builder = TimestampNanosecondBuilder::new().with_data_type(data_type.clone());
         builder.append_value(1);
         let array = builder.finish();
         assert_eq!(array.data_type(), &data_type);
     }
 
     #[test]
-    #[should_panic(
-        expected = "incompatible data type for builder, expected Int32 got Int64"
-    )]
+    #[should_panic(expected = "incompatible data type for builder, expected Int32 got Int64")]
     fn test_invalid_with_data_type() {
         Int32Builder::new().with_data_type(DataType::Int64);
     }
@@ -627,5 +642,64 @@ mod tests {
         builder.extend([2, 4, 6, 2].into_iter().map(Some));
         let array = builder.finish();
         assert_eq!(array.values(), &[1, 2, 3, 5, 2, 4, 4, 2, 4, 6, 2]);
+    }
+
+    #[test]
+    fn test_primitive_array_append_array() {
+        let input = vec![
+            Some(1),
+            None,
+            Some(3),
+            None,
+            Some(5),
+            None,
+            None,
+            None,
+            Some(7),
+            Some(9),
+            Some(8),
+            Some(6),
+            Some(4),
+        ];
+        let arr1 = Int32Array::from(input[..5].to_vec());
+        let arr2 = Int32Array::from(input[5..8].to_vec());
+        let arr3 = Int32Array::from(input[8..].to_vec());
+
+        let mut builder = Int32Array::builder(5);
+        builder.append_array(&arr1);
+        builder.append_array(&arr2);
+        builder.append_array(&arr3);
+        let actual = builder.finish();
+        let expected = Int32Array::from(input);
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_append_array_add_underlying_null_values() {
+        let array = Int32Array::new(
+            ScalarBuffer::from(vec![2, 3, 4, 5]),
+            Some(NullBuffer::from(&[true, true, false, false])),
+        );
+
+        let mut builder = Int32Array::builder(5);
+        builder.append_array(&array);
+        let actual = builder.finish();
+
+        assert_eq!(actual, array);
+        assert_eq!(actual.values(), array.values())
+    }
+
+    #[test]
+    #[should_panic(expected = "array data type mismatch")]
+    fn test_invalid_with_data_type_in_append_array() {
+        let array = {
+            let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(1, 2));
+            builder.append_value(1);
+            builder.finish()
+        };
+
+        let mut builder = Decimal128Builder::new().with_data_type(DataType::Decimal128(2, 3));
+        builder.append_array(&array)
     }
 }

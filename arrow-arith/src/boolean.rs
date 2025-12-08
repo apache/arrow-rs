@@ -24,7 +24,7 @@
 
 use arrow_array::*;
 use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer, buffer_bin_and_not};
 use arrow_schema::ArrowError;
 
 /// Logical 'and' boolean values with Kleene logic
@@ -57,10 +57,7 @@ use arrow_schema::ArrowError;
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn and_kleene(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform bitwise operation on arrays of different length".to_string(),
@@ -155,10 +152,7 @@ pub fn and_kleene(
 /// # Fails
 ///
 /// If the operands have different lengths
-pub fn or_kleene(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     if left.len() != right.len() {
         return Err(ArrowError::ComputeError(
             "Cannot perform bitwise operation on arrays of different length".to_string(),
@@ -257,10 +251,7 @@ where
 /// let and_ab = and(&a, &b).unwrap();
 /// assert_eq!(and_ab, BooleanArray::from(vec![Some(false), Some(true), None]));
 /// ```
-pub fn and(
-    left: &BooleanArray,
-    right: &BooleanArray,
-) -> Result<BooleanArray, ArrowError> {
+pub fn and(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| a & b)
 }
 
@@ -279,6 +270,27 @@ pub fn and(
 /// ```
 pub fn or(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
     binary_boolean_kernel(left, right, |a, b| a | b)
+}
+
+/// Performs `AND_NOT` operation on two arrays. If either left or right value is null then the
+/// result is also null.
+/// # Error
+/// This function errors when the arrays have different lengths.
+/// # Example
+/// ```rust
+/// # use arrow_array::BooleanArray;
+/// # use arrow_arith::boolean::{and, not, and_not};
+/// let a = BooleanArray::from(vec![Some(false), Some(true), None]);
+/// let b = BooleanArray::from(vec![Some(true), Some(true), Some(false)]);
+/// let andn_ab = and_not(&a, &b).unwrap();
+/// assert_eq!(andn_ab, BooleanArray::from(vec![Some(false), Some(false), None]));
+/// // It's equal to and(left, not(right))
+/// assert_eq!(andn_ab, and(&a, &not(&b).unwrap()).unwrap());
+pub fn and_not(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArray, ArrowError> {
+    binary_boolean_kernel(left, right, |a, b| {
+        let buffer = buffer_bin_and_not(a.inner(), b.offset(), b.inner(), a.offset(), a.len());
+        BooleanBuffer::new(buffer, left.offset(), left.len())
+    })
 }
 
 /// Performs unary `NOT` operation on an arrays. If value is null then the result is also
@@ -311,7 +323,7 @@ pub fn not(left: &BooleanArray) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_null, BooleanArray::from(vec![false, false, true]));
 /// ```
 pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let values = match input.nulls() {
+    let values = match input.logical_nulls() {
         None => BooleanBuffer::new_unset(input.len()),
         Some(nulls) => !nulls.inner(),
     };
@@ -331,7 +343,7 @@ pub fn is_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 /// assert_eq!(a_is_not_null, BooleanArray::from(vec![true, true, false]));
 /// ```
 pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
-    let values = match input.nulls() {
+    let values = match input.logical_nulls() {
         None => BooleanBuffer::new_set(input.len()),
         Some(n) => n.inner().clone(),
     };
@@ -340,6 +352,9 @@ pub fn is_not_null(input: &dyn Array) -> Result<BooleanArray, ArrowError> {
 
 #[cfg(test)]
 mod tests {
+    use arrow_buffer::ScalarBuffer;
+    use arrow_schema::{DataType, Field, UnionFields};
+
     use super::*;
     use std::sync::Arc;
 
@@ -363,6 +378,18 @@ mod tests {
         let expected = BooleanArray::from(vec![false, true, true, true]);
 
         assert_eq!(c, expected);
+    }
+
+    #[test]
+    fn test_bool_array_and_not() {
+        let a = BooleanArray::from(vec![false, false, true, true]);
+        let b = BooleanArray::from(vec![false, true, false, true]);
+        let c = and_not(&a, &b).unwrap();
+
+        let expected = BooleanArray::from(vec![false, false, true, false]);
+
+        assert_eq!(c, expected);
+        assert_eq!(c, and(&a, &not(&b).unwrap()).unwrap());
     }
 
     #[test]
@@ -581,8 +608,7 @@ mod tests {
         let a = a.as_any().downcast_ref::<BooleanArray>().unwrap();
         let c = not(a).unwrap();
 
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
+        let expected = BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]);
 
         assert_eq!(c, expected);
     }
@@ -631,12 +657,10 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_same_offset() {
         let a = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, false, true,
-            true,
+            false, false, false, false, false, false, false, false, false, false, true, true,
         ]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let a = a.slice(8, 4);
@@ -654,12 +678,10 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_same_offset_mod8() {
         let a = BooleanArray::from(vec![
-            false, false, true, true, false, false, false, false, false, false, false,
-            false,
+            false, false, true, true, false, false, false, false, false, false, false, false,
         ]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let a = a.slice(0, 4);
@@ -677,8 +699,7 @@ mod tests {
     #[test]
     fn test_bool_array_and_sliced_offset1() {
         let a = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, false, true,
-            true,
+            false, false, false, false, false, false, false, false, false, false, true, true,
         ]);
         let b = BooleanArray::from(vec![false, true, false, true]);
 
@@ -696,8 +717,7 @@ mod tests {
     fn test_bool_array_and_sliced_offset2() {
         let a = BooleanArray::from(vec![false, false, true, true]);
         let b = BooleanArray::from(vec![
-            false, false, false, false, false, false, false, false, false, true, false,
-            true,
+            false, false, false, false, false, false, false, false, false, true, false, true,
         ]);
 
         let b = b.slice(8, 4);
@@ -730,8 +750,7 @@ mod tests {
 
         let c = and(a, b).unwrap();
 
-        let expected =
-            BooleanArray::from(vec![Some(false), Some(false), None, Some(true)]);
+        let expected = BooleanArray::from(vec![Some(false), Some(false), None, Some(true)]);
 
         assert_eq!(expected, c);
     }
@@ -870,5 +889,86 @@ mod tests {
 
         assert_eq!(expected, res);
         assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_null() {
+        let a = NullArray::new(3);
+
+        let res = is_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![true, true, true]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_null_array_is_not_null() {
+        let a = NullArray::new(3);
+
+        let res = is_not_null(&a).unwrap();
+
+        let expected = BooleanArray::from(vec![false, false, false]);
+
+        assert_eq!(expected, res);
+        assert!(res.nulls().is_none());
+    }
+
+    #[test]
+    fn test_dense_union_is_null() {
+        // union of [{A=1}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
+        let int_array = Int32Array::from(vec![Some(1), None]);
+        let float_array = Float64Array::from(vec![Some(3.2), None]);
+        let str_array = StringArray::from(vec![Some("a"), None]);
+        let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+        let offsets = [0, 1, 0, 1, 0, 1]
+            .into_iter()
+            .collect::<ScalarBuffer<i32>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, Some(offsets), children).unwrap();
+
+        let result = is_null(&array).unwrap();
+
+        let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
+        assert_eq!(expected, &result);
+    }
+
+    #[test]
+    fn test_sparse_union_is_null() {
+        // union of [{A=1}, {A=}, {B=3.2}, {B=}, {C="a"}, {C=}]
+        let int_array = Int32Array::from(vec![Some(1), None, None, None, None, None]);
+        let float_array = Float64Array::from(vec![None, None, Some(3.2), None, None, None]);
+        let str_array = StringArray::from(vec![None, None, None, None, Some("a"), None]);
+        let type_ids = [0, 0, 1, 1, 2, 2].into_iter().collect::<ScalarBuffer<i8>>();
+
+        let children = vec![
+            Arc::new(int_array) as Arc<dyn Array>,
+            Arc::new(float_array),
+            Arc::new(str_array),
+        ];
+
+        let array = UnionArray::try_new(union_fields(), type_ids, None, children).unwrap();
+
+        let result = is_null(&array).unwrap();
+
+        let expected = &BooleanArray::from(vec![false, true, false, true, false, true]);
+        assert_eq!(expected, &result);
+    }
+
+    fn union_fields() -> UnionFields {
+        [
+            (0, Arc::new(Field::new("A", DataType::Int32, true))),
+            (1, Arc::new(Field::new("B", DataType::Float64, true))),
+            (2, Arc::new(Field::new("C", DataType::Utf8, true))),
+        ]
+        .into_iter()
+        .collect()
     }
 }

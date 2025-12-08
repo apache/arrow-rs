@@ -17,7 +17,7 @@
 
 use std::{any::Any, sync::Arc};
 
-use crate::{types::RunEndIndexType, ArrayRef, ArrowPrimitiveType, RunArray};
+use crate::{ArrayRef, ArrowPrimitiveType, RunArray, types::RunEndIndexType};
 
 use super::{ArrayBuilder, PrimitiveBuilder};
 
@@ -134,11 +134,6 @@ where
     /// the eventual runs array.
     fn len(&self) -> usize {
         self.current_run_end_index
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.current_run_end_index == 0
     }
 
     /// Builds the array and reset this builder.
@@ -282,6 +277,7 @@ mod tests {
         let array = builder.finish();
 
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
         assert_eq!(array.len(), 6);
 
         assert_eq!(array.run_ends().values(), &[3, 4, 6]);
@@ -307,6 +303,7 @@ mod tests {
 
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 0);
         assert_eq!(array.run_ends().values(), &[1, 3, 5, 9, 10, 11]);
         assert_eq!(
             array.values().as_primitive::<Int16Type>().values(),
