@@ -729,6 +729,7 @@ pub fn test_column_statistics_with_plaintext_footer() {
         .with_plaintext_footer(true)
         .with_column_key("x", column_key.clone())
         .with_column_key("y", column_key.clone())
+        .with_column_key("s", column_key.clone())
         .build()
         .unwrap();
 
@@ -739,17 +740,17 @@ pub fn test_column_statistics_with_plaintext_footer() {
         .unwrap();
 
     // Reader can read plaintext stats from the unencrypted column z
-    // and column x for which the key is provided, but not column y
+    // and column x for which the key is provided, but not columns y and s
     // for which no key is provided.
     write_and_read_stats(
         Arc::clone(&encryption_properties),
         Some(decryption_properties),
-        &[true, false, true],
+        &[true, false, true, false],
     );
 
     // Read without any decryption properties.
     // Reader can only read plaintext stats from the unencrypted column z.
-    write_and_read_stats(encryption_properties, None, &[false, false, true]);
+    write_and_read_stats(encryption_properties, None, &[false, false, true, false]);
 }
 
 #[test]
@@ -770,11 +771,11 @@ pub fn test_column_statistics_with_plaintext_footer_and_uniform_encryption() {
     write_and_read_stats(
         Arc::clone(&encryption_properties),
         Some(decryption_properties),
-        &[true, true, true],
+        &[true, true, true, true],
     );
 
     // Reader can not read stats from plaintext footer metadata if no key is provided
-    write_and_read_stats(encryption_properties, None, &[false, false, false]);
+    write_and_read_stats(encryption_properties, None, &[false, false, false, false]);
 }
 
 #[test]
@@ -787,6 +788,7 @@ pub fn test_column_statistics_with_encrypted_footer() {
         .with_plaintext_footer(false)
         .with_column_key("x", column_key.clone())
         .with_column_key("y", column_key.clone())
+        .with_column_key("s", column_key.clone())
         .build()
         .unwrap();
 
@@ -797,12 +799,12 @@ pub fn test_column_statistics_with_encrypted_footer() {
         .unwrap();
 
     // Reader can read plaintext stats from the unencrypted column z
-    // and column x for which the key is provided, but not column y
+    // and column x for which the key is provided, but not columns y and s
     // for which no key is provided.
     write_and_read_stats(
         encryption_properties,
         Some(decryption_properties),
-        &[true, false, true],
+        &[true, false, true, false],
     );
 }
 
@@ -825,7 +827,7 @@ pub fn test_column_statistics_with_encrypted_footer_and_uniform_encryption() {
     write_and_read_stats(
         encryption_properties,
         Some(decryption_properties),
-        &[true, true, true],
+        &[true, true, true, true],
     );
 }
 
@@ -835,23 +837,42 @@ fn write_and_read_stats(
     decryption_properties: Option<Arc<FileDecryptionProperties>>,
     expect_stats: &[bool],
 ) {
-    let values = Int32Array::from(vec![8, 3, 4, 19, 5]);
-    let values = Arc::new(values);
+    use parquet::basic::Type;
+
+    let int_values = Int32Array::from(vec![8, 3, 4, 19, 5]);
+    let int_values = Arc::new(int_values);
+    let string_values: StringArray = vec![
+        None,
+        Some("parquet"),
+        Some("encryption"),
+        Some("test"),
+        None,
+    ]
+    .into();
+    let string_values = Arc::new(string_values);
+
     let schema = Arc::new(Schema::new(vec![
-        Field::new("x", values.data_type().clone(), true),
-        Field::new("y", values.data_type().clone(), true),
-        Field::new("z", values.data_type().clone(), true),
+        Field::new("x", int_values.data_type().clone(), true),
+        Field::new("y", int_values.data_type().clone(), true),
+        Field::new("z", int_values.data_type().clone(), true),
+        Field::new("s", string_values.data_type().clone(), true),
     ]));
     let record_batches = vec![
         RecordBatch::try_new(
             schema.clone(),
-            vec![values.clone(), values.clone(), values.clone()],
+            vec![
+                int_values.clone(),
+                int_values.clone(),
+                int_values.clone(),
+                string_values.clone(),
+            ],
         )
         .unwrap(),
     ];
 
     let props = WriterProperties::builder()
         .with_file_encryption_properties(encryption_properties)
+        .set_bloom_filter_enabled(true)
         .build();
 
     let temp_file = tempfile::tempfile().unwrap();
@@ -865,15 +886,29 @@ fn write_and_read_stats(
     let expected_max = 19i32.to_le_bytes();
 
     let check_column_stats = |column: &ColumnChunkMetaData, expect_stats: bool| {
+        let is_byte_array = column.column_type() == Type::BYTE_ARRAY;
         if expect_stats {
             assert!(column.page_encoding_stats().is_some());
             assert!(column.statistics().is_some());
-            let column_stats = column.statistics().unwrap();
-            assert_eq!(column_stats.min_bytes_opt(), Some(expected_min.as_slice()));
-            assert_eq!(column_stats.max_bytes_opt(), Some(expected_max.as_slice()));
+            if is_byte_array {
+                // Size statistics for BYTE_ARRAY columns
+                assert!(column.unencoded_byte_array_data_bytes().is_some());
+            } else {
+                let column_stats = column.statistics().unwrap();
+                assert_eq!(column_stats.min_bytes_opt(), Some(expected_min.as_slice()));
+                assert_eq!(column_stats.max_bytes_opt(), Some(expected_max.as_slice()));
+            }
+            assert!(column.bloom_filter_offset().is_some());
+            assert!(column.bloom_filter_length().is_some());
         } else {
             assert!(column.statistics().is_none());
             assert!(column.page_encoding_stats().is_none());
+            assert!(column.bloom_filter_offset().is_none());
+            assert!(column.bloom_filter_length().is_none());
+            // Size statistics should also be stripped
+            if is_byte_array {
+                assert!(column.unencoded_byte_array_data_bytes().is_none());
+            }
         }
     };
 
