@@ -19,7 +19,10 @@
 
 use crate::filter::{SlicesIterator, prep_null_mask_filter};
 use arrow_array::cast::AsArray;
-use arrow_array::types::{BinaryType, BinaryViewType, ByteArrayType, ByteViewType, LargeBinaryType, LargeUtf8Type, StringViewType, Utf8Type};
+use arrow_array::types::{
+    BinaryType, BinaryViewType, ByteArrayType, ByteViewType, LargeBinaryType, LargeUtf8Type,
+    StringViewType, Utf8Type,
+};
 use arrow_array::*;
 use arrow_buffer::{
     BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, OffsetBufferBuilder,
@@ -1429,10 +1432,7 @@ mod test {
         let mask = BooleanArray::from(vec![true, false]);
         let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
         let actual = out.as_byte_view();
-        let expected = BinaryViewArray::from_iter_values(vec![
-            b"hello",
-            b"world",
-        ]);
+        let expected = BinaryViewArray::from_iter_values(vec![b"hello", b"world"]);
         assert_eq!(actual, &expected);
     }
 
