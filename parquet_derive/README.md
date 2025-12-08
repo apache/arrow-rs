@@ -19,14 +19,16 @@
 
 # Parquet Derive
 
-A crate for deriving `RecordWriter` for arbitrary, _simple_ structs. This does not generate writers for arbitrarily nested
-structures. It only works for primitives and a few generic structures and
-various levels of reference. Please see features checklist for what is currently
+A crate for deriving `RecordWriter` and `RecordReader` for arbitrary, _simple_ structs. This does not
+generate readers or writers for arbitrarily nested structures. It only works for primitives and a few
+generic structures and various levels of reference. Please see features checklist for what is currently
 supported.
 
 Derive also has some support for the chrono time library. You must must enable the `chrono` feature to get this support.
 
 ## Usage
+
+See example in [ParquetRecordWriter](<https://docs.rs/parquet_derive/latest/parquet_derive/derive.ParquetRecordWriter.html>) for reading/writing to a parquet file.
 
 Add this to your Cargo.toml:
 
@@ -77,15 +79,54 @@ writer.close_row_group(row_group).unwrap();
 writer.close().unwrap();
 ```
 
+Example usage of deriving a `RecordReader` for your struct:
+
+```rust
+use parquet::file::{serialized_reader::SerializedFileReader, reader::FileReader};
+use parquet_derive::ParquetRecordReader;
+
+#[derive(ParquetRecordReader)]
+struct ACompleteRecord {
+    pub a_bool: bool,
+    pub a_string: String,
+    pub i16: i16,
+    pub i32: i32,
+    pub u64: u64,
+    pub isize: isize,
+    pub float: f32,
+    pub double: f64,
+    pub now: chrono::NaiveDateTime,
+    pub byte_vec: Vec<u8>,
+}
+
+// Initialize your parquet file
+let reader = SerializedFileReader::new(file).unwrap();
+let mut row_group = reader.get_row_group(0).unwrap();
+
+// create your records vector to read into
+let mut chunks: Vec<ACompleteRecord> = Vec::new();
+
+// The derived `RecordReader` takes over here
+chunks.read_from_row_group(&mut *row_group, 1).unwrap();
+```
+
 ## Features
 
 - [x] Support writing `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
 - [ ] Support writing dictionaries
 - [x] Support writing logical types like timestamp
-- [x] Derive definition_levels for `Option`
-- [ ] Derive definition levels for nested structures
+- [x] Derive definition_levels for `Option` for writing
+- [ ] Derive definition levels for nested structures for writing
 - [ ] Derive writing tuple struct
 - [ ] Derive writing `tuple` container types
+
+- [x] Support reading `String`, `&str`, `bool`, `i32`, `f32`, `f64`, `Vec<u8>`
+- [ ] Support reading/writing dictionaries
+- [x] Support reading/writing logical types like timestamp
+- [ ] Handle definition_levels for `Option` for reading
+- [ ] Handle definition levels for nested structures for reading
+- [ ] Derive reading/writing tuple struct
+- [ ] Derive reading/writing `tuple` container types
 
 ## Requirements
 
@@ -95,6 +136,8 @@ writer.close().unwrap();
 
 Testing a `*_derive` crate requires an intermediate crate. Go to `parquet_derive_test` and run `cargo test` for
 unit tests.
+
+To compile and test doctests, run `cargo test --doc -- --show-output`
 
 ## Docs
 

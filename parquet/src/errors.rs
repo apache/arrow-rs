@@ -17,13 +17,19 @@
 
 //! Common Parquet errors and macros.
 
+use core::num::TryFromIntError;
 use std::error::Error;
+use std::string::FromUtf8Error;
 use std::{cell, io, result, str};
 
 #[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 
+/// Parquet error enumeration
+// Note: we don't implement PartialEq as the semantics for the
+// external variant are not well defined (#4469)
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum ParquetError {
     /// General Parquet error.
     /// Returned when code violates normal workflow of working with Parquet files.
@@ -39,9 +45,17 @@ pub enum ParquetError {
     /// Arrow error.
     /// Returned when reading into arrow or writing from arrow.
     ArrowError(String),
+    /// Error when the requested column index is more than the
+    /// number of columns in the row group
     IndexOutOfBound(usize, usize),
     /// An external error variant
     External(Box<dyn Error + Send + Sync>),
+    /// Returned when a function needs more data to complete properly. The `usize` field indicates
+    /// the total number of bytes required, not the number of additional bytes.
+    NeedMoreData(usize),
+    /// Returned when a function needs more data to complete properly.
+    /// The `Range<u64>` indicates the range of bytes that are needed.
+    NeedMoreDataRange(std::ops::Range<u64>),
 }
 
 impl std::fmt::Display for ParquetError {
@@ -54,10 +68,14 @@ impl std::fmt::Display for ParquetError {
             ParquetError::EOF(message) => write!(fmt, "EOF: {message}"),
             #[cfg(feature = "arrow")]
             ParquetError::ArrowError(message) => write!(fmt, "Arrow: {message}"),
-            ParquetError::IndexOutOfBound(index, ref bound) => {
+            ParquetError::IndexOutOfBound(index, bound) => {
                 write!(fmt, "Index {index} out of bound: {bound}")
             }
             ParquetError::External(e) => write!(fmt, "External: {e}"),
+            ParquetError::NeedMoreData(needed) => write!(fmt, "NeedMoreData: {needed}"),
+            ParquetError::NeedMoreDataRange(range) => {
+                write!(fmt, "NeedMoreDataRange: {}..{}", range.start, range.end)
+            }
         }
     }
 }
@@ -68,6 +86,12 @@ impl Error for ParquetError {
             ParquetError::External(e) => Some(e.as_ref()),
             _ => None,
         }
+    }
+}
+
+impl From<TryFromIntError> for ParquetError {
+    fn from(e: TryFromIntError) -> ParquetError {
+        ParquetError::General(format!("Integer overflow: {e}"))
     }
 }
 
@@ -102,9 +126,29 @@ impl From<str::Utf8Error> for ParquetError {
     }
 }
 
+impl From<FromUtf8Error> for ParquetError {
+    fn from(e: FromUtf8Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
 #[cfg(feature = "arrow")]
 impl From<ArrowError> for ParquetError {
     fn from(e: ArrowError) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
+#[cfg(feature = "object_store")]
+impl From<object_store::Error> for ParquetError {
+    fn from(e: object_store::Error) -> ParquetError {
+        ParquetError::External(Box::new(e))
+    }
+}
+
+#[cfg(feature = "encryption")]
+impl From<ring::error::Unspecified> for ParquetError {
+    fn from(e: ring::error::Unspecified) -> ParquetError {
         ParquetError::External(Box::new(e))
     }
 }
@@ -117,7 +161,7 @@ pub type Result<T, E = ParquetError> = result::Result<T, E>;
 
 impl From<ParquetError> for io::Error {
     fn from(e: ParquetError) -> Self {
-        io::Error::new(io::ErrorKind::Other, e)
+        io::Error::other(e)
     }
 }
 

@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Scenario for testing middleware.
+
 use arrow_flight::{
-    flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
-    FlightDescriptor,
+    FlightDescriptor, flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
 };
 use prost::bytes::Bytes;
 use tonic::{Request, Status};
@@ -25,6 +26,7 @@ use tonic::{Request, Status};
 type Error = Box<dyn std::error::Error + Send + Sync + 'static>;
 type Result<T = (), E = Error> = std::result::Result<T, E>;
 
+/// Run a scenario that tests middleware.
 pub async fn run_scenario(host: &str, port: u16) -> Result {
     let url = format!("http://{host}:{port}");
     let conn = tonic::transport::Endpoint::new(url)?.connect().await?;
@@ -74,7 +76,7 @@ pub async fn run_scenario(host: &str, port: u16) -> Result {
     Ok(())
 }
 
-#[allow(clippy::unnecessary_wraps)]
+#[allow(clippy::result_large_err)]
 fn middleware_interceptor(mut req: Request<()>) -> Result<Request<()>, Status> {
     let metadata = req.metadata_mut();
     metadata.insert("x-middleware", "expected value".parse().unwrap());

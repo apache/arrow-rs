@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::bit_iterator::BitIndexIterator;
-use crate::data::{contains_nulls, ArrayData};
+use crate::data::{ArrayData, contains_nulls};
 use arrow_buffer::bit_util::get_bit;
 
 use super::utils::{equal_bits, equal_len};
@@ -78,11 +78,10 @@ pub(super) fn boolean_equal(
         // get a ref of the null buffer bytes, to use in testing for nullness
         let lhs_nulls = lhs.nulls().unwrap();
 
-        BitIndexIterator::new(lhs_nulls.validity(), lhs_start + lhs_nulls.offset(), len)
-            .all(|i| {
-                let lhs_pos = lhs_start + lhs.offset() + i;
-                let rhs_pos = rhs_start + rhs.offset() + i;
-                get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos)
-            })
+        BitIndexIterator::new(lhs_nulls.validity(), lhs_start + lhs_nulls.offset(), len).all(|i| {
+            let lhs_pos = lhs_start + lhs.offset() + i;
+            let rhs_pos = rhs_start + rhs.offset() + i;
+            get_bit(lhs_values, lhs_pos) == get_bit(rhs_values, rhs_pos)
+        })
     }
 }

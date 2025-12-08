@@ -1,0 +1,93 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+---
+# tests for parquet-variant crate
+name: "parquet-variant"
+
+concurrency:
+  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  cancel-in-progress: true
+
+# trigger for all PRs that touch certain files and changes to main
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - parquet-variant/**
+      - parquet-variant-json/**
+      - parquet-variant-compute/**
+      - .github/**
+
+jobs:
+  # test the crate
+  linux-test:
+    name: Test
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Test parquet-variant
+        run: cargo test -p parquet-variant
+      - name: Test parquet-variant-json
+        run: cargo test -p parquet-variant-json
+      - name: Test parquet-variant-compute
+        run: cargo test -p parquet-variant-compute
+
+  # test compilation
+  linux-features:
+    name: Check Compilation
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: true
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Check compilation (parquet-variant)
+        run: cargo check -p parquet-variant
+      - name: Check compilation (parquet-variant-json)
+        run: cargo check -p parquet-variant-json
+      - name: Check compilation (parquet-variant-compute)
+        run: cargo check -p parquet-variant-compute
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    container:
+      image: amd64/rust
+    steps:
+      - uses: actions/checkout@v6
+      - name: Setup Rust toolchain
+        uses: ./.github/actions/setup-builder
+      - name: Setup Clippy
+        run: rustup component add clippy
+      - name: Run clippy (parquet-variant)
+        run: cargo clippy -p parquet-variant --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-json)
+        run: cargo clippy -p parquet-variant-json --all-targets --all-features -- -D warnings
+      - name: Run clippy (parquet-variant-compute)
+        run: cargo clippy -p parquet-variant-compute --all-targets --all-features -- -D warnings

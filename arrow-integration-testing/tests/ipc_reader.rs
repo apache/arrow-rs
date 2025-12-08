@@ -18,16 +18,19 @@
 //! Tests for reading the content of  [`FileReader`] and [`StreamReader`]
 //! in `testing/arrow-ipc-stream/integration/...`
 
-use arrow::ipc::reader::{FileReader, StreamReader};
+use arrow::error::ArrowError;
+use arrow::ipc::reader::{FileReader, StreamDecoder, StreamReader};
 use arrow::util::test_util::arrow_test_data;
+use arrow_buffer::Buffer;
 use arrow_integration_testing::read_gzip_json;
 use std::fs::File;
+use std::io::Read;
 
 #[test]
 fn read_0_1_4() {
     let testdata = arrow_test_data();
     let version = "0.14.1";
-    let paths = vec![
+    let paths = [
         "generated_interval",
         "generated_datetime",
         "generated_dictionary",
@@ -48,7 +51,7 @@ fn read_0_1_4() {
 fn read_0_1_7() {
     let testdata = arrow_test_data();
     let version = "0.17.1";
-    let paths = vec!["generated_union"];
+    let paths = ["generated_union"];
     paths.iter().for_each(|path| {
         verify_arrow_file(&testdata, version, path);
         verify_arrow_stream(&testdata, version, path);
@@ -56,27 +59,11 @@ fn read_0_1_7() {
 }
 
 #[test]
-#[should_panic(expected = "Big Endian is not supported for Decimal!")]
-fn read_1_0_0_bigendian_decimal_should_panic() {
-    let testdata = arrow_test_data();
-    verify_arrow_file(&testdata, "1.0.0-bigendian", "generated_decimal");
-}
-
-#[test]
-#[should_panic(
-    expected = "Last offset 687865856 of Utf8 is larger than values length 41"
-)]
-fn read_1_0_0_bigendian_dictionary_should_panic() {
-    // The offsets are not translated for big-endian files
-    // https://github.com/apache/arrow-rs/issues/859
-    let testdata = arrow_test_data();
-    verify_arrow_file(&testdata, "1.0.0-bigendian", "generated_dictionary");
-}
-
-#[test]
 fn read_1_0_0_bigendian() {
     let testdata = arrow_test_data();
-    let paths = vec![
+    let paths = [
+        "generated_decimal",
+        "generated_dictionary",
         "generated_interval",
         "generated_datetime",
         "generated_map",
@@ -93,14 +80,12 @@ fn read_1_0_0_bigendian() {
         ))
         .unwrap();
 
-        FileReader::try_new(file, None).unwrap();
+        let reader = FileReader::try_new(file, None);
 
-        // While the the reader doesn't error but the values are not
-        // read correctly on little endian platforms so verifying the
-        // contents fails
-        //
-        // https://github.com/apache/arrow-rs/issues/3459
-        //verify_arrow_file(&testdata, "1.0.0-bigendian", path);
+        assert!(reader.is_err());
+        let err = reader.err().unwrap();
+        assert!(matches!(err, ArrowError::IpcError(_)));
+        assert_eq!(err.to_string(), "Ipc error: the endianness of the source system does not match the endianness of the target system.");
     });
 }
 
@@ -145,7 +130,7 @@ fn read_2_0_0_compression() {
     let version = "2.0.0-compression";
 
     // the test is repetitive, thus we can read all supported files at once
-    let paths = vec!["generated_lz4", "generated_zstd"];
+    let paths = ["generated_lz4", "generated_zstd"];
     paths.iter().for_each(|path| {
         verify_arrow_file(&testdata, version, path);
         verify_arrow_stream(&testdata, version, path);
@@ -160,8 +145,7 @@ fn read_2_0_0_compression() {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
-    let filename =
-        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
+    let filename = format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.arrow_file");
     println!("Verifying {filename}");
 
     // Compare contents to the expected output format in JSON
@@ -197,9 +181,11 @@ fn verify_arrow_file(testdata: &str, version: &str, path: &str) {
 /// Verification json file
 /// `arrow-ipc-stream/integration/<version>/<path>.json.gz
 fn verify_arrow_stream(testdata: &str, version: &str, path: &str) {
-    let filename =
-        format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
+    let filename = format!("{testdata}/arrow-ipc-stream/integration/{version}/{path}.stream");
     println!("Verifying {filename}");
+
+    // read expected JSON output
+    let arrow_json = read_gzip_json(version, path);
 
     // Compare contents to the expected output format in JSON
     {
@@ -207,12 +193,36 @@ fn verify_arrow_stream(testdata: &str, version: &str, path: &str) {
         let file = File::open(&filename).unwrap();
         let mut reader = StreamReader::try_new(file, None).unwrap();
 
-        // read expected JSON output
-        let arrow_json = read_gzip_json(version, path);
         assert!(arrow_json.equals_reader(&mut reader).unwrap());
         // the next batch must be empty
         assert!(reader.next().is_none());
         // the stream must indicate that it's finished
         assert!(reader.is_finished());
     }
+
+    // Test stream decoder
+    let expected = arrow_json.get_record_batches().unwrap();
+    for chunk_sizes in [1, 2, 8, 123] {
+        let mut decoder = StreamDecoder::new();
+        let stream = chunked_file(&filename, chunk_sizes);
+        let mut actual = Vec::with_capacity(expected.len());
+        for mut x in stream {
+            while !x.is_empty() {
+                if let Some(x) = decoder.decode(&mut x).unwrap() {
+                    actual.push(x);
+                }
+            }
+        }
+        decoder.finish().unwrap();
+        assert_eq!(expected, actual);
+    }
+}
+
+fn chunked_file(filename: &str, chunk_size: u64) -> impl Iterator<Item = Buffer> {
+    let mut file = File::open(filename).unwrap();
+    std::iter::from_fn(move || {
+        let mut buf = vec![];
+        let read = (&mut file).take(chunk_size).read_to_end(&mut buf).unwrap();
+        (read != 0).then(|| Buffer::from_vec(buf))
+    })
 }

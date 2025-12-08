@@ -72,7 +72,7 @@
 
 use std::{
     fmt::Display,
-    fs::{read_to_string, File},
+    fs::{File, read_to_string},
     io::Read,
     path::{Path, PathBuf},
     sync::Arc,
@@ -81,8 +81,9 @@ use std::{
 use arrow_csv::ReaderBuilder;
 use arrow_schema::{ArrowError, Schema};
 use clap::{Parser, ValueEnum};
+use parquet::arrow::arrow_writer::ArrowWriterOptions;
 use parquet::{
-    arrow::{parquet_to_arrow_schema, ArrowWriter},
+    arrow::{ArrowWriter, parquet_to_arrow_schema},
     basic::Compression,
     errors::ParquetError,
     file::properties::{WriterProperties, WriterVersion},
@@ -223,9 +224,9 @@ fn compression_from_str(cmp: &str) -> Result<Compression, String> {
         "BROTLI" => Ok(Compression::BROTLI(Default::default())),
         "LZ4" => Ok(Compression::LZ4),
         "ZSTD" => Ok(Compression::ZSTD(Default::default())),
-        v => Err(
-            format!("Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help")
-        )
+        v => Err(format!(
+            "Unknown compression {v} : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help"
+        )),
     }
 }
 
@@ -296,12 +297,10 @@ fn configure_writer_properties(args: &Args) -> WriterProperties {
         properties_builder = properties_builder.set_writer_version(writer_version);
     }
     if let Some(max_row_group_size) = args.max_row_group_size {
-        properties_builder =
-            properties_builder.set_max_row_group_size(max_row_group_size);
+        properties_builder = properties_builder.set_max_row_group_size(max_row_group_size);
     }
     if let Some(enable_bloom_filter) = args.enable_bloom_filter {
-        properties_builder =
-            properties_builder.set_bloom_filter_enabled(enable_bloom_filter);
+        properties_builder = properties_builder.set_bloom_filter_enabled(enable_bloom_filter);
     }
     properties_builder.build()
 }
@@ -321,7 +320,7 @@ fn configure_reader_builder(args: &Args, arrow_schema: Arc<Schema>) -> ReaderBui
 
     let mut builder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(args.batch_size)
-        .has_header(args.has_header)
+        .with_header(args.has_header)
         .with_delimiter(args.get_delimiter());
 
     builder = configure_reader(
@@ -335,13 +334,6 @@ fn configure_reader_builder(args: &Args, arrow_schema: Arc<Schema>) -> ReaderBui
     builder
 }
 
-fn arrow_schema_from_string(schema: &str) -> Result<Arc<Schema>, ParquetFromCsvError> {
-    let schema = Arc::new(parse_message_type(schema)?);
-    let desc = SchemaDescriptor::new(schema);
-    let arrow_schema = Arc::new(parquet_to_arrow_schema(&desc, None)?);
-    Ok(arrow_schema)
-}
-
 fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     let schema = read_to_string(args.schema_path()).map_err(|e| {
         ParquetFromCsvError::with_context(
@@ -349,7 +341,9 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
             &format!("Failed to open schema file {:#?}", args.schema_path()),
         )
     })?;
-    let arrow_schema = arrow_schema_from_string(&schema)?;
+    let parquet_schema = Arc::new(parse_message_type(&schema)?);
+    let desc = SchemaDescriptor::new(parquet_schema);
+    let arrow_schema = Arc::new(parquet_to_arrow_schema(&desc, None)?);
 
     // create output parquet writer
     let parquet_file = File::create(&args.output_file).map_err(|e| {
@@ -359,12 +353,13 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
         )
     })?;
 
-    let writer_properties = Some(configure_writer_properties(args));
+    let options = ArrowWriterOptions::new()
+        .with_properties(configure_writer_properties(args))
+        .with_schema_root(desc.name().to_string());
+
     let mut arrow_writer =
-        ArrowWriter::try_new(parquet_file, arrow_schema.clone(), writer_properties)
-            .map_err(|e| {
-                ParquetFromCsvError::with_context(e, "Failed to create ArrowWriter")
-            })?;
+        ArrowWriter::try_new_with_options(parquet_file, arrow_schema.clone(), options)
+            .map_err(|e| ParquetFromCsvError::with_context(e, "Failed to create ArrowWriter"))?;
 
     // open input file
     let input_file = File::open(&args.input_file).map_err(|e| {
@@ -377,21 +372,21 @@ fn convert_csv_to_parquet(args: &Args) -> Result<(), ParquetFromCsvError> {
     // open input file decoder
     let input_file_decoder = match args.csv_compression {
         Compression::UNCOMPRESSED => Box::new(input_file) as Box<dyn Read>,
-        Compression::SNAPPY => {
-            Box::new(snap::read::FrameDecoder::new(input_file)) as Box<dyn Read>
-        }
+        Compression::SNAPPY => Box::new(snap::read::FrameDecoder::new(input_file)) as Box<dyn Read>,
         Compression::GZIP(_) => {
             Box::new(flate2::read::MultiGzDecoder::new(input_file)) as Box<dyn Read>
         }
         Compression::BROTLI(_) => {
             Box::new(brotli::Decompressor::new(input_file, 0)) as Box<dyn Read>
         }
-        Compression::LZ4 => Box::new(lz4::Decoder::new(input_file).map_err(|e| {
-            ParquetFromCsvError::with_context(e, "Failed to create lz4::Decoder")
-        })?) as Box<dyn Read>,
-        Compression::ZSTD(_) => Box::new(zstd::Decoder::new(input_file).map_err(|e| {
-            ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
-        })?) as Box<dyn Read>,
+        Compression::LZ4 => {
+            Box::new(lz4_flex::frame::FrameDecoder::new(input_file)) as Box<dyn Read>
+        }
+        Compression::ZSTD(_) => {
+            Box::new(zstd::Decoder::new(input_file).map_err(|e| {
+                ParquetFromCsvError::with_context(e, "Failed to create zstd::Decoder")
+            })?) as Box<dyn Read>
+        }
         d => unimplemented!("compression type {d}"),
     };
 
@@ -430,6 +425,7 @@ mod tests {
     use clap::{CommandFactory, Parser};
     use flate2::write::GzEncoder;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
+    use parquet::file::reader::{FileReader, SerializedFileReader};
     use snap::write::FrameEncoder;
     use tempfile::NamedTempFile;
 
@@ -561,9 +557,10 @@ mod tests {
     fn test_parse_arg_compression_format_fail() {
         match parse_args(vec!["--parquet-compression", "zip"]) {
             Ok(_) => panic!("unexpected success"),
-            Err(e) => assert_eq!(
-                format!("{e}"),
-                "error: invalid value 'zip' for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help\n"),
+            Err(e) => {
+                let err = e.to_string();
+                assert!(err.contains("error: invalid value 'zip' for '--parquet-compression <PARQUET_COMPRESSION>': Unknown compression ZIP : possible values UNCOMPRESSED, SNAPPY, GZIP, LZO, BROTLI, LZ4, ZSTD \n\nFor more information try --help"), "{err}")
+            }
         }
     }
 
@@ -606,7 +603,7 @@ mod tests {
 
         let reader_builder = configure_reader_builder(&args, arrow_schema);
         let builder_debug = format!("{reader_builder:?}");
-        assert_debug_text(&builder_debug, "has_header", "false");
+        assert_debug_text(&builder_debug, "header", "false");
         assert_debug_text(&builder_debug, "delimiter", "Some(44)");
         assert_debug_text(&builder_debug, "quote", "Some(34)");
         assert_debug_text(&builder_debug, "terminator", "None");
@@ -641,7 +638,7 @@ mod tests {
         ]));
         let reader_builder = configure_reader_builder(&args, arrow_schema);
         let builder_debug = format!("{reader_builder:?}");
-        assert_debug_text(&builder_debug, "has_header", "true");
+        assert_debug_text(&builder_debug, "header", "true");
         assert_debug_text(&builder_debug, "delimiter", "Some(9)");
         assert_debug_text(&builder_debug, "quote", "None");
         assert_debug_text(&builder_debug, "terminator", "Some(10)");
@@ -651,7 +648,7 @@ mod tests {
 
     fn test_convert_compressed_csv_to_parquet(csv_compression: Compression) {
         let schema = NamedTempFile::new().unwrap();
-        let schema_text = r"message schema {
+        let schema_text = r"message my_amazing_schema {
             optional int32 id;
             optional binary name (STRING);
         }";
@@ -692,31 +689,17 @@ mod tests {
                 encoder.into_inner()
             }
             Compression::LZ4 => {
-                let mut encoder = lz4::EncoderBuilder::new()
-                    .build(input_file)
-                    .map_err(|e| {
-                        ParquetFromCsvError::with_context(
-                            e,
-                            "Failed to create lz4::Encoder",
-                        )
-                    })
-                    .unwrap();
+                let mut encoder = lz4_flex::frame::FrameEncoder::new(input_file);
                 write_tmp_file(&mut encoder);
-                let (inner, err) = encoder.finish();
-                err.unwrap();
-                inner
+                encoder.finish().unwrap()
             }
 
             Compression::ZSTD(level) => {
-                let mut encoder =
-                    zstd::Encoder::new(input_file, level.compression_level())
-                        .map_err(|e| {
-                            ParquetFromCsvError::with_context(
-                                e,
-                                "Failed to create zstd::Encoder",
-                            )
-                        })
-                        .unwrap();
+                let mut encoder = zstd::Encoder::new(input_file, level.compression_level())
+                    .map_err(|e| {
+                        ParquetFromCsvError::with_context(e, "Failed to create zstd::Encoder")
+                    })
+                    .unwrap();
                 write_tmp_file(&mut encoder);
                 encoder.finish().unwrap()
             }
@@ -746,21 +729,21 @@ mod tests {
             help: None,
         };
         convert_csv_to_parquet(&args).unwrap();
+
+        let file = SerializedFileReader::new(output_parquet.into_file()).unwrap();
+        let schema_name = file.metadata().file_metadata().schema().name();
+        assert_eq!(schema_name, "my_amazing_schema");
     }
 
     #[test]
     fn test_convert_csv_to_parquet() {
         test_convert_compressed_csv_to_parquet(Compression::UNCOMPRESSED);
         test_convert_compressed_csv_to_parquet(Compression::SNAPPY);
-        test_convert_compressed_csv_to_parquet(Compression::GZIP(
-            GzipLevel::try_new(1).unwrap(),
-        ));
+        test_convert_compressed_csv_to_parquet(Compression::GZIP(GzipLevel::try_new(1).unwrap()));
         test_convert_compressed_csv_to_parquet(Compression::BROTLI(
             BrotliLevel::try_new(2).unwrap(),
         ));
         test_convert_compressed_csv_to_parquet(Compression::LZ4);
-        test_convert_compressed_csv_to_parquet(Compression::ZSTD(
-            ZstdLevel::try_new(1).unwrap(),
-        ));
+        test_convert_compressed_csv_to_parquet(Compression::ZSTD(ZstdLevel::try_new(1).unwrap()));
     }
 }

@@ -21,20 +21,17 @@ use super::rle::RleEncoder;
 
 use crate::basic::Encoding;
 use crate::data_type::AsBytes;
-use crate::util::bit_util::{ceil, num_required_bits, BitWriter};
+use crate::util::bit_util::{BitWriter, ceil, num_required_bits};
 
 /// Computes max buffer size for level encoder/decoder based on encoding, max
 /// repetition/definition level and number of total buffered values (includes null
 /// values).
 #[inline]
-pub fn max_buffer_size(
-    encoding: Encoding,
-    max_level: i16,
-    num_buffered_values: usize,
-) -> usize {
+pub fn max_buffer_size(encoding: Encoding, max_level: i16, num_buffered_values: usize) -> usize {
     let bit_width = num_required_bits(max_level as u64);
     match encoding {
         Encoding::RLE => RleEncoder::max_buffer_size(bit_width, num_buffered_values),
+        #[allow(deprecated)]
         Encoding::BIT_PACKED => ceil(num_buffered_values * bit_width as usize, 8),
         _ => panic!("Unsupported encoding type {encoding}"),
     }
@@ -66,6 +63,7 @@ impl LevelEncoder {
                 buffer.extend_from_slice(&[0; 4]);
                 LevelEncoder::Rle(RleEncoder::new_from_buf(bit_width, buffer))
             }
+            #[allow(deprecated)]
             Encoding::BIT_PACKED => {
                 // Here we set full byte buffer without adjusting for num_buffered_values,
                 // because byte buffer will already be allocated with size from

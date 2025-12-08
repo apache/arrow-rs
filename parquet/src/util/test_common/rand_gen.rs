@@ -17,86 +17,91 @@
 
 use crate::basic::Encoding;
 use crate::column::page::Page;
+use bytes::Bytes;
 use rand::{
-    distributions::{uniform::SampleUniform, Distribution, Standard},
-    thread_rng, Rng,
+    Rng,
+    distr::{Distribution, StandardUniform, uniform::SampleUniform},
+    rng,
 };
 use std::collections::VecDeque;
 
 use crate::data_type::*;
 use crate::encodings::encoding::{DictEncoder, Encoder};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::memory::ByteBufferPtr;
 use crate::util::{DataPageBuilder, DataPageBuilderImpl};
 
 /// Random generator of data type `T` values and sequences.
 pub trait RandGen<T: DataType> {
-    fn gen(len: i32) -> T::T;
+    fn r#gen(len: i32) -> T::T;
 
     fn gen_vec(len: i32, total: usize) -> Vec<T::T> {
         let mut result = vec![];
         for _ in 0..total {
-            result.push(Self::gen(len))
+            result.push(Self::r#gen(len))
         }
         result
     }
 }
 
 impl RandGen<BoolType> for BoolType {
-    fn gen(_: i32) -> bool {
-        thread_rng().gen::<bool>()
+    fn r#gen(_: i32) -> bool {
+        rng().random::<bool>()
     }
 }
 
 impl RandGen<Int32Type> for Int32Type {
-    fn gen(_: i32) -> i32 {
-        thread_rng().gen::<i32>()
+    fn r#gen(_: i32) -> i32 {
+        rng().random::<i32>()
     }
 }
 
 impl RandGen<Int64Type> for Int64Type {
-    fn gen(_: i32) -> i64 {
-        thread_rng().gen::<i64>()
+    fn r#gen(_: i32) -> i64 {
+        rng().random::<i64>()
     }
 }
 
 impl RandGen<Int96Type> for Int96Type {
-    fn gen(_: i32) -> Int96 {
-        let mut rng = thread_rng();
+    fn r#gen(_: i32) -> Int96 {
+        let mut rng = rng();
         let mut result = Int96::new();
-        result.set_data(rng.gen::<u32>(), rng.gen::<u32>(), rng.gen::<u32>());
+        result.set_data(
+            rng.random::<u32>(),
+            rng.random::<u32>(),
+            rng.random::<u32>(),
+        );
         result
     }
 }
 
 impl RandGen<FloatType> for FloatType {
-    fn gen(_: i32) -> f32 {
-        thread_rng().gen::<f32>()
+    fn r#gen(_: i32) -> f32 {
+        rng().random::<f32>()
     }
 }
 
 impl RandGen<DoubleType> for DoubleType {
-    fn gen(_: i32) -> f64 {
-        thread_rng().gen::<f64>()
+    fn r#gen(_: i32) -> f64 {
+        rng().random::<f64>()
     }
 }
 
 impl RandGen<ByteArrayType> for ByteArrayType {
-    fn gen(_: i32) -> ByteArray {
-        let mut rng = thread_rng();
+    fn r#gen(_: i32) -> ByteArray {
+        let mut rng = rng();
         let mut result = ByteArray::new();
         let mut value = vec![];
-        let len = rng.gen_range(0..128);
+        let len = rng.random_range(0..128);
         for _ in 0..len {
-            value.push(rng.gen_range(0..255));
+            value.push(rng.random_range(0..255));
         }
-        result.set_data(ByteBufferPtr::new(value));
+        result.set_data(Bytes::from(value));
         result
     }
 }
 
 impl RandGen<FixedLenByteArrayType> for FixedLenByteArrayType {
-    fn gen(len: i32) -> FixedLenByteArray {
+    fn r#gen(len: i32) -> FixedLenByteArray {
         assert!(len >= 0);
         let value = random_bytes(len as usize);
         ByteArray::from(value).into()
@@ -105,28 +110,28 @@ impl RandGen<FixedLenByteArrayType> for FixedLenByteArrayType {
 
 pub fn random_bytes(n: usize) -> Vec<u8> {
     let mut result = vec![];
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for _ in 0..n {
-        result.push(rng.gen_range(0..255));
+        result.push(rng.random_range(0..255));
     }
     result
 }
 
 pub fn random_numbers<T>(n: usize) -> Vec<T>
 where
-    Standard: Distribution<T>,
+    StandardUniform: Distribution<T>,
 {
-    let mut rng = thread_rng();
-    Standard.sample_iter(&mut rng).take(n).collect()
+    let mut rng = rng();
+    StandardUniform.sample_iter(&mut rng).take(n).collect()
 }
 
 pub fn random_numbers_range<T>(n: usize, low: T, high: T, result: &mut Vec<T>)
 where
     T: PartialOrd + SampleUniform + Copy,
 {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for _ in 0..n {
-        result.push(rng.gen_range(low..high));
+        result.push(rng.random_range(low..high));
     }
 }
 
@@ -173,8 +178,7 @@ pub fn make_pages<T: DataType>(
 
         // Generate the current page
 
-        let mut pb =
-            DataPageBuilderImpl::new(desc.clone(), num_values_cur_page as u32, use_v2);
+        let mut pb = DataPageBuilderImpl::new(desc.clone(), num_values_cur_page as u32, use_v2);
         if max_rep_level > 0 {
             pb.add_rep_levels(max_rep_level, &rep_levels[level_range.clone()]);
         }

@@ -15,67 +15,29 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::collections::HashMap;
-use std::ops::Range;
+use bytes::Bytes;
 
-use crate::basic::Encoding;
+use crate::basic::{Encoding, EncodingMask};
 use crate::data_type::DataType;
 use crate::encodings::{
-    decoding::{get_decoder, Decoder, DictDecoder, PlainDecoder},
+    decoding::{Decoder, DictDecoder, PlainDecoder, get_decoder},
     rle::RleDecoder,
 };
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
-use crate::util::{
-    bit_util::{num_required_bits, BitReader},
-    memory::ByteBufferPtr,
-};
+use crate::util::bit_util::{BitReader, num_required_bits};
 
-/// A slice of levels buffer data that is written to by a [`ColumnLevelDecoder`]
-pub trait LevelsBufferSlice {
-    /// Returns the capacity of this slice or `usize::MAX` if no limit
-    fn capacity(&self) -> usize;
-
-    /// Count the number of levels in `range` not equal to `max_level`
-    fn count_nulls(&self, range: Range<usize>, max_level: i16) -> usize;
-}
-
-impl LevelsBufferSlice for [i16] {
-    fn capacity(&self) -> usize {
-        self.len()
-    }
-
-    fn count_nulls(&self, range: Range<usize>, max_level: i16) -> usize {
-        self[range].iter().filter(|i| **i != max_level).count()
-    }
-}
-
-/// A slice of values buffer data that is written to by a [`ColumnValueDecoder`]
-pub trait ValuesBufferSlice {
-    /// Returns the capacity of this slice or `usize::MAX` if no limit
-    fn capacity(&self) -> usize;
-}
-
-impl<T> ValuesBufferSlice for [T] {
-    fn capacity(&self) -> usize {
-        self.len()
-    }
-}
-
-/// Decodes level data to a [`LevelsBufferSlice`]
+/// Decodes level data
 pub trait ColumnLevelDecoder {
-    type Slice: LevelsBufferSlice + ?Sized;
+    type Buffer;
 
     /// Set data for this [`ColumnLevelDecoder`]
-    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr);
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()>;
 }
 
 pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
-    /// Read up to `max_records` of repetition level data into `out[range]` returning the number
+    /// Read up to `max_records` of repetition level data into `out` returning the number
     /// of complete records and levels read
-    ///
-    /// `range` is provided by the caller to allow for types such as default-initialized `[T]`
-    /// that only track capacity and not length
     ///
     /// A record only ends when the data contains a subsequent repetition level of 0,
     /// it is therefore left to the caller to delimit the final record in a column
@@ -85,9 +47,9 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
     /// Implementations may panic if `range` overlaps with already written data
     fn read_rep_levels(
         &mut self,
-        out: &mut Self::Slice,
-        range: Range<usize>,
-        max_records: usize,
+        out: &mut Self::Buffer,
+        num_records: usize,
+        num_levels: usize,
     ) -> Result<(usize, usize)>;
 
     /// Skips over up to `num_levels` repetition levels corresponding to `num_records` records,
@@ -97,43 +59,35 @@ pub trait RepetitionLevelDecoder: ColumnLevelDecoder {
     ///
     /// A record only ends when the data contains a subsequent repetition level of 0,
     /// it is therefore left to the caller to delimit the final record in a column
-    fn skip_rep_levels(
-        &mut self,
-        num_records: usize,
-        num_levels: usize,
-    ) -> Result<(usize, usize)>;
+    fn skip_rep_levels(&mut self, num_records: usize, num_levels: usize) -> Result<(usize, usize)>;
+
+    /// Flush any partially read or skipped record
+    fn flush_partial(&mut self) -> bool;
 }
 
 pub trait DefinitionLevelDecoder: ColumnLevelDecoder {
-    /// Read definition level data into `out[range]` returning the number of levels read
+    /// Read up to `num_levels` definition levels into `out`.
     ///
-    /// `range` is provided by the caller to allow for types such as default-initialized `[T]`
-    /// that only track capacity and not length
+    /// Returns the number of values read, and the number of levels read.
     ///
     /// # Panics
     ///
     /// Implementations may panic if `range` overlaps with already written data
-    ///
-    // TODO: Should this return the number of nulls
     fn read_def_levels(
         &mut self,
-        out: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> Result<usize>;
-
-    /// Skips over `num_levels` definition levels
-    ///
-    /// Returns the number of values skipped, and the number of levels skipped
-    fn skip_def_levels(
-        &mut self,
+        out: &mut Self::Buffer,
         num_levels: usize,
-        max_def_level: i16,
     ) -> Result<(usize, usize)>;
+
+    /// Skips over `num_levels` definition levels.
+    ///
+    /// Returns the number of values skipped, and the number of levels skipped.
+    fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)>;
 }
 
-/// Decodes value data to a [`ValuesBufferSlice`]
+/// Decodes value data
 pub trait ColumnValueDecoder {
-    type Slice: ValuesBufferSlice + ?Sized;
+    type Buffer;
 
     /// Create a new [`ColumnValueDecoder`]
     fn new(col: &ColumnDescPtr) -> Self;
@@ -141,7 +95,7 @@ pub trait ColumnValueDecoder {
     /// Set the current dictionary page
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         encoding: Encoding,
         is_sorted: bool,
@@ -161,21 +115,18 @@ pub trait ColumnValueDecoder {
     fn set_data(
         &mut self,
         encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()>;
 
-    /// Read values data into `out[range]` returning the number of values read
-    ///
-    /// `range` is provided by the caller to allow for types such as default-initialized `[T]`
-    /// that only track capacity and not length
+    /// Read up to `num_values` values into `out`
     ///
     /// # Panics
     ///
     /// Implementations may panic if `range` overlaps with already written data
     ///
-    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize>;
+    fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize>;
 
     /// Skips over `num_values` values
     ///
@@ -183,30 +134,39 @@ pub trait ColumnValueDecoder {
     fn skip_values(&mut self, num_values: usize) -> Result<usize>;
 }
 
+/// Bucket-based storage for decoder instances keyed by `Encoding`.
+///
+/// This replaces `HashMap` lookups with direct indexing to avoid hashing overhead in the
+/// hot decoding paths.
+const ENCODING_SLOTS: usize = Encoding::MAX_DISCRIMINANT as usize + 1;
+
 /// An implementation of [`ColumnValueDecoder`] for `[T::T]`
 pub struct ColumnValueDecoderImpl<T: DataType> {
     descr: ColumnDescPtr,
 
     current_encoding: Option<Encoding>,
 
-    // Cache of decoders for existing encodings
-    decoders: HashMap<Encoding, Box<dyn Decoder<T>>>,
+    /// Cache of decoders for existing encodings.
+    /// Uses `EncodingMask` and dense storage keyed by encoding discriminant.
+    decoder_mask: EncodingMask,
+    decoders: [Option<Box<dyn Decoder<T>>>; ENCODING_SLOTS],
 }
 
 impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
-    type Slice = [T::T];
+    type Buffer = Vec<T::T>;
 
     fn new(descr: &ColumnDescPtr) -> Self {
         Self {
             descr: descr.clone(),
             current_encoding: None,
-            decoders: Default::default(),
+            decoder_mask: EncodingMask::default(),
+            decoders: std::array::from_fn(|_| None),
         }
     }
 
     fn set_dict(
         &mut self,
-        buf: ByteBufferPtr,
+        buf: Bytes,
         num_values: u32,
         mut encoding: Encoding,
         _is_sorted: bool,
@@ -215,7 +175,7 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             encoding = Encoding::RLE_DICTIONARY
         }
 
-        if self.decoders.contains_key(&encoding) {
+        if self.decoder_mask.is_set(encoding) {
             return Err(general_err!("Column cannot have more than one dictionary"));
         }
 
@@ -225,7 +185,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
 
             let mut decoder = DictDecoder::new();
             decoder.set_dict(Box::new(dictionary))?;
-            self.decoders.insert(encoding, Box::new(decoder));
+            self.decoders[encoding as usize] = Some(Box::new(decoder));
+            self.decoder_mask.insert(encoding);
             Ok(())
         } else {
             Err(nyi_err!(
@@ -238,29 +199,28 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
     fn set_data(
         &mut self,
         mut encoding: Encoding,
-        data: ByteBufferPtr,
+        data: Bytes,
         num_levels: usize,
         num_values: Option<usize>,
     ) -> Result<()> {
-        use std::collections::hash_map::Entry;
-
         if encoding == Encoding::PLAIN_DICTIONARY {
             encoding = Encoding::RLE_DICTIONARY;
         }
 
         let decoder = if encoding == Encoding::RLE_DICTIONARY {
-            self.decoders
-                .get_mut(&encoding)
+            self.decoders[encoding as usize]
+                .as_mut()
                 .expect("Decoder for dict should have been set")
         } else {
-            // Search cache for data page decoder
-            match self.decoders.entry(encoding) {
-                Entry::Occupied(e) => e.into_mut(),
-                Entry::Vacant(v) => {
-                    let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
-                    v.insert(data_decoder)
-                }
+            let slot = encoding as usize;
+            if self.decoders[slot].is_none() {
+                let data_decoder = get_decoder::<T>(self.descr.clone(), encoding)?;
+                self.decoders[slot] = Some(data_decoder);
+                self.decoder_mask.insert(encoding);
             }
+            self.decoders[slot]
+                .as_mut()
+                .expect("decoder should have been inserted")
         };
 
         decoder.set_data(data, num_values.unwrap_or(num_levels))?;
@@ -268,17 +228,21 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
         Ok(())
     }
 
-    fn read(&mut self, out: &mut Self::Slice, range: Range<usize>) -> Result<usize> {
+    fn read(&mut self, out: &mut Self::Buffer, num_values: usize) -> Result<usize> {
         let encoding = self
             .current_encoding
             .expect("current_encoding should be set");
 
-        let current_decoder = self
-            .decoders
-            .get_mut(&encoding)
+        let current_decoder = self.decoders[encoding as usize]
+            .as_mut()
             .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
 
-        current_decoder.get(&mut out[range])
+        // TODO: Push vec into decoder (#5177)
+        let start = out.len();
+        out.resize(start + num_values, T::T::default());
+        let read = current_decoder.get(&mut out[start..])?;
+        out.truncate(start + read);
+        Ok(read)
     }
 
     fn skip_values(&mut self, num_values: usize) -> Result<usize> {
@@ -286,9 +250,8 @@ impl<T: DataType> ColumnValueDecoder for ColumnValueDecoderImpl<T> {
             .current_encoding
             .expect("current_encoding should be set");
 
-        let current_decoder = self
-            .decoders
-            .get_mut(&encoding)
+        let current_decoder = self.decoders[encoding as usize]
+            .as_mut()
             .unwrap_or_else(|| panic!("decoder for encoding {encoding} should be set"));
 
         current_decoder.skip(num_values)
@@ -303,14 +266,15 @@ enum LevelDecoder {
 }
 
 impl LevelDecoder {
-    fn new(encoding: Encoding, data: ByteBufferPtr, bit_width: u8) -> Self {
+    fn new(encoding: Encoding, data: Bytes, bit_width: u8) -> Result<Self> {
         match encoding {
             Encoding::RLE => {
                 let mut decoder = RleDecoder::new(bit_width);
-                decoder.set_data(data);
-                Self::Rle(decoder)
+                decoder.set_data(data)?;
+                Ok(Self::Rle(decoder))
             }
-            Encoding::BIT_PACKED => Self::Packed(BitReader::new(data), bit_width),
+            #[allow(deprecated)]
+            Encoding::BIT_PACKED => Ok(Self::Packed(BitReader::new(data), bit_width)),
             _ => unreachable!("invalid level encoding: {}", encoding),
         }
     }
@@ -329,6 +293,7 @@ impl LevelDecoder {
 pub struct DefinitionLevelDecoderImpl {
     decoder: Option<LevelDecoder>,
     bit_width: u8,
+    max_level: i16,
 }
 
 impl DefinitionLevelDecoderImpl {
@@ -337,32 +302,38 @@ impl DefinitionLevelDecoderImpl {
         Self {
             decoder: None,
             bit_width,
+            max_level,
         }
     }
 }
 
 impl ColumnLevelDecoder for DefinitionLevelDecoderImpl {
-    type Slice = [i16];
+    type Buffer = Vec<i16>;
 
-    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width))
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
+        Ok(())
     }
 }
 
 impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
     fn read_def_levels(
         &mut self,
-        out: &mut Self::Slice,
-        range: Range<usize>,
-    ) -> Result<usize> {
-        self.decoder.as_mut().unwrap().read(&mut out[range])
+        out: &mut Self::Buffer,
+        num_levels: usize,
+    ) -> Result<(usize, usize)> {
+        // TODO: Push vec into decoder (#5177)
+        let start = out.len();
+        out.resize(start + num_levels, 0);
+        let levels_read = self.decoder.as_mut().unwrap().read(&mut out[start..])?;
+        out.truncate(start + levels_read);
+
+        let iter = out.iter().skip(start);
+        let values_read = iter.filter(|x| **x == self.max_level).count();
+        Ok((values_read, levels_read))
     }
 
-    fn skip_def_levels(
-        &mut self,
-        num_levels: usize,
-        max_def_level: i16,
-    ) -> Result<(usize, usize)> {
+    fn skip_def_levels(&mut self, num_levels: usize) -> Result<(usize, usize)> {
         let mut level_skip = 0;
         let mut value_skip = 0;
         let mut buf: Vec<i16> = vec![];
@@ -371,14 +342,14 @@ impl DefinitionLevelDecoder for DefinitionLevelDecoderImpl {
 
             let to_read = remaining_levels.min(SKIP_BUFFER_SIZE);
             buf.resize(to_read, 0);
-            let read = self.read_def_levels(&mut buf, 0..to_read)?;
-            if read == 0 {
+            let (values_read, levels_read) = self.read_def_levels(&mut buf, to_read)?;
+            if levels_read == 0 {
                 // Reached end of page
                 break;
             }
 
-            level_skip += read;
-            value_skip += buf[..read].iter().filter(|x| **x == max_def_level).count();
+            level_skip += levels_read;
+            value_skip += values_read;
         }
 
         Ok((value_skip, level_skip))
@@ -421,11 +392,7 @@ impl RepetitionLevelDecoderImpl {
     /// and returns the number of "complete" records along with the corresponding number of values
     ///
     /// A "complete" record is one where the buffer contains a subsequent repetition level of 0
-    fn count_records(
-        &mut self,
-        records_to_read: usize,
-        num_levels: usize,
-    ) -> (bool, usize, usize) {
+    fn count_records(&mut self, records_to_read: usize, num_levels: usize) -> (bool, usize, usize) {
         let mut records_read = 0;
 
         let levels = num_levels.min(self.buffer_len - self.buffer_offset);
@@ -445,28 +412,27 @@ impl RepetitionLevelDecoderImpl {
 }
 
 impl ColumnLevelDecoder for RepetitionLevelDecoderImpl {
-    type Slice = [i16];
+    type Buffer = Vec<i16>;
 
-    fn set_data(&mut self, encoding: Encoding, data: ByteBufferPtr) {
-        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width));
+    fn set_data(&mut self, encoding: Encoding, data: Bytes) -> Result<()> {
+        self.decoder = Some(LevelDecoder::new(encoding, data, self.bit_width)?);
         self.buffer_len = 0;
         self.buffer_offset = 0;
+        Ok(())
     }
 }
 
 impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
     fn read_rep_levels(
         &mut self,
-        out: &mut Self::Slice,
-        range: Range<usize>,
-        max_records: usize,
+        out: &mut Self::Buffer,
+        num_records: usize,
+        num_levels: usize,
     ) -> Result<(usize, usize)> {
-        let output = &mut out[range];
-        let max_levels = output.len();
         let mut total_records_read = 0;
         let mut total_levels_read = 0;
 
-        while total_records_read < max_records && total_levels_read < max_levels {
+        while total_records_read < num_records && total_levels_read < num_levels {
             if self.buffer_len == self.buffer_offset {
                 self.fill_buf()?;
                 if self.buffer_len == 0 {
@@ -475,11 +441,11 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
             }
 
             let (partial, records_read, levels_read) = self.count_records(
-                max_records - total_records_read,
-                max_levels - total_levels_read,
+                num_records - total_records_read,
+                num_levels - total_levels_read,
             );
 
-            output[total_levels_read..total_levels_read + levels_read].copy_from_slice(
+            out.extend_from_slice(
                 &self.buffer[self.buffer_offset..self.buffer_offset + levels_read],
             );
 
@@ -491,11 +457,7 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
         Ok((total_records_read, total_levels_read))
     }
 
-    fn skip_rep_levels(
-        &mut self,
-        num_records: usize,
-        num_levels: usize,
-    ) -> Result<(usize, usize)> {
+    fn skip_rep_levels(&mut self, num_records: usize, num_levels: usize) -> Result<(usize, usize)> {
         let mut total_records_read = 0;
         let mut total_levels_read = 0;
 
@@ -519,30 +481,34 @@ impl RepetitionLevelDecoder for RepetitionLevelDecoderImpl {
         }
         Ok((total_records_read, total_levels_read))
     }
+
+    fn flush_partial(&mut self) -> bool {
+        std::mem::take(&mut self.has_partial)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::encodings::rle::RleEncoder;
-    use rand::prelude::*;
+    use rand::{prelude::*, rng};
 
     #[test]
     fn test_skip_padding() {
         let mut encoder = RleEncoder::new(1, 1024);
         encoder.put(0);
         (0..3).for_each(|_| encoder.put(1));
-        let data = ByteBufferPtr::new(encoder.consume());
+        let data = Bytes::from(encoder.consume());
 
         let mut decoder = RepetitionLevelDecoderImpl::new(1);
-        decoder.set_data(Encoding::RLE, data.clone());
+        decoder.set_data(Encoding::RLE, data.clone()).unwrap();
         let (_, levels) = decoder.skip_rep_levels(100, 4).unwrap();
         assert_eq!(levels, 4);
 
         // The length of the final bit packed run is ambiguous, so without the correct
         // levels limit, it will decode zero padding
         let mut decoder = RepetitionLevelDecoderImpl::new(1);
-        decoder.set_data(Encoding::RLE, data);
+        decoder.set_data(Encoding::RLE, data).unwrap();
         let (_, levels) = decoder.skip_rep_levels(100, 6).unwrap();
         assert_eq!(levels, 6);
     }
@@ -550,36 +516,35 @@ mod tests {
     #[test]
     fn test_skip_rep_levels() {
         for _ in 0..10 {
-            let mut rng = thread_rng();
+            let mut rng = rng();
             let total_len = 10000_usize;
-            let mut encoded: Vec<i16> =
-                (0..total_len).map(|_| rng.gen_range(0..5)).collect();
+            let mut encoded: Vec<i16> = (0..total_len).map(|_| rng.random_range(0..5)).collect();
             encoded[0] = 0;
             let mut encoder = RleEncoder::new(3, 1024);
             for v in &encoded {
                 encoder.put(*v as _)
             }
-            let data = ByteBufferPtr::new(encoder.consume());
+            let data = Bytes::from(encoder.consume());
 
             let mut decoder = RepetitionLevelDecoderImpl::new(5);
-            decoder.set_data(Encoding::RLE, data);
+            decoder.set_data(Encoding::RLE, data).unwrap();
 
             let total_records = encoded.iter().filter(|x| **x == 0).count();
             let mut remaining_records = total_records;
             let mut remaining_levels = encoded.len();
             loop {
-                let skip = rng.gen_bool(0.5);
-                let records = rng.gen_range(1..=remaining_records.min(5));
+                let skip = rng.random_bool(0.5);
+                let records = rng.random_range(1..=remaining_records.min(5));
                 let (records_read, levels_read) = if skip {
                     decoder.skip_rep_levels(records, remaining_levels).unwrap()
                 } else {
-                    let mut decoded = vec![0; remaining_levels];
+                    let mut decoded = Vec::new();
                     let (records_read, levels_read) = decoder
-                        .read_rep_levels(&mut decoded, 0..remaining_levels, records)
+                        .read_rep_levels(&mut decoded, records, remaining_levels)
                         .unwrap();
 
                     assert_eq!(
-                        decoded[..levels_read],
+                        decoded,
                         encoded[encoded.len() - remaining_levels..][..levels_read]
                     );
                     (records_read, levels_read)

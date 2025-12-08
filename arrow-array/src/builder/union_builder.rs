@@ -15,15 +15,16 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::buffer_builder::{Int32BufferBuilder, Int8BufferBuilder};
-use crate::builder::BufferBuilder;
-use crate::{make_array, ArrowPrimitiveType, UnionArray};
+use crate::builder::buffer_builder::{Int8BufferBuilder, Int32BufferBuilder};
+use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::{ArrayRef, ArrowPrimitiveType, UnionArray, make_array};
 use arrow_buffer::NullBufferBuilder;
-use arrow_buffer::{ArrowNativeType, Buffer};
+use arrow_buffer::{ArrowNativeType, Buffer, ScalarBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// `FieldData` is a helper struct to track the state of the fields in the `UnionBuilder`.
 #[derive(Debug)]
@@ -41,12 +42,14 @@ struct FieldData {
 }
 
 /// A type-erased [`BufferBuilder`] used by [`FieldData`]
-trait FieldDataValues: std::fmt::Debug {
+trait FieldDataValues: std::fmt::Debug + Send + Sync {
     fn as_mut_any(&mut self) -> &mut dyn Any;
 
     fn append_null(&mut self);
 
     fn finish(&mut self) -> Buffer;
+
+    fn finish_cloned(&self) -> Buffer;
 }
 
 impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
@@ -61,15 +64,15 @@ impl<T: ArrowNativeType> FieldDataValues for BufferBuilder<T> {
     fn finish(&mut self) -> Buffer {
         self.finish()
     }
+
+    fn finish_cloned(&self) -> Buffer {
+        Buffer::from_slice_ref(self.as_slice())
+    }
 }
 
 impl FieldData {
     /// Creates a new `FieldData`.
-    fn new<T: ArrowPrimitiveType>(
-        type_id: i8,
-        data_type: DataType,
-        capacity: usize,
-    ) -> Self {
+    fn new<T: ArrowPrimitiveType>(type_id: i8, data_type: DataType, capacity: usize) -> Self {
         Self {
             type_id,
             data_type,
@@ -141,12 +144,12 @@ impl FieldData {
 /// assert_eq!(union.value_offset(1), 1);
 /// assert_eq!(union.value_offset(2), 2);
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct UnionBuilder {
     /// The current number of slots in the array
     len: usize,
     /// Maps field names to `FieldData` instances which track the builders for that field
-    fields: HashMap<String, FieldData>,
+    fields: BTreeMap<String, FieldData>,
     /// Builder to keep track of type ids
     type_id_builder: Int8BufferBuilder,
     /// Builder to keep track of offsets (`None` for sparse unions)
@@ -169,7 +172,7 @@ impl UnionBuilder {
     pub fn with_capacity_dense(capacity: usize) -> Self {
         Self {
             len: 0,
-            fields: HashMap::default(),
+            fields: Default::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: Some(Int32BufferBuilder::new(capacity)),
             initial_capacity: capacity,
@@ -180,7 +183,7 @@ impl UnionBuilder {
     pub fn with_capacity_sparse(capacity: usize) -> Self {
         Self {
             len: 0,
-            fields: HashMap::default(),
+            fields: Default::default(),
             type_id_builder: Int8BufferBuilder::new(capacity),
             value_offset_builder: None,
             initial_capacity: capacity,
@@ -222,7 +225,12 @@ impl UnionBuilder {
         let mut field_data = match self.fields.remove(&type_name) {
             Some(data) => {
                 if data.data_type != T::DATA_TYPE {
-                    return Err(ArrowError::InvalidArgumentError(format!("Attempt to write col \"{}\" with type {} doesn't match existing type {}", type_name, T::DATA_TYPE, data.data_type)));
+                    return Err(ArrowError::InvalidArgumentError(format!(
+                        "Attempt to write col \"{}\" with type {} doesn't match existing type {}",
+                        type_name,
+                        T::DATA_TYPE,
+                        data.data_type
+                    )));
                 }
                 data
             }
@@ -273,40 +281,207 @@ impl UnionBuilder {
     }
 
     /// Builds this builder creating a new `UnionArray`.
-    pub fn build(mut self) -> Result<UnionArray, ArrowError> {
-        let type_id_buffer = self.type_id_builder.finish();
-        let value_offsets_buffer = self.value_offset_builder.map(|mut b| b.finish());
-        let mut children = Vec::new();
-        for (
-            name,
-            FieldData {
-                type_id,
-                data_type,
-                mut values_buffer,
-                slots,
-                null_buffer_builder: mut bitmap_builder,
-            },
-        ) in self.fields.into_iter()
-        {
-            let buffer = values_buffer.finish();
-            let arr_data_builder = ArrayDataBuilder::new(data_type.clone())
-                .add_buffer(buffer)
-                .len(slots)
-                .nulls(bitmap_builder.finish());
+    pub fn build(self) -> Result<UnionArray, ArrowError> {
+        let mut children = Vec::with_capacity(self.fields.len());
+        let union_fields = self
+            .fields
+            .into_iter()
+            .map(
+                |(
+                    name,
+                    FieldData {
+                        type_id,
+                        data_type,
+                        mut values_buffer,
+                        slots,
+                        mut null_buffer_builder,
+                    },
+                )| {
+                    let array_ref = make_array(unsafe {
+                        ArrayDataBuilder::new(data_type.clone())
+                            .add_buffer(values_buffer.finish())
+                            .len(slots)
+                            .nulls(null_buffer_builder.finish())
+                            .build_unchecked()
+                    });
+                    children.push(array_ref);
+                    (type_id, Arc::new(Field::new(name, data_type, false)))
+                },
+            )
+            .collect();
+        UnionArray::try_new(
+            union_fields,
+            self.type_id_builder.into(),
+            self.value_offset_builder.map(Into::into),
+            children,
+        )
+    }
 
-            let arr_data_ref = unsafe { arr_data_builder.build_unchecked() };
-            let array_ref = make_array(arr_data_ref);
-            children.push((type_id, (Field::new(name, data_type, false), array_ref)))
-        }
+    /// Builds this builder creating a new `UnionArray` without consuming the builder.
+    ///
+    /// This is used for the `finish_cloned` implementation in `ArrayBuilder`.
+    fn build_cloned(&self) -> Result<UnionArray, ArrowError> {
+        let mut children = Vec::with_capacity(self.fields.len());
+        let union_fields: Vec<_> = self
+            .fields
+            .iter()
+            .map(|(name, field_data)| {
+                let FieldData {
+                    type_id,
+                    data_type,
+                    values_buffer,
+                    slots,
+                    null_buffer_builder,
+                } = field_data;
 
-        children.sort_by(|a, b| {
-            a.0.partial_cmp(&b.0)
-                .expect("This will never be None as type ids are always i8 values.")
-        });
-        let children: Vec<_> = children.into_iter().map(|(_, b)| b).collect();
+                let array_ref = make_array(unsafe {
+                    ArrayDataBuilder::new(data_type.clone())
+                        .add_buffer(values_buffer.finish_cloned())
+                        .len(*slots)
+                        .nulls(null_buffer_builder.finish_cloned())
+                        .build_unchecked()
+                });
+                children.push(array_ref);
+                (
+                    *type_id,
+                    Arc::new(Field::new(name.clone(), data_type.clone(), false)),
+                )
+            })
+            .collect();
+        UnionArray::try_new(
+            union_fields.into_iter().collect(),
+            ScalarBuffer::from(self.type_id_builder.as_slice().to_vec()),
+            self.value_offset_builder
+                .as_ref()
+                .map(|builder| ScalarBuffer::from(builder.as_slice().to_vec())),
+            children,
+        )
+    }
+}
 
-        let type_ids: Vec<i8> = (0_i8..children.len() as i8).collect();
+impl ArrayBuilder for UnionBuilder {
+    /// Returns the number of array slots in the builder
+    fn len(&self) -> usize {
+        self.len
+    }
 
-        UnionArray::try_new(&type_ids, type_id_buffer, value_offsets_buffer, children)
+    /// Builds the array
+    fn finish(&mut self) -> ArrayRef {
+        // Even simpler - just move the builder using mem::take and replace with default
+        let builder = std::mem::take(self);
+
+        // Since UnionBuilder controls all invariants, this should never fail
+        Arc::new(builder.build().unwrap())
+    }
+
+    /// Builds the array without resetting the underlying builder
+    fn finish_cloned(&self) -> ArrayRef {
+        // We construct the UnionArray carefully to ensure try_new cannot fail.
+        // Since UnionBuilder controls all the invariants, this should never panic.
+        Arc::new(self.build_cloned().unwrap_or_else(|err| {
+            panic!("UnionBuilder::build_cloned failed unexpectedly: {}", err)
+        }))
+    }
+
+    /// Returns the builder as a non-mutable `Any` reference
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    /// Returns the builder as a mutable `Any` reference
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    /// Returns the boxed builder as a box of `Any`
+    fn into_box_any(self: Box<Self>) -> Box<dyn Any> {
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::array::Array;
+    use crate::cast::AsArray;
+    use crate::types::{Float64Type, Int32Type};
+
+    #[test]
+    fn test_union_builder_array_builder_trait() {
+        // Test that UnionBuilder implements ArrayBuilder trait
+        let mut builder = UnionBuilder::new_dense();
+
+        // Add some data
+        builder.append::<Int32Type>("a", 1).unwrap();
+        builder.append::<Float64Type>("b", 3.0).unwrap();
+        builder.append::<Int32Type>("a", 4).unwrap();
+
+        assert_eq!(builder.len(), 3);
+
+        // Test finish_cloned (non-destructive)
+        let array1 = builder.finish_cloned();
+        assert_eq!(array1.len(), 3);
+
+        // Verify values in cloned array
+        let union1 = array1.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(union1.type_ids(), &[0, 1, 0]);
+        assert_eq!(union1.offsets().unwrap().as_ref(), &[0, 0, 1]);
+        let int_array1 = union1.child(0).as_primitive::<Int32Type>();
+        let float_array1 = union1.child(1).as_primitive::<Float64Type>();
+        assert_eq!(int_array1.value(0), 1);
+        assert_eq!(int_array1.value(1), 4);
+        assert_eq!(float_array1.value(0), 3.0);
+
+        // Builder should still be usable after finish_cloned
+        builder.append::<Float64Type>("b", 5.0).unwrap();
+        assert_eq!(builder.len(), 4);
+
+        // Test finish (destructive)
+        let array2 = builder.finish();
+        assert_eq!(array2.len(), 4);
+
+        // Verify values in final array
+        let union2 = array2.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(union2.type_ids(), &[0, 1, 0, 1]);
+        assert_eq!(union2.offsets().unwrap().as_ref(), &[0, 0, 1, 1]);
+        let int_array2 = union2.child(0).as_primitive::<Int32Type>();
+        let float_array2 = union2.child(1).as_primitive::<Float64Type>();
+        assert_eq!(int_array2.value(0), 1);
+        assert_eq!(int_array2.value(1), 4);
+        assert_eq!(float_array2.value(0), 3.0);
+        assert_eq!(float_array2.value(1), 5.0);
+    }
+
+    #[test]
+    fn test_union_builder_type_erased() {
+        // Test type-erased usage with Box<dyn ArrayBuilder>
+        let mut builders: Vec<Box<dyn ArrayBuilder>> = vec![Box::new(UnionBuilder::new_sparse())];
+
+        // Downcast and use
+        let union_builder = builders[0]
+            .as_any_mut()
+            .downcast_mut::<UnionBuilder>()
+            .unwrap();
+        union_builder.append::<Int32Type>("x", 10).unwrap();
+        union_builder.append::<Float64Type>("y", 20.0).unwrap();
+
+        assert_eq!(builders[0].len(), 2);
+
+        let result = builders
+            .into_iter()
+            .map(|mut b| b.finish())
+            .collect::<Vec<_>>();
+        assert_eq!(result[0].len(), 2);
+
+        // Verify sparse union values
+        let union = result[0].as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(union.type_ids(), &[0, 1]);
+        assert!(union.offsets().is_none()); // Sparse union has no offsets
+        let int_array = union.child(0).as_primitive::<Int32Type>();
+        let float_array = union.child(1).as_primitive::<Float64Type>();
+        assert_eq!(int_array.value(0), 10);
+        assert!(int_array.is_null(1)); // Null in sparse layout
+        assert!(float_array.is_null(0)); // Null in sparse layout
+        assert_eq!(float_array.value(1), 20.0);
     }
 }

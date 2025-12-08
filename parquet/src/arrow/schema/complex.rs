@@ -18,13 +18,15 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::ProjectionMask;
+use crate::arrow::schema::virtual_type::RowNumber;
+use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use crate::schema::types::{SchemaDescriptor, Type, TypePtr};
-use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
+use arrow_schema::{DataType, Field, Fields, SchemaBuilder, extension::ExtensionType};
 
 fn get_repetition(t: &Type) -> Repetition {
     let info = t.get_basic_info();
@@ -38,10 +40,11 @@ fn get_repetition(t: &Type) -> Repetition {
 #[derive(Debug, Clone)]
 pub struct ParquetField {
     /// The level which represents an insertion into the current list
-    /// i.e. guaranteed to be > 0 for a list type
+    /// i.e. guaranteed to be > 0 for an element of list type
     pub rep_level: i16,
     /// The level at which this field is fully defined,
-    /// i.e. guaranteed to be > 0 for a nullable type
+    /// i.e. guaranteed to be > 0 for a nullable type or child of a
+    /// nullable type
     pub def_level: i16,
     /// Whether this field is nullable
     pub nullable: bool,
@@ -63,11 +66,7 @@ impl ParquetField {
             rep_level: self.rep_level,
             def_level: self.def_level,
             nullable: false,
-            arrow_type: DataType::List(Arc::new(Field::new(
-                name,
-                self.arrow_type.clone(),
-                false,
-            ))),
+            arrow_type: DataType::List(Arc::new(Field::new(name, self.arrow_type.clone(), false))),
             field_type: ParquetFieldType::Group {
                 children: vec![self],
             },
@@ -79,8 +78,16 @@ impl ParquetField {
         match &self.field_type {
             ParquetFieldType::Primitive { .. } => None,
             ParquetFieldType::Group { children } => Some(children),
+            ParquetFieldType::Virtual(_) => None,
         }
     }
+}
+
+/// Types of virtual columns that can be computed at read time
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum VirtualColumnType {
+    /// Row number within the file
+    RowNumber,
 }
 
 #[derive(Debug, Clone)]
@@ -94,6 +101,9 @@ pub enum ParquetFieldType {
     Group {
         children: Vec<ParquetField>,
     },
+    /// Virtual column that doesn't exist in the parquet file
+    /// but is computed at read time (e.g., row_number)
+    Virtual(VirtualColumnType),
 }
 
 /// Encodes the context of the parent of the field currently under consideration
@@ -175,7 +185,7 @@ impl Visitor {
 
         let parquet_fields = struct_type.get_fields();
 
-        // Extract the arrow fields
+        // Extract any arrow fields from the hints
         let arrow_fields = match &context.data_type {
             Some(DataType::Struct(fields)) => {
                 if fields.len() != parquet_fields.len() {
@@ -191,7 +201,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected struct got {}",
                     d
-                ))
+                ));
             }
             None => None,
         };
@@ -223,10 +233,10 @@ impl Visitor {
                 data_type,
             };
 
-            if let Some(child) = self.dispatch(parquet_field, child_ctx)? {
+            if let Some(mut child) = self.dispatch(parquet_field, child_ctx)? {
                 // The child type returned may be different from what is encoded in the arrow
                 // schema in the event of a mismatch or a projection
-                child_fields.push(convert_field(parquet_field, &child, arrow_field));
+                child_fields.push(convert_field(parquet_field, &mut child, arrow_field)?);
                 children.push(child);
             }
         }
@@ -274,8 +284,13 @@ impl Visitor {
             return Err(arrow_err!("Child of map field must be repeated"));
         }
 
+        // According to the specification the values are optional (#1642).
+        // In this case, return the keys as a list.
+        if map_key_value.get_fields().len() == 1 {
+            return self.visit_list(map_type, context);
+        }
+
         if map_key_value.get_fields().len() != 2 {
-            // According to the specification the values are optional (#1642)
             return Err(arrow_err!(
                 "Child of map field must have two children, found {}",
                 map_key_value.get_fields().len()
@@ -286,8 +301,16 @@ impl Visitor {
         let map_key = &map_key_value.get_fields()[0];
         let map_value = &map_key_value.get_fields()[1];
 
-        if map_key.get_basic_info().repetition() != Repetition::REQUIRED {
-            return Err(arrow_err!("Map keys must be required"));
+        match map_key.get_basic_info().repetition() {
+            Repetition::REPEATED => {
+                return Err(arrow_err!("Map keys cannot be repeated"));
+            }
+            Repetition::REQUIRED | Repetition::OPTIONAL => {
+                // Relaxed check for having repetition REQUIRED as there exists
+                // parquet writers and files that do not conform to this standard.
+                // This allows us to consume a broader range of existing files even
+                // if they are out of spec.
+            }
         }
 
         if map_value.get_basic_info().repetition() == Repetition::REPEATED {
@@ -308,17 +331,14 @@ impl Visitor {
                     (Some(field), Some(&*fields[0]), Some(&*fields[1]), *sorted)
                 }
                 d => {
-                    return Err(arrow_err!(
-                        "Map data type should contain struct got {}",
-                        d
-                    ));
+                    return Err(arrow_err!("Map data type should contain struct got {}", d));
                 }
             },
             Some(d) => {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected map got {}",
                     d
-                ))
+                ));
             }
             None => (None, None, None, false),
         };
@@ -345,9 +365,13 @@ impl Visitor {
 
         // Need both columns to be projected
         match (maybe_key, maybe_value) {
-            (Some(key), Some(value)) => {
-                let key_field = Arc::new(convert_field(map_key, &key, arrow_key));
-                let value_field = Arc::new(convert_field(map_value, &value, arrow_value));
+            (Some(mut key), Some(mut value)) => {
+                let key_field = Arc::new(
+                    convert_field(map_key, &mut key, arrow_key)?
+                        // The key is always non-nullable (#5630)
+                        .with_nullable(false),
+                );
+                let value_field = Arc::new(convert_field(map_value, &mut value, arrow_value)?);
                 let field_metadata = match arrow_map {
                     Some(field) => field.metadata().clone(),
                     _ => HashMap::default(),
@@ -403,9 +427,7 @@ impl Visitor {
         let (def_level, nullable) = match list_type.get_basic_info().repetition() {
             Repetition::REQUIRED => (context.def_level, false),
             Repetition::OPTIONAL => (context.def_level + 1, true),
-            Repetition::REPEATED => {
-                return Err(arrow_err!("List type cannot be repeated"))
-            }
+            Repetition::REPEATED => return Err(arrow_err!("List type cannot be repeated")),
         };
 
         let arrow_field = match &context.data_type {
@@ -416,7 +438,7 @@ impl Visitor {
                 return Err(arrow_err!(
                     "incompatible arrow schema, expected list got {}",
                     d
-                ))
+                ));
             }
             None => None,
         };
@@ -444,15 +466,21 @@ impl Visitor {
             };
         }
 
+        // test to see if the repeated field is a struct or one-tuple
         let items = repeated_field.get_fields();
         if items.len() != 1
-            || repeated_field.name() == "array"
-            || repeated_field.name() == format!("{}_tuple", list_type.name())
+            || (!repeated_field.is_list()
+                && !repeated_field.has_single_repeated_child()
+                && (repeated_field.name() == "array"
+                    || repeated_field.name() == format!("{}_tuple", list_type.name())))
         {
-            // If the repeated field is a group with multiple fields, then its type is the element type and elements are required.
+            // If the repeated field is a group with multiple fields, then its type is the element
+            // type and elements are required.
             //
-            // If the repeated field is a group with one field and is named either array or uses the LIST-annotated group's name
-            // with _tuple appended then the repeated type is the element type and elements are required.
+            // If the repeated field is a group with one field and is named either array or uses
+            // the LIST-annotated group's name with _tuple appended then the repeated type is the
+            // element type and elements are required. But this rule only applies if the
+            // repeated field is not annotated, and the single child field is not `repeated`.
             let context = VisitorContext {
                 rep_level: context.rep_level,
                 def_level,
@@ -480,8 +508,8 @@ impl Visitor {
         };
 
         match self.dispatch(item_type, new_context) {
-            Ok(Some(item)) => {
-                let item_field = Arc::new(convert_field(item_type, &item, arrow_field));
+            Ok(Some(mut item)) => {
+                let item_field = Arc::new(convert_field(item_type, &mut item, arrow_field)?);
 
                 // Use arrow type as hint for index size
                 let arrow_type = match context.data_type {
@@ -525,15 +553,64 @@ impl Visitor {
     }
 }
 
-/// Computes the [`Field`] for a child column
+/// Converts a virtual Arrow [`Field`] to a [`ParquetField`]
 ///
-/// The resulting [`Field`] will have the type dictated by `field`, a name
+/// Virtual fields don't correspond to any data in the parquet file,
+/// but are computed at read time (e.g., row_number)
+///
+/// The levels are computed based on the parent context:
+/// - If nullable: def_level = parent_def_level + 1
+/// - If required: def_level = parent_def_level
+/// - rep_level = parent_rep_level (virtual fields are not repeated)
+pub(super) fn convert_virtual_field(
+    arrow_field: &Field,
+    parent_rep_level: i16,
+    parent_def_level: i16,
+) -> Result<ParquetField> {
+    let nullable = arrow_field.is_nullable();
+    let def_level = if nullable {
+        parent_def_level + 1
+    } else {
+        parent_def_level
+    };
+
+    // Determine the virtual column type based on the extension type name
+    let extension_name = arrow_field.extension_type_name().ok_or_else(|| {
+        ParquetError::ArrowError(format!(
+            "virtual column field '{}' must have an extension type",
+            arrow_field.name()
+        ))
+    })?;
+
+    let virtual_type = match extension_name {
+        RowNumber::NAME => VirtualColumnType::RowNumber,
+        _ => {
+            return Err(ParquetError::ArrowError(format!(
+                "unsupported virtual column type '{}' for field '{}'",
+                extension_name,
+                arrow_field.name()
+            )));
+        }
+    };
+
+    Ok(ParquetField {
+        rep_level: parent_rep_level,
+        def_level,
+        nullable,
+        arrow_type: arrow_field.data_type().clone(),
+        field_type: ParquetFieldType::Virtual(virtual_type),
+    })
+}
+
+/// Computes the Arrow [`Field`] for a child column
+///
+/// The resulting Arrow [`Field`] will have the type dictated by the Parquet `field`, a name
 /// dictated by the `parquet_type`, and any metadata from `arrow_hint`
 fn convert_field(
     parquet_type: &Type,
-    field: &ParquetField,
+    field: &mut ParquetField,
     arrow_hint: Option<&Field>,
-) -> Field {
+) -> Result<Field, ParquetError> {
     let name = parquet_type.name();
     let data_type = field.arrow_type.clone();
     let nullable = field.nullable;
@@ -541,16 +618,31 @@ fn convert_field(
     match arrow_hint {
         Some(hint) => {
             // If the inferred type is a dictionary, preserve dictionary metadata
+            #[allow(deprecated)]
             let field = match (&data_type, hint.dict_id(), hint.dict_is_ordered()) {
-                (DataType::Dictionary(_, _), Some(id), Some(ordered)) => {
+                (DataType::Dictionary(_, _), Some(id), Some(ordered)) =>
+                {
+                    #[allow(deprecated)]
                     Field::new_dict(name, data_type, nullable, id, ordered)
                 }
                 _ => Field::new(name, data_type, nullable),
             };
 
-            field.with_metadata(hint.metadata().clone())
+            Ok(field.with_metadata(hint.metadata().clone()))
         }
-        None => Field::new(name, data_type, nullable),
+        None => {
+            let mut ret = Field::new(name, data_type, nullable);
+            let basic_info = parquet_type.get_basic_info();
+            if basic_info.has_id() {
+                let mut meta = HashMap::with_capacity(1);
+                meta.insert(
+                    PARQUET_FIELD_ID_META_KEY.to_string(),
+                    basic_info.id().to_string(),
+                );
+                ret.set_metadata(meta);
+            }
+            try_add_extension_type(ret, parquet_type)
+        }
     }
 }
 

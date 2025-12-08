@@ -19,14 +19,14 @@ use std::sync::{Arc, Mutex};
 
 use arrow_array::RecordBatch;
 use arrow_schema::Schema;
-use futures::{stream::BoxStream, StreamExt, TryStreamExt};
-use tonic::{metadata::MetadataMap, Request, Response, Status, Streaming};
+use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use tonic::{Request, Response, Status, Streaming, metadata::MetadataMap};
 
 use arrow_flight::{
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
     encode::FlightDataEncoderBuilder,
     flight_service_server::{FlightService, FlightServiceServer},
-    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightInfo,
-    HandshakeRequest, HandshakeResponse, PutResult, SchemaAsIpc, SchemaResult, Ticket,
 };
 
 #[derive(Debug, Clone)]
@@ -38,6 +38,7 @@ pub struct TestFlightServer {
 
 impl TestFlightServer {
     /// Create a `TestFlightServer`
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(State::new())),
@@ -46,19 +47,21 @@ impl TestFlightServer {
 
     /// Return an [`FlightServiceServer`] that can be used with a
     /// [`Server`](tonic::transport::Server)
+    #[allow(dead_code)]
     pub fn service(&self) -> FlightServiceServer<TestFlightServer> {
         // wrap up tonic goop
         FlightServiceServer::new(self.clone())
     }
 
     /// Specify the response returned from the next call to handshake
+    #[allow(dead_code)]
     pub fn set_handshake_response(&self, response: Result<HandshakeResponse, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
-
         state.handshake_response.replace(response);
     }
 
-    /// Take and return last handshake request send to the server,
+    /// Take and return last handshake request sent to the server,
+    #[allow(dead_code)]
     pub fn take_handshake_request(&self) -> Option<HandshakeRequest> {
         self.state
             .lock()
@@ -67,14 +70,15 @@ impl TestFlightServer {
             .take()
     }
 
-    /// Specify the response returned from the next call to handshake
+    /// Specify the response returned from the next call to get_flight_info
+    #[allow(dead_code)]
     pub fn set_get_flight_info_response(&self, response: Result<FlightInfo, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
-
         state.get_flight_info_response.replace(response);
     }
 
-    /// Take and return last get_flight_info request send to the server,
+    /// Take and return last get_flight_info request sent to the server,
+    #[allow(dead_code)]
     pub fn take_get_flight_info_request(&self) -> Option<FlightDescriptor> {
         self.state
             .lock()
@@ -83,13 +87,32 @@ impl TestFlightServer {
             .take()
     }
 
+    /// Specify the response returned from the next call to poll_flight_info
+    #[allow(dead_code)]
+    pub fn set_poll_flight_info_response(&self, response: Result<PollInfo, Status>) {
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.poll_flight_info_response.replace(response);
+    }
+
+    /// Take and return last poll_flight_info request sent to the server,
+    #[allow(dead_code)]
+    pub fn take_poll_flight_info_request(&self) -> Option<FlightDescriptor> {
+        self.state
+            .lock()
+            .expect("mutex not poisoned")
+            .poll_flight_info_request
+            .take()
+    }
+
     /// Specify the response returned from the next call to `do_get`
+    #[allow(dead_code)]
     pub fn set_do_get_response(&self, response: Vec<Result<RecordBatch, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_get_response.replace(response);
     }
 
     /// Take and return last do_get request send to the server,
+    #[allow(dead_code)]
     pub fn take_do_get_request(&self) -> Option<Ticket> {
         self.state
             .lock()
@@ -99,12 +122,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_put`
+    #[allow(dead_code)]
     pub fn set_do_put_response(&self, response: Vec<Result<PutResult, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_put_response.replace(response);
     }
 
-    /// Take and return last do_put request send to the server,
+    /// Take and return last do_put request sent to the server,
+    #[allow(dead_code)]
     pub fn take_do_put_request(&self) -> Option<Vec<FlightData>> {
         self.state
             .lock()
@@ -114,12 +139,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_exchange`
+    #[allow(dead_code)]
     pub fn set_do_exchange_response(&self, response: Vec<Result<FlightData, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_exchange_response.replace(response);
     }
 
     /// Take and return last do_exchange request send to the server,
+    #[allow(dead_code)]
     pub fn take_do_exchange_request(&self) -> Option<Vec<FlightData>> {
         self.state
             .lock()
@@ -129,12 +156,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `list_flights`
+    #[allow(dead_code)]
     pub fn set_list_flights_response(&self, response: Vec<Result<FlightInfo, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.list_flights_response.replace(response);
     }
 
     /// Take and return last list_flights request send to the server,
+    #[allow(dead_code)]
     pub fn take_list_flights_request(&self) -> Option<Criteria> {
         self.state
             .lock()
@@ -144,12 +173,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `get_schema`
+    #[allow(dead_code)]
     pub fn set_get_schema_response(&self, response: Result<Schema, Status>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_schema_response.replace(response);
     }
 
     /// Take and return last get_schema request send to the server,
+    #[allow(dead_code)]
     pub fn take_get_schema_request(&self) -> Option<FlightDescriptor> {
         self.state
             .lock()
@@ -159,12 +190,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `list_actions`
+    #[allow(dead_code)]
     pub fn set_list_actions_response(&self, response: Vec<Result<ActionType, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.list_actions_response.replace(response);
     }
 
     /// Take and return last list_actions request send to the server,
+    #[allow(dead_code)]
     pub fn take_list_actions_request(&self) -> Option<Empty> {
         self.state
             .lock()
@@ -174,15 +207,14 @@ impl TestFlightServer {
     }
 
     /// Specify the response returned from the next call to `do_action`
-    pub fn set_do_action_response(
-        &self,
-        response: Vec<Result<arrow_flight::Result, Status>>,
-    ) {
+    #[allow(dead_code)]
+    pub fn set_do_action_response(&self, response: Vec<Result<arrow_flight::Result, Status>>) {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.do_action_response.replace(response);
     }
 
     /// Take and return last do_action request send to the server,
+    #[allow(dead_code)]
     pub fn take_do_action_request(&self) -> Option<Action> {
         self.state
             .lock()
@@ -192,6 +224,7 @@ impl TestFlightServer {
     }
 
     /// Returns the last metadata from a request received by the server
+    #[allow(dead_code)]
     pub fn take_last_request_metadata(&self) -> Option<MetadataMap> {
         self.state
             .lock()
@@ -217,8 +250,12 @@ struct State {
     pub handshake_response: Option<Result<HandshakeResponse, Status>>,
     /// The last `get_flight_info` request received
     pub get_flight_info_request: Option<FlightDescriptor>,
-    /// the next response  to return from `get_flight_info`
+    /// The next response to return from `get_flight_info`
     pub get_flight_info_response: Option<Result<FlightInfo, Status>>,
+    /// The last `poll_flight_info` request received
+    pub poll_flight_info_request: Option<FlightDescriptor>,
+    /// The next response to return from `poll_flight_info`
+    pub poll_flight_info_response: Option<Result<PollInfo, Status>>,
     /// The last do_get request received
     pub do_get_request: Option<Ticket>,
     /// The next response returned from `do_get`
@@ -278,9 +315,10 @@ impl FlightService for TestFlightServer {
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.handshake_request = Some(handshake_request);
 
-        let response = state.handshake_response.take().unwrap_or_else(|| {
-            Err(Status::internal("No handshake response configured"))
-        })?;
+        let response = state
+            .handshake_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No handshake response configured")))?;
 
         // turn into a streaming response
         let output = futures::stream::iter(std::iter::once(Ok(response)));
@@ -313,9 +351,24 @@ impl FlightService for TestFlightServer {
         self.save_metadata(&request);
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_flight_info_request = Some(request.into_inner());
-        let response = state.get_flight_info_response.take().unwrap_or_else(|| {
-            Err(Status::internal("No get_flight_info response configured"))
-        })?;
+        let response = state
+            .get_flight_info_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No get_flight_info response configured")))?;
+        Ok(Response::new(response))
+    }
+
+    async fn poll_flight_info(
+        &self,
+        request: Request<FlightDescriptor>,
+    ) -> Result<Response<PollInfo>, Status> {
+        self.save_metadata(&request);
+        let mut state = self.state.lock().expect("mutex not poisoned");
+        state.poll_flight_info_request = Some(request.into_inner());
+        let response = state
+            .poll_flight_info_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No poll_flight_info response configured")))?;
         Ok(Response::new(response))
     }
 
@@ -326,9 +379,10 @@ impl FlightService for TestFlightServer {
         self.save_metadata(&request);
         let mut state = self.state.lock().expect("mutex not poisoned");
         state.get_schema_request = Some(request.into_inner());
-        let schema = state.get_schema_response.take().unwrap_or_else(|| {
-            Err(Status::internal("No get_schema response configured"))
-        })?;
+        let schema = state
+            .get_schema_response
+            .take()
+            .unwrap_or_else(|| Err(Status::internal("No get_schema response configured")))?;
 
         // encode the schema
         let options = arrow_ipc::writer::IpcWriteOptions::default();
@@ -359,7 +413,11 @@ impl FlightService for TestFlightServer {
             .build(batch_stream)
             .map_err(Into::into);
 
-        Ok(Response::new(stream.boxed()))
+        let mut resp = Response::new(stream.boxed());
+        resp.metadata_mut()
+            .insert("test-resp-header", "some_val".parse().unwrap());
+
+        Ok(resp)
     }
 
     async fn do_put(

@@ -16,12 +16,9 @@
 // under the License.
 
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
-use crate::arrow::record_reader::buffer::{
-    BufferQueue, ScalarBuffer, ScalarValue, ValuesBuffer,
-};
-use crate::column::reader::decoder::ValuesBufferSlice;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{make_array, Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
@@ -29,17 +26,12 @@ use std::sync::Arc;
 
 /// An array of variable length byte arrays that are potentially dictionary encoded
 /// and can be converted into a corresponding [`ArrayRef`]
-pub enum DictionaryBuffer<K: ScalarValue, V: ScalarValue> {
-    Dict {
-        keys: ScalarBuffer<K>,
-        values: ArrayRef,
-    },
-    Values {
-        values: OffsetBuffer<V>,
-    },
+pub enum DictionaryBuffer<K: ArrowNativeType, V: OffsetSizeTrait> {
+    Dict { keys: Vec<K>, values: ArrayRef },
+    Values { values: OffsetBuffer<V> },
 }
 
-impl<K: ScalarValue, V: ScalarValue> Default for DictionaryBuffer<K, V> {
+impl<K: ArrowNativeType, V: OffsetSizeTrait> Default for DictionaryBuffer<K, V> {
     fn default() -> Self {
         Self::Values {
             values: Default::default(),
@@ -47,9 +39,7 @@ impl<K: ScalarValue, V: ScalarValue> Default for DictionaryBuffer<K, V> {
     }
 }
 
-impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
-    DictionaryBuffer<K, V>
-{
+impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
     #[allow(unused)]
     pub fn len(&self) -> usize {
         match self {
@@ -65,7 +55,7 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
     /// # Panic
     ///
     /// Panics if the dictionary is too large for `K`
-    pub fn as_keys(&mut self, dictionary: &ArrayRef) -> Option<&mut ScalarBuffer<K>> {
+    pub fn as_keys(&mut self, dictionary: &ArrayRef) -> Option<&mut Vec<K>> {
         assert!(K::from_usize(dictionary.len()).is_some());
 
         match self {
@@ -114,18 +104,14 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
 
                 if values.is_empty() {
                     // If dictionary is empty, zero pad offsets
-                    spilled.offsets.resize(keys.len() + 1);
+                    spilled.offsets.resize(keys.len() + 1, V::default());
                 } else {
                     // Note: at this point null positions will have arbitrary dictionary keys
                     // and this will hydrate them to the corresponding byte array. This is
                     // likely sub-optimal, as we would prefer zero length null "slots", but
                     // spilling is already a degenerate case and so it is unclear if this is
                     // worth optimising for, e.g. by keeping a null mask around
-                    spilled.extend_from_dictionary(
-                        keys.as_slice(),
-                        dict_offsets,
-                        dict_values,
-                    )?;
+                    spilled.extend_from_dictionary(keys.as_slice(), dict_offsets, dict_values)?;
                 }
 
                 *self = Self::Values { values: spilled };
@@ -152,8 +138,15 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                     let min = K::from_usize(0).unwrap();
                     let max = K::from_usize(values.len()).unwrap();
 
-                    // It may be possible to use SIMD here
-                    if keys.as_slice().iter().any(|x| *x < min || *x >= max) {
+                    // using copied and fold gets auto-vectorized since rust 1.70
+                    // all/any would allow early exit on invalid values
+                    // but in the happy case all values have to be checked anyway
+                    if !keys
+                        .as_slice()
+                        .iter()
+                        .copied()
+                        .fold(true, |a, x| a && x >= min && x < max)
+                    {
                         return Err(general_err!(
                             "dictionary key beyond bounds of dictionary: 0..{}",
                             values.len()
@@ -161,9 +154,18 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                     }
                 }
 
+                let ArrowType::Dictionary(_, value_type) = data_type else {
+                    unreachable!()
+                };
+                let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
+                    arrow_cast::cast(&values, &ArrowType::FixedSizeBinary(size)).unwrap()
+                } else {
+                    values
+                };
+
                 let builder = ArrayDataBuilder::new(data_type.clone())
                     .len(keys.len())
-                    .add_buffer(keys.into())
+                    .add_buffer(Buffer::from_vec(keys))
                     .add_child_data(values.into_data())
                     .null_bit_buffer(null_buffer);
 
@@ -181,11 +183,9 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
                 };
 
                 // This will compute a new dictionary
-                let array = arrow_cast::cast(
-                    &values.into_array(null_buffer, value_type),
-                    data_type,
-                )
-                .expect("cast should be infallible");
+                let array =
+                    arrow_cast::cast(&values.into_array(null_buffer, value_type), data_type)
+                        .expect("cast should be infallible");
 
                 Ok(array)
             }
@@ -193,15 +193,7 @@ impl<K: ScalarValue + ArrowNativeType + Ord, V: ScalarValue + OffsetSizeTrait>
     }
 }
 
-impl<K: ScalarValue, V: ScalarValue> ValuesBufferSlice for DictionaryBuffer<K, V> {
-    fn capacity(&self) -> usize {
-        usize::MAX
-    }
-}
-
-impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> ValuesBuffer
-    for DictionaryBuffer<K, V>
-{
+impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K, V> {
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -211,7 +203,7 @@ impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> ValuesBuffer
     ) {
         match self {
             Self::Dict { keys, .. } => {
-                keys.resize(read_offset + levels_read);
+                keys.resize(read_offset + levels_read, K::default());
                 keys.pad_nulls(read_offset, values_read, levels_read, valid_mask)
             }
             Self::Values { values, .. } => {
@@ -221,49 +213,18 @@ impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> ValuesBuffer
     }
 }
 
-impl<K: ScalarValue, V: ScalarValue + OffsetSizeTrait> BufferQueue
-    for DictionaryBuffer<K, V>
-{
-    type Output = Self;
-    type Slice = Self;
-
-    fn consume(&mut self) -> Self::Output {
-        match self {
-            Self::Dict { keys, values } => Self::Dict {
-                keys: std::mem::take(keys),
-                values: values.clone(),
-            },
-            Self::Values { values } => Self::Values {
-                values: values.consume(),
-            },
-        }
-    }
-
-    fn spare_capacity_mut(&mut self, _batch_size: usize) -> &mut Self::Slice {
-        self
-    }
-
-    fn set_len(&mut self, len: usize) {
-        match self {
-            Self::Dict { keys, .. } => keys.set_len(len),
-            Self::Values { values } => values.set_len(len),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::compute::cast;
-    use arrow_array::{Array, StringArray};
+    use arrow_array::StringArray;
 
     #[test]
     fn test_dictionary_buffer() {
         let dict_type =
             ArrowType::Dictionary(Box::new(ArrowType::Int32), Box::new(ArrowType::Utf8));
 
-        let d1: ArrayRef =
-            Arc::new(StringArray::from(vec!["hello", "world", "", "a", "b"]));
+        let d1: ArrayRef = Arc::new(StringArray::from(vec!["hello", "world", "", "a", "b"]));
 
         let mut buffer = DictionaryBuffer::<i32, i32>::default();
 
@@ -287,7 +248,7 @@ mod tests {
         buffer.pad_nulls(read_offset, 2, 5, null_buffer.as_slice());
 
         assert_eq!(buffer.len(), 13);
-        let split = buffer.consume();
+        let split = std::mem::take(&mut buffer);
 
         let array = split.into_array(Some(null_buffer), &dict_type).unwrap();
         assert_eq!(array.data_type(), &dict_type);
@@ -322,7 +283,9 @@ mod tests {
             .unwrap()
             .extend_from_slice(&[0, 1, 0, 1]);
 
-        let array = buffer.consume().into_array(None, &dict_type).unwrap();
+        let array = std::mem::take(&mut buffer)
+            .into_array(None, &dict_type)
+            .unwrap();
         assert_eq!(array.data_type(), &dict_type);
 
         let strings = cast(&array, &ArrowType::Utf8).unwrap();
@@ -333,7 +296,7 @@ mod tests {
         );
 
         // Can recreate with new dictionary as keys empty
-        assert!(matches!(&buffer, DictionaryBuffer::Dict { .. }));
+        assert!(matches!(&buffer, DictionaryBuffer::Values { .. }));
         assert_eq!(buffer.len(), 0);
         let d3 = Arc::new(StringArray::from(vec!["bongo"])) as ArrayRef;
         buffer.as_keys(&d3).unwrap().extend_from_slice(&[0, 0]);

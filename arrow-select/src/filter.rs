@@ -17,17 +17,20 @@
 
 //! Defines filter kernels
 
+use std::ops::AddAssign;
 use std::sync::Arc;
 
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_array::cast::AsArray;
-use arrow_array::types::{ArrowDictionaryKeyType, ByteArrayType};
+use arrow_array::types::{
+    ArrowDictionaryKeyType, ArrowPrimitiveType, ByteArrayType, ByteViewType, RunEndIndexType,
+};
 use arrow_array::*;
-use arrow_buffer::{bit_util, BooleanBuffer, NullBuffer};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, NullBuffer, RunEndBuffer, bit_util};
 use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_data::ArrayDataBuilder;
 use arrow_data::bit_iterator::{BitIndexIterator, BitSliceIterator};
 use arrow_data::transform::MutableArrayData;
-use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 
 /// If the filter selects more than this fraction of rows, use
@@ -39,8 +42,9 @@ use arrow_schema::*;
 const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
 
 /// An iterator of `(usize, usize)` each representing an interval
-/// `[start, end)` whose slots of a bitmap [Buffer] are true. Each
-/// interval corresponds to a contiguous region of memory to be
+/// `[start, end)` whose slots of a bitmap [Buffer] are true.
+///
+/// Each interval corresponds to a contiguous region of memory to be
 /// "taken" from an array to be filtered.
 ///
 /// ## Notes:
@@ -52,12 +56,19 @@ const FILTER_SLICES_SELECTIVITY_THRESHOLD: f64 = 0.8;
 pub struct SlicesIterator<'a>(BitSliceIterator<'a>);
 
 impl<'a> SlicesIterator<'a> {
+    /// Creates a new iterator from a [BooleanArray]
     pub fn new(filter: &'a BooleanArray) -> Self {
-        Self(filter.values().set_slices())
+        filter.values().into()
     }
 }
 
-impl<'a> Iterator for SlicesIterator<'a> {
+impl<'a> From<&'a BooleanBuffer> for SlicesIterator<'a> {
+    fn from(filter: &'a BooleanBuffer) -> Self {
+        Self(filter.set_slices())
+    }
+}
+
+impl Iterator for SlicesIterator<'_> {
     type Item = (usize, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -82,7 +93,7 @@ impl<'a> IndexIterator<'a> {
     }
 }
 
-impl<'a> Iterator for IndexIterator<'a> {
+impl Iterator for IndexIterator<'_> {
     type Item = usize;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -107,42 +118,6 @@ fn filter_count(filter: &BooleanArray) -> usize {
     filter.values().count_set_bits()
 }
 
-/// Function that can filter arbitrary arrays
-///
-/// Deprecated: Use [`FilterPredicate`] instead
-#[deprecated]
-pub type Filter<'a> = Box<dyn Fn(&ArrayData) -> ArrayData + 'a>;
-
-/// Returns a prepared function optimized to filter multiple arrays.
-/// Creating this function requires time, but using it is faster than [filter] when the
-/// same filter needs to be applied to multiple arrays (e.g. a multi-column `RecordBatch`).
-/// WARNING: the nulls of `filter` are ignored and the value on its slot is considered.
-/// Therefore, it is considered undefined behavior to pass `filter` with null values.
-///
-/// Deprecated: Use [`FilterBuilder`] instead
-#[deprecated]
-#[allow(deprecated)]
-pub fn build_filter(filter: &BooleanArray) -> Result<Filter, ArrowError> {
-    let iter = SlicesIterator::new(filter);
-    let filter_count = filter_count(filter);
-    let chunks = iter.collect::<Vec<_>>();
-
-    Ok(Box::new(move |array: &ArrayData| {
-        match filter_count {
-            // return all
-            len if len == array.len() => array.clone(),
-            0 => ArrayData::new_empty(array.data_type()),
-            _ => {
-                let mut mutable = MutableArrayData::new(vec![array], false, filter_count);
-                chunks
-                    .iter()
-                    .for_each(|(start, end)| mutable.extend(0, *start, *end));
-                mutable.freeze()
-            }
-        }
-    }))
-}
-
 /// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let nulls = filter.nulls().unwrap();
@@ -150,7 +125,23 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     BooleanArray::new(mask, None)
 }
 
-/// Filters an [Array], returning elements matching the filter (i.e. where the values are true).
+/// Returns a filtered `values` [`Array`] where the corresponding elements of
+/// `predicate` are `true`.
+///
+/// If multiple arrays (or record batches) need to be filtered using the same predicate array,
+/// consider using [FilterBuilder] to create a single [FilterPredicate] and then
+/// calling [FilterPredicate::filter_record_batch].
+///
+/// In contrast to this function, it is then the responsibility of the caller
+/// to use [FilterBuilder::optimize] if appropriate.
+///
+/// # See also
+/// * [`FilterBuilder`] for more control over the filtering process.
+/// * [`filter_record_batch`] to filter a [`RecordBatch`]
+/// * [`BatchCoalescer`]: to filter multiple [`RecordBatch`] and coalesce
+///   the results into a single array.
+///
+/// [`BatchCoalescer`]: crate::coalesce::BatchCoalescer
 ///
 /// # Example
 /// ```rust
@@ -162,33 +153,49 @@ pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
 /// let c = c.as_any().downcast_ref::<Int32Array>().unwrap();
 /// assert_eq!(c, &Int32Array::from(vec![5, 8]));
 /// ```
-pub fn filter(
-    values: &dyn Array,
-    predicate: &BooleanArray,
-) -> Result<ArrayRef, ArrowError> {
-    let predicate = FilterBuilder::new(predicate).build();
+pub fn filter(values: &dyn Array, predicate: &BooleanArray) -> Result<ArrayRef, ArrowError> {
+    let mut filter_builder = FilterBuilder::new(predicate);
+
+    if FilterBuilder::is_optimize_beneficial(values.data_type()) {
+        // Only optimize if filtering more than one array
+        // Otherwise, the overhead of optimization can be more than the benefit
+        filter_builder = filter_builder.optimize();
+    }
+
+    let predicate = filter_builder.build();
+
     filter_array(values, &predicate)
 }
 
-/// Returns a new [RecordBatch] with arrays containing only values matching the filter.
+/// Returns a filtered [RecordBatch] where the corresponding elements of
+/// `predicate` are true.
+///
+/// This is the equivalent of calling [filter] on each column of the [RecordBatch].
+///
+/// If multiple record batches (or arrays) need to be filtered using the same predicate array,
+/// consider using [FilterBuilder] to create a single [FilterPredicate] and then
+/// calling [FilterPredicate::filter_record_batch].
+/// In contrast to this function, it is then the responsibility of the caller
+/// to use [FilterBuilder::optimize] if appropriate.
 pub fn filter_record_batch(
     record_batch: &RecordBatch,
     predicate: &BooleanArray,
 ) -> Result<RecordBatch, ArrowError> {
     let mut filter_builder = FilterBuilder::new(predicate);
-    if record_batch.num_columns() > 1 {
-        // Only optimize if filtering more than one column
+    let num_cols = record_batch.num_columns();
+    if num_cols > 1
+        || (num_cols > 0
+            && FilterBuilder::is_optimize_beneficial(
+                record_batch.schema_ref().field(0).data_type(),
+            ))
+    {
+        // Only optimize if filtering more than one column or if the column contains multiple internal arrays
+        // Otherwise, the overhead of optimization can be more than the benefit
         filter_builder = filter_builder.optimize();
     }
     let filter = filter_builder.build();
 
-    let filtered_arrays = record_batch
-        .columns()
-        .iter()
-        .map(|a| filter_array(a, &filter))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    RecordBatch::try_new(record_batch.schema(), filtered_arrays)
+    filter.filter_record_batch(record_batch)
 }
 
 /// A builder to construct [`FilterPredicate`]
@@ -217,11 +224,16 @@ impl FilterBuilder {
         }
     }
 
-    /// Compute an optimised representation of the provided `filter` mask that can be
+    /// Compute an optimized representation of the provided `filter` mask that can be
     /// applied to an array more quickly.
     ///
-    /// Note: There is limited benefit to calling this to then filter a single array
-    /// Note: This will likely have a larger memory footprint than the original mask
+    /// When filtering multiple arrays (e.g. a [`RecordBatch`] or a
+    /// [`StructArray`] with multiple fields), optimizing the filter can provide
+    /// significant performance benefits.
+    ///
+    /// However, optimization takes time and can have a larger memory footprint
+    /// than the original mask, so it is often faster to filter a single array,
+    /// without filter optimization.
     pub fn optimize(mut self) -> Self {
         match self.strategy {
             IterationStrategy::SlicesIterator => {
@@ -235,6 +247,22 @@ impl FilterBuilder {
             _ => {}
         }
         self
+    }
+
+    /// Determines if calling [FilterBuilder::optimize] is beneficial for the
+    /// given type even when filtering just a single array.
+    ///
+    /// See [`FilterBuilder::optimize`] for more details.
+    pub fn is_optimize_beneficial(data_type: &DataType) -> bool {
+        match data_type {
+            DataType::Struct(fields) => {
+                fields.len() > 1
+                    || fields.len() == 1
+                        && FilterBuilder::is_optimize_beneficial(fields[0].data_type())
+            }
+            DataType::Union(fields, UnionMode::Sparse) => !fields.is_empty(),
+            _ => false,
+        }
     }
 
     /// Construct the final `FilterPredicate`
@@ -301,12 +329,39 @@ impl FilterPredicate {
     pub fn filter(&self, values: &dyn Array) -> Result<ArrayRef, ArrowError> {
         filter_array(values, self)
     }
+
+    /// Returns a filtered [`RecordBatch`] containing only the rows that are selected by this
+    /// [`FilterPredicate`].
+    ///
+    /// This is the equivalent of calling [filter] on each column of the [`RecordBatch`].
+    pub fn filter_record_batch(
+        &self,
+        record_batch: &RecordBatch,
+    ) -> Result<RecordBatch, ArrowError> {
+        let filtered_arrays = record_batch
+            .columns()
+            .iter()
+            .map(|a| filter_array(a, self))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // SAFETY: we know that the set of filtered arrays will match the schema of the original
+        // record batch
+        unsafe {
+            Ok(RecordBatch::new_unchecked(
+                record_batch.schema(),
+                filtered_arrays,
+                self.count,
+            ))
+        }
+    }
+
+    /// Number of rows being selected based on this [`FilterPredicate`]
+    pub fn count(&self) -> usize {
+        self.count
+    }
 }
 
-fn filter_array(
-    values: &dyn Array,
-    predicate: &FilterPredicate,
-) -> Result<ArrayRef, ArrowError> {
+fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {
     if predicate.filter.len() > values.len() {
         return Err(ArrowError::InvalidArgumentError(format!(
             "Filter predicate of length {} is larger than target array of length {}",
@@ -321,16 +376,6 @@ fn filter_array(
         // actually filter
         _ => downcast_primitive_array! {
             values => Ok(Arc::new(filter_primitive(values, predicate))),
-            DataType::Decimal128(p, s) => {
-                let values = values.as_any().downcast_ref::<Decimal128Array>().unwrap();
-                let filtered = filter_primitive(values, predicate);
-                Ok(Arc::new(filtered.with_precision_and_scale(*p, *s).unwrap()))
-            }
-            DataType::Decimal256(p, s) => {
-                let values = values.as_any().downcast_ref::<Decimal256Array>().unwrap();
-                let filtered = filter_primitive(values, predicate);
-                Ok(Arc::new(filtered.with_precision_and_scale(*p, *s).unwrap()))
-            }
             DataType::Boolean => {
                 let values = values.as_any().downcast_ref::<BooleanArray>().unwrap();
                 Ok(Arc::new(filter_boolean(values, predicate)))
@@ -341,15 +386,42 @@ fn filter_array(
             DataType::LargeUtf8 => {
                 Ok(Arc::new(filter_bytes(values.as_string::<i64>(), predicate)))
             }
+            DataType::Utf8View => {
+                Ok(Arc::new(filter_byte_view(values.as_string_view(), predicate)))
+            }
             DataType::Binary => {
                 Ok(Arc::new(filter_bytes(values.as_binary::<i32>(), predicate)))
             }
             DataType::LargeBinary => {
                 Ok(Arc::new(filter_bytes(values.as_binary::<i64>(), predicate)))
             }
+            DataType::BinaryView => {
+                Ok(Arc::new(filter_byte_view(values.as_binary_view(), predicate)))
+            }
+            DataType::FixedSizeBinary(_) => {
+                Ok(Arc::new(filter_fixed_size_binary(values.as_fixed_size_binary(), predicate)))
+            }
+            DataType::ListView(_) => {
+                Ok(Arc::new(filter_list_view::<i32>(values.as_list_view(), predicate)))
+            }
+            DataType::LargeListView(_) => {
+                Ok(Arc::new(filter_list_view::<i64>(values.as_list_view(), predicate)))
+            }
+            DataType::RunEndEncoded(_, _) => {
+                downcast_run_array!{
+                    values => Ok(Arc::new(filter_run_end_array(values, predicate)?)),
+                    t => unimplemented!("Filter not supported for RunEndEncoded type {:?}", t)
+                }
+            }
             DataType::Dictionary(_, _) => downcast_dictionary_array! {
                 values => Ok(Arc::new(filter_dict(values, predicate))),
                 t => unimplemented!("Filter not supported for dictionary type {:?}", t)
+            }
+            DataType::Struct(_) => {
+                Ok(Arc::new(filter_struct(values.as_struct(), predicate)?))
+            }
+            DataType::Union(_, UnionMode::Sparse) => {
+                Ok(Arc::new(filter_sparse_union(values.as_union(), predicate)?))
             }
             _ => {
                 let data = values.to_data();
@@ -377,6 +449,53 @@ fn filter_array(
             }
         },
     }
+}
+
+/// Filter any supported [`RunArray`] based on a [`FilterPredicate`]
+fn filter_run_end_array<R: RunEndIndexType>(
+    array: &RunArray<R>,
+    predicate: &FilterPredicate,
+) -> Result<RunArray<R>, ArrowError>
+where
+    R::Native: Into<i64> + From<bool>,
+    R::Native: AddAssign,
+{
+    let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
+    let mut new_run_ends = vec![R::default_value(); run_ends.len()];
+
+    let mut start = 0u64;
+    let mut j = 0;
+    let mut count = R::default_value();
+    let filter_values = predicate.filter.values();
+    let run_ends = run_ends.inner();
+
+    let pred: BooleanArray = BooleanBuffer::collect_bool(run_ends.len(), |i| {
+        let mut keep = false;
+        let mut end = run_ends[i].into() as u64;
+        let difference = end.saturating_sub(filter_values.len() as u64);
+        end -= difference;
+
+        // Safety: we subtract the difference off `end` so we are always within bounds
+        for pred in (start..end).map(|i| unsafe { filter_values.value_unchecked(i as usize) }) {
+            count += R::Native::from(pred);
+            keep |= pred
+        }
+        // this is to avoid branching
+        new_run_ends[j] = count;
+        j += keep as usize;
+
+        start = end;
+        keep
+    })
+    .into();
+
+    new_run_ends.truncate(j);
+
+    let values = array.values();
+    let values = filter(&values, &pred)?;
+
+    let run_ends = PrimitiveArray::<R>::try_new(new_run_ends.into(), None)?;
+    RunArray::try_new(&run_ends, &values)
 }
 
 /// Computes a new null mask for `data` based on `predicate`
@@ -410,34 +529,36 @@ fn filter_null_mask(
 fn filter_bits(buffer: &BooleanBuffer, predicate: &FilterPredicate) -> Buffer {
     let src = buffer.values();
     let offset = buffer.offset();
+    assert!(buffer.len() >= predicate.filter.len());
 
     match &predicate.strategy {
         IterationStrategy::IndexIterator => {
-            let bits = IndexIterator::new(&predicate.filter, predicate.count)
-                .map(|src_idx| bit_util::get_bit(src, src_idx + offset));
+            let bits =
+                // SAFETY: IndexIterator uses the filter predicate to derive indices
+                IndexIterator::new(&predicate.filter, predicate.count).map(|src_idx| unsafe {
+                    bit_util::get_bit_raw(buffer.values().as_ptr(), src_idx + offset)
+                });
 
             // SAFETY: `IndexIterator` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::Indices(indices) => {
-            let bits = indices
-                .iter()
-                .map(|src_idx| bit_util::get_bit(src, *src_idx + offset));
-
+            // SAFETY: indices were derived from the filter predicate
+            let bits = indices.iter().map(|src_idx| unsafe {
+                bit_util::get_bit_raw(buffer.values().as_ptr(), *src_idx + offset)
+            });
             // SAFETY: `Vec::iter()` reports its size correctly
             unsafe { MutableBuffer::from_trusted_len_iter_bool(bits).into() }
         }
         IterationStrategy::SlicesIterator => {
-            let mut builder =
-                BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in SlicesIterator::new(&predicate.filter) {
                 builder.append_packed_range(start + offset..end + offset, src)
             }
             builder.into()
         }
         IterationStrategy::Slices(slices) => {
-            let mut builder =
-                BooleanBufferBuilder::new(bit_util::ceil(predicate.count, 8));
+            let mut builder = BooleanBufferBuilder::new(predicate.count);
             for (start, end) in slices {
                 builder.append_packed_range(*start + offset..*end + offset, src)
             }
@@ -463,53 +584,54 @@ fn filter_boolean(array: &BooleanArray, predicate: &FilterPredicate) -> BooleanA
     BooleanArray::from(data)
 }
 
+#[inline(never)]
+fn filter_native<T: ArrowNativeType>(values: &[T], predicate: &FilterPredicate) -> Buffer {
+    assert!(values.len() >= predicate.filter.len());
+
+    match &predicate.strategy {
+        IterationStrategy::SlicesIterator => {
+            let mut buffer = Vec::with_capacity(predicate.count);
+            for (start, end) in SlicesIterator::new(&predicate.filter) {
+                // SAFETY: indices were derived from the filter predicate
+                buffer.extend_from_slice(unsafe { values.get_unchecked(start..end) });
+            }
+            buffer.into()
+        }
+        IterationStrategy::Slices(slices) => {
+            let mut buffer = Vec::with_capacity(predicate.count);
+            for (start, end) in slices {
+                // SAFETY: indices were derived from the filter predicate
+                buffer.extend_from_slice(unsafe { values.get_unchecked(*start..*end) });
+            }
+            buffer.into()
+        }
+        IterationStrategy::IndexIterator => {
+            // SAFETY: indices were derived from the filter predicate
+            let iter = IndexIterator::new(&predicate.filter, predicate.count)
+                .map(|x| unsafe { *values.get_unchecked(x) });
+
+            // SAFETY: IndexIterator is trusted length
+            unsafe { MutableBuffer::from_trusted_len_iter(iter) }.into()
+        }
+        IterationStrategy::Indices(indices) => {
+            // SAFETY: indices were derived from the filter predicate
+            let iter = indices.iter().map(|x| unsafe { *values.get_unchecked(*x) });
+            iter.collect::<Vec<_>>().into()
+        }
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+    }
+}
+
 /// `filter` implementation for primitive arrays
-fn filter_primitive<T>(
-    array: &PrimitiveArray<T>,
-    predicate: &FilterPredicate,
-) -> PrimitiveArray<T>
+fn filter_primitive<T>(array: &PrimitiveArray<T>, predicate: &FilterPredicate) -> PrimitiveArray<T>
 where
     T: ArrowPrimitiveType,
 {
     let values = array.values();
-    assert!(values.len() >= predicate.filter.len());
-
-    let buffer = match &predicate.strategy {
-        IterationStrategy::SlicesIterator => {
-            let mut buffer =
-                MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
-            for (start, end) in SlicesIterator::new(&predicate.filter) {
-                buffer.extend_from_slice(&values[start..end]);
-            }
-            buffer
-        }
-        IterationStrategy::Slices(slices) => {
-            let mut buffer =
-                MutableBuffer::with_capacity(predicate.count * T::get_byte_width());
-            for (start, end) in slices {
-                buffer.extend_from_slice(&values[*start..*end]);
-            }
-            buffer
-        }
-        IterationStrategy::IndexIterator => {
-            let iter =
-                IndexIterator::new(&predicate.filter, predicate.count).map(|x| values[x]);
-
-            // SAFETY: IndexIterator is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
-        }
-        IterationStrategy::Indices(indices) => {
-            let iter = indices.iter().map(|x| values[*x]);
-
-            // SAFETY: `Vec::iter` is trusted length
-            unsafe { MutableBuffer::from_trusted_len_iter(iter) }
-        }
-        IterationStrategy::All | IterationStrategy::None => unreachable!(),
-    };
-
+    let buffer = filter_native(values, predicate);
     let mut builder = ArrayDataBuilder::new(array.data_type().clone())
         .len(predicate.count)
-        .add_buffer(buffer.into());
+        .add_buffer(buffer);
 
     if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
         builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
@@ -526,8 +648,8 @@ where
 struct FilterBytes<'a, OffsetSize> {
     src_offsets: &'a [OffsetSize],
     src_values: &'a [u8],
-    dst_offsets: MutableBuffer,
-    dst_values: MutableBuffer,
+    dst_offsets: Vec<OffsetSize>,
+    dst_values: Vec<u8>,
     cur_offset: OffsetSize,
 }
 
@@ -539,10 +661,10 @@ where
     where
         T: ByteArrayType<Offset = OffsetSize>,
     {
-        let num_offsets_bytes = (capacity + 1) * std::mem::size_of::<OffsetSize>();
-        let mut dst_offsets = MutableBuffer::new(num_offsets_bytes);
-        let dst_values = MutableBuffer::new(0);
+        let dst_values = Vec::new();
+        let mut dst_offsets: Vec<OffsetSize> = Vec::with_capacity(capacity + 1);
         let cur_offset = OffsetSize::from_usize(0).unwrap();
+
         dst_offsets.push(cur_offset);
 
         Self {
@@ -570,27 +692,46 @@ where
         (start, end, len)
     }
 
+    fn extend_offsets_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        self.dst_offsets.extend(iter.map(|idx| {
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
+            let len = OffsetSize::from_usize(end - start).expect("illegal offset range");
+            self.cur_offset += len;
+
+            self.cur_offset
+        }));
+    }
+
     /// Extends the in-progress array by the indexes in the provided iterator
     fn extend_idx(&mut self, iter: impl Iterator<Item = usize>) {
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
+
         for idx in iter {
-            let (start, end, len) = self.get_value_range(idx);
-            self.cur_offset += len;
-            self.dst_offsets.push(self.cur_offset);
+            let start = self.src_offsets[idx].as_usize();
+            let end = self.src_offsets[idx + 1].as_usize();
             self.dst_values
                 .extend_from_slice(&self.src_values[start..end]);
         }
     }
 
-    /// Extends the in-progress array by the ranges in the provided iterator
-    fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+    fn extend_offsets_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>, count: usize) {
+        self.dst_offsets.reserve_exact(count);
         for (start, end) in iter {
             // These can only fail if `array` contains invalid data
             for idx in start..end {
                 let (_, _, len) = self.get_value_range(idx);
                 self.cur_offset += len;
-                self.dst_offsets.push(self.cur_offset); // push_unchecked?
+                self.dst_offsets.push(self.cur_offset);
             }
+        }
+    }
 
+    /// Extends the in-progress array by the ranges in the provided iterator
+    fn extend_slices(&mut self, iter: impl Iterator<Item = (usize, usize)>) {
+        self.dst_values.reserve_exact(self.cur_offset.as_usize());
+
+        for (start, end) in iter {
             let value_start = self.get_value_offset(start);
             let value_end = self.get_value_offset(end);
             self.dst_values
@@ -603,10 +744,7 @@ where
 ///
 /// Note: NULLs with a non-zero slot length in `array` will have the corresponding
 /// data copied across. This allows handling the null mask separately from the data
-fn filter_bytes<T>(
-    array: &GenericByteArray<T>,
-    predicate: &FilterPredicate,
-) -> GenericByteArray<T>
+fn filter_bytes<T>(array: &GenericByteArray<T>, predicate: &FilterPredicate) -> GenericByteArray<T>
 where
     T: ByteArrayType,
 {
@@ -614,13 +752,21 @@ where
 
     match &predicate.strategy {
         IterationStrategy::SlicesIterator => {
+            filter.extend_offsets_slices(SlicesIterator::new(&predicate.filter), predicate.count);
             filter.extend_slices(SlicesIterator::new(&predicate.filter))
         }
-        IterationStrategy::Slices(slices) => filter.extend_slices(slices.iter().cloned()),
+        IterationStrategy::Slices(slices) => {
+            filter.extend_offsets_slices(slices.iter().cloned(), predicate.count);
+            filter.extend_slices(slices.iter().cloned())
+        }
         IterationStrategy::IndexIterator => {
+            filter.extend_offsets_idx(IndexIterator::new(&predicate.filter, predicate.count));
             filter.extend_idx(IndexIterator::new(&predicate.filter, predicate.count))
         }
-        IterationStrategy::Indices(indices) => filter.extend_idx(indices.iter().cloned()),
+        IterationStrategy::Indices(indices) => {
+            filter.extend_offsets_idx(indices.iter().cloned());
+            filter.extend_idx(indices.iter().cloned())
+        }
         IterationStrategy::All | IterationStrategy::None => unreachable!(),
     }
 
@@ -637,14 +783,88 @@ where
     GenericByteArray::from(data)
 }
 
-/// `filter` implementation for dictionaries
-fn filter_dict<T>(
-    array: &DictionaryArray<T>,
+/// `filter` implementation for byte view arrays.
+fn filter_byte_view<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
     predicate: &FilterPredicate,
-) -> DictionaryArray<T>
+) -> GenericByteViewArray<T> {
+    let new_view_buffer = filter_native(array.views(), predicate);
+
+    let mut builder = ArrayDataBuilder::new(T::DATA_TYPE)
+        .len(predicate.count)
+        .add_buffer(new_view_buffer)
+        .add_buffers(array.data_buffers().to_vec());
+
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+    }
+
+    GenericByteViewArray::from(unsafe { builder.build_unchecked() })
+}
+
+fn filter_fixed_size_binary(
+    array: &FixedSizeBinaryArray,
+    predicate: &FilterPredicate,
+) -> FixedSizeBinaryArray {
+    let values: &[u8] = array.values();
+    let value_length = array.value_length() as usize;
+    let calculate_offset_from_index = |index: usize| index * value_length;
+    let buffer = match &predicate.strategy {
+        IterationStrategy::SlicesIterator => {
+            let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
+            for (start, end) in SlicesIterator::new(&predicate.filter) {
+                buffer.extend_from_slice(
+                    &values[calculate_offset_from_index(start)..calculate_offset_from_index(end)],
+                );
+            }
+            buffer
+        }
+        IterationStrategy::Slices(slices) => {
+            let mut buffer = MutableBuffer::with_capacity(predicate.count * value_length);
+            for (start, end) in slices {
+                buffer.extend_from_slice(
+                    &values[calculate_offset_from_index(*start)..calculate_offset_from_index(*end)],
+                );
+            }
+            buffer
+        }
+        IterationStrategy::IndexIterator => {
+            let iter = IndexIterator::new(&predicate.filter, predicate.count).map(|x| {
+                &values[calculate_offset_from_index(x)..calculate_offset_from_index(x + 1)]
+            });
+
+            let mut buffer = MutableBuffer::new(predicate.count * value_length);
+            iter.for_each(|item| buffer.extend_from_slice(item));
+            buffer
+        }
+        IterationStrategy::Indices(indices) => {
+            let iter = indices.iter().map(|x| {
+                &values[calculate_offset_from_index(*x)..calculate_offset_from_index(*x + 1)]
+            });
+
+            let mut buffer = MutableBuffer::new(predicate.count * value_length);
+            iter.for_each(|item| buffer.extend_from_slice(item));
+            buffer
+        }
+        IterationStrategy::All | IterationStrategy::None => unreachable!(),
+    };
+    let mut builder = ArrayDataBuilder::new(array.data_type().clone())
+        .len(predicate.count)
+        .add_buffer(buffer.into());
+
+    if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        builder = builder.null_count(null_count).null_bit_buffer(Some(nulls));
+    }
+
+    let data = unsafe { builder.build_unchecked() };
+    FixedSizeBinaryArray::from(data)
+}
+
+/// `filter` implementation for dictionaries
+fn filter_dict<T>(array: &DictionaryArray<T>, predicate: &FilterPredicate) -> DictionaryArray<T>
 where
     T: ArrowDictionaryKeyType,
-    T::Native: num::Num,
+    T::Native: num_traits::Num,
 {
     let builder = filter_primitive::<T>(array.keys(), predicate)
         .into_data()
@@ -657,14 +877,98 @@ where
     DictionaryArray::from(unsafe { builder.build_unchecked() })
 }
 
+/// `filter` implementation for structs
+fn filter_struct(
+    array: &StructArray,
+    predicate: &FilterPredicate,
+) -> Result<StructArray, ArrowError> {
+    let columns = array
+        .columns()
+        .iter()
+        .map(|column| filter_array(column, predicate))
+        .collect::<Result<_, _>>()?;
+
+    let nulls = if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
+
+        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
+    } else {
+        None
+    };
+
+    Ok(unsafe {
+        StructArray::new_unchecked_with_length(
+            array.fields().clone(),
+            columns,
+            nulls,
+            predicate.count(),
+        )
+    })
+}
+
+/// `filter` implementation for sparse unions
+fn filter_sparse_union(
+    array: &UnionArray,
+    predicate: &FilterPredicate,
+) -> Result<UnionArray, ArrowError> {
+    let DataType::Union(fields, UnionMode::Sparse) = array.data_type() else {
+        unreachable!()
+    };
+
+    let type_ids = filter_primitive(
+        &Int8Array::try_new(array.type_ids().clone(), None)?,
+        predicate,
+    );
+
+    let children = fields
+        .iter()
+        .map(|(child_type_id, _)| filter_array(array.child(child_type_id), predicate))
+        .collect::<Result<_, _>>()?;
+
+    Ok(unsafe {
+        UnionArray::new_unchecked(fields.clone(), type_ids.into_parts().1, None, children)
+    })
+}
+
+/// `filter` implementation for list views
+fn filter_list_view<OffsetType: OffsetSizeTrait>(
+    array: &GenericListViewArray<OffsetType>,
+    predicate: &FilterPredicate,
+) -> GenericListViewArray<OffsetType> {
+    let filtered_offsets = filter_native::<OffsetType>(array.offsets(), predicate);
+    let filtered_sizes = filter_native::<OffsetType>(array.sizes(), predicate);
+
+    // Filter the nulls
+    let nulls = if let Some((null_count, nulls)) = filter_null_mask(array.nulls(), predicate) {
+        let buffer = BooleanBuffer::new(nulls, 0, predicate.count);
+
+        Some(unsafe { NullBuffer::new_unchecked(buffer, null_count) })
+    } else {
+        None
+    };
+
+    let list_data = ArrayDataBuilder::new(array.data_type().clone())
+        .nulls(nulls)
+        .buffers(vec![filtered_offsets, filtered_sizes])
+        .child_data(vec![array.values().to_data()])
+        .len(predicate.count);
+
+    let list_data = unsafe { list_data.build_unchecked() };
+
+    GenericListViewArray::from(list_data)
+}
+
 #[cfg(test)]
 mod tests {
-    use arrow_array::builder::*;
-    use arrow_array::types::*;
-    use rand::distributions::{Alphanumeric, Standard};
-    use rand::prelude::*;
-
     use super::*;
+    use arrow_array::builder::*;
+    use arrow_array::cast::as_run_array;
+    use arrow_array::types::*;
+    use arrow_data::ArrayData;
+    use rand::distr::uniform::{UniformSampler, UniformUsize};
+    use rand::distr::{Alphanumeric, StandardUniform};
+    use rand::prelude::*;
+    use rand::rng;
 
     macro_rules! def_temporal_test {
         ($test:ident, $array_type: ident, $data: expr) => {
@@ -770,8 +1074,7 @@ mod tests {
     fn test_filter_array_low_density() {
         // this test exercises the all 0's branch of the filter algorithm
         let mut data_values = (1..=65).collect::<Vec<i32>>();
-        let mut filter_values =
-            (1..=65).map(|i| matches!(i % 65, 0)).collect::<Vec<bool>>();
+        let mut filter_values = (1..=65).map(|i| matches!(i % 65, 0)).collect::<Vec<bool>>();
         // set up two more values after the batch
         data_values.extend_from_slice(&[66, 67]);
         filter_values.extend_from_slice(&[false, true]);
@@ -855,10 +1158,144 @@ mod tests {
         assert!(d.is_null(1));
     }
 
+    fn _test_filter_byte_view<T>()
+    where
+        T: ByteViewType,
+        str: AsRef<T::Native>,
+        T::Native: PartialEq,
+    {
+        let array = {
+            // ["hello", "world", null, "large payload over 12 bytes", "lulu"]
+            let mut builder = GenericByteViewBuilder::<T>::new();
+            builder.append_value("hello");
+            builder.append_value("world");
+            builder.append_null();
+            builder.append_value("large payload over 12 bytes");
+            builder.append_value("lulu");
+            builder.finish()
+        };
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, true, true, false]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 3);
+
+            let expected = {
+                // ["hello", null, "large payload over 12 bytes"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_null();
+                builder.append_value("large payload over 12 bytes");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+
+        {
+            let predicate = BooleanArray::from(vec![true, false, false, false, true]);
+            let actual = filter(&array, &predicate).unwrap();
+
+            assert_eq!(actual.len(), 2);
+
+            let expected = {
+                // ["hello", "lulu"]
+                let mut builder = GenericByteViewBuilder::<T>::new();
+                builder.append_value("hello");
+                builder.append_value("lulu");
+                builder.finish()
+            };
+
+            assert_eq!(actual.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_filter_string_view() {
+        _test_filter_byte_view::<StringViewType>()
+    }
+
+    #[test]
+    fn test_filter_binary_view() {
+        _test_filter_byte_view::<BinaryViewType>()
+    }
+
+    #[test]
+    fn test_filter_fixed_binary() {
+        let v1 = [1_u8, 2];
+        let v2 = [3_u8, 4];
+        let v3 = [5_u8, 6];
+        let v = vec![&v1, &v2, &v3];
+        let a = FixedSizeBinaryArray::from(v);
+        let b = BooleanArray::from(vec![true, false, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 2);
+        assert_eq!(d.value(0), &v1);
+        assert_eq!(d.value(1), &v3);
+        let c2 = FilterBuilder::new(&b)
+            .optimize()
+            .build()
+            .filter(&a)
+            .unwrap();
+        let d2 = c2
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d, d2);
+
+        let b = BooleanArray::from(vec![false, false, false]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 0);
+
+        let b = BooleanArray::from(vec![true, true, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 3);
+        assert_eq!(d.value(0), &v1);
+        assert_eq!(d.value(1), &v2);
+        assert_eq!(d.value(2), &v3);
+
+        let b = BooleanArray::from(vec![false, false, true]);
+        let c = filter(&a, &b).unwrap();
+        let d = c
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d.len(), 1);
+        assert_eq!(d.value(0), &v3);
+        let c2 = FilterBuilder::new(&b)
+            .optimize()
+            .build()
+            .filter(&a)
+            .unwrap();
+        let d2 = c2
+            .as_ref()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        assert_eq!(d, d2);
+    }
+
     #[test]
     fn test_filter_array_slice_with_null() {
-        let a =
-            Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]).slice(1, 4);
+        let a = Int32Array::from(vec![Some(5), None, Some(7), Some(8), Some(9)]).slice(1, 4);
         let b = BooleanArray::from(vec![true, false, false, true]);
         // filtering with sliced filter array is not currently supported
         // let b_slice = BooleanArray::from(vec![true, false, false, true, false]).slice(1, 4);
@@ -872,8 +1309,100 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_run_end_encoding_array() {
+        let run_ends = Int64Array::from(vec![2, 3, 8]);
+        let values = Int64Array::from(vec![7, -2, 9]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![true, false, true, false, true, false, true, false]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        assert_eq!(4, actual.len());
+
+        let expected = RunArray::try_new(
+            &Int64Array::from(vec![1, 2, 4]),
+            &Int64Array::from(vec![7, -2, 9]),
+        )
+        .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_remove_value() {
+        let run_ends = Int32Array::from(vec![2, 3, 8, 10]);
+        let values = Int32Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, true, false, false, true, false, true, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int32Type> = as_run_array(&c);
+        assert_eq!(3, actual.len());
+
+        let expected =
+            RunArray::try_new(&Int32Array::from(vec![1, 3]), &Int32Array::from(vec![7, 9]))
+                .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_remove_all_but_one() {
+        let run_ends = Int16Array::from(vec![2, 3, 8, 10]);
+        let values = Int16Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, false, false, false, false, false, true, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int16Type> = as_run_array(&c);
+        assert_eq!(1, actual.len());
+
+        let expected = RunArray::try_new(&Int16Array::from(vec![1]), &Int16Array::from(vec![9]))
+            .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_empty() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![
+            false, false, false, false, false, false, false, false, false, false,
+        ]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        assert_eq!(0, actual.len());
+    }
+
+    #[test]
+    fn test_filter_run_end_encoding_array_max_value_gt_predicate_len() {
+        let run_ends = Int64Array::from(vec![2, 3, 8, 10]);
+        let values = Int64Array::from(vec![7, -2, 9, -8]);
+        let a = RunArray::try_new(&run_ends, &values).expect("Failed to create RunArray");
+        let b = BooleanArray::from(vec![false, true, true]);
+        let c = filter(&a, &b).unwrap();
+        let actual: &RunArray<Int64Type> = as_run_array(&c);
+        assert_eq!(2, actual.len());
+
+        let expected = RunArray::try_new(
+            &Int64Array::from(vec![1, 2]),
+            &Int64Array::from(vec![7, -2]),
+        )
+        .expect("Failed to make expected RunArray test is broken");
+
+        assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
+        assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
     fn test_filter_dictionary_array() {
-        let values = vec![Some("hello"), None, Some("world"), Some("!")];
+        let values = [Some("hello"), None, Some("world"), Some("!")];
         let a: Int8DictionaryArray = values.iter().copied().collect();
         let b = BooleanArray::from(vec![false, true, true, false]);
         let c = filter(&a, &b).unwrap();
@@ -903,7 +1432,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 6, 8, 8]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let list_data = ArrayData::builder(list_data_type)
             .len(4)
             .add_buffer(value_offsets)
@@ -927,7 +1456,7 @@ mod tests {
         let value_offsets = Buffer::from_slice_ref([0i64, 3, 3]);
 
         let list_data_type =
-            DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, false)));
+            DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let expected = ArrayData::builder(list_data_type)
             .len(2)
             .add_buffer(value_offsets)
@@ -937,6 +1466,69 @@ mod tests {
             .unwrap();
 
         assert_eq!(&make_array(expected), &result);
+    }
+
+    fn test_case_filter_list_view<T: OffsetSizeTrait>() {
+        // [[1, 2], null, [], [3,4]]
+        let mut list_array = GenericListViewBuilder::<T, _>::new(Int32Builder::new());
+        list_array.append_value([Some(1), Some(2)]);
+        list_array.append_null();
+        list_array.append_value([]);
+        list_array.append_value([Some(3), Some(4)]);
+
+        let list_array = list_array.finish();
+        let predicate = BooleanArray::from_iter([true, false, true, false]);
+
+        // Filter result: [[1, 2], []]
+        let filtered = filter(&list_array, &predicate)
+            .unwrap()
+            .as_list_view::<T>()
+            .clone();
+
+        let mut expected =
+            GenericListViewBuilder::<T, _>::with_capacity(Int32Builder::with_capacity(5), 3);
+        expected.append_value([Some(1), Some(2)]);
+        expected.append_value([]);
+        let expected = expected.finish();
+
+        assert_eq!(&filtered, &expected);
+    }
+
+    fn test_case_filter_sliced_list_view<T: OffsetSizeTrait>() {
+        // [[1, 2], null, [], [3,4]]
+        let mut list_array =
+            GenericListViewBuilder::<T, _>::with_capacity(Int32Builder::with_capacity(6), 4);
+        list_array.append_value([Some(1), Some(2)]);
+        list_array.append_null();
+        list_array.append_value([]);
+        list_array.append_value([Some(3), Some(4)]);
+
+        let list_array = list_array.finish();
+
+        // Sliced: [null, [], [3, 4]]
+        let sliced = list_array.slice(1, 3);
+        let predicate = BooleanArray::from_iter([false, false, true]);
+
+        // Filter result: [[1, 2], []]
+        let filtered = filter(&sliced, &predicate)
+            .unwrap()
+            .as_list_view::<T>()
+            .clone();
+
+        let mut expected = GenericListViewBuilder::<T, _>::new(Int32Builder::new());
+        expected.append_value([Some(3), Some(4)]);
+        let expected = expected.finish();
+
+        assert_eq!(&filtered, &expected);
+    }
+
+    #[test]
+    fn test_filter_list_view_array() {
+        test_case_filter_list_view::<i32>();
+        test_case_filter_list_view::<i64>();
+
+        test_case_filter_sliced_list_view::<i32>();
+        test_case_filter_sliced_list_view::<i64>();
     }
 
     #[test]
@@ -988,9 +1580,19 @@ mod tests {
     }
 
     #[test]
+    fn test_filter_record_batch_no_columns() {
+        let pred = BooleanArray::from(vec![Some(true), Some(true), None]);
+        let options = RecordBatchOptions::default().with_row_count(Some(100));
+        let record_batch =
+            RecordBatch::try_new_with_options(Arc::new(Schema::empty()), vec![], &options).unwrap();
+        let out = filter_record_batch(&record_batch, &pred).unwrap();
+
+        assert_eq!(out.num_rows(), 2);
+    }
+
+    #[test]
     fn test_fast_path() {
-        let a: PrimitiveArray<Int64Type> =
-            PrimitiveArray::from(vec![Some(1), Some(2), None]);
+        let a: PrimitiveArray<Int64Type> = PrimitiveArray::from(vec![Some(1), Some(2), None]);
 
         // all true
         let mask = BooleanArray::from(vec![true, true, true]);
@@ -1011,12 +1613,11 @@ mod tests {
     #[test]
     fn test_slices() {
         // takes up 2 u64s
-        let bools = std::iter::repeat(true)
-            .take(10)
-            .chain(std::iter::repeat(false).take(30))
-            .chain(std::iter::repeat(true).take(20))
-            .chain(std::iter::repeat(false).take(17))
-            .chain(std::iter::repeat(true).take(4));
+        let bools = std::iter::repeat_n(true, 10)
+            .chain(std::iter::repeat_n(false, 30))
+            .chain(std::iter::repeat_n(true, 20))
+            .chain(std::iter::repeat_n(false, 17))
+            .chain(std::iter::repeat_n(true, 4));
 
         let bool_array: BooleanArray = bools.map(Some).collect();
 
@@ -1037,9 +1638,9 @@ mod tests {
     }
 
     fn test_slices_fuzz(mask_len: usize, offset: usize, truncate: usize) {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
-        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.gen()))
+        let bools: Vec<bool> = std::iter::from_fn(|| Some(rng.random()))
             .take(mask_len)
             .collect();
 
@@ -1078,15 +1679,19 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test_slices_iterator() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
+        let uusize = UniformUsize::new(usize::MIN, usize::MAX).unwrap();
         for _ in 0..100 {
-            let mask_len = rng.gen_range(0..1024);
+            let mask_len = rng.random_range(0..1024);
             let max_offset = 64.min(mask_len);
-            let offset = rng.gen::<usize>().checked_rem(max_offset).unwrap_or(0);
+            let offset = uusize.sample(&mut rng).checked_rem(max_offset).unwrap_or(0);
 
             let max_truncate = 128.min(mask_len - offset);
-            let truncate = rng.gen::<usize>().checked_rem(max_truncate).unwrap_or(0);
+            let truncate = uusize
+                .sample(&mut rng)
+                .checked_rem(max_truncate)
+                .unwrap_or(0);
 
             test_slices_fuzz(mask_len, offset, truncate);
         }
@@ -1111,11 +1716,11 @@ mod tests {
     /// Generates an array of length `len` with `valid_percent` non-null values
     fn gen_primitive<T>(len: usize, valid_percent: f64) -> Vec<Option<T>>
     where
-        Standard: Distribution<T>,
+        StandardUniform: Distribution<T>,
     {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
-            .map(|_| rng.gen_bool(valid_percent).then(|| rng.gen()))
+            .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
             .collect()
     }
 
@@ -1125,11 +1730,11 @@ mod tests {
         valid_percent: f64,
         str_len_range: std::ops::Range<usize>,
     ) -> Vec<Option<String>> {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         (0..len)
             .map(|_| {
-                rng.gen_bool(valid_percent).then(|| {
-                    let len = rng.gen_range(str_len_range.clone());
+                rng.random_bool(valid_percent).then(|| {
+                    let len = rng.random_range(str_len_range.clone());
                     (0..len)
                         .map(|_| char::from(rng.sample(Alphanumeric)))
                         .collect()
@@ -1139,33 +1744,31 @@ mod tests {
     }
 
     /// Returns an iterator that calls `Option::as_deref` on each item
-    fn as_deref<T: std::ops::Deref>(
-        src: &[Option<T>],
-    ) -> impl Iterator<Item = Option<&T::Target>> {
+    fn as_deref<T: std::ops::Deref>(src: &[Option<T>]) -> impl Iterator<Item = Option<&T::Target>> {
         src.iter().map(|x| x.as_deref())
     }
 
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_filter() {
-        let mut rng = thread_rng();
+        let mut rng = rng();
 
         for i in 0..100 {
             let filter_percent = match i {
                 0..=4 => 1.,
                 5..=10 => 0.,
-                _ => rng.gen_range(0.0..1.0),
+                _ => rng.random_range(0.0..1.0),
             };
 
-            let valid_percent = rng.gen_range(0.0..1.0);
+            let valid_percent = rng.random_range(0.0..1.0);
 
-            let array_len = rng.gen_range(32..256);
-            let array_offset = rng.gen_range(0..10);
+            let array_len = rng.random_range(32..256);
+            let array_offset = rng.random_range(0..10);
 
             // Construct a predicate
-            let filter_offset = rng.gen_range(0..10);
-            let filter_truncate = rng.gen_range(0..10);
-            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.gen_bool(filter_percent)))
+            let filter_offset = rng.random_range(0..10);
+            let filter_truncate = rng.random_range(0..10);
+            let bools: Vec<_> = std::iter::from_fn(|| Some(rng.random_bool(filter_percent)))
                 .take(array_len + filter_offset - filter_truncate)
                 .collect();
 
@@ -1280,10 +1883,7 @@ mod tests {
             .add_buffer(Buffer::from_slice_ref([0, 1, 2, 3, 4, 5, 6, 7, 8]))
             .build()
             .unwrap();
-        let list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Int32, false)),
-            3,
-        );
+        let list_data_type = DataType::new_fixed_size_list(DataType::Int32, 3, false);
         let list_data = ArrayData::builder(list_data_type)
             .len(3)
             .add_child_data(value_data)
@@ -1339,10 +1939,7 @@ mod tests {
         bit_util::set_bit(&mut null_bits, 3);
         bit_util::set_bit(&mut null_bits, 4);
 
-        let list_data_type = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::Int32, false)),
-            2,
-        );
+        let list_data_type = DataType::new_fixed_size_list(DataType::Int32, 2, false);
         let list_data = ArrayData::builder(list_data_type)
             .len(5)
             .add_child_data(value_data)
@@ -1524,13 +2121,11 @@ mod tests {
                         assert_eq!(value1, value2);
                     }
                     1 => {
-                        let slot1 =
-                            slot1.as_any().downcast_ref::<Float64Array>().unwrap();
+                        let slot1 = slot1.as_any().downcast_ref::<Float64Array>().unwrap();
                         assert_eq!(slot1.len(), 1);
                         let value1 = slot1.value(0);
 
-                        let slot2 =
-                            slot2.as_any().downcast_ref::<Float64Array>().unwrap();
+                        let slot2 = slot2.as_any().downcast_ref::<Float64Array>().unwrap();
                         assert_eq!(slot2.len(), 1);
                         let value2 = slot2.value(0);
                         assert_eq!(value1, value2);
@@ -1539,5 +2134,149 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_filter_struct() {
+        let predicate = BooleanArray::from(vec![true, false, true, false]);
+
+        let a = Arc::new(StringArray::from(vec!["hello", " ", "world", "!"]));
+        let a_filtered = Arc::new(StringArray::from(vec!["hello", "world"]));
+
+        let b = Arc::new(Int32Array::from(vec![5, 6, 7, 8]));
+        let b_filtered = Arc::new(Int32Array::from(vec![5, 7]));
+
+        let null_mask = NullBuffer::from(vec![true, false, false, true]);
+        let null_mask_filtered = NullBuffer::from(vec![true, false]);
+
+        let a_field = Field::new("a", DataType::Utf8, false);
+        let b_field = Field::new("b", DataType::Int32, false);
+
+        let array = StructArray::new(vec![a_field.clone()].into(), vec![a.clone()], None);
+        let expected =
+            StructArray::new(vec![a_field.clone()].into(), vec![a_filtered.clone()], None);
+
+        let result = filter(&array, &predicate).unwrap();
+
+        assert_eq!(result.to_data(), expected.to_data());
+
+        let array = StructArray::new(
+            vec![a_field.clone()].into(),
+            vec![a.clone()],
+            Some(null_mask.clone()),
+        );
+        let expected = StructArray::new(
+            vec![a_field.clone()].into(),
+            vec![a_filtered.clone()],
+            Some(null_mask_filtered.clone()),
+        );
+
+        let result = filter(&array, &predicate).unwrap();
+
+        assert_eq!(result.to_data(), expected.to_data());
+
+        let array = StructArray::new(
+            vec![a_field.clone(), b_field.clone()].into(),
+            vec![a.clone(), b.clone()],
+            None,
+        );
+        let expected = StructArray::new(
+            vec![a_field.clone(), b_field.clone()].into(),
+            vec![a_filtered.clone(), b_filtered.clone()],
+            None,
+        );
+
+        let result = filter(&array, &predicate).unwrap();
+
+        assert_eq!(result.to_data(), expected.to_data());
+
+        let array = StructArray::new(
+            vec![a_field.clone(), b_field.clone()].into(),
+            vec![a.clone(), b.clone()],
+            Some(null_mask.clone()),
+        );
+
+        let expected = StructArray::new(
+            vec![a_field.clone(), b_field.clone()].into(),
+            vec![a_filtered.clone(), b_filtered.clone()],
+            Some(null_mask_filtered.clone()),
+        );
+
+        let result = filter(&array, &predicate).unwrap();
+
+        assert_eq!(result.to_data(), expected.to_data());
+    }
+
+    #[test]
+    fn test_filter_empty_struct() {
+        /*
+            "a": {
+                "b": int64,
+                "c": {}
+            },
+        */
+        let fields = arrow_schema::Field::new(
+            "a",
+            arrow_schema::DataType::Struct(arrow_schema::Fields::from(vec![
+                arrow_schema::Field::new("b", arrow_schema::DataType::Int64, true),
+                arrow_schema::Field::new(
+                    "c",
+                    arrow_schema::DataType::Struct(arrow_schema::Fields::empty()),
+                    true,
+                ),
+            ])),
+            true,
+        );
+
+        /* Test record
+            {"a":{"c": {}}}
+            {"a":{"c": {}}}
+            {"a":{"c": {}}}
+        */
+
+        // Create the record batch with the nested struct array
+        let schema = Arc::new(Schema::new(vec![fields]));
+
+        let b = Arc::new(Int64Array::from(vec![None, None, None]));
+        let c = Arc::new(StructArray::new_empty_fields(
+            3,
+            Some(NullBuffer::from(vec![true, true, true])),
+        ));
+        let a = StructArray::new(
+            vec![
+                Field::new("b", DataType::Int64, true),
+                Field::new("c", DataType::Struct(Fields::empty()), true),
+            ]
+            .into(),
+            vec![b.clone(), c.clone()],
+            Some(NullBuffer::from(vec![true, true, true])),
+        );
+        let record_batch = RecordBatch::try_new(schema, vec![Arc::new(a)]).unwrap();
+        println!("{record_batch:?}");
+
+        // Apply the filter
+        let predicate = BooleanArray::from(vec![true, false, true]);
+        let filtered_batch = filter_record_batch(&record_batch, &predicate).unwrap();
+
+        // The filtered batch should have 2 rows (the 1st and 3rd)
+        assert_eq!(filtered_batch.num_rows(), 2);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_filter_bits_too_large() {
+        let buffer = BooleanBuffer::from(vec![false; 8]);
+        let predicate = BooleanArray::from(vec![true; 9]);
+        let filter = FilterBuilder::new(&predicate).build();
+        filter_bits(&buffer, &filter);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_filter_native_too_large() {
+        let values = vec![1; 8];
+        let predicate = BooleanArray::from(vec![false; 9]);
+        let filter = FilterBuilder::new(&predicate).build();
+        filter_native(&values, &filter);
     }
 }

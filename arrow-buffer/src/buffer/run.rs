@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::buffer::ScalarBuffer;
 use crate::ArrowNativeType;
+use crate::buffer::ScalarBuffer;
 
 /// A slice-able buffer of monotonically increasing, positive integers used to store run-ends
 ///
@@ -110,11 +110,7 @@ where
     ///
     /// - `buffer` must contain strictly increasing values greater than zero
     /// - The last value of `buffer` must be greater than or equal to `offset + len`
-    pub unsafe fn new_unchecked(
-        run_ends: ScalarBuffer<E>,
-        offset: usize,
-        len: usize,
-    ) -> Self {
+    pub unsafe fn new_unchecked(run_ends: ScalarBuffer<E>, offset: usize, len: usize) -> Self {
         Self {
             run_ends,
             offset,
@@ -138,6 +134,12 @@ where
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        // TODO(emilk): we could shrink even more in the case where we are a small sub-slice of the full buffer
+        self.run_ends.shrink_to_fit();
     }
 
     /// Returns the values of this [`RunEndBuffer`] not including any offset

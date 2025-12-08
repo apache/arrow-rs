@@ -15,226 +15,271 @@
 // specific language governing permissions and limitations
 // under the License.
 
+extern crate arrow;
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
 
-extern crate arrow;
-
-use arrow::compute::*;
-use arrow::datatypes::{ArrowNativeTypeOp, ArrowNumericType, IntervalMonthDayNanoType};
+use arrow::compute::kernels::cmp::*;
 use arrow::util::bench_util::*;
+use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, datatypes::Float32Type, datatypes::Int32Type};
+use arrow_buffer::IntervalMonthDayNano;
+use arrow_string::like::*;
+use arrow_string::regexp::regexp_is_match_scalar;
+use criterion::Criterion;
+use rand::Rng;
+use rand::rngs::StdRng;
+use std::hint;
 
 const SIZE: usize = 65536;
 
-fn bench_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_neq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    neq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_lt<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    lt(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_lt_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    lt_eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_gt<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    gt(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
-fn bench_gt_eq<T>(arr_a: &PrimitiveArray<T>, arr_b: &PrimitiveArray<T>)
-where
-    T: ArrowNumericType,
-    <T as ArrowPrimitiveType>::Native: ArrowNativeTypeOp,
-{
-    gt_eq(criterion::black_box(arr_a), criterion::black_box(arr_b)).unwrap();
-}
-
 fn bench_like_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    like_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b)).unwrap();
+    like(arr_a, &StringArray::new_scalar(value_b)).unwrap();
+}
+
+fn bench_like_utf8view_scalar(arr_a: &StringViewArray, value_b: &str) {
+    like(arr_a, &StringViewArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_nlike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    nlike_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b))
-        .unwrap();
+    nlike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_ilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    ilike_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b))
-        .unwrap();
+    ilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
 fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    nilike_utf8_scalar(criterion::black_box(arr_a), criterion::black_box(value_b))
-        .unwrap();
+    nilike(arr_a, &StringArray::new_scalar(value_b)).unwrap();
 }
 
-fn bench_regexp_is_match_utf8_scalar(arr_a: &StringArray, value_b: &str) {
-    regexp_is_match_utf8_scalar(
-        criterion::black_box(arr_a),
-        criterion::black_box(value_b),
-        None,
-    )
-    .unwrap();
+fn bench_stringview_regexp_is_match_scalar(arr_a: &StringViewArray, value_b: &str) {
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
 }
 
-#[cfg(not(feature = "dyn_cmp_dict"))]
-fn dyn_cmp_dict_benchmarks(_c: &mut Criterion) {}
+fn bench_string_regexp_is_match_scalar(arr_a: &StringArray, value_b: &str) {
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
+}
 
-#[cfg(feature = "dyn_cmp_dict")]
-fn dyn_cmp_dict_benchmarks(c: &mut Criterion) {
-    let strings = create_string_array::<i32>(20, 0.);
-    let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
-    let dict_arr_b = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Option<String>> + '_ {
+    (0..size).map(|_| {
+        let len = rng.random_range(0..64);
+        let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
+        Some(String::from_utf8(bytes).unwrap())
+    })
+}
 
-    c.bench_function("eq dictionary[10] string[4])", |b| {
-        b.iter(|| {
-            cmp_dict_utf8::<_, i32, _>(
-                criterion::black_box(&dict_arr_a),
-                criterion::black_box(&dict_arr_b),
-                |a, b| a == b,
-            )
-            .unwrap()
-        })
-    });
+fn make_inlined_string_array(
+    size: usize,
+    rng: &mut StdRng,
+) -> impl Iterator<Item = Option<String>> + '_ {
+    (0..size).map(|_| {
+        let len = rng.random_range(0..12);
+        let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
+        Some(String::from_utf8(bytes).unwrap())
+    })
 }
 
 fn add_benchmark(c: &mut Criterion) {
     let arr_a = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Float32Type>(SIZE, 0.0, 43);
 
-    let arr_month_day_nano_a =
-        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(SIZE, 0.0, 43);
-    let arr_month_day_nano_b =
-        create_primitive_array_with_seed::<IntervalMonthDayNanoType>(SIZE, 0.0, 43);
+    let arr_month_day_nano_a = create_month_day_nano_array_with_seed(SIZE, 0.0, 43);
+    let arr_month_day_nano_b = create_month_day_nano_array_with_seed(SIZE, 0.0, 43);
 
     let arr_string = create_string_array::<i32>(SIZE, 0.0);
+    let arr_string_view = create_string_view_array(SIZE, 0.0);
 
-    c.bench_function("eq Float32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
+    // create long string arrays with the same prefix
+    let arr_long_string = create_longer_string_array_with_same_prefix::<i32>(SIZE, 0.0);
+    let arr_long_string_view = create_longer_string_view_array_with_same_prefix(SIZE, 0.0);
+
+    let left_arr_long_string = create_longer_string_array_with_same_prefix::<i32>(SIZE, 0.0);
+    let right_arr_long_string = create_longer_string_array_with_same_prefix::<i32>(SIZE, 0.0);
+
+    let left_arr_long_string_view = create_longer_string_view_array_with_same_prefix(SIZE, 0.0);
+    let right_arr_long_string_view = create_longer_string_view_array_with_same_prefix(SIZE, 0.0);
+
+    let scalar = Float32Array::from(vec![1.0]);
+
+    // eq benchmarks
+
+    c.bench_function("eq Float32", |b| b.iter(|| eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Float32", |b| {
-        b.iter(|| {
-            eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("neq Float32", |b| b.iter(|| bench_neq(&arr_a, &arr_b)));
+    c.bench_function("neq Float32", |b| b.iter(|| neq(&arr_a, &arr_b)));
     c.bench_function("neq scalar Float32", |b| {
-        b.iter(|| {
-            neq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| neq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("lt Float32", |b| b.iter(|| bench_lt(&arr_a, &arr_b)));
+    c.bench_function("lt Float32", |b| b.iter(|| lt(&arr_a, &arr_b)));
     c.bench_function("lt scalar Float32", |b| {
-        b.iter(|| {
-            lt_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| lt(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("lt_eq Float32", |b| b.iter(|| bench_lt_eq(&arr_a, &arr_b)));
+    c.bench_function("lt_eq Float32", |b| b.iter(|| lt_eq(&arr_a, &arr_b)));
     c.bench_function("lt_eq scalar Float32", |b| {
-        b.iter(|| {
-            lt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| lt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("gt Float32", |b| b.iter(|| bench_gt(&arr_a, &arr_b)));
+    c.bench_function("gt Float32", |b| b.iter(|| gt(&arr_a, &arr_b)));
     c.bench_function("gt scalar Float32", |b| {
-        b.iter(|| {
-            gt_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| gt(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
-    c.bench_function("gt_eq Float32", |b| b.iter(|| bench_gt_eq(&arr_a, &arr_b)));
+    c.bench_function("gt_eq Float32", |b| b.iter(|| gt_eq(&arr_a, &arr_b)));
     c.bench_function("gt_eq scalar Float32", |b| {
-        b.iter(|| {
-            gt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1.0)).unwrap()
-        })
+        b.iter(|| gt_eq(&arr_a, &Scalar::new(&scalar)).unwrap())
     });
 
     let arr_a = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 42);
     let arr_b = create_primitive_array_with_seed::<Int32Type>(SIZE, 0.0, 43);
+    let scalar = Int32Array::new_scalar(1);
 
-    c.bench_function("eq Int32", |b| b.iter(|| bench_eq(&arr_a, &arr_b)));
+    c.bench_function("eq Int32", |b| b.iter(|| eq(&arr_a, &arr_b)));
     c.bench_function("eq scalar Int32", |b| {
-        b.iter(|| {
-            eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| eq(&arr_a, &scalar).unwrap())
     });
 
-    c.bench_function("neq Int32", |b| b.iter(|| bench_neq(&arr_a, &arr_b)));
+    c.bench_function("neq Int32", |b| b.iter(|| neq(&arr_a, &arr_b)));
     c.bench_function("neq scalar Int32", |b| {
-        b.iter(|| {
-            neq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| neq(&arr_a, &scalar).unwrap())
     });
 
-    c.bench_function("lt Int32", |b| b.iter(|| bench_lt(&arr_a, &arr_b)));
+    c.bench_function("lt Int32", |b| b.iter(|| lt(&arr_a, &arr_b)));
     c.bench_function("lt scalar Int32", |b| {
-        b.iter(|| {
-            lt_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| lt(&arr_a, &scalar).unwrap())
     });
 
-    c.bench_function("lt_eq Int32", |b| b.iter(|| bench_lt_eq(&arr_a, &arr_b)));
+    c.bench_function("lt_eq Int32", |b| b.iter(|| lt_eq(&arr_a, &arr_b)));
     c.bench_function("lt_eq scalar Int32", |b| {
-        b.iter(|| {
-            lt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| lt_eq(&arr_a, &scalar).unwrap())
     });
 
-    c.bench_function("gt Int32", |b| b.iter(|| bench_gt(&arr_a, &arr_b)));
+    c.bench_function("gt Int32", |b| b.iter(|| gt(&arr_a, &arr_b)));
     c.bench_function("gt scalar Int32", |b| {
-        b.iter(|| {
-            gt_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| gt(&arr_a, &scalar).unwrap())
     });
 
-    c.bench_function("gt_eq Int32", |b| b.iter(|| bench_gt_eq(&arr_a, &arr_b)));
+    c.bench_function("gt_eq Int32", |b| b.iter(|| gt_eq(&arr_a, &arr_b)));
     c.bench_function("gt_eq scalar Int32", |b| {
-        b.iter(|| {
-            gt_eq_scalar(criterion::black_box(&arr_a), criterion::black_box(1)).unwrap()
-        })
+        b.iter(|| gt_eq(&arr_a, &scalar).unwrap())
     });
 
     c.bench_function("eq MonthDayNano", |b| {
-        b.iter(|| bench_eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
+        b.iter(|| eq(&arr_month_day_nano_a, &arr_month_day_nano_b))
     });
+    let scalar = IntervalMonthDayNanoArray::new_scalar(IntervalMonthDayNano::new(123, 0, 0));
+
     c.bench_function("eq scalar MonthDayNano", |b| {
+        b.iter(|| eq(&arr_month_day_nano_b, &scalar).unwrap())
+    });
+
+    let mut rng = seedable_rng();
+    let mut array_gen = make_string_array(1024 * 1024 * 8, &mut rng);
+    let string_left = StringArray::from_iter(array_gen);
+    let string_view_left = StringViewArray::from_iter(string_left.iter());
+
+    // reference to the same rng to make sure we generate **different** array data,
+    // ow. the left and right will be identical
+    array_gen = make_string_array(1024 * 1024 * 8, &mut rng);
+    let string_right = StringArray::from_iter(array_gen);
+    let string_view_right = StringViewArray::from_iter(string_right.iter());
+
+    let string_scalar = StringArray::new_scalar("xxxx");
+    c.bench_function("eq scalar StringArray", |b| {
+        b.iter(|| eq(&string_scalar, &string_left).unwrap())
+    });
+
+    c.bench_function("lt scalar StringViewArray", |b| {
         b.iter(|| {
-            eq_scalar(
-                criterion::black_box(&arr_month_day_nano_a),
-                criterion::black_box(123),
+            lt(
+                &Scalar::new(StringViewArray::from_iter_values(["xxxx"])),
+                &string_view_left,
             )
             .unwrap()
         })
     });
+
+    c.bench_function("lt scalar StringArray", |b| {
+        b.iter(|| {
+            lt(
+                &Scalar::new(StringArray::from_iter_values(["xxxx"])),
+                &string_left,
+            )
+            .unwrap()
+        })
+    });
+
+    // StringViewArray has special handling for strings with length <= 12 and length <= 4
+    let string_view_scalar = StringViewArray::new_scalar("xxxx");
+    c.bench_function("eq scalar StringViewArray 4 bytes", |b| {
+        b.iter(|| eq(&string_view_scalar, &string_view_left).unwrap())
+    });
+
+    let string_view_scalar = StringViewArray::new_scalar("xxxxxx");
+    c.bench_function("eq scalar StringViewArray 6 bytes", |b| {
+        b.iter(|| eq(&string_view_scalar, &string_view_left).unwrap())
+    });
+
+    let string_view_scalar = StringViewArray::new_scalar("xxxxxxxxxxxxx");
+    c.bench_function("eq scalar StringViewArray 13 bytes", |b| {
+        b.iter(|| eq(&string_view_scalar, &string_view_left).unwrap())
+    });
+
+    c.bench_function("eq StringArray StringArray", |b| {
+        b.iter(|| eq(&string_left, &string_right).unwrap())
+    });
+
+    c.bench_function("eq StringViewArray StringViewArray", |b| {
+        b.iter(|| eq(&string_view_left, &string_view_right).unwrap())
+    });
+
+    let array_gen = make_inlined_string_array(1024 * 1024 * 8, &mut rng);
+    let string_left = StringArray::from_iter(array_gen);
+    let string_view_inlined_left = StringViewArray::from_iter(string_left.iter());
+
+    let array_gen = make_inlined_string_array(1024 * 1024 * 8, &mut rng);
+    let string_right = StringArray::from_iter(array_gen);
+    let string_view_inlined_right = StringViewArray::from_iter(string_right.iter());
+
+    // Add fast path benchmarks for StringViewArray, both side are inlined views < 12 bytes
+    c.bench_function("eq StringViewArray StringViewArray inlined bytes", |b| {
+        b.iter(|| eq(&string_view_inlined_left, &string_view_inlined_right).unwrap())
+    });
+
+    c.bench_function("lt StringViewArray StringViewArray inlined bytes", |b| {
+        b.iter(|| lt(&string_view_inlined_left, &string_view_inlined_right).unwrap())
+    });
+
+    // eq benchmarks for long strings with the same prefix
+    c.bench_function("eq long same prefix strings StringArray", |b| {
+        b.iter(|| eq(&left_arr_long_string, &right_arr_long_string).unwrap())
+    });
+
+    c.bench_function("neq long same prefix strings StringArray", |b| {
+        b.iter(|| neq(&left_arr_long_string, &right_arr_long_string).unwrap())
+    });
+
+    c.bench_function("lt long same prefix strings StringArray", |b| {
+        b.iter(|| lt(&left_arr_long_string, &right_arr_long_string).unwrap())
+    });
+
+    c.bench_function("eq long same prefix strings StringViewArray", |b| {
+        b.iter(|| eq(&left_arr_long_string_view, &right_arr_long_string_view).unwrap())
+    });
+
+    c.bench_function("neq long same prefix strings StringViewArray", |b| {
+        b.iter(|| neq(&left_arr_long_string_view, &right_arr_long_string_view).unwrap())
+    });
+
+    c.bench_function("lt long same prefix strings StringViewArray", |b| {
+        b.iter(|| lt(&left_arr_long_string_view, &right_arr_long_string_view).unwrap())
+    });
+
+    // StringArray: LIKE benchmarks
 
     c.bench_function("like_utf8 scalar equals", |b| {
         b.iter(|| bench_like_utf8_scalar(&arr_string, "xxxx"))
@@ -245,16 +290,111 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("like_utf8 scalar ends with", |b| {
-        b.iter(|| bench_like_utf8_scalar(&arr_string, "xxxx%"))
+        b.iter(|| bench_like_utf8_scalar(&arr_string, "%xxxx"))
     });
 
     c.bench_function("like_utf8 scalar starts with", |b| {
-        b.iter(|| bench_like_utf8_scalar(&arr_string, "%xxxx"))
+        b.iter(|| bench_like_utf8_scalar(&arr_string, "xxxx%"))
     });
 
     c.bench_function("like_utf8 scalar complex", |b| {
         b.iter(|| bench_like_utf8_scalar(&arr_string, "%xx_xx%xxx"))
     });
+
+    // StringArray: LIKE benchmarks with long strings 4 bytes prefix
+    // Note:
+    // long strings mean strings start with same 4 bytes prefix such as "test",
+    // followed by a tail, ensuring the total length is greater than 12 bytes.
+    c.bench_function("long same prefix strings like_utf8 scalar equals", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "prefix_1234"))
+    });
+
+    c.bench_function("long same prefix strings like_utf8 scalar contains", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "%prefix_1234%"))
+    });
+
+    c.bench_function("long same prefix strings like_utf8 scalar ends with", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "%prefix_1234"))
+    });
+
+    c.bench_function(
+        "long same prefix strings like_utf8 scalar starts with",
+        |b| b.iter(|| bench_like_utf8_scalar(&arr_long_string, "prefix_1234%")),
+    );
+
+    c.bench_function("long same prefix strings like_utf8 scalar complex", |b| {
+        b.iter(|| bench_like_utf8_scalar(&arr_long_string, "%prefix_1234%xxx"))
+    });
+
+    // StringViewArray: LIKE benchmarks with long strings 4 bytes prefix
+    // Note:
+    // long strings mean strings start with same 4 bytes prefix such as "test",
+    // followed by a tail, ensuring the total length is greater than 12 bytes.
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar equals",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "prefix_1234")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar contains",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "%prefix_1234%")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar ends with",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "%prefix_1234")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar starts with",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "prefix_1234%")),
+    );
+
+    c.bench_function(
+        "long same prefix strings like_utf8view scalar complex",
+        |b| b.iter(|| bench_like_utf8view_scalar(&arr_long_string_view, "%prefix_1234%xxx")),
+    );
+
+    // StringViewArray: LIKE benchmarks
+    // Note: since like/nlike share the same implementation, we only benchmark one
+    c.bench_function("like_utf8view scalar equals", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar contains", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx%"))
+    });
+
+    // StringView has special handling for strings with length <= 12 and length <= 4
+    c.bench_function("like_utf8view scalar ends with 4 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar ends with 6 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar ends with 13 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xxxxxxxxxxxxx"))
+    });
+
+    c.bench_function("like_utf8view scalar starts with 4 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxx%"))
+    });
+
+    c.bench_function("like_utf8view scalar starts with 6 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxxxx%"))
+    });
+
+    c.bench_function("like_utf8view scalar starts with 13 bytes", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "xxxxxxxxxxxxx%"))
+    });
+
+    c.bench_function("like_utf8view scalar complex", |b| {
+        b.iter(|| bench_like_utf8view_scalar(&string_view_left, "%xx_xx%xxx"))
+    });
+
+    // StringArray: NOT LIKE benchmarks
 
     c.bench_function("nlike_utf8 scalar equals", |b| {
         b.iter(|| bench_nlike_utf8_scalar(&arr_string, "xxxx"))
@@ -265,16 +405,18 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("nlike_utf8 scalar ends with", |b| {
-        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "xxxx%"))
+        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "%xxxx"))
     });
 
     c.bench_function("nlike_utf8 scalar starts with", |b| {
-        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "%xxxx"))
+        b.iter(|| bench_nlike_utf8_scalar(&arr_string, "xxxx%"))
     });
 
     c.bench_function("nlike_utf8 scalar complex", |b| {
         b.iter(|| bench_nlike_utf8_scalar(&arr_string, "%xx_xx%xxx"))
     });
+
+    // StringArray: ILIKE benchmarks
 
     c.bench_function("ilike_utf8 scalar equals", |b| {
         b.iter(|| bench_ilike_utf8_scalar(&arr_string, "xxXX"))
@@ -285,16 +427,18 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("ilike_utf8 scalar ends with", |b| {
-        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "xXXx%"))
+        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "%xXXx"))
     });
 
     c.bench_function("ilike_utf8 scalar starts with", |b| {
-        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "%XXXx"))
+        b.iter(|| bench_ilike_utf8_scalar(&arr_string, "XXXx%"))
     });
 
     c.bench_function("ilike_utf8 scalar complex", |b| {
         b.iter(|| bench_ilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
+
+    // StringArray: NOT ILIKE benchmarks
 
     c.bench_function("nilike_utf8 scalar equals", |b| {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "xxXX"))
@@ -305,46 +449,87 @@ fn add_benchmark(c: &mut Criterion) {
     });
 
     c.bench_function("nilike_utf8 scalar ends with", |b| {
-        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "xXXx%"))
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xXXx"))
     });
 
     c.bench_function("nilike_utf8 scalar starts with", |b| {
-        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%XXXx"))
+        b.iter(|| bench_nilike_utf8_scalar(&arr_string, "XXXx%"))
     });
 
     c.bench_function("nilike_utf8 scalar complex", |b| {
         b.iter(|| bench_nilike_utf8_scalar(&arr_string, "%xx_xX%xXX"))
     });
 
-    c.bench_function("egexp_matches_utf8 scalar starts with", |b| {
-        b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "^xx"))
-    });
+    // StringArray: regexp_matches_utf8 scalar benchmarks
+    let mut group =
+        c.benchmark_group("StringArray: regexp_matches_utf8 scalar benchmarks".to_string());
 
-    c.bench_function("egexp_matches_utf8 scalar ends with", |b| {
-        b.iter(|| bench_regexp_is_match_utf8_scalar(&arr_string, "xx$"))
-    });
+    group
+        .bench_function("regexp_matches_utf8 scalar starts with", |b| {
+            b.iter(|| bench_string_regexp_is_match_scalar(&arr_string, "^xx"))
+        })
+        .bench_function("regexp_matches_utf8 scalar contains", |b| {
+            b.iter(|| bench_string_regexp_is_match_scalar(&arr_string, ".*xxXX.*"))
+        })
+        .bench_function("regexp_matches_utf8 scalar ends with", |b| {
+            b.iter(|| bench_string_regexp_is_match_scalar(&arr_string, "xx$"))
+        })
+        .bench_function("regexp_matches_utf8 scalar complex", |b| {
+            b.iter(|| bench_string_regexp_is_match_scalar(&arr_string, ".*x{2}.xX.*xXX"))
+        });
+
+    group.finish();
+
+    // StringViewArray: regexp_matches_utf8view scalar benchmarks
+    group =
+        c.benchmark_group("StringViewArray: regexp_matches_utf8view scalar benchmarks".to_string());
+
+    group
+        .bench_function("regexp_matches_utf8view scalar starts with", |b| {
+            b.iter(|| bench_stringview_regexp_is_match_scalar(&arr_string_view, "^xx"))
+        })
+        .bench_function("regexp_matches_utf8view scalar contains", |b| {
+            b.iter(|| bench_stringview_regexp_is_match_scalar(&arr_string_view, ".*xxXX.*"))
+        })
+        .bench_function("regexp_matches_utf8view scalar ends with", |b| {
+            b.iter(|| bench_stringview_regexp_is_match_scalar(&arr_string_view, "xx$"))
+        })
+        .bench_function("regexp_matches_utf8view scalar complex", |b| {
+            b.iter(|| bench_stringview_regexp_is_match_scalar(&arr_string_view, ".*x{2}.xX.*xXX"))
+        });
+
+    group.finish();
+
+    // DictionaryArray benchmarks
 
     let strings = create_string_array::<i32>(20, 0.);
     let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+    let scalar = StringArray::from(vec!["test"]);
 
     c.bench_function("eq_dyn_utf8_scalar dictionary[10] string[4])", |b| {
-        b.iter(|| eq_dyn_utf8_scalar(&dict_arr_a, "test"))
+        b.iter(|| eq(&dict_arr_a, &Scalar::new(&scalar)))
     });
 
     c.bench_function(
         "gt_eq_dyn_utf8_scalar scalar dictionary[10] string[4])",
-        |b| b.iter(|| gt_eq_dyn_utf8_scalar(&dict_arr_a, "test")),
+        |b| b.iter(|| gt_eq(&dict_arr_a, &Scalar::new(&scalar))),
     );
 
     c.bench_function("like_utf8_scalar_dyn dictionary[10] string[4])", |b| {
-        b.iter(|| like_utf8_scalar_dyn(&dict_arr_a, "test"))
+        b.iter(|| like(&dict_arr_a, &StringArray::new_scalar("test")))
     });
 
     c.bench_function("ilike_utf8_scalar_dyn dictionary[10] string[4])", |b| {
-        b.iter(|| ilike_utf8_scalar_dyn(&dict_arr_a, "test"))
+        b.iter(|| ilike(&dict_arr_a, &StringArray::new_scalar("test")))
     });
 
-    dyn_cmp_dict_benchmarks(c);
+    let strings = create_string_array::<i32>(20, 0.);
+    let dict_arr_a = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+    let dict_arr_b = create_dict_from_values::<Int32Type>(SIZE, 0., &strings);
+
+    c.bench_function("eq dictionary[10] string[4])", |b| {
+        b.iter(|| eq(&dict_arr_a, &dict_arr_b).unwrap())
+    });
 }
 
 criterion_group!(benches, add_benchmark);

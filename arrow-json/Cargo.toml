@@ -18,7 +18,7 @@
 [package]
 name = "arrow-json"
 version = { workspace = true }
-description = "Support for parsing JSON format into the Arrow format"
+description = "Support for parsing JSON format to and from the Arrow format"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
@@ -30,27 +30,38 @@ rust-version = { workspace = true }
 
 [lib]
 name = "arrow_json"
-path = "src/lib.rs"
 bench = false
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
-arrow-array = { workspace = true  }
-arrow-buffer = { workspace = true  }
-arrow-cast = { workspace = true  }
-arrow-data = { workspace = true  }
-arrow-schema = { workspace = true  }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true }
+arrow-data = { workspace = true }
+arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
-indexmap = { version = "1.9", default-features = false, features = ["std"] }
-num = { version = "0.4", default-features = false, features = ["std"] }
-serde = { version = "1.0", default-features = false }
+indexmap = { version = "2.0", default-features = false, features = ["std"] }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
+serde_core = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
-chrono = { version = "0.4.23", default-features = false, features = ["clock"] }
-lexical-core = { version = "0.8", default-features = false }
+chrono = { workspace = true }
+lexical-core = { version = "1.0", default-features = false}
+memchr = "2.7.4"
+simdutf8 = { workspace = true }
+ryu = "1.0"
+itoa = "1.0"
 
 [dev-dependencies]
-tempfile = "3.3"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 serde = { version = "1.0", default-features = false, features = ["derive"] }
 futures = "0.3"
 tokio = { version = "1.27", default-features = false, features = ["io-util"] }
 bytes = "1.4"
+criterion = { workspace = true, default-features = false }
+rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+
+[[bench]]
+name = "serde"
+harness = false

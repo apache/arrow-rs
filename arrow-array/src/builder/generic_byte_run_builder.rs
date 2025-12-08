@@ -19,11 +19,8 @@ use crate::types::bytes::ByteArrayNativeType;
 use std::{any::Any, sync::Arc};
 
 use crate::{
-    types::{
-        BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType,
-        Utf8Type,
-    },
     ArrayRef, ArrowPrimitiveType, RunArray,
+    types::{BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, RunEndIndexType, Utf8Type},
 };
 
 use super::{ArrayBuilder, GenericByteBuilder, PrimitiveBuilder};
@@ -112,10 +109,7 @@ where
     pub fn with_capacity(capacity: usize, data_capacity: usize) -> Self {
         Self {
             run_ends_builder: PrimitiveBuilder::with_capacity(capacity),
-            values_builder: GenericByteBuilder::<V>::with_capacity(
-                capacity,
-                data_capacity,
-            ),
+            values_builder: GenericByteBuilder::<V>::with_capacity(capacity, data_capacity),
             current_value: Vec::new(),
             has_current_value: false,
             current_run_end_index: 0,
@@ -148,11 +142,6 @@ where
     /// the eventual runs array.
     fn len(&self) -> usize {
         self.current_run_end_index
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.current_run_end_index == 0
     }
 
     /// Builds the array and reset this builder.
@@ -287,12 +276,13 @@ where
     }
 
     fn run_end_index_as_native(&self) -> R::Native {
-        R::Native::from_usize(self.current_run_end_index)
-        .unwrap_or_else(|| panic!(
+        R::Native::from_usize(self.current_run_end_index).unwrap_or_else(|| {
+            panic!(
                 "Cannot convert the value {} from `usize` to native form of arrow datatype {}",
                 self.current_run_end_index,
                 R::DATA_TYPE
-        ))
+            )
+        })
     }
 }
 
@@ -385,11 +375,11 @@ pub type LargeBinaryRunBuilder<K> = GenericByteRunBuilder<K, LargeBinaryType>;
 mod tests {
     use super::*;
 
+    use crate::GenericByteArray;
+    use crate::Int16RunArray;
     use crate::array::Array;
     use crate::cast::AsArray;
     use crate::types::{Int16Type, Int32Type};
-    use crate::GenericByteArray;
-    use crate::Int16RunArray;
 
     fn test_bytes_run_builder<T>(values: Vec<&T::Native>)
     where
@@ -413,13 +403,13 @@ mod tests {
 
         assert_eq!(array.len(), 11);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 2);
 
         assert_eq!(array.run_ends().values(), &[3, 5, 7, 11]);
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(*ava.value(0), *values[0]);
         assert!(ava.is_null(1));
@@ -459,13 +449,13 @@ mod tests {
 
         assert_eq!(array.len(), 5);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert_eq!(array.run_ends().values(), &[1, 2, 4, 5]);
 
         // Values are polymorphic and so require a downcast.
         let av = array.values();
-        let ava: &GenericByteArray<T> =
-            av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
+        let ava: &GenericByteArray<T> = av.as_any().downcast_ref::<GenericByteArray<T>>().unwrap();
 
         assert_eq!(ava.value(0), values[0]);
         assert!(ava.is_null(1));
@@ -481,6 +471,7 @@ mod tests {
 
         assert_eq!(array.len(), 8);
         assert_eq!(array.null_count(), 0);
+        assert_eq!(array.logical_null_count(), 1);
 
         assert_eq!(array.run_ends().values(), &[1, 2, 4, 7, 8]);
 

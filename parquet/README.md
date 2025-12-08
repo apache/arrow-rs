@@ -24,7 +24,9 @@
 
 This crate contains the official Native Rust implementation of [Apache Parquet](https://parquet.apache.org/), which is part of the [Apache Arrow](https://arrow.apache.org/) project.
 
-See [crate documentation](https://docs.rs/parquet/latest/parquet/) for examples and the full API.
+See the [API documentation](https://docs.rs/parquet/latest) for examples and the full API.
+
+The API documentation for most recent, unreleased code is available [here](https://arrow.apache.org/rust/parquet/index.html).
 
 ## Rust Version Compatibility
 
@@ -32,51 +34,50 @@ This crate is tested with the latest stable version of Rust. We do not currently
 
 ## Versioning / Releases
 
-The arrow crate follows the [SemVer standard](https://doc.rust-lang.org/cargo/reference/semver.html) defined by Cargo and works well within the Rust crate ecosystem.
+The `parquet` crate follows the [SemVer standard] defined by Cargo and works well
+within the Rust crate ecosystem. See the [repository README] for more details on
+the release schedule, version and deprecation policy.
 
-However, for historical reasons, this crate uses versions with major numbers greater than `0.x` (e.g. `19.0.0`), unlike many other crates in the Rust ecosystem which spend extended time releasing versions `0.x` to signal planned ongoing API changes. Minor arrow releases contain only compatible changes, while major releases may contain breaking API changes.
+[semver standard]: https://doc.rust-lang.org/cargo/reference/semver.html
+[repository readme]: https://github.com/apache/arrow-rs
+
+Note that for historical reasons, this crate uses versions with major numbers
+greater than `0.x` (e.g. `19.0.0`), unlike many other crates in the Rust
+ecosystem which spend extended time releasing versions `0.x` to signal planned
+ongoing API changes. Minor arrow releases contain only compatible changes, while
+major releases may contain breaking API changes.
 
 ## Feature Flags
 
 The `parquet` crate provides the following features which may be enabled in your `Cargo.toml`:
 
-- `arrow` (default) - support for reading / writing [`arrow`](https://crates.io/crates/arrow) arrays to / from parquet
-- `async` - support `async` APIs for reading parquet
-- `json` - support for reading / writing `json` data to / from parquet
-- `brotli` (default) - support for parquet using `brotli` compression
-- `flate2` (default) - support for parquet using `gzip` compression
-- `lz4` (default) - support for parquet using `lz4` compression
-- `zstd` (default) - support for parquet using `zstd` compression
-- `snap` (default) - support for parquet using `snappy` compression
-- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/master/parquet/src/bin)
+- `arrow` (default) - support for reading / writing [`arrow`] arrays to / from Parquet
+- `async` - support `async` APIs for reading Parquet
+- `json` - support for reading / writing `json` data to / from Parquet
+- `brotli` (default) - support for Parquet using `brotli` compression
+- `flate2` (default) - support for Parquet using `gzip` compression
+- `lz4` (default) - support for Parquet using `lz4` compression
+- `zstd` (default) - support for Parquet using `zstd` compression
+- `snap` (default) - support for Parquet using `snappy` compression
+- `cli` - parquet [CLI tools](https://github.com/apache/arrow-rs/tree/main/parquet/src/bin)
+- `crc` - enables functionality to automatically verify checksums of each page (if present) when decoding
 - `experimental` - Experimental APIs which may change, even between minor releases
+- `simdutf8` (default) - Use the [`simdutf8`] crate for SIMD-accelerated UTF-8 validation
+- `encryption` - support for reading / writing encrypted Parquet files
+- `variant_experimental` - ⚠️ Experimental [Parquet Variant] support, which may change, even between minor releases.
+- `geospatial` - ⚠️ Experimental geospatial support, which may change, even between minor releases.
+
+[`arrow`]: https://crates.io/crates/arrow
+[`simdutf8`]: https://crates.io/crates/simdutf8
+[parquet variant]: https://github.com/apache/parquet-format/blob/master/VariantEncoding.md
 
 ## Parquet Feature Status
 
-- [x] All encodings supported
-- [x] All compression codecs supported
-- [x] Read support
-  - [x] Primitive column value readers
-  - [x] Row record reader
-  - [x] Arrow record reader
-  - [x] Async support (to Arrow)
-- [x] Statistics support
-- [x] Write support
-  - [x] Primitive column value writers
-  - [ ] Row record writer
-  - [x] Arrow record writer
-  - [x] Async support
-- [x] Predicate pushdown
-- [x] Parquet format 4.0.0 support
+Please see the [Implementation Status Page] on the [Apache Parquet] website for
+information on the status of this implementation.
 
-## Support for `wasm32-unknown-unknown` target
-
-It's possible to build `parquet` for the `wasm32-unknown-unknown` target, however not all the compression features are currently unsupported due to issues with the upstream crates. In particular, the `zstd` and `lz4` features may have compilation issues. See issue [#180](https://github.com/apache/arrow-rs/issues/180).
-
-```
-cargo build -p parquet --target wasm32-unknown-unknown --no-default-features --features cli,snap,flate2,brotli
-```
+[implementation status page]: https://parquet.apache.org/docs/file-format/implementationstatus/
 
 ## License
 
-Licensed under the Apache License, Version 2.0: http://www.apache.org/licenses/LICENSE-2.0.
+Licensed under the Apache License, Version 2.0: <http://www.apache.org/licenses/LICENSE-2.0>.

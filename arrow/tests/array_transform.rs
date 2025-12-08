@@ -16,23 +16,21 @@
 // under the License.
 
 use arrow::array::{
-    Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray,
-    FixedSizeBinaryArray, Int16Array, Int32Array, Int64Array, Int64Builder, ListArray,
-    ListBuilder, MapBuilder, NullArray, StringArray, StringBuilder,
-    StringDictionaryBuilder, StructArray, UInt8Array,
+    Array, ArrayRef, BooleanArray, Decimal128Array, DictionaryArray, FixedSizeBinaryArray,
+    FixedSizeListBuilder, Int16Array, Int32Array, Int64Array, Int64Builder, ListArray, ListBuilder,
+    MapBuilder, NullArray, StringArray, StringBuilder, StringDictionaryBuilder, StructArray,
+    UInt8Array, UInt16Array, UInt16Builder, UnionArray,
 };
 use arrow::datatypes::Int16Type;
-use arrow_buffer::Buffer;
-use arrow_data::transform::MutableArrayData;
+use arrow_array::StringViewArray;
+use arrow_buffer::{Buffer, ScalarBuffer};
 use arrow_data::ArrayData;
-use arrow_schema::{DataType, Field, Fields};
+use arrow_data::transform::MutableArrayData;
+use arrow_schema::{DataType, Field, Fields, UnionFields};
 use std::sync::Arc;
 
-fn create_decimal_array(
-    array: Vec<Option<i128>>,
-    precision: u8,
-    scale: i8,
-) -> Decimal128Array {
+#[allow(unused)]
+fn create_decimal_array(array: Vec<Option<i128>>, precision: u8, scale: i8) -> Decimal128Array {
     array
         .into_iter()
         .collect::<Decimal128Array>()
@@ -57,8 +55,7 @@ fn test_decimal() {
 #[test]
 #[cfg(not(feature = "force_validate"))]
 fn test_decimal_offset() {
-    let decimal_array =
-        create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
+    let decimal_array = create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
     let decimal_array = decimal_array.slice(1, 3).into_data(); // 2, null, 3
     let arrays = vec![&decimal_array];
     let mut a = MutableArrayData::new(arrays, true, 2);
@@ -72,8 +69,7 @@ fn test_decimal_offset() {
 #[test]
 #[cfg(not(feature = "force_validate"))]
 fn test_decimal_null_offset_nulls() {
-    let decimal_array =
-        create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
+    let decimal_array = create_decimal_array(vec![Some(1), Some(2), None, Some(3)], 10, 3);
     let decimal_array = decimal_array.slice(1, 3).into_data(); // 2, null, 3
     let arrays = vec![&decimal_array];
     let mut a = MutableArrayData::new(arrays, true, 2);
@@ -174,8 +170,7 @@ fn test_list_null_offset() {
 /// tests extending from a variable-sized (strings and binary) array w/ offset with nulls
 #[test]
 fn test_variable_sized_nulls() {
-    let array =
-        StringArray::from(vec![Some("a"), Some("bc"), None, Some("defh")]).into_data();
+    let array = StringArray::from(vec![Some("a"), Some("bc"), None, Some("defh")]).into_data();
     let arrays = vec![&array];
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
@@ -267,8 +262,7 @@ fn test_string_null_offset_nulls() {
 
 #[test]
 fn test_bool() {
-    let array =
-        BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]).into_data();
+    let array = BooleanArray::from(vec![Some(false), Some(true), None, Some(false)]).into_data();
     let arrays = vec![&array];
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
@@ -303,8 +297,7 @@ fn test_null() {
 fn create_dictionary_array(values: &[&str], keys: &[Option<&str>]) -> ArrayData {
     let values = StringArray::from(values.to_vec());
     let mut builder =
-        StringDictionaryBuilder::<Int16Type>::new_with_dictionary(keys.len(), &values)
-            .unwrap();
+        StringDictionaryBuilder::<Int16Type>::new_with_dictionary(keys.len(), &values).unwrap();
     for key in keys {
         if let Some(v) = key {
             builder.append(v).unwrap();
@@ -318,10 +311,7 @@ fn create_dictionary_array(values: &[&str], keys: &[Option<&str>]) -> ArrayData 
 #[test]
 fn test_dictionary() {
     // (a, b, c), (0, 1, 0, 2) => (a, b, a, c)
-    let array = create_dictionary_array(
-        &["a", "b", "c"],
-        &[Some("a"), Some("b"), None, Some("c")],
-    );
+    let array = create_dictionary_array(&["a", "b", "c"], &[Some("a"), Some("b"), None, Some("c")]);
     let arrays = vec![&array];
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
@@ -352,10 +342,9 @@ fn test_struct() {
         Some(5),
     ]));
 
-    let array =
-        StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
-            .unwrap()
-            .into_data();
+    let array = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
+        .unwrap()
+        .into_data();
     let arrays = vec![&array];
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
@@ -363,11 +352,8 @@ fn test_struct() {
     let data = mutable.freeze();
     let array = StructArray::from(data);
 
-    let expected = StructArray::try_from(vec![
-        ("f1", strings.slice(1, 2)),
-        ("f2", ints.slice(1, 2)),
-    ])
-    .unwrap();
+    let expected =
+        StructArray::try_from(vec![("f1", strings.slice(1, 2)), ("f2", ints.slice(1, 2))]).unwrap();
     assert_eq!(array, expected)
 }
 
@@ -388,11 +374,10 @@ fn test_struct_offset() {
         Some(5),
     ]));
 
-    let array =
-        StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
-            .unwrap()
-            .into_data()
-            .slice(1, 3);
+    let array = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
+        .unwrap()
+        .into_data()
+        .slice(1, 3);
     let arrays = vec![&array];
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
@@ -400,11 +385,9 @@ fn test_struct_offset() {
     let data = mutable.freeze();
     let array = StructArray::from(data);
 
-    let expected_strings: ArrayRef =
-        Arc::new(StringArray::from(vec![None, Some("mark")]));
+    let expected_strings: ArrayRef = Arc::new(StringArray::from(vec![None, Some("mark")]));
     let expected =
-        StructArray::try_from(vec![("f1", expected_strings), ("f2", ints.slice(2, 2))])
-            .unwrap();
+        StructArray::try_from(vec![("f1", expected_strings), ("f2", ints.slice(2, 2))]).unwrap();
 
     assert_eq!(array, expected);
 }
@@ -426,10 +409,9 @@ fn test_struct_nulls() {
         Some(5),
     ]));
 
-    let array =
-        StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
-            .unwrap()
-            .into_data();
+    let array = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
+        .unwrap()
+        .into_data();
     let arrays = vec![&array];
 
     let mut mutable = MutableArrayData::new(arrays, false, 0);
@@ -443,8 +425,7 @@ fn test_struct_nulls() {
     let expected_int = Arc::new(Int32Array::from(vec![Some(2), None])) as ArrayRef;
 
     let expected =
-        StructArray::try_from(vec![("f1", expected_string), ("f2", expected_int)])
-            .unwrap();
+        StructArray::try_from(vec![("f1", expected_string), ("f2", expected_int)]).unwrap();
     assert_eq!(array, expected)
 }
 
@@ -465,10 +446,9 @@ fn test_struct_many() {
         Some(5),
     ]));
 
-    let array =
-        StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
-            .unwrap()
-            .into_data();
+    let array = StructArray::try_from(vec![("f1", strings.clone()), ("f2", ints.clone())])
+        .unwrap()
+        .into_data();
     let arrays = vec![&array, &array];
     let mut mutable = MutableArrayData::new(arrays, false, 0);
 
@@ -483,17 +463,72 @@ fn test_struct_many() {
         Arc::new(Int32Array::from(vec![Some(2), None, Some(1), Some(2)])) as ArrayRef;
 
     let expected =
-        StructArray::try_from(vec![("f1", expected_string), ("f2", expected_int)])
-            .unwrap();
+        StructArray::try_from(vec![("f1", expected_string), ("f2", expected_int)]).unwrap();
     assert_eq!(array, expected)
 }
 
 #[test]
-fn test_binary_fixed_sized_offsets() {
-    let array = FixedSizeBinaryArray::try_from_iter(
-        vec![vec![0, 0], vec![0, 1], vec![0, 2]].into_iter(),
+fn test_union_dense() {
+    // Input data
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![
+        Some("joe"),
+        Some("mark"),
+        Some("doe"),
+    ]));
+    let ints: ArrayRef = Arc::new(Int32Array::from(vec![
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+    ]));
+    let offsets = [0, 0, 1, 1, 2, 2, 3, 4]
+        .into_iter()
+        .collect::<ScalarBuffer<i32>>();
+    let type_ids = [42, 84, 42, 84, 84, 42, 84, 84]
+        .into_iter()
+        .collect::<ScalarBuffer<i8>>();
+
+    let union_fields = [
+        (84, Arc::new(Field::new("int", DataType::Int32, false))),
+        (42, Arc::new(Field::new("string", DataType::Utf8, false))),
+    ]
+    .into_iter()
+    .collect::<UnionFields>();
+
+    let array = UnionArray::try_new(
+        union_fields.clone(),
+        type_ids,
+        Some(offsets),
+        vec![ints, strings],
     )
-    .expect("Failed to create FixedSizeBinaryArray from iterable");
+    .unwrap()
+    .into_data();
+    let arrays = vec![&array];
+    let mut mutable = MutableArrayData::new(arrays, false, 0);
+
+    // Slice it by `MutableArrayData`
+    mutable.extend(0, 4, 7);
+    let data = mutable.freeze();
+    let array = UnionArray::from(data);
+
+    // Expected data
+    let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("doe")]));
+    let ints: ArrayRef = Arc::new(Int32Array::from(vec![Some(3), Some(4)]));
+    let offsets = [0, 0, 1].into_iter().collect::<ScalarBuffer<i32>>();
+    let type_ids = [84, 42, 84].into_iter().collect::<ScalarBuffer<i8>>();
+
+    let expected =
+        UnionArray::try_new(union_fields, type_ids, Some(offsets), vec![ints, strings]).unwrap();
+
+    assert_eq!(array.to_data(), expected.to_data());
+}
+
+#[test]
+fn test_binary_fixed_sized_offsets() {
+    let array =
+        FixedSizeBinaryArray::try_from_iter(vec![vec![0, 0], vec![0, 1], vec![0, 2]].into_iter())
+            .expect("Failed to create FixedSizeBinaryArray from iterable");
     let array = array.slice(1, 2).into_data();
     // = [[0, 1], [0, 2]] due to the offset = 1
 
@@ -507,9 +542,8 @@ fn test_binary_fixed_sized_offsets() {
     let result = mutable.freeze();
     let result = FixedSizeBinaryArray::from(result);
 
-    let expected =
-        FixedSizeBinaryArray::try_from_iter(vec![vec![0, 2], vec![0, 1]].into_iter())
-            .expect("Failed to create FixedSizeBinaryArray from iterable");
+    let expected = FixedSizeBinaryArray::try_from_iter(vec![vec![0, 2], vec![0, 1]].into_iter())
+        .expect("Failed to create FixedSizeBinaryArray from iterable");
     assert_eq!(result, expected);
 }
 
@@ -566,7 +600,7 @@ fn test_list_append() {
     ]);
     let list_value_offsets = Buffer::from_slice_ref([0i32, 3, 5, 11, 13, 13, 15, 15, 17]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+        DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
         8,
         None,
         0,
@@ -643,7 +677,7 @@ fn test_list_nulls_append() {
     let list_value_offsets =
         Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Arc::new(Field::new("item", DataType::Int64, true))),
+        DataType::List(Arc::new(Field::new_list_field(DataType::Int64, true))),
         12,
         Some(Buffer::from(&[0b11011011, 0b1110])),
         0,
@@ -773,8 +807,7 @@ fn test_map_nulls_append() {
         ),
     ]);
 
-    let map_offsets =
-        Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
+    let map_offsets = Buffer::from_slice_ref([0, 3, 5, 5, 13, 15, 15, 15, 19, 19, 19, 19, 23]);
 
     let expected_list_data = ArrayData::try_new(
         DataType::Map(
@@ -796,6 +829,57 @@ fn test_map_nulls_append() {
     )
     .unwrap();
     assert_eq!(result, expected_list_data);
+}
+
+#[test]
+fn test_map_keys_values_append() {
+    let mut builder = MapBuilder::<Int64Builder, Int64Builder>::new(
+        None,
+        Int64Builder::with_capacity(32),
+        Int64Builder::with_capacity(32),
+    );
+    let (keys, values) = builder.entries();
+    keys.append_slice(&[1, 2, 3]);
+    values.append_slice(&[1, 3, 4]);
+    builder.append(true).unwrap();
+
+    let (keys, values) = builder.entries();
+    keys.append_slice(&[4, 5]);
+    values.append_slice(&[4, 6]);
+    builder.append(true).unwrap();
+
+    builder.append(false).unwrap();
+
+    let map = builder.finish();
+    assert!(map.is_null(2));
+
+    let first = map.value(0);
+    let keys = first
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let values = first
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(keys, &Int64Array::from(vec![Some(1), Some(2), Some(3)]));
+    assert_eq!(values, &Int64Array::from(vec![Some(1), Some(3), Some(4)]));
+
+    let second = map.value(1);
+    let keys = second
+        .column(0)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    let values = second
+        .column(1)
+        .as_any()
+        .downcast_ref::<Int64Array>()
+        .unwrap();
+    assert_eq!(keys, &Int64Array::from(vec![Some(4), Some(5)]));
+    assert_eq!(values, &Int64Array::from(vec![Some(4), Some(6)]));
 }
 
 #[test]
@@ -856,7 +940,7 @@ fn test_list_of_strings_append() {
     ]);
     let list_value_offsets = Buffer::from_slice_ref([0, 3, 5, 6, 9, 10, 13]);
     let expected_list_data = ArrayData::try_new(
-        DataType::List(Arc::new(Field::new("item", DataType::Utf8, true))),
+        DataType::List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
         6,
         None,
         0,
@@ -915,10 +999,9 @@ fn test_fixed_size_binary_append() {
         Some(vec![9, 10]),
         // b[4..4]
     ];
-    let expected =
-        FixedSizeBinaryArray::try_from_sparse_iter_with_size(expected.into_iter(), 2)
-            .expect("Failed to create FixedSizeBinaryArray from iterable")
-            .into_data();
+    let expected = FixedSizeBinaryArray::try_from_sparse_iter_with_size(expected.into_iter(), 2)
+        .expect("Failed to create FixedSizeBinaryArray from iterable")
+        .into_data();
     assert_eq!(result, expected);
 }
 
@@ -945,43 +1028,88 @@ fn test_extend_nulls_panic() {
     mutable.extend_nulls(2);
 }
 
-/*
-// this is an old test used on a meanwhile removed dead code
-// that is still useful when `MutableArrayData` supports fixed-size lists.
 #[test]
-fn test_fixed_size_list_append() -> Result<()> {
-    let int_builder = UInt16Builder::new(64);
-    let mut builder = FixedSizeListBuilder::<UInt16Builder>::new(int_builder, 2);
-    builder.values().append_slice(&[1, 2])?;
-    builder.append(true)?;
-    builder.values().append_slice(&[3, 4])?;
-    builder.append(false)?;
-    builder.values().append_slice(&[5, 6])?;
-    builder.append(true)?;
+fn test_string_view() {
+    let a1 =
+        StringViewArray::from(vec!["foo", "very long string over 12 bytes", "bar"]).into_data();
+    let a2 = StringViewArray::from_iter(vec![
+        Some("bar"),
+        None,
+        Some("long string also over 12 bytes"),
+    ])
+    .into_data();
 
-    let a_builder = UInt16Builder::new(64);
+    a1.validate_full().unwrap();
+    a2.validate_full().unwrap();
+
+    let mut mutable = MutableArrayData::new(vec![&a1, &a2], false, 4);
+    mutable.extend(1, 0, 1);
+    mutable.extend(0, 1, 2);
+    mutable.extend(0, 0, 1);
+    mutable.extend(1, 2, 3);
+
+    let array = StringViewArray::from(mutable.freeze());
+    assert_eq!(array.data_buffers().len(), 2);
+    // Should have reused data buffers
+    assert_eq!(array.data_buffers()[0].as_ptr(), a1.buffers()[1].as_ptr());
+    assert_eq!(array.data_buffers()[1].as_ptr(), a2.buffers()[1].as_ptr());
+
+    let v = array.iter().collect::<Vec<_>>();
+    assert_eq!(
+        v,
+        vec![
+            Some("bar"),
+            Some("very long string over 12 bytes"),
+            Some("foo"),
+            Some("long string also over 12 bytes")
+        ]
+    )
+}
+
+#[test]
+#[should_panic(expected = "Arrays with inconsistent types passed to MutableArrayData")]
+fn test_mixed_types() {
+    let a = StringArray::from(vec!["abc", "def"]).to_data();
+    let b = Int32Array::from(vec![1, 2, 3]).to_data();
+    MutableArrayData::new(vec![&a, &b], false, 4);
+}
+
+#[test]
+fn test_fixed_size_list_append() {
+    let int_builder = UInt16Builder::with_capacity(64);
+    let mut builder = FixedSizeListBuilder::<UInt16Builder>::new(int_builder, 2);
+    builder.values().append_slice(&[1, 2]);
+    builder.append(true);
+    builder.values().append_slice(&[3, 4]);
+    builder.append(false);
+    builder.values().append_slice(&[5, 6]);
+    builder.append(true);
+    let a = builder.finish().into_data();
+
+    let a_builder = UInt16Builder::with_capacity(64);
     let mut a_builder = FixedSizeListBuilder::<UInt16Builder>::new(a_builder, 2);
-    a_builder.values().append_slice(&[7, 8])?;
-    a_builder.append(true)?;
-    a_builder.values().append_slice(&[9, 10])?;
-    a_builder.append(true)?;
-    a_builder.values().append_slice(&[11, 12])?;
-    a_builder.append(false)?;
-    a_builder.values().append_slice(&[13, 14])?;
-    a_builder.append(true)?;
-    a_builder.values().append_null()?;
-    a_builder.values().append_null()?;
-    a_builder.append(true)?;
-    let a = a_builder.finish();
+    a_builder.values().append_slice(&[7, 8]);
+    a_builder.append(true);
+    a_builder.values().append_slice(&[9, 10]);
+    a_builder.append(true);
+    a_builder.values().append_slice(&[11, 12]);
+    a_builder.append(false);
+    a_builder.values().append_slice(&[13, 14]);
+    a_builder.append(true);
+    a_builder.values().append_null();
+    a_builder.values().append_null();
+    a_builder.append(true);
+    let b = a_builder.finish().into_data();
+
+    let mut mutable = MutableArrayData::new(vec![&a, &b], false, 10);
+    mutable.extend(0, 0, a.len());
+    mutable.extend(1, 0, b.len());
 
     // append array
-    builder.append_data(&[
-        a.data(),
-        a.slice(1, 3).data(),
-        a.slice(2, 1).data(),
-        a.slice(5, 0).data(),
-    ])?;
-    let finished = builder.finish();
+    mutable.extend(1, 1, 4);
+    mutable.extend(1, 2, 3);
+
+    let finished = mutable.freeze();
 
     let expected_int_array = UInt16Array::from(vec![
         Some(1),
@@ -1012,23 +1140,14 @@ fn test_fixed_size_list_append() -> Result<()> {
         Some(11),
         Some(12),
     ]);
-    let expected_list_data = ArrayData::new(
-        DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::UInt16, true)),
-            2,
-        ),
+    let expected_fixed_size_list_data = ArrayData::try_new(
+        DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::UInt16, true)), 2),
         12,
-        None,
-        None,
+        Some(Buffer::from(&[0b11011101, 0b101])),
         0,
         vec![],
-        vec![expected_int_array.data()],
-    );
-    let expected_list =
-        FixedSizeListArray::from(Arc::new(expected_list_data) as ArrayData);
-    assert_eq!(&expected_list.values(), &finished.values());
-    assert_eq!(expected_list.len(), finished.len());
-
-    Ok(())
+        vec![expected_int_array.to_data()],
+    )
+    .unwrap();
+    assert_eq!(finished, expected_fixed_size_list_data);
 }
-*/

@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+//! Utilities to traverse against various parquet type.
+
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError::General;
 use crate::errors::Result;
@@ -59,17 +61,11 @@ pub trait TypeVisitor<R, C> {
 
                 match list_item.as_ref() {
                     Type::PrimitiveType { .. } => {
-                        if list_item.get_basic_info().repetition() == Repetition::REPEATED
-                        {
-                            self.visit_list_with_item(
-                                list_type.clone(),
-                                list_item.clone(),
-                                context,
-                            )
+                        if list_item.get_basic_info().repetition() == Repetition::REPEATED {
+                            self.visit_list_with_item(list_type.clone(), list_item.clone(), context)
                         } else {
                             Err(General(
-                                "Primitive element type of list must be repeated."
-                                    .to_string(),
+                                "Primitive element type of list must be repeated.".to_string(),
                             ))
                         }
                     }
@@ -87,11 +83,7 @@ pub trait TypeVisitor<R, C> {
                                 context,
                             )
                         } else {
-                            self.visit_list_with_item(
-                                list_type.clone(),
-                                list_item.clone(),
-                                context,
-                            )
+                            self.visit_list_with_item(list_type.clone(), list_item.clone(), context)
                         }
                     }
                 }
@@ -176,11 +168,7 @@ mod tests {
             Ok(true)
         }
 
-        fn visit_map(
-            &mut self,
-            _map_type: TypePtr,
-            _context: TestVisitorContext,
-        ) -> Result<bool> {
+        fn visit_map(&mut self, _map_type: TypePtr, _context: TestVisitorContext) -> Result<bool> {
             unimplemented!()
         }
 

@@ -20,18 +20,20 @@
 //! Though some common methods are available on enum, use pattern match to extract
 //! actual min and max values from statistics, see below:
 //!
+//! # Examples
 //! ```rust
 //! use parquet::file::statistics::Statistics;
 //!
-//! let stats = Statistics::int32(Some(1), Some(10), None, 3, true);
-//! assert_eq!(stats.null_count(), 3);
-//! assert!(stats.has_min_max_set());
+//! let stats = Statistics::int32(Some(1), Some(10), None, Some(3), true);
+//! assert_eq!(stats.null_count_opt(), Some(3));
 //! assert!(stats.is_min_max_deprecated());
+//! assert!(stats.min_is_exact());
+//! assert!(stats.max_is_exact());
 //!
 //! match stats {
 //!     Statistics::Int32(ref typed) => {
-//!         assert_eq!(*typed.min(), 1);
-//!         assert_eq!(*typed.max(), 10);
+//!         assert_eq!(typed.min_opt(), Some(&1));
+//!         assert_eq!(typed.max_opt(), Some(&10));
 //!     }
 //!     _ => {}
 //! }
@@ -39,12 +41,12 @@
 
 use std::fmt;
 
-use crate::format::Statistics as TStatistics;
-
 use crate::basic::Type;
 use crate::data_type::private::ParquetValueType;
 use crate::data_type::*;
-use crate::util::bit_util::from_le_slice;
+use crate::errors::{ParquetError, Result};
+use crate::file::metadata::thrift::PageStatistics;
+use crate::util::bit_util::FromBytes;
 
 pub(crate) mod private {
     use super::*;
@@ -78,14 +80,15 @@ pub(crate) mod private {
     gen_make_statistics!(FixedLenByteArray, FixedLenByteArray);
 }
 
-// Macro to generate methods create Statistics.
+/// Macro to generate methods to create Statistics.
 macro_rules! statistics_new_func {
     ($func:ident, $vtype:ty, $stat:ident) => {
+        #[doc = concat!("Creates new statistics for `", stringify!($stat), "` column type.")]
         pub fn $func(
             min: $vtype,
             max: $vtype,
             distinct: Option<u64>,
-            nulls: u64,
+            nulls: Option<u64>,
             is_deprecated: bool,
         ) -> Self {
             Statistics::$stat(ValueStatistics::new(
@@ -116,21 +119,25 @@ macro_rules! statistics_enum_func {
 }
 
 /// Converts Thrift definition into `Statistics`.
-pub fn from_thrift(
+pub(crate) fn from_thrift_page_stats(
     physical_type: Type,
-    thrift_stats: Option<TStatistics>,
-) -> Option<Statistics> {
-    match thrift_stats {
+    thrift_stats: Option<PageStatistics>,
+) -> Result<Option<Statistics>> {
+    Ok(match thrift_stats {
         Some(stats) => {
             // Number of nulls recorded, when it is not available, we just mark it as 0.
+            // TODO this should be `None` if there is no information about NULLS.
+            // see https://github.com/apache/arrow-rs/pull/6216/files
             let null_count = stats.null_count.unwrap_or(0);
-            assert!(
-                null_count >= 0,
-                "Statistics null count is negative ({null_count})"
-            );
+
+            if null_count < 0 {
+                return Err(ParquetError::General(format!(
+                    "Statistics null count is negative {null_count}",
+                )));
+            }
 
             // Generic null count.
-            let null_count = null_count as u64;
+            let null_count = Some(null_count as u64);
             // Generic distinct count (count of distinct values occurring)
             let distinct_count = stats.distinct_count.map(|value| value as u64);
             // Whether or not statistics use deprecated min/max fields.
@@ -147,6 +154,32 @@ pub fn from_thrift(
             } else {
                 stats.max_value
             };
+
+            fn check_len(min: &Option<Vec<u8>>, max: &Option<Vec<u8>>, len: usize) -> Result<()> {
+                if let Some(min) = min {
+                    if min.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse min statistic".to_string(),
+                        ));
+                    }
+                }
+                if let Some(max) = max {
+                    if max.len() < len {
+                        return Err(ParquetError::General(
+                            "Insufficient bytes to parse max statistic".to_string(),
+                        ));
+                    }
+                }
+                Ok(())
+            }
+
+            match physical_type {
+                Type::BOOLEAN => check_len(&min, &max, 1),
+                Type::INT32 | Type::FLOAT => check_len(&min, &max, 4),
+                Type::INT64 | Type::DOUBLE => check_len(&min, &max, 8),
+                Type::INT96 => check_len(&min, &max, 12),
+                _ => Ok(()),
+            }?;
 
             // Values are encoded using PLAIN encoding definition, except that
             // variable-length byte arrays do not include a length prefix.
@@ -176,16 +209,26 @@ pub fn from_thrift(
                 ),
                 Type::INT96 => {
                     // INT96 statistics may not be correct, because comparison is signed
-                    // byte-wise, not actual timestamps. It is recommended to ignore
-                    // min/max statistics for INT96 columns.
-                    let min = min.map(|data| {
-                        assert_eq!(data.len(), 12);
-                        from_le_slice::<Int96>(&data)
-                    });
-                    let max = max.map(|data| {
-                        assert_eq!(data.len(), 12);
-                        from_le_slice::<Int96>(&data)
-                    });
+                    let min = if let Some(data) = min {
+                        if data.len() != 12 {
+                            return Err(ParquetError::General(
+                                "Incorrect Int96 min statistics".to_string(),
+                            ));
+                        }
+                        Some(Int96::try_from_le_slice(&data)?)
+                    } else {
+                        None
+                    };
+                    let max = if let Some(data) = max {
+                        if data.len() != 12 {
+                            return Err(ParquetError::General(
+                                "Incorrect Int96 max statistics".to_string(),
+                            ));
+                        }
+                        Some(Int96::try_from_le_slice(&data)?)
+                    } else {
+                        None
+                    };
                     Statistics::int96(min, max, distinct_count, null_count, old_format)
                 }
                 Type::FLOAT => Statistics::float(
@@ -202,59 +245,72 @@ pub fn from_thrift(
                     null_count,
                     old_format,
                 ),
-                Type::BYTE_ARRAY => Statistics::byte_array(
-                    min.map(ByteArray::from),
-                    max.map(ByteArray::from),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::BYTE_ARRAY => Statistics::ByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from),
+                        max.map(ByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
-                Type::FIXED_LEN_BYTE_ARRAY => Statistics::fixed_len_byte_array(
-                    min.map(ByteArray::from).map(FixedLenByteArray::from),
-                    max.map(ByteArray::from).map(FixedLenByteArray::from),
-                    distinct_count,
-                    null_count,
-                    old_format,
+                Type::FIXED_LEN_BYTE_ARRAY => Statistics::FixedLenByteArray(
+                    ValueStatistics::new(
+                        min.map(ByteArray::from).map(FixedLenByteArray::from),
+                        max.map(ByteArray::from).map(FixedLenByteArray::from),
+                        distinct_count,
+                        null_count,
+                        old_format,
+                    )
+                    .with_max_is_exact(stats.is_max_value_exact.unwrap_or(false))
+                    .with_min_is_exact(stats.is_min_value_exact.unwrap_or(false)),
                 ),
             };
 
             Some(res)
         }
         None => None,
-    }
+    })
 }
 
-// Convert Statistics into Thrift definition.
-pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
+/// Convert Statistics into Thrift definition.
+pub(crate) fn page_stats_to_thrift(stats: Option<&Statistics>) -> Option<PageStatistics> {
     let stats = stats?;
 
-    let mut thrift_stats = TStatistics {
+    // record null count if it can fit in i64
+    let null_count = stats
+        .null_count_opt()
+        .and_then(|value| i64::try_from(value).ok());
+
+    // record distinct count if it can fit in i64
+    let distinct_count = stats
+        .distinct_count_opt()
+        .and_then(|value| i64::try_from(value).ok());
+
+    let mut thrift_stats = PageStatistics {
         max: None,
         min: None,
-        null_count: if stats.has_nulls() {
-            Some(stats.null_count() as i64)
-        } else {
-            None
-        },
-        distinct_count: stats.distinct_count().map(|value| value as i64),
+        null_count,
+        distinct_count,
         max_value: None,
         min_value: None,
+        is_max_value_exact: None,
+        is_min_value_exact: None,
     };
 
     // Get min/max if set.
-    let (min, max) = if stats.has_min_max_set() {
-        (
-            Some(stats.min_bytes().to_vec()),
-            Some(stats.max_bytes().to_vec()),
-        )
-    } else {
-        (None, None)
-    };
-
+    let (min, max, min_exact, max_exact) = (
+        stats.min_bytes_opt().map(|x| x.to_vec()),
+        stats.max_bytes_opt().map(|x| x.to_vec()),
+        Some(stats.min_is_exact()),
+        Some(stats.max_is_exact()),
+    );
     if stats.is_min_max_backwards_compatible() {
         // Copy to deprecated min, max values for compatibility with older readers
-        thrift_stats.min = min.clone();
-        thrift_stats.max = max.clone();
+        thrift_stats.min.clone_from(&min);
+        thrift_stats.max.clone_from(&max);
     }
 
     if !stats.is_min_max_deprecated() {
@@ -262,19 +318,39 @@ pub fn to_thrift(stats: Option<&Statistics>) -> Option<TStatistics> {
         thrift_stats.max_value = max;
     }
 
+    thrift_stats.is_min_value_exact = min_exact;
+    thrift_stats.is_max_value_exact = max_exact;
+
     Some(thrift_stats)
 }
 
-/// Statistics for a column chunk and data page.
+/// Strongly typed statistics for a column chunk within a row group.
+///
+/// This structure is a natively typed, in memory representation of the thrift
+/// `Statistics` structure in a Parquet file footer. The statistics stored in
+/// this structure can be used by query engines to skip decoding pages while
+/// reading parquet data.
+///
+/// Page level statistics are stored separately, in [ColumnIndexMetaData].
+///
+/// [ColumnIndexMetaData]: crate::file::page_index::column_index::ColumnIndexMetaData
 #[derive(Debug, Clone, PartialEq)]
 pub enum Statistics {
+    /// Statistics for Boolean column
     Boolean(ValueStatistics<bool>),
+    /// Statistics for Int32 column
     Int32(ValueStatistics<i32>),
+    /// Statistics for Int64 column
     Int64(ValueStatistics<i64>),
+    /// Statistics for Int96 column
     Int96(ValueStatistics<Int96>),
+    /// Statistics for Float column
     Float(ValueStatistics<f32>),
+    /// Statistics for Double column
     Double(ValueStatistics<f64>),
+    /// Statistics for ByteArray column
     ByteArray(ValueStatistics<ByteArray>),
+    /// Statistics for FixedLenByteArray column
     FixedLenByteArray(ValueStatistics<FixedLenByteArray>),
 }
 
@@ -285,11 +361,12 @@ impl<T: ParquetValueType> From<ValueStatistics<T>> for Statistics {
 }
 
 impl Statistics {
+    /// Creates new statistics for a column type
     pub fn new<T: ParquetValueType>(
         min: Option<T>,
         max: Option<T>,
         distinct_count: Option<u64>,
-        null_count: u64,
+        null_count: Option<u64>,
         is_deprecated: bool,
     ) -> Self {
         Self::from(ValueStatistics::new(
@@ -347,37 +424,38 @@ impl Statistics {
 
     /// Returns optional value of number of distinct values occurring.
     /// When it is `None`, the value should be ignored.
-    pub fn distinct_count(&self) -> Option<u64> {
+    pub fn distinct_count_opt(&self) -> Option<u64> {
         statistics_enum_func![self, distinct_count]
     }
 
-    /// Returns number of null values for the column.
+    /// Returns number of null values for the column, if known.
     /// Note that this includes all nulls when column is part of the complex type.
-    pub fn null_count(&self) -> u64 {
-        statistics_enum_func![self, null_count]
+    ///
+    /// Note this API returns Some(0) even if the null count was not present
+    /// in the statistics.
+    /// See <https://github.com/apache/arrow-rs/pull/6216/files>
+    pub fn null_count_opt(&self) -> Option<u64> {
+        statistics_enum_func![self, null_count_opt]
     }
 
-    /// Returns `true` if statistics collected any null values, `false` otherwise.
-    pub fn has_nulls(&self) -> bool {
-        self.null_count() > 0
+    /// Returns `true` if the min value is set, and is an exact min value.
+    pub fn min_is_exact(&self) -> bool {
+        statistics_enum_func![self, min_is_exact]
     }
 
-    /// Returns `true` if min value and max value are set.
-    /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub fn has_min_max_set(&self) -> bool {
-        statistics_enum_func![self, has_min_max_set]
+    /// Returns `true` if the max value is set, and is an exact max value.
+    pub fn max_is_exact(&self) -> bool {
+        statistics_enum_func![self, max_is_exact]
     }
 
-    /// Returns slice of bytes that represent min value.
-    /// Panics if min value is not set.
-    pub fn min_bytes(&self) -> &[u8] {
-        statistics_enum_func![self, min_bytes]
+    /// Returns slice of bytes that represent min value, if min value is known.
+    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
+        statistics_enum_func![self, min_bytes_opt]
     }
 
-    /// Returns slice of bytes that represent max value.
-    /// Panics if max value is not set.
-    pub fn max_bytes(&self) -> &[u8] {
-        statistics_enum_func![self, max_bytes]
+    /// Returns slice of bytes that represent max value, if max value is known.
+    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
+        statistics_enum_func![self, max_bytes_opt]
     }
 
     /// Returns physical type associated with statistics.
@@ -413,14 +491,20 @@ impl fmt::Display for Statistics {
 /// Typed implementation for [`Statistics`].
 pub type TypedStatistics<T> = ValueStatistics<<T as DataType>::T>;
 
-/// Statistics for a particular `ParquetValueType`
+/// Typed statistics for one column chunk
+///
+/// See [`Statistics`] for more details
 #[derive(Clone, Eq, PartialEq)]
 pub struct ValueStatistics<T> {
     min: Option<T>,
     max: Option<T>,
     // Distinct count could be omitted in some cases
     distinct_count: Option<u64>,
-    null_count: u64,
+    null_count: Option<u64>,
+
+    // Whether or not the min or max values are exact, or truncated.
+    is_max_value_exact: bool,
+    is_min_value_exact: bool,
 
     /// If `true` populate the deprecated `min` and `max` fields instead of
     /// `min_value` and `max_value`
@@ -431,22 +515,46 @@ pub struct ValueStatistics<T> {
     is_min_max_backwards_compatible: bool,
 }
 
-impl<T: ParquetValueType> ValueStatistics<T> {
+impl<T> ValueStatistics<T> {
     /// Creates new typed statistics.
     pub fn new(
         min: Option<T>,
         max: Option<T>,
         distinct_count: Option<u64>,
-        null_count: u64,
+        null_count: Option<u64>,
         is_min_max_deprecated: bool,
     ) -> Self {
         Self {
+            is_max_value_exact: max.is_some(),
+            is_min_value_exact: min.is_some(),
             min,
             max,
             distinct_count,
             null_count,
             is_min_max_deprecated,
             is_min_max_backwards_compatible: is_min_max_deprecated,
+        }
+    }
+
+    /// Set whether the stored `min` field represents the exact
+    /// minimum, or just a bound on the minimum value.
+    ///
+    /// see [`Self::min_is_exact`]
+    pub fn with_min_is_exact(self, is_min_value_exact: bool) -> Self {
+        Self {
+            is_min_value_exact,
+            ..self
+        }
+    }
+
+    /// Set whether the stored `max` field represents the exact
+    /// maximum, or just a bound on the maximum value.
+    ///
+    /// see [`Self::max_is_exact`]
+    pub fn with_max_is_exact(self, is_max_value_exact: bool) -> Self {
+        Self {
+            is_max_value_exact,
+            ..self
         }
     }
 
@@ -462,51 +570,39 @@ impl<T: ParquetValueType> ValueStatistics<T> {
         }
     }
 
-    /// Returns min value of the statistics.
-    ///
-    /// Panics if min value is not set, e.g. all values are `null`.
-    /// Use `has_min_max_set` method to check that.
-    pub fn min(&self) -> &T {
-        self.min.as_ref().unwrap()
+    /// Returns min value of the statistics, if known.
+    pub fn min_opt(&self) -> Option<&T> {
+        self.min.as_ref()
     }
 
-    /// Returns max value of the statistics.
-    ///
-    /// Panics if max value is not set, e.g. all values are `null`.
-    /// Use `has_min_max_set` method to check that.
-    pub fn max(&self) -> &T {
-        self.max.as_ref().unwrap()
-    }
-
-    /// Returns min value as bytes of the statistics.
-    ///
-    /// Panics if min value is not set, use `has_min_max_set` method to check
-    /// if values are set.
-    pub fn min_bytes(&self) -> &[u8] {
-        self.min().as_bytes()
-    }
-
-    /// Returns max value as bytes of the statistics.
-    ///
-    /// Panics if max value is not set, use `has_min_max_set` method to check
-    /// if values are set.
-    pub fn max_bytes(&self) -> &[u8] {
-        self.max().as_bytes()
+    /// Returns max value of the statistics, if known.
+    pub fn max_opt(&self) -> Option<&T> {
+        self.max.as_ref()
     }
 
     /// Whether or not min and max values are set.
     /// Normally both min/max values will be set to `Some(value)` or `None`.
-    pub fn has_min_max_set(&self) -> bool {
+    pub(crate) fn _internal_has_min_max_set(&self) -> bool {
         self.min.is_some() && self.max.is_some()
     }
 
+    /// Whether or not max value is set, and is an exact value.
+    pub fn max_is_exact(&self) -> bool {
+        self.max.is_some() && self.is_max_value_exact
+    }
+
+    /// Whether or not min value is set, and is an exact value.
+    pub fn min_is_exact(&self) -> bool {
+        self.min.is_some() && self.is_min_value_exact
+    }
+
     /// Returns optional value of number of distinct values occurring.
-    fn distinct_count(&self) -> Option<u64> {
+    pub fn distinct_count(&self) -> Option<u64> {
         self.distinct_count
     }
 
     /// Returns null count.
-    fn null_count(&self) -> u64 {
+    pub fn null_count_opt(&self) -> Option<u64> {
         self.null_count
     }
 
@@ -530,6 +626,18 @@ impl<T: ParquetValueType> ValueStatistics<T> {
     }
 }
 
+impl<T: AsBytes> ValueStatistics<T> {
+    /// Returns min value as bytes of the statistics, if min value is known.
+    pub fn min_bytes_opt(&self) -> Option<&[u8]> {
+        self.min_opt().map(AsBytes::as_bytes)
+    }
+
+    /// Returns max value as bytes of the statistics, if max value is known.
+    pub fn max_bytes_opt(&self) -> Option<&[u8]> {
+        self.max_opt().map(AsBytes::as_bytes)
+    }
+}
+
 impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{{")?;
@@ -548,8 +656,14 @@ impl<T: ParquetValueType> fmt::Display for ValueStatistics<T> {
             Some(value) => write!(f, "{value}")?,
             None => write!(f, "N/A")?,
         }
-        write!(f, ", null_count: {}", self.null_count)?;
+        write!(f, ", null_count: ")?;
+        match self.null_count {
+            Some(value) => write!(f, "{value}")?,
+            None => write!(f, "N/A")?,
+        }
         write!(f, ", min_max_deprecated: {}", self.is_min_max_deprecated)?;
+        write!(f, ", max_value_exact: {}", self.is_max_value_exact)?;
+        write!(f, ", min_value_exact: {}", self.is_min_value_exact)?;
         write!(f, "}}")
     }
 }
@@ -558,14 +672,16 @@ impl<T: ParquetValueType> fmt::Debug for ValueStatistics<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "{{min: {:?}, max: {:?}, distinct_count: {:?}, null_count: {}, \
-             min_max_deprecated: {}, min_max_backwards_compatible: {}}}",
+            "{{min: {:?}, max: {:?}, distinct_count: {:?}, null_count: {:?}, \
+             min_max_deprecated: {}, min_max_backwards_compatible: {}, max_value_exact: {}, min_value_exact: {}}}",
             self.min,
             self.max,
             self.distinct_count,
             self.null_count,
             self.is_min_max_deprecated,
-            self.is_min_max_backwards_compatible
+            self.is_min_max_backwards_compatible,
+            self.is_max_value_exact,
+            self.is_min_value_exact
         )
     }
 }
@@ -576,120 +692,127 @@ mod tests {
 
     #[test]
     fn test_statistics_min_max_bytes() {
-        let stats = Statistics::int32(Some(-123), Some(234), None, 1, false);
-        assert!(stats.has_min_max_set());
-        assert_eq!(stats.min_bytes(), (-123).as_bytes());
-        assert_eq!(stats.max_bytes(), 234.as_bytes());
+        let stats = Statistics::int32(Some(-123), Some(234), None, Some(1), false);
+        assert_eq!(stats.min_bytes_opt(), Some((-123).as_bytes()));
+        assert_eq!(stats.max_bytes_opt(), Some(234.as_bytes()));
 
         let stats = Statistics::byte_array(
             Some(ByteArray::from(vec![1, 2, 3])),
             Some(ByteArray::from(vec![3, 4, 5])),
             None,
-            1,
+            Some(1),
             true,
         );
-        assert!(stats.has_min_max_set());
-        assert_eq!(stats.min_bytes(), &[1, 2, 3]);
-        assert_eq!(stats.max_bytes(), &[3, 4, 5]);
+        assert_eq!(stats.min_bytes_opt().unwrap(), &[1, 2, 3]);
+        assert_eq!(stats.max_bytes_opt().unwrap(), &[3, 4, 5]);
     }
 
     #[test]
-    #[should_panic(expected = "Statistics null count is negative (-10)")]
+    #[should_panic(expected = "General(\"Statistics null count is negative -10\")")]
     fn test_statistics_negative_null_count() {
-        let thrift_stats = TStatistics {
+        let thrift_stats = PageStatistics {
             max: None,
             min: None,
             null_count: Some(-10),
             distinct_count: None,
             max_value: None,
             min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
         };
 
-        from_thrift(Type::INT32, Some(thrift_stats));
+        from_thrift_page_stats(Type::INT32, Some(thrift_stats)).unwrap();
     }
 
     #[test]
     fn test_statistics_thrift_none() {
-        assert_eq!(from_thrift(Type::INT32, None), None);
-        assert_eq!(from_thrift(Type::BYTE_ARRAY, None), None);
+        assert_eq!(from_thrift_page_stats(Type::INT32, None).unwrap(), None);
+        assert_eq!(
+            from_thrift_page_stats(Type::BYTE_ARRAY, None).unwrap(),
+            None
+        );
     }
 
     #[test]
     fn test_statistics_debug() {
-        let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
+        let stats = Statistics::int32(Some(1), Some(12), None, Some(12), true);
         assert_eq!(
             format!("{stats:?}"),
-            "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: 12, \
-             min_max_deprecated: true, min_max_backwards_compatible: true})"
+            "Int32({min: Some(1), max: Some(12), distinct_count: None, null_count: Some(12), \
+             min_max_deprecated: true, min_max_backwards_compatible: true, max_value_exact: true, min_value_exact: true})"
         );
 
-        let stats = Statistics::int32(None, None, None, 7, false);
+        let stats = Statistics::int32(None, None, None, Some(7), false);
         assert_eq!(
             format!("{stats:?}"),
-            "Int32({min: None, max: None, distinct_count: None, null_count: 7, \
-             min_max_deprecated: false, min_max_backwards_compatible: false})"
+            "Int32({min: None, max: None, distinct_count: None, null_count: Some(7), \
+             min_max_deprecated: false, min_max_backwards_compatible: false, max_value_exact: false, min_value_exact: false})"
         )
     }
 
     #[test]
     fn test_statistics_display() {
-        let stats = Statistics::int32(Some(1), Some(12), None, 12, true);
+        let stats = Statistics::int32(Some(1), Some(12), None, Some(12), true);
         assert_eq!(
             format!("{stats}"),
-            "{min: 1, max: 12, distinct_count: N/A, null_count: 12, min_max_deprecated: true}"
+            "{min: 1, max: 12, distinct_count: N/A, null_count: 12, min_max_deprecated: true, max_value_exact: true, min_value_exact: true}"
         );
 
-        let stats = Statistics::int64(None, None, None, 7, false);
+        let stats = Statistics::int64(None, None, None, Some(7), false);
         assert_eq!(
             format!("{stats}"),
             "{min: N/A, max: N/A, distinct_count: N/A, null_count: 7, min_max_deprecated: \
-             false}"
+             false, max_value_exact: false, min_value_exact: false}"
         );
 
         let stats = Statistics::int96(
             Some(Int96::from(vec![1, 0, 0])),
             Some(Int96::from(vec![2, 3, 4])),
             None,
-            3,
+            Some(3),
             true,
         );
         assert_eq!(
             format!("{stats}"),
             "{min: [1, 0, 0], max: [2, 3, 4], distinct_count: N/A, null_count: 3, \
-             min_max_deprecated: true}"
+             min_max_deprecated: true, max_value_exact: true, min_value_exact: true}"
         );
 
-        let stats = Statistics::byte_array(
-            Some(ByteArray::from(vec![1u8])),
-            Some(ByteArray::from(vec![2u8])),
-            Some(5),
-            7,
-            false,
+        let stats = Statistics::ByteArray(
+            ValueStatistics::new(
+                Some(ByteArray::from(vec![1u8])),
+                Some(ByteArray::from(vec![2u8])),
+                Some(5),
+                Some(7),
+                false,
+            )
+            .with_max_is_exact(false)
+            .with_min_is_exact(false),
         );
         assert_eq!(
             format!("{stats}"),
-            "{min: [1], max: [2], distinct_count: 5, null_count: 7, min_max_deprecated: false}"
+            "{min: [1], max: [2], distinct_count: 5, null_count: 7, min_max_deprecated: false, max_value_exact: false, min_value_exact: false}"
         );
     }
 
     #[test]
     fn test_statistics_partial_eq() {
-        let expected = Statistics::int32(Some(12), Some(45), None, 11, true);
+        let expected = Statistics::int32(Some(12), Some(45), None, Some(11), true);
 
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, true) == expected);
-        assert!(Statistics::int32(Some(11), Some(45), None, 11, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(44), None, 11, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 23, true) != expected);
-        assert!(Statistics::int32(Some(12), Some(45), None, 11, false) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), true) == expected);
+        assert!(Statistics::int32(Some(11), Some(45), None, Some(11), true) != expected);
+        assert!(Statistics::int32(Some(12), Some(44), None, Some(11), true) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, Some(23), true) != expected);
+        assert!(Statistics::int32(Some(12), Some(45), None, Some(11), false) != expected);
 
         assert!(
-            Statistics::int32(Some(12), Some(45), None, 11, false)
-                != Statistics::int64(Some(12), Some(45), None, 11, false)
+            Statistics::int32(Some(12), Some(45), None, Some(11), false)
+                != Statistics::int64(Some(12), Some(45), None, Some(11), false)
         );
 
         assert!(
-            Statistics::boolean(Some(false), Some(true), None, 0, true)
-                != Statistics::double(Some(1.2), Some(4.5), None, 0, true)
+            Statistics::boolean(Some(false), Some(true), None, None, true)
+                != Statistics::double(Some(1.2), Some(4.5), None, None, true)
         );
 
         assert!(
@@ -697,14 +820,52 @@ mod tests {
                 Some(ByteArray::from(vec![1, 2, 3])),
                 Some(ByteArray::from(vec![1, 2, 3])),
                 None,
-                0,
+                None,
                 true
             ) != Statistics::fixed_len_byte_array(
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 Some(ByteArray::from(vec![1, 2, 3]).into()),
                 None,
-                0,
-                true
+                None,
+                true,
+            )
+        );
+
+        assert!(
+            Statistics::byte_array(
+                Some(ByteArray::from(vec![1, 2, 3])),
+                Some(ByteArray::from(vec![1, 2, 3])),
+                None,
+                None,
+                true,
+            ) != Statistics::ByteArray(
+                ValueStatistics::new(
+                    Some(ByteArray::from(vec![1, 2, 3])),
+                    Some(ByteArray::from(vec![1, 2, 3])),
+                    None,
+                    None,
+                    true,
+                )
+                .with_max_is_exact(false)
+            )
+        );
+
+        assert!(
+            Statistics::fixed_len_byte_array(
+                Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                None,
+                None,
+                true,
+            ) != Statistics::FixedLenByteArray(
+                ValueStatistics::new(
+                    Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                    Some(FixedLenByteArray::from(vec![1, 2, 3])),
+                    None,
+                    None,
+                    true,
+                )
+                .with_min_is_exact(false)
             )
         );
     }
@@ -714,49 +875,274 @@ mod tests {
         // Helper method to check statistics conversion.
         fn check_stats(stats: Statistics) {
             let tpe = stats.physical_type();
-            let thrift_stats = to_thrift(Some(&stats));
-            assert_eq!(from_thrift(tpe, thrift_stats), Some(stats));
+            let thrift_stats = page_stats_to_thrift(Some(&stats));
+            assert_eq!(
+                from_thrift_page_stats(tpe, thrift_stats).unwrap(),
+                Some(stats)
+            );
         }
 
-        check_stats(Statistics::boolean(Some(false), Some(true), None, 7, true));
-        check_stats(Statistics::boolean(Some(false), Some(true), None, 7, true));
-        check_stats(Statistics::boolean(Some(false), Some(true), None, 0, false));
-        check_stats(Statistics::boolean(Some(true), Some(true), None, 7, true));
-        check_stats(Statistics::boolean(Some(false), Some(false), None, 7, true));
-        check_stats(Statistics::boolean(None, None, None, 7, true));
+        check_stats(Statistics::boolean(
+            Some(false),
+            Some(true),
+            None,
+            Some(7),
+            true,
+        ));
+        check_stats(Statistics::boolean(
+            Some(false),
+            Some(true),
+            None,
+            Some(7),
+            true,
+        ));
+        check_stats(Statistics::boolean(
+            Some(false),
+            Some(true),
+            None,
+            Some(0),
+            false,
+        ));
+        check_stats(Statistics::boolean(
+            Some(true),
+            Some(true),
+            None,
+            Some(7),
+            true,
+        ));
+        check_stats(Statistics::boolean(
+            Some(false),
+            Some(false),
+            None,
+            Some(7),
+            true,
+        ));
+        check_stats(Statistics::boolean(None, None, None, Some(7), true));
 
-        check_stats(Statistics::int32(Some(-100), Some(500), None, 7, true));
-        check_stats(Statistics::int32(Some(-100), Some(500), None, 0, false));
-        check_stats(Statistics::int32(None, None, None, 7, true));
+        check_stats(Statistics::int32(
+            Some(-100),
+            Some(500),
+            None,
+            Some(7),
+            true,
+        ));
+        check_stats(Statistics::int32(
+            Some(-100),
+            Some(500),
+            None,
+            Some(0),
+            false,
+        ));
+        check_stats(Statistics::int32(None, None, None, Some(7), true));
 
-        check_stats(Statistics::int64(Some(-100), Some(200), None, 7, true));
-        check_stats(Statistics::int64(Some(-100), Some(200), None, 0, false));
-        check_stats(Statistics::int64(None, None, None, 7, true));
+        check_stats(Statistics::int64(
+            Some(-100),
+            Some(200),
+            None,
+            Some(7),
+            true,
+        ));
+        check_stats(Statistics::int64(
+            Some(-100),
+            Some(200),
+            None,
+            Some(0),
+            false,
+        ));
+        check_stats(Statistics::int64(None, None, None, Some(7), true));
 
-        check_stats(Statistics::float(Some(1.2), Some(3.4), None, 7, true));
-        check_stats(Statistics::float(Some(1.2), Some(3.4), None, 0, false));
-        check_stats(Statistics::float(None, None, None, 7, true));
+        check_stats(Statistics::float(Some(1.2), Some(3.4), None, Some(7), true));
+        check_stats(Statistics::float(
+            Some(1.2),
+            Some(3.4),
+            None,
+            Some(0),
+            false,
+        ));
+        check_stats(Statistics::float(None, None, None, Some(7), true));
 
-        check_stats(Statistics::double(Some(1.2), Some(3.4), None, 7, true));
-        check_stats(Statistics::double(Some(1.2), Some(3.4), None, 0, false));
-        check_stats(Statistics::double(None, None, None, 7, true));
+        check_stats(Statistics::double(
+            Some(1.2),
+            Some(3.4),
+            None,
+            Some(7),
+            true,
+        ));
+        check_stats(Statistics::double(
+            Some(1.2),
+            Some(3.4),
+            None,
+            Some(0),
+            false,
+        ));
+        check_stats(Statistics::double(None, None, None, Some(7), true));
 
         check_stats(Statistics::byte_array(
             Some(ByteArray::from(vec![1, 2, 3])),
             Some(ByteArray::from(vec![3, 4, 5])),
             None,
-            7,
+            Some(7),
             true,
         ));
-        check_stats(Statistics::byte_array(None, None, None, 7, true));
+        check_stats(Statistics::byte_array(None, None, None, Some(7), true));
 
         check_stats(Statistics::fixed_len_byte_array(
             Some(ByteArray::from(vec![1, 2, 3]).into()),
             Some(ByteArray::from(vec![3, 4, 5]).into()),
             None,
-            7,
+            Some(7),
             true,
         ));
-        check_stats(Statistics::fixed_len_byte_array(None, None, None, 7, true));
+        check_stats(Statistics::fixed_len_byte_array(
+            None,
+            None,
+            None,
+            Some(7),
+            true,
+        ));
+    }
+
+    #[test]
+    fn test_count_encoding() {
+        statistics_count_test(None, None);
+        statistics_count_test(Some(0), Some(0));
+        statistics_count_test(Some(100), Some(2000));
+        statistics_count_test(Some(1), None);
+        statistics_count_test(None, Some(1));
+    }
+
+    #[test]
+    fn test_count_encoding_distinct_too_large() {
+        // statistics are stored using i64, so test trying to store larger values
+        let statistics = make_bool_stats(Some(u64::MAX), Some(100));
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.distinct_count, None); // can't store u64 max --> null
+        assert_eq!(thrift_stats.null_count, Some(100));
+    }
+
+    #[test]
+    fn test_count_encoding_null_too_large() {
+        // statistics are stored using i64, so test trying to store larger values
+        let statistics = make_bool_stats(Some(100), Some(u64::MAX));
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.distinct_count, Some(100));
+        assert_eq!(thrift_stats.null_count, None); // can' store u64 max --> null
+    }
+
+    #[test]
+    fn test_count_decoding_null_invalid() {
+        let tstatistics = PageStatistics {
+            null_count: Some(-42),
+            max: None,
+            min: None,
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+        let err = from_thrift_page_stats(Type::BOOLEAN, Some(tstatistics)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Statistics null count is negative -42"
+        );
+    }
+
+    /// Writes statistics to thrift and reads them back and ensures:
+    /// - The statistics are the same
+    /// - The statistics written to thrift are the same as the original statistics
+    fn statistics_count_test(distinct_count: Option<u64>, null_count: Option<u64>) {
+        let statistics = make_bool_stats(distinct_count, null_count);
+
+        let thrift_stats = page_stats_to_thrift(Some(&statistics)).unwrap();
+        assert_eq!(thrift_stats.null_count.map(|c| c as u64), null_count);
+        assert_eq!(
+            thrift_stats.distinct_count.map(|c| c as u64),
+            distinct_count
+        );
+
+        let round_tripped = from_thrift_page_stats(Type::BOOLEAN, Some(thrift_stats))
+            .unwrap()
+            .unwrap();
+        // TODO: remove branch when we no longer support assuming null_count==None in the thrift
+        // means null_count = Some(0)
+        if null_count.is_none() {
+            assert_ne!(round_tripped, statistics);
+            assert!(round_tripped.null_count_opt().is_some());
+            assert_eq!(round_tripped.null_count_opt(), Some(0));
+            assert_eq!(round_tripped.min_bytes_opt(), statistics.min_bytes_opt());
+            assert_eq!(round_tripped.max_bytes_opt(), statistics.max_bytes_opt());
+            assert_eq!(
+                round_tripped.distinct_count_opt(),
+                statistics.distinct_count_opt()
+            );
+        } else {
+            assert_eq!(round_tripped, statistics);
+        }
+    }
+
+    fn make_bool_stats(distinct_count: Option<u64>, null_count: Option<u64>) -> Statistics {
+        let min = Some(true);
+        let max = Some(false);
+        let is_min_max_deprecated = false;
+
+        // test is about the counts, so we aren't really testing the min/max values
+        Statistics::Boolean(ValueStatistics::new(
+            min,
+            max,
+            distinct_count,
+            null_count,
+            is_min_max_deprecated,
+        ))
+    }
+
+    #[test]
+    fn test_int96_invalid_statistics() {
+        let mut thrift_stats = PageStatistics {
+            max: None,
+            min: Some((0..13).collect()),
+            null_count: Some(0),
+            distinct_count: None,
+            max_value: None,
+            min_value: None,
+            is_max_value_exact: None,
+            is_min_value_exact: None,
+        };
+
+        let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats.clone())).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 min statistics"
+        );
+
+        thrift_stats.min = None;
+        thrift_stats.max = Some((0..13).collect());
+        let err = from_thrift_page_stats(Type::INT96, Some(thrift_stats)).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: Incorrect Int96 max statistics"
+        );
+    }
+
+    // Ensures that we can call ValueStatistics::min_opt from a
+    // generic function without reyling on a bound to a private trait.
+    fn generic_statistics_handler<T: std::fmt::Display>(stats: ValueStatistics<T>) -> String {
+        match stats.min_opt() {
+            Some(s) => format!("min: {}", s),
+            None => "min: NA".to_string(),
+        }
+    }
+
+    #[test]
+    fn test_generic_access() {
+        let stats = Statistics::int32(Some(12), Some(45), None, Some(11), false);
+
+        match stats {
+            Statistics::Int32(v) => {
+                let stats_string = generic_statistics_handler(v);
+                assert_eq!(&stats_string, "min: 12");
+            }
+            _ => unreachable!(),
+        }
     }
 }

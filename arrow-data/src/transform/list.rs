@@ -16,16 +16,17 @@
 // under the License.
 
 use super::{
-    Extend, _MutableArrayData,
+    _MutableArrayData, Extend,
     utils::{extend_offsets, get_last_offset},
 };
 use crate::ArrayData;
 use arrow_buffer::ArrowNativeType;
-use num::{CheckedAdd, Integer};
+use num_integer::Integer;
+use num_traits::CheckedAdd;
 
 pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
     array: &ArrayData,
-) -> Extend {
+) -> Extend<'_> {
     let offsets = array.buffer::<T>(0);
     Box::new(
         move |mutable: &mut _MutableArrayData, index: usize, start: usize, len: usize| {
@@ -35,11 +36,7 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
             let last_offset: T = unsafe { get_last_offset(offset_buffer) };
 
             // offsets
-            extend_offsets::<T>(
-                offset_buffer,
-                last_offset,
-                &offsets[start..start + len + 1],
-            );
+            extend_offsets::<T>(offset_buffer, last_offset, &offsets[start..start + len + 1]);
 
             mutable.child_data[0].extend(
                 index,
@@ -50,10 +47,7 @@ pub(super) fn build_extend<T: ArrowNativeType + Integer + CheckedAdd>(
     )
 }
 
-pub(super) fn extend_nulls<T: ArrowNativeType>(
-    mutable: &mut _MutableArrayData,
-    len: usize,
-) {
+pub(super) fn extend_nulls<T: ArrowNativeType>(mutable: &mut _MutableArrayData, len: usize) {
     let offset_buffer = &mut mutable.buffer1;
 
     // this is safe due to how offset is built. See details on `get_last_offset`

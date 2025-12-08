@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{ArrowError, Field, FieldRef};
 use std::ops::Deref;
 use std::sync::Arc;
+
+use crate::{ArrowError, DataType, Field, FieldRef};
 
 /// A cheaply cloneable, owned slice of [`FieldRef`]
 ///
@@ -27,7 +28,7 @@ use std::sync::Arc;
 ///
 /// ```
 /// # use std::sync::Arc;
-/// # use arrow_schema::{DataType, Field, Fields};
+/// # use arrow_schema::{DataType, Field, Fields, SchemaBuilder};
 /// // Can be constructed from Vec<Field>
 /// Fields::from(vec![Field::new("a", DataType::Boolean, false)]);
 /// // Can be constructed from Vec<FieldRef>
@@ -38,6 +39,21 @@ use std::sync::Arc;
 /// std::iter::once(Arc::new(Field::new("a", DataType::Boolean, false))).collect::<Fields>();
 /// ```
 ///
+/// See [`SchemaBuilder`] for mutating or updating [`Fields`]
+///
+/// ```
+/// # use arrow_schema::{DataType, Field, SchemaBuilder};
+/// let mut builder = SchemaBuilder::new();
+/// builder.push(Field::new("a", DataType::Boolean, false));
+/// builder.push(Field::new("b", DataType::Boolean, false));
+/// let fields = builder.finish().fields;
+///
+/// let mut builder = SchemaBuilder::from(&fields);
+/// builder.remove(0);
+/// let new = builder.finish().fields;
+/// ```
+///
+/// [`SchemaBuilder`]: crate::SchemaBuilder
 #[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
@@ -82,6 +98,163 @@ impl Fields {
                 .iter()
                 .zip(other.iter())
                 .all(|(a, b)| Arc::ptr_eq(a, b) || a.contains(b))
+    }
+
+    /// Returns a copy of this [`Fields`] containing only those [`FieldRef`] passing a predicate
+    ///
+    /// Performs a depth-first scan of [`Fields`] invoking `filter` for each [`FieldRef`]
+    /// containing no child [`FieldRef`], a leaf field, along with a count of the number
+    /// of such leaves encountered so far. Only [`FieldRef`] for which `filter`
+    /// returned `true` will be included in the result.
+    ///
+    /// This can therefore be used to select a subset of fields from nested types
+    /// such as [`DataType::Struct`] or [`DataType::List`].
+    ///
+    /// ```
+    /// # use arrow_schema::{DataType, Field, Fields};
+    /// let fields = Fields::from(vec![
+    ///     Field::new("a", DataType::Int32, true), // Leaf 0
+    ///     Field::new("b", DataType::Struct(Fields::from(vec![
+    ///         Field::new("c", DataType::Float32, false), // Leaf 1
+    ///         Field::new("d", DataType::Float64, false), // Leaf 2
+    ///         Field::new("e", DataType::Struct(Fields::from(vec![
+    ///             Field::new("f", DataType::Int32, false),   // Leaf 3
+    ///             Field::new("g", DataType::Float16, false), // Leaf 4
+    ///         ])), true),
+    ///     ])), false)
+    /// ]);
+    /// let filtered = fields.filter_leaves(|idx, _| [0, 2, 3, 4].contains(&idx));
+    /// let expected = Fields::from(vec![
+    ///     Field::new("a", DataType::Int32, true),
+    ///     Field::new("b", DataType::Struct(Fields::from(vec![
+    ///         Field::new("d", DataType::Float64, false),
+    ///         Field::new("e", DataType::Struct(Fields::from(vec![
+    ///             Field::new("f", DataType::Int32, false),
+    ///             Field::new("g", DataType::Float16, false),
+    ///         ])), true),
+    ///     ])), false)
+    /// ]);
+    /// assert_eq!(filtered, expected);
+    /// ```
+    pub fn filter_leaves<F: FnMut(usize, &FieldRef) -> bool>(&self, mut filter: F) -> Self {
+        self.try_filter_leaves(|idx, field| Ok(filter(idx, field)))
+            .unwrap()
+    }
+
+    /// Returns a copy of this [`Fields`] containing only those [`FieldRef`] passing a predicate
+    /// or an error if the predicate fails.
+    ///
+    /// See [`Fields::filter_leaves`] for more information.
+    pub fn try_filter_leaves<F: FnMut(usize, &FieldRef) -> Result<bool, ArrowError>>(
+        &self,
+        mut filter: F,
+    ) -> Result<Self, ArrowError> {
+        fn filter_field<F: FnMut(&FieldRef) -> Result<bool, ArrowError>>(
+            f: &FieldRef,
+            filter: &mut F,
+        ) -> Result<Option<FieldRef>, ArrowError> {
+            use DataType::*;
+
+            let v = match f.data_type() {
+                Dictionary(_, v) => v.as_ref(),       // Key must be integer
+                RunEndEncoded(_, v) => v.data_type(), // Run-ends must be integer
+                d => d,
+            };
+            let d = match v {
+                List(child) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        List(fields)
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                LargeList(child) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        LargeList(fields)
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                Map(child, ordered) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        Map(fields, *ordered)
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                FixedSizeList(child, size) => {
+                    let fields = filter_field(child, filter)?;
+                    if let Some(fields) = fields {
+                        FixedSizeList(fields, *size)
+                    } else {
+                        return Ok(None);
+                    }
+                }
+                Struct(fields) => {
+                    let filtered: Result<Vec<_>, _> =
+                        fields.iter().map(|f| filter_field(f, filter)).collect();
+                    let filtered: Fields = filtered?
+                        .iter()
+                        .filter_map(|f| f.as_ref().cloned())
+                        .collect();
+
+                    if filtered.is_empty() {
+                        return Ok(None);
+                    }
+
+                    Struct(filtered)
+                }
+                Union(fields, mode) => {
+                    let filtered: Result<Vec<_>, _> = fields
+                        .iter()
+                        .map(|(id, f)| filter_field(f, filter).map(|f| f.map(|f| (id, f))))
+                        .collect();
+                    let filtered: UnionFields = filtered?
+                        .iter()
+                        .filter_map(|f| f.as_ref().cloned())
+                        .collect();
+
+                    if filtered.is_empty() {
+                        return Ok(None);
+                    }
+
+                    Union(filtered, *mode)
+                }
+                _ => {
+                    let filtered = filter(f)?;
+                    return Ok(filtered.then(|| f.clone()));
+                }
+            };
+            let d = match f.data_type() {
+                Dictionary(k, _) => Dictionary(k.clone(), Box::new(d)),
+                RunEndEncoded(v, f) => {
+                    RunEndEncoded(v.clone(), Arc::new(f.as_ref().clone().with_data_type(d)))
+                }
+                _ => d,
+            };
+            Ok(Some(Arc::new(f.as_ref().clone().with_data_type(d))))
+        }
+
+        let mut leaf_idx = 0;
+        let mut filter = |f: &FieldRef| {
+            let t = filter(leaf_idx, f)?;
+            leaf_idx += 1;
+            Ok(t)
+        };
+
+        let filtered: Result<Vec<_>, _> = self
+            .0
+            .iter()
+            .map(|f| filter_field(f, &mut filter))
+            .collect();
+        let filtered = filtered?
+            .iter()
+            .filter_map(|f| f.as_ref().cloned())
+            .collect();
+        Ok(filtered)
     }
 }
 
@@ -189,14 +362,13 @@ impl UnionFields {
         let mut set = 0_u128;
         type_ids
             .into_iter()
-            .map(|idx| {
+            .inspect(|&idx| {
                 let mask = 1_u128 << idx;
                 if (set & mask) != 0 {
-                    panic!("duplicate type id: {}", idx);
+                    panic!("duplicate type id: {idx}");
                 } else {
                     set |= mask;
                 }
-                idx
             })
             .zip(fields)
             .collect()
@@ -220,10 +392,20 @@ impl UnionFields {
     }
 
     /// Returns an iterator over the fields and type ids in this [`UnionFields`]
-    ///
-    /// Note: the iteration order is not guaranteed
     pub fn iter(&self) -> impl Iterator<Item = (i8, &FieldRef)> + '_ {
         self.0.iter().map(|(id, f)| (*id, f))
+    }
+
+    /// Searches for a field by its type id, returning the type id and field reference if found.
+    /// Returns `None` if no field with the given type id exists.
+    pub fn find_by_type_id(&self, type_id: i8) -> Option<(i8, &FieldRef)> {
+        self.iter().find(|&(i, _)| i == type_id)
+    }
+
+    /// Searches for a field by value equality, returning its type id and reference if found.
+    /// Returns `None` if no matching field exists in this [`UnionFields`].
+    pub fn find_by_field(&self, field: &Field) -> Option<(i8, &FieldRef)> {
+        self.iter().find(|&(_, f)| f.as_ref() == field)
     }
 
     /// Merge this field into self if it is compatible.
@@ -239,10 +421,12 @@ impl UnionFields {
                     // If the nested fields in two unions are the same, they must have same
                     // type id.
                     if *self_type_id != field_type_id {
-                        return Err(ArrowError::SchemaError(
-                            format!("Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
-                                    self_field.name(), self_type_id, field_type_id)
-                        ));
+                        return Err(ArrowError::SchemaError(format!(
+                            "Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
+                            self_field.name(),
+                            self_type_id,
+                            field_type_id
+                        )));
                     }
 
                     is_new_field = false;
@@ -263,5 +447,137 @@ impl FromIterator<(i8, FieldRef)> for UnionFields {
     fn from_iter<T: IntoIterator<Item = (i8, FieldRef)>>(iter: T) -> Self {
         // TODO: Should this validate type IDs are unique (#3982)
         Self(iter.into_iter().collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::UnionMode;
+
+    #[test]
+    fn test_filter() {
+        let floats = Fields::from(vec![
+            Field::new("a", DataType::Float32, false),
+            Field::new("b", DataType::Float32, false),
+        ]);
+        let fields = Fields::from(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("floats", DataType::Struct(floats.clone()), true),
+            Field::new("b", DataType::Int16, true),
+            Field::new(
+                "c",
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "d",
+                DataType::Dictionary(
+                    Box::new(DataType::Int32),
+                    Box::new(DataType::Struct(floats.clone())),
+                ),
+                false,
+            ),
+            Field::new_list(
+                "e",
+                Field::new("floats", DataType::Struct(floats.clone()), true),
+                true,
+            ),
+            Field::new_fixed_size_list(
+                "f",
+                Field::new_list_field(DataType::Int32, false),
+                3,
+                false,
+            ),
+            Field::new_map(
+                "g",
+                "entries",
+                Field::new("keys", DataType::LargeUtf8, false),
+                Field::new("values", DataType::Int32, true),
+                false,
+                false,
+            ),
+            Field::new(
+                "h",
+                DataType::Union(
+                    UnionFields::new(
+                        vec![1, 3],
+                        vec![
+                            Field::new("field1", DataType::UInt8, false),
+                            Field::new("field3", DataType::Utf8, false),
+                        ],
+                    ),
+                    UnionMode::Dense,
+                ),
+                true,
+            ),
+            Field::new(
+                "i",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", DataType::Struct(floats.clone()), true)),
+                ),
+                false,
+            ),
+        ]);
+
+        let floats_a = DataType::Struct(vec![floats[0].clone()].into());
+
+        let r = fields.filter_leaves(|idx, _| idx == 0 || idx == 1);
+        assert_eq!(r.len(), 2);
+        assert_eq!(r[0], fields[0]);
+        assert_eq!(r[1].data_type(), &floats_a);
+
+        let r = fields.filter_leaves(|_, f| f.name() == "a");
+        assert_eq!(r.len(), 5);
+        assert_eq!(r[0], fields[0]);
+        assert_eq!(r[1].data_type(), &floats_a);
+        assert_eq!(
+            r[2].data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(floats_a.clone()))
+        );
+        assert_eq!(
+            r[3].as_ref(),
+            &Field::new_list("e", Field::new("floats", floats_a.clone(), true), true)
+        );
+        assert_eq!(
+            r[4].as_ref(),
+            &Field::new(
+                "i",
+                DataType::RunEndEncoded(
+                    Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                    Arc::new(Field::new("values", floats_a.clone(), true)),
+                ),
+                false,
+            )
+        );
+
+        let r = fields.filter_leaves(|_, f| f.name() == "floats");
+        assert_eq!(r.len(), 0);
+
+        let r = fields.filter_leaves(|idx, _| idx == 9);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0], fields[6]);
+
+        let r = fields.filter_leaves(|idx, _| idx == 10 || idx == 11);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0], fields[7]);
+
+        let union = DataType::Union(
+            UnionFields::new(vec![1], vec![Field::new("field1", DataType::UInt8, false)]),
+            UnionMode::Dense,
+        );
+
+        let r = fields.filter_leaves(|idx, _| idx == 12);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0].data_type(), &union);
+
+        let r = fields.filter_leaves(|idx, _| idx == 14 || idx == 15);
+        assert_eq!(r.len(), 1);
+        assert_eq!(r[0], fields[9]);
+
+        // Propagate error
+        let r = fields.try_filter_leaves(|_, _| Err(ArrowError::SchemaError("error".to_string())));
+        assert!(r.is_err());
     }
 }

@@ -23,11 +23,11 @@ use std::sync::Arc;
 
 use arrow_arith::boolean::{and, or};
 use arrow_array::builder::{BinaryBuilder, StringBuilder};
-use arrow_array::{ArrayRef, RecordBatch};
-use arrow_ord::comparison::eq_utf8_scalar;
+use arrow_array::{ArrayRef, RecordBatch, StringArray};
+use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
-use arrow_string::like::like_utf8_scalar;
+use arrow_string::like::like;
 use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
@@ -184,12 +184,13 @@ impl GetTablesBuilder {
         let mut filters = vec![];
 
         if let Some(catalog_filter_name) = catalog_filter {
-            filters.push(eq_utf8_scalar(&catalog_name, &catalog_filter_name)?);
+            let scalar = StringArray::new_scalar(catalog_filter_name);
+            filters.push(eq(&catalog_name, &scalar)?);
         }
 
         let tt_filter = table_types_filter
             .into_iter()
-            .map(|tt| eq_utf8_scalar(&table_type, &tt))
+            .map(|tt| eq(&table_type, &StringArray::new_scalar(tt)))
             .collect::<std::result::Result<Vec<_>, _>>()?
             .into_iter()
             // We know the arrays are of same length as they are produced fromn the same root array
@@ -200,15 +201,14 @@ impl GetTablesBuilder {
 
         if let Some(db_schema_filter_pattern) = db_schema_filter_pattern {
             // use like kernel to get wildcard matching
-            filters.push(like_utf8_scalar(
-                &db_schema_name,
-                &db_schema_filter_pattern,
-            )?)
+            let scalar = StringArray::new_scalar(db_schema_filter_pattern);
+            filters.push(like(&db_schema_name, &scalar)?)
         }
 
         if let Some(table_name_filter_pattern) = table_name_filter_pattern {
             // use like kernel to get wildcard matching
-            filters.push(like_utf8_scalar(&table_name, &table_name_filter_pattern)?)
+            let scalar = StringArray::new_scalar(table_name_filter_pattern);
+            filters.push(like(&table_name, &scalar)?)
         }
 
         let batch = if let Some(table_schema) = table_schema {
@@ -291,8 +291,8 @@ fn get_tables_schema(include_schema: bool) -> SchemaRef {
 /// The schema for GetTables without `table_schema` column
 static GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
-        Field::new("db_schema_name", DataType::Utf8, false),
+        Field::new("catalog_name", DataType::Utf8, true),
+        Field::new("db_schema_name", DataType::Utf8, true),
         Field::new("table_name", DataType::Utf8, false),
         Field::new("table_type", DataType::Utf8, false),
     ]))
@@ -301,8 +301,8 @@ static GET_TABLES_SCHEMA_WITHOUT_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
 /// The schema for GetTables with `table_schema` column
 static GET_TABLES_SCHEMA_WITH_TABLE_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
-        Field::new("db_schema_name", DataType::Utf8, false),
+        Field::new("catalog_name", DataType::Utf8, true),
+        Field::new("db_schema_name", DataType::Utf8, true),
         Field::new("table_name", DataType::Utf8, false),
         Field::new("table_type", DataType::Utf8, false),
         Field::new("table_schema", DataType::Binary, false),
@@ -329,12 +329,12 @@ mod tests {
                     "b_catalog",
                 ])) as ArrayRef,
                 Arc::new(StringArray::from(vec![
-                    "a_schema", "a_schema", "b_schema", "b_schema", "a_schema",
-                    "a_schema", "b_schema", "b_schema",
+                    "a_schema", "a_schema", "b_schema", "b_schema", "a_schema", "a_schema",
+                    "b_schema", "b_schema",
                 ])) as ArrayRef,
                 Arc::new(StringArray::from(vec![
-                    "a_table", "b_table", "a_table", "b_table", "a_table", "a_table",
-                    "b_table", "b_table",
+                    "a_table", "b_table", "a_table", "b_table", "a_table", "a_table", "b_table",
+                    "b_table",
                 ])) as ArrayRef,
                 Arc::new(StringArray::from(vec![
                     "TABLE", "TABLE", "TABLE", "TABLE", "TABLE", "VIEW", "TABLE", "VIEW",

@@ -15,14 +15,19 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use base64::prelude::BASE64_STANDARD;
+use arrow_flight::sql::DoPutPreparedStatementResult;
+use arrow_flight::sql::server::PeekableFlightDataStream;
 use base64::Engine;
-use futures::{stream, Stream, TryStreamExt};
+use base64::prelude::BASE64_STANDARD;
+use core::str;
+use futures::{Stream, TryStreamExt, stream};
 use once_cell::sync::Lazy;
 use prost::Message;
 use std::collections::HashSet;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
+use tonic::metadata::MetadataValue;
 use tonic::transport::Server;
 use tonic::transport::{Certificate, Identity, ServerTlsConfig};
 use tonic::{Request, Response, Status, Streaming};
@@ -31,28 +36,26 @@ use arrow_array::builder::StringBuilder;
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::sql::metadata::{
-    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData,
-    XdbcTypeInfoDataBuilder,
+    SqlInfoData, SqlInfoDataBuilder, XdbcTypeInfo, XdbcTypeInfoData, XdbcTypeInfoDataBuilder,
 };
 use arrow_flight::sql::{
-    server::FlightSqlService, ActionBeginSavepointRequest, ActionBeginSavepointResult,
-    ActionBeginTransactionRequest, ActionBeginTransactionResult,
-    ActionCancelQueryRequest, ActionCancelQueryResult,
+    ActionBeginSavepointRequest, ActionBeginSavepointResult, ActionBeginTransactionRequest,
+    ActionBeginTransactionResult, ActionCancelQueryRequest, ActionCancelQueryResult,
     ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
     ActionCreatePreparedStatementResult, ActionCreatePreparedSubstraitPlanRequest,
     ActionEndSavepointRequest, ActionEndTransactionRequest, Any, CommandGetCatalogs,
-    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandPreparedStatementUpdate, CommandStatementQuery,
-    CommandStatementSubstraitPlan, CommandStatementUpdate, Nullable, ProstMessageExt,
-    Searchable, SqlInfo, TicketStatementQuery, XdbcDataType,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementSubstraitPlan,
+    CommandStatementUpdate, Nullable, ProstMessageExt, Searchable, SqlInfo, TicketStatementQuery,
+    XdbcDataType, server::FlightSqlService,
 };
 use arrow_flight::utils::batches_to_flight_data;
 use arrow_flight::{
-    flight_service_server::FlightService, flight_service_server::FlightServiceServer,
     Action, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, Location, SchemaAsIpc, Ticket,
+    HandshakeResponse, IpcMessage, SchemaAsIpc, Ticket, flight_service_server::FlightService,
+    flight_service_server::FlightServiceServer,
 };
 use arrow_ipc::writer::IpcWriteOptions;
 use arrow_schema::{ArrowError, DataType, Field, Schema};
@@ -109,6 +112,7 @@ static TABLES: Lazy<Vec<&'static str>> = Lazy::new(|| vec!["flight_sql.example.t
 pub struct FlightSqlServiceImpl {}
 
 impl FlightSqlServiceImpl {
+    #[allow(clippy::result_large_err)]
     fn check_token<T>(&self, req: &Request<T>) -> Result<(), Status> {
         let metadata = req.metadata();
         let auth = metadata.get("authorization").ok_or_else(|| {
@@ -166,8 +170,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let bytes = BASE64_STANDARD
             .decode(base64)
             .map_err(|e| status!("authorization not decodable", e))?;
-        let str = String::from_utf8(bytes)
-            .map_err(|e| status!("authorization not parsable", e))?;
+        let str = str::from_utf8(&bytes).map_err(|e| status!("authorization not parsable", e))?;
         let parts: Vec<_> = str.split(':').collect();
         let (user, pass) = match parts.as_slice() {
             [user, pass] => (user, pass),
@@ -185,7 +188,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
         };
         let result = Ok(result);
         let output = futures::stream::iter(vec![result]);
-        return Ok(Response::new(Box::pin(output)));
+
+        let token = format!("Bearer {FAKE_TOKEN}");
+        let mut response: Response<Pin<Box<dyn Stream<Item = _> + Send>>> =
+            Response::new(Box::pin(output));
+        response.metadata_mut().append(
+            "authorization",
+            MetadataValue::from_str(token.as_str()).unwrap(),
+        );
+        return Ok(response);
     }
 
     async fn do_get_fallback(
@@ -194,10 +205,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _message: Any,
     ) -> Result<Response<<Self as FlightService>::DoGetStream>, Status> {
         self.check_token(&request)?;
-        let batch =
-            Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
-        let schema = (*batch.schema()).clone();
-        let batches = vec![batch];
+        let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
+        let schema = batch.schema_ref();
+        let batches = vec![batch.clone()];
         let flight_data = batches_to_flight_data(schema, batches)
             .map_err(|e| status!("Could not convert batches", e))?
             .into_iter()
@@ -237,14 +247,12 @@ impl FlightSqlService for FlightSqlServiceImpl {
         self.check_token(&request)?;
         let handle = std::str::from_utf8(&cmd.prepared_statement_handle)
             .map_err(|e| status!("Unable to parse handle", e))?;
-        let batch =
-            Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
+
+        let batch = Self::fake_result().map_err(|e| status!("Could not fake a result", e))?;
         let schema = (*batch.schema()).clone();
         let num_rows = batch.num_rows();
         let num_bytes = batch.get_array_memory_size();
-        let loc = Location {
-            uri: "grpc+tcp://127.0.0.1".to_string(),
-        };
+
         let fetch = FetchResults {
             handle: handle.to_string(),
         };
@@ -252,7 +260,9 @@ impl FlightSqlService for FlightSqlServiceImpl {
         let ticket = Ticket { ticket: buf };
         let endpoint = FlightEndpoint {
             ticket: Some(ticket),
-            location: vec![loc],
+            location: vec![],
+            expiration_time: None,
+            app_metadata: vec![].into(),
         };
         let info = FlightInfo::new()
             .try_with_schema(&schema)
@@ -274,7 +284,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -294,7 +304,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -314,7 +324,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
         let ticket = Ticket {
-            ticket: query.encode_to_vec().into(),
+            ticket: query.as_any().encode_to_vec().into(),
         };
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
@@ -343,7 +353,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
-        let ticket = Ticket::new(query.encode_to_vec());
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
@@ -401,7 +411,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<FlightDescriptor>,
     ) -> Result<Response<FlightInfo>, Status> {
         let flight_descriptor = request.into_inner();
-        let ticket = Ticket::new(query.encode_to_vec());
+        let ticket = Ticket::new(query.as_any().encode_to_vec());
         let endpoint = FlightEndpoint::new().with_ticket(ticket);
 
         let flight_info = FlightInfo::new()
@@ -602,7 +612,15 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_statement_update(
         &self,
         _ticket: CommandStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<i64, Status> {
+        Ok(FAKE_UPDATE_RESULT)
+    }
+
+    async fn do_put_statement_ingest(
+        &self,
+        _ticket: CommandStatementIngest,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Ok(FAKE_UPDATE_RESULT)
     }
@@ -610,7 +628,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_substrait_plan(
         &self,
         _ticket: CommandStatementSubstraitPlan,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_substrait_plan not implemented",
@@ -620,8 +638,8 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_query(
         &self,
         _query: CommandPreparedStatementQuery,
-        _request: Request<Streaming<FlightData>>,
-    ) -> Result<Response<<Self as FlightService>::DoPutStream>, Status> {
+        _request: Request<PeekableFlightDataStream>,
+    ) -> Result<DoPutPreparedStatementResult, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_query not implemented",
         ))
@@ -630,7 +648,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
     async fn do_put_prepared_statement_update(
         &self,
         _query: CommandPreparedStatementUpdate,
-        _request: Request<Streaming<FlightData>>,
+        _request: Request<PeekableFlightDataStream>,
     ) -> Result<i64, Status> {
         Err(Status::unimplemented(
             "do_put_prepared_statement_update not implemented",
@@ -643,10 +661,10 @@ impl FlightSqlService for FlightSqlServiceImpl {
         request: Request<Action>,
     ) -> Result<ActionCreatePreparedStatementResult, Status> {
         self.check_token(&request)?;
-        let schema = Self::fake_result()
-            .map_err(|e| status!("Error getting result schema", e))?
-            .schema();
-        let message = SchemaAsIpc::new(&schema, &IpcWriteOptions::default())
+        let record_batch =
+            Self::fake_result().map_err(|e| status!("Error getting result schema", e))?;
+        let schema = record_batch.schema_ref();
+        let message = SchemaAsIpc::new(schema, &IpcWriteOptions::default())
             .try_into()
             .map_err(|e| status!("Unable to serialize schema", e))?;
         let IpcMessage(schema_bytes) = message;
@@ -663,9 +681,7 @@ impl FlightSqlService for FlightSqlServiceImpl {
         _query: ActionClosePreparedStatementRequest,
         _request: Request<Action>,
     ) -> Result<(), Status> {
-        Err(Status::unimplemented(
-            "Implement do_action_close_prepared_statement",
-        ))
+        Ok(())
     }
 
     async fn do_action_create_prepared_substrait_plan(
@@ -726,18 +742,17 @@ impl FlightSqlService for FlightSqlServiceImpl {
 /// This example shows how to run a FlightSql server
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let addr = "0.0.0.0:50051".parse()?;
+    let addr_str = "0.0.0.0:50051";
+    let addr = addr_str.parse()?;
 
-    let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
-
-    println!("Listening on {:?}", addr);
+    println!("Listening on {addr:?}");
 
     if std::env::var("USE_TLS").ok().is_some() {
         let cert = std::fs::read_to_string("arrow-flight/examples/data/server.pem")?;
         let key = std::fs::read_to_string("arrow-flight/examples/data/server.key")?;
-        let client_ca =
-            std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
+        let client_ca = std::fs::read_to_string("arrow-flight/examples/data/client_ca.pem")?;
 
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
         let tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&cert, &key))
             .client_ca_root(Certificate::from_pem(&client_ca));
@@ -748,6 +763,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .serve(addr)
             .await?;
     } else {
+        let svc = FlightServiceServer::new(FlightSqlServiceImpl {});
+
         Server::builder().add_service(svc).serve(addr).await?;
     }
 
@@ -776,10 +793,12 @@ impl ProstMessageExt for FetchResults {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::TryStreamExt;
+    use futures::{TryFutureExt, TryStreamExt};
+    use hyper_util::rt::TokioIo;
     use std::fs;
     use std::future::Future;
     use std::net::SocketAddr;
+    use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use tokio::net::{TcpListener, UnixListener, UnixStream};
@@ -788,7 +807,6 @@ mod tests {
 
     use arrow_cast::pretty::pretty_format_batches;
     use arrow_flight::sql::client::FlightSqlServiceClient;
-    use arrow_flight::utils::flight_data_to_batches;
     use tonic::transport::server::TcpIncoming;
     use tonic::transport::{Certificate, Endpoint};
     use tower::service_fn;
@@ -796,13 +814,13 @@ mod tests {
     async fn bind_tcp() -> (TcpIncoming, SocketAddr) {
         let listener = TcpListener::bind("0.0.0.0:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        let incoming = TcpIncoming::from_listener(listener, true, None).unwrap();
+        let incoming = TcpIncoming::from(listener).with_nodelay(Some(true));
         (incoming, addr)
     }
 
     fn endpoint(uri: String) -> Result<Endpoint, ArrowError> {
         let endpoint = Endpoint::new(uri)
-            .map_err(|_| ArrowError::IoError("Cannot create endpoint".to_string()))?
+            .map_err(|_| ArrowError::IpcError("Cannot create endpoint".to_string()))?
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(20))
             .tcp_nodelay(true) // Disable Nagle's Algorithm since we don't want packets to wait
@@ -837,7 +855,8 @@ mod tests {
             .serve_with_incoming(stream);
 
         let request_future = async {
-            let connector = service_fn(move |_| UnixStream::connect(path.clone()));
+            let connector =
+                service_fn(move |_| UnixStream::connect(path.clone()).map_ok(TokioIo::new));
             let channel = Endpoint::try_from("http://example.com")
                 .unwrap()
                 .connect_with_connector(connector)
@@ -884,13 +903,15 @@ mod tests {
         F: FnOnce(FlightSqlServiceClient<Channel>) -> C,
         C: Future<Output = ()>,
     {
-        let cert = std::fs::read_to_string("examples/data/server.pem").unwrap();
-        let key = std::fs::read_to_string("examples/data/server.key").unwrap();
-        let client_ca = std::fs::read_to_string("examples/data/client_ca.pem").unwrap();
+        let cert_dir = PathBuf::from("examples/data");
+
+        let cert = std::fs::read_to_string(cert_dir.join("server.pem")).unwrap();
+        let key = std::fs::read_to_string(cert_dir.join("server.key")).unwrap();
+        let ca_root = std::fs::read_to_string(cert_dir.join("ca_root.pem")).unwrap();
 
         let tls_config = ServerTlsConfig::new()
             .identity(Identity::from_pem(&cert, &key))
-            .client_ca_root(Certificate::from_pem(&client_ca));
+            .client_ca_root(Certificate::from_pem(&ca_root));
 
         let (incoming, addr) = bind_tcp().await;
         let uri = format!("https://{}:{}", addr.ip(), addr.port());
@@ -903,14 +924,13 @@ mod tests {
             .add_service(svc)
             .serve_with_incoming(incoming);
 
-        let request_future = async {
-            let cert = std::fs::read_to_string("examples/data/client1.pem").unwrap();
-            let key = std::fs::read_to_string("examples/data/client1.key").unwrap();
-            let server_ca = std::fs::read_to_string("examples/data/ca.pem").unwrap();
+        let request_future = async move {
+            let cert = std::fs::read_to_string(cert_dir.join("client.pem")).unwrap();
+            let key = std::fs::read_to_string(cert_dir.join("client.key")).unwrap();
 
             let tls_config = ClientTlsConfig::new()
                 .domain_name("localhost")
-                .ca_certificate(Certificate::from_pem(&server_ca))
+                .ca_certificate(Certificate::from_pem(&ca_root))
                 .identity(Identity::from_pem(cert, key));
 
             let endpoint = endpoint(uri).unwrap().tls_config(tls_config).unwrap();
@@ -954,8 +974,7 @@ mod tests {
 
             let ticket = flight_info.endpoint[0].ticket.as_ref().unwrap().clone();
             let flight_data = client.do_get(ticket).await.unwrap();
-            let flight_data: Vec<FlightData> = flight_data.try_collect().await.unwrap();
-            let batches = flight_data_to_batches(&flight_data).unwrap();
+            let batches: Vec<_> = flight_data.try_collect().await.unwrap();
 
             let res = pretty_format_batches(batches.as_slice()).unwrap();
             let expected = r#"
@@ -988,40 +1007,54 @@ mod tests {
     async fn test_auth() {
         test_all_clients(|mut client| async move {
             // no handshake
-            assert!(client
-                .prepare("select 1;".to_string(), None)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("No authorization header"));
+            assert_contains(
+                client
+                    .prepare("select 1;".to_string(), None)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "No authorization header",
+            );
 
             // Invalid credentials
-            assert!(client
-                .handshake("admin", "password2")
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("Invalid credentials"));
-
-            // forget to set_token
-            client.handshake("admin", "password").await.unwrap();
-            assert!(client
-                .prepare("select 1;".to_string(), None)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("No authorization header"));
+            assert_contains(
+                client
+                    .handshake("admin", "password2")
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "Invalid credentials",
+            );
 
             // Invalid Tokens
             client.handshake("admin", "password").await.unwrap();
             client.set_token("wrong token".to_string());
-            assert!(client
-                .prepare("select 1;".to_string(), None)
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("invalid token"));
+            assert_contains(
+                client
+                    .prepare("select 1;".to_string(), None)
+                    .await
+                    .unwrap_err()
+                    .to_string(),
+                "invalid token",
+            );
+
+            client.clear_token();
+
+            // Successful call (token is automatically set by handshake)
+            client.handshake("admin", "password").await.unwrap();
+            client.prepare("select 1;".to_string(), None).await.unwrap();
         })
         .await
+    }
+
+    fn assert_contains(actual: impl AsRef<str>, searched_for: impl AsRef<str>) {
+        let actual = actual.as_ref();
+        let searched_for = searched_for.as_ref();
+        assert!(
+            actual.contains(searched_for),
+            "Expected '{}' to contain '{}'",
+            actual,
+            searched_for
+        );
     }
 }

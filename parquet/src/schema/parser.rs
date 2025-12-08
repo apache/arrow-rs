@@ -17,7 +17,7 @@
 
 //! Parquet schema parser.
 //! Provides methods to parse and validate string message type into Parquet
-//! [`Type`](crate::schema::types::Type).
+//! [`Type`].
 //!
 //! # Example
 //!
@@ -44,13 +44,11 @@
 
 use std::sync::Arc;
 
-use crate::basic::{
-    ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType,
-};
+use crate::basic::{ConvertedType, LogicalType, Repetition, TimeUnit, Type as PhysicalType};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{Type, TypePtr};
 
-/// Parses message type as string into a Parquet [`Type`](crate::schema::types::Type)
+/// Parses message type as string into a Parquet [`Type`]
 /// which, for example, could be used to extract individual columns. Returns Parquet
 /// general error when parsing or validation fails.
 pub fn parse_message_type(message_type: &str) -> Result<Type> {
@@ -153,11 +151,7 @@ fn assert_token(token: Option<&str>, expected: &str) -> Result<()> {
 
 // Utility function to parse i32 or return general error.
 #[inline]
-fn parse_i32(
-    value: Option<&str>,
-    not_found_msg: &str,
-    parse_fail_msg: &str,
-) -> Result<i32> {
+fn parse_i32(value: Option<&str>, not_found_msg: &str, parse_fail_msg: &str) -> Result<i32> {
     value
         .ok_or_else(|| general_err!(not_found_msg))
         .and_then(|v| v.parse::<i32>().map_err(|_| general_err!(parse_fail_msg)))
@@ -165,11 +159,7 @@ fn parse_i32(
 
 // Utility function to parse boolean or return general error.
 #[inline]
-fn parse_bool(
-    value: Option<&str>,
-    not_found_msg: &str,
-    parse_fail_msg: &str,
-) -> Result<bool> {
+fn parse_bool(value: Option<&str>, not_found_msg: &str, parse_fail_msg: &str) -> Result<bool> {
     value
         .ok_or_else(|| general_err!(not_found_msg))
         .and_then(|v| {
@@ -188,14 +178,14 @@ fn parse_timeunit(
     value
         .ok_or_else(|| general_err!(not_found_msg))
         .and_then(|v| match v.to_uppercase().as_str() {
-            "MILLIS" => Ok(TimeUnit::MILLIS(Default::default())),
-            "MICROS" => Ok(TimeUnit::MICROS(Default::default())),
-            "NANOS" => Ok(TimeUnit::NANOS(Default::default())),
+            "MILLIS" => Ok(TimeUnit::MILLIS),
+            "MICROS" => Ok(TimeUnit::MICROS),
+            "NANOS" => Ok(TimeUnit::NANOS),
             _ => Err(general_err!(parse_fail_msg)),
         })
 }
 
-impl<'a> Parser<'a> {
+impl Parser<'_> {
     // Entry function to parse message type, uses internal tokenizer.
     fn parse_message_type(&mut self) -> Result<Type> {
         // Check that message type starts with "message".
@@ -205,9 +195,8 @@ impl<'a> Parser<'a> {
                     .tokenizer
                     .next()
                     .ok_or_else(|| general_err!("Expected name, found None"))?;
-                let mut fields = self.parse_child_types()?;
                 Type::group_type_builder(name)
-                    .with_fields(&mut fields)
+                    .with_fields(self.parse_child_types()?)
                     .build()
             }
             _ => Err(general_err!("Message type does not start with 'message'")),
@@ -239,9 +228,7 @@ impl<'a> Parser<'a> {
             .and_then(|v| v.to_uppercase().parse::<Repetition>())?;
 
         match self.tokenizer.next() {
-            Some(group) if group.to_uppercase() == "GROUP" => {
-                self.add_group_type(Some(repetition))
-            }
+            Some(group) if group.to_uppercase() == "GROUP" => self.add_group_type(Some(repetition)),
             Some(type_string) => {
                 let physical_type = type_string.to_uppercase().parse::<PhysicalType>()?;
                 self.add_primitive_type(repetition, physical_type)
@@ -268,10 +255,9 @@ impl<'a> Parser<'a> {
                     let upper = v.to_uppercase();
                     let logical = upper.parse::<LogicalType>();
                     match logical {
-                        Ok(logical) => Ok((
-                            Some(logical.clone()),
-                            ConvertedType::from(Some(logical)),
-                        )),
+                        Ok(logical) => {
+                            Ok((Some(logical.clone()), ConvertedType::from(Some(logical))))
+                        }
                         Err(_) => Ok((None, upper.parse::<ConvertedType>()?)),
                     }
                 })?;
@@ -290,16 +276,13 @@ impl<'a> Parser<'a> {
             None
         };
 
-        let mut fields = self.parse_child_types()?;
         let mut builder = Type::group_type_builder(name)
             .with_logical_type(logical_type)
             .with_converted_type(converted_type)
-            .with_fields(&mut fields);
+            .with_fields(self.parse_child_types()?)
+            .with_id(id);
         if let Some(rep) = repetition {
             builder = builder.with_repetition(rep);
-        }
-        if let Some(id) = id {
-            builder = builder.with_id(id);
         }
         builder.build()
     }
@@ -334,17 +317,14 @@ impl<'a> Parser<'a> {
             let (mut logical, mut converted) = self
                 .tokenizer
                 .next()
-                .ok_or_else(|| {
-                    general_err!("Expected logical or converted type, found None")
-                })
+                .ok_or_else(|| general_err!("Expected logical or converted type, found None"))
                 .and_then(|v| {
                     let upper = v.to_uppercase();
                     let logical = upper.parse::<LogicalType>();
                     match logical {
-                        Ok(logical) => Ok((
-                            Some(logical.clone()),
-                            ConvertedType::from(Some(logical)),
-                        )),
+                        Ok(logical) => {
+                            Ok((Some(logical.clone()), ConvertedType::from(Some(logical))))
+                        }
                         Err(_) => Ok((None, upper.parse::<ConvertedType>()?)),
                     }
                 })?;
@@ -435,21 +415,28 @@ impl<'a> Parser<'a> {
                                 "Failed to parse bit_width for INTEGER type",
                             )? as i8;
                             match physical_type {
-                                PhysicalType::INT32 => {
-                                    match bit_width {
-                                        8 | 16 | 32 => {}
-                                        _ => {
-                                            return Err(general_err!("Incorrect bit width {} for INT32", bit_width))
-                                        }
+                                PhysicalType::INT32 => match bit_width {
+                                    8 | 16 | 32 => {}
+                                    _ => {
+                                        return Err(general_err!(
+                                            "Incorrect bit width {} for INT32",
+                                            bit_width
+                                        ));
                                     }
-                                }
+                                },
                                 PhysicalType::INT64 => {
                                     if bit_width != 64 {
-                                        return Err(general_err!("Incorrect bit width {} for INT64", bit_width))
+                                        return Err(general_err!(
+                                            "Incorrect bit width {} for INT64",
+                                            bit_width
+                                        ));
                                     }
                                 }
                                 _ => {
-                                    return Err(general_err!("Logical type Integer cannot be used with physical type {}", physical_type))
+                                    return Err(general_err!(
+                                        "Logical type Integer cannot be used with physical type {}",
+                                        physical_type
+                                    ));
                                 }
                             }
                             if let Some(",") = self.tokenizer.next() {
@@ -516,17 +503,15 @@ impl<'a> Parser<'a> {
         };
         assert_token(self.tokenizer.next(), ";")?;
 
-        let mut builder = Type::primitive_type_builder(name, physical_type)
+        Type::primitive_type_builder(name, physical_type)
             .with_repetition(repetition)
             .with_logical_type(logical_type)
             .with_converted_type(converted_type)
             .with_length(length)
             .with_precision(precision)
-            .with_scale(scale);
-        if let Some(id) = id {
-            builder = builder.with_id(id);
-        }
-        builder.build()
+            .with_scale(scale)
+            .with_id(id)
+            .build()
     }
 }
 
@@ -611,12 +596,11 @@ mod tests {
         assert_eq!(
             res,
             vec![
-                "message", "schema", "{", "required", "int32", "a", ";", "optional",
-                "binary", "c", "(", "UTF8", ")", ";", "required", "group", "d", "{",
-                "required", "int32", "a", ";", "optional", "binary", "c", "(", "UTF8",
-                ")", ";", "}", "required", "group", "e", "(", "LIST", ")", "{",
-                "repeated", "group", "list", "{", "required", "int32", "element", ";",
-                "}", "}", "}"
+                "message", "schema", "{", "required", "int32", "a", ";", "optional", "binary", "c",
+                "(", "UTF8", ")", ";", "required", "group", "d", "{", "required", "int32", "a",
+                ";", "optional", "binary", "c", "(", "UTF8", ")", ";", "}", "required", "group",
+                "e", "(", "LIST", ")", "{", "repeated", "group", "list", "{", "required", "int32",
+                "element", ";", "}", "}", "}"
             ]
         );
     }
@@ -840,43 +824,45 @@ mod tests {
             message root {
               optional fixed_len_byte_array(5) f1 (DECIMAL(9, 3));
               optional fixed_len_byte_array (16) f2 (DECIMAL (38, 18));
+              optional fixed_len_byte_array (2) f3 (FLOAT16);
             }
         ";
         let message = parse(schema).unwrap();
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut vec![
+            .with_fields(vec![
                 Arc::new(
-                    Type::primitive_type_builder(
-                        "f1",
-                        PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                    )
-                    .with_logical_type(Some(LogicalType::Decimal {
-                        precision: 9,
-                        scale: 3,
-                    }))
-                    .with_converted_type(ConvertedType::DECIMAL)
-                    .with_length(5)
-                    .with_precision(9)
-                    .with_scale(3)
-                    .build()
-                    .unwrap(),
+                    Type::primitive_type_builder("f1", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                        .with_logical_type(Some(LogicalType::Decimal {
+                            precision: 9,
+                            scale: 3,
+                        }))
+                        .with_converted_type(ConvertedType::DECIMAL)
+                        .with_length(5)
+                        .with_precision(9)
+                        .with_scale(3)
+                        .build()
+                        .unwrap(),
                 ),
                 Arc::new(
-                    Type::primitive_type_builder(
-                        "f2",
-                        PhysicalType::FIXED_LEN_BYTE_ARRAY,
-                    )
-                    .with_logical_type(Some(LogicalType::Decimal {
-                        precision: 38,
-                        scale: 18,
-                    }))
-                    .with_converted_type(ConvertedType::DECIMAL)
-                    .with_length(16)
-                    .with_precision(38)
-                    .with_scale(18)
-                    .build()
-                    .unwrap(),
+                    Type::primitive_type_builder("f2", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                        .with_logical_type(Some(LogicalType::Decimal {
+                            precision: 38,
+                            scale: 18,
+                        }))
+                        .with_converted_type(ConvertedType::DECIMAL)
+                        .with_length(16)
+                        .with_precision(38)
+                        .with_scale(18)
+                        .build()
+                        .unwrap(),
+                ),
+                Arc::new(
+                    Type::primitive_type_builder("f3", PhysicalType::FIXED_LEN_BYTE_ARRAY)
+                        .with_logical_type(Some(LogicalType::Float16))
+                        .with_length(2)
+                        .build()
+                        .unwrap(),
                 ),
             ])
             .build()
@@ -906,24 +892,21 @@ mod tests {
         let message = parse(schema).unwrap();
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut vec![Arc::new(
+            .with_fields(vec![Arc::new(
                 Type::group_type_builder("a0")
                     .with_repetition(Repetition::REQUIRED)
-                    .with_fields(&mut vec![
+                    .with_fields(vec![
                         Arc::new(
                             Type::group_type_builder("a1")
                                 .with_repetition(Repetition::OPTIONAL)
                                 .with_logical_type(Some(LogicalType::List))
                                 .with_converted_type(ConvertedType::LIST)
-                                .with_fields(&mut vec![Arc::new(
-                                    Type::primitive_type_builder(
-                                        "a2",
-                                        PhysicalType::BYTE_ARRAY,
-                                    )
-                                    .with_repetition(Repetition::REPEATED)
-                                    .with_converted_type(ConvertedType::UTF8)
-                                    .build()
-                                    .unwrap(),
+                                .with_fields(vec![Arc::new(
+                                    Type::primitive_type_builder("a2", PhysicalType::BYTE_ARRAY)
+                                        .with_repetition(Repetition::REPEATED)
+                                        .with_converted_type(ConvertedType::UTF8)
+                                        .build()
+                                        .unwrap(),
                                 )])
                                 .build()
                                 .unwrap(),
@@ -933,10 +916,10 @@ mod tests {
                                 .with_repetition(Repetition::OPTIONAL)
                                 .with_logical_type(Some(LogicalType::List))
                                 .with_converted_type(ConvertedType::LIST)
-                                .with_fields(&mut vec![Arc::new(
+                                .with_fields(vec![Arc::new(
                                     Type::group_type_builder("b2")
                                         .with_repetition(Repetition::REPEATED)
-                                        .with_fields(&mut vec![
+                                        .with_fields(vec![
                                             Arc::new(
                                                 Type::primitive_type_builder(
                                                     "b3",
@@ -984,7 +967,7 @@ mod tests {
         ";
         let message = parse(schema).unwrap();
 
-        let mut fields = vec![
+        let fields = vec![
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
@@ -1027,7 +1010,7 @@ mod tests {
         ];
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut fields)
+            .with_fields(fields)
             .build()
             .unwrap();
         assert_eq!(message, expected);
@@ -1051,7 +1034,7 @@ mod tests {
         ";
         let message = parse(schema).unwrap();
 
-        let mut fields = vec![
+        let fields = vec![
             Arc::new(
                 Type::primitive_type_builder("_1", PhysicalType::INT32)
                     .with_repetition(Repetition::REQUIRED)
@@ -1093,7 +1076,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_6", PhysicalType::INT32)
                     .with_logical_type(Some(LogicalType::Time {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: false,
                     }))
                     .build()
@@ -1102,7 +1085,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_7", PhysicalType::INT64)
                     .with_logical_type(Some(LogicalType::Time {
-                        unit: TimeUnit::MICROS(Default::default()),
+                        unit: TimeUnit::MICROS,
                         is_adjusted_to_u_t_c: true,
                     }))
                     .build()
@@ -1111,7 +1094,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_8", PhysicalType::INT64)
                     .with_logical_type(Some(LogicalType::Timestamp {
-                        unit: TimeUnit::MILLIS(Default::default()),
+                        unit: TimeUnit::MILLIS,
                         is_adjusted_to_u_t_c: true,
                     }))
                     .build()
@@ -1120,7 +1103,7 @@ mod tests {
             Arc::new(
                 Type::primitive_type_builder("_9", PhysicalType::INT64)
                     .with_logical_type(Some(LogicalType::Timestamp {
-                        unit: TimeUnit::NANOS(Default::default()),
+                        unit: TimeUnit::NANOS,
                         is_adjusted_to_u_t_c: false,
                     }))
                     .build()
@@ -1135,7 +1118,7 @@ mod tests {
         ];
 
         let expected = Type::group_type_builder("root")
-            .with_fields(&mut fields)
+            .with_fields(fields)
             .build()
             .unwrap();
         assert_eq!(message, expected);

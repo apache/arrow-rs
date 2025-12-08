@@ -20,20 +20,16 @@
 
 #[macro_use]
 extern crate criterion;
-use arrow::compute::eq_utf8_scalar;
 use criterion::Criterion;
 
 extern crate arrow;
 
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
+use std::hint;
 
 fn bench_equal<A: Array + PartialEq<A>>(arr_a: &A) {
-    criterion::black_box(arr_a == arr_a);
-}
-
-fn bench_equal_utf8_scalar(arr_a: &GenericStringArray<i32>, right: &str) {
-    criterion::black_box(eq_utf8_scalar(arr_a, right).unwrap());
+    hint::black_box(arr_a == arr_a);
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -48,11 +44,6 @@ fn add_benchmark(c: &mut Criterion) {
 
     let arr_a = create_string_array::<i32>(512, 0.0);
     c.bench_function("equal_string_512", |b| b.iter(|| bench_equal(&arr_a)));
-
-    let arr_a = create_string_array::<i32>(512, 0.0);
-    c.bench_function("equal_string_scalar_empty_512", |b| {
-        b.iter(|| bench_equal_utf8_scalar(&arr_a, ""))
-    });
 
     let arr_a_nulls = create_string_array::<i32>(512, 0.5);
     c.bench_function("equal_string_nulls_512", |b| {

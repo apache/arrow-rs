@@ -26,57 +26,64 @@
 //! This crate contains:
 //!
 //! 1. Low level [prost] generated structs
-//!  for Flight gRPC protobuf messages, such as [`FlightData`], [`FlightInfo`],
-//!  [`Location`] and [`Ticket`].
+//!    for Flight gRPC protobuf messages, such as [`FlightData`], [`FlightInfo`],
+//!    [`Location`] and [`Ticket`].
 //!
 //! 2. Low level [tonic] generated [`flight_service_client`] and
-//! [`flight_service_server`].
+//!    [`flight_service_server`].
 //!
-//! 3. Experimental support for [Flight SQL] in [`sql`]. Requires the
-//! `flight-sql-experimental` feature of this crate to be activated.
+//! 3. Support for [Flight SQL] in [`sql`]. Requires the
+//!    `flight-sql` feature of this crate to be activated.
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
+
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(rustdoc::invalid_html_tags)]
+#![warn(missing_docs)]
+// The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
+#![allow(unused_crate_dependencies)]
 
 use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
 
 use arrow_ipc::convert::try_schema_from_ipc_buffer;
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
-use std::{
-    convert::{TryFrom, TryInto},
-    fmt,
-    ops::Deref,
-};
+use prost_types::Timestamp;
+use std::{fmt, ops::Deref};
 
 type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
-#[allow(clippy::derive_partial_eq_without_eq)]
-
-mod gen {
+#[allow(clippy::all)]
+mod r#gen {
+    // Since this file is auto-generated, we suppress all warnings
+    #![allow(missing_docs)]
     include!("arrow.flight.protocol.rs");
 }
 
 /// Defines a `Flight` for generation or retrieval.
 pub mod flight_descriptor {
-    use super::gen;
-    pub use gen::flight_descriptor::DescriptorType;
+    use super::r#gen;
+    pub use r#gen::flight_descriptor::DescriptorType;
 }
 
 /// Low Level [tonic] [`FlightServiceClient`](gen::flight_service_client::FlightServiceClient).
 pub mod flight_service_client {
-    use super::gen;
-    pub use gen::flight_service_client::FlightServiceClient;
+    use super::r#gen;
+    pub use r#gen::flight_service_client::FlightServiceClient;
 }
 
 /// Low Level [tonic] [`FlightServiceServer`](gen::flight_service_server::FlightServiceServer)
 /// and [`FlightService`](gen::flight_service_server::FlightService).
 pub mod flight_service_server {
-    use super::gen;
-    pub use gen::flight_service_server::FlightService;
-    pub use gen::flight_service_server::FlightServiceServer;
+    use super::r#gen;
+    pub use r#gen::flight_service_server::FlightService;
+    pub use r#gen::flight_service_server::FlightServiceServer;
 }
 
 /// Mid Level [`FlightClient`]
@@ -94,32 +101,42 @@ pub mod encode;
 /// Common error types
 pub mod error;
 
-pub use gen::Action;
-pub use gen::ActionType;
-pub use gen::BasicAuth;
-pub use gen::Criteria;
-pub use gen::Empty;
-pub use gen::FlightData;
-pub use gen::FlightDescriptor;
-pub use gen::FlightEndpoint;
-pub use gen::FlightInfo;
-pub use gen::HandshakeRequest;
-pub use gen::HandshakeResponse;
-pub use gen::Location;
-pub use gen::PutResult;
-pub use gen::Result;
-pub use gen::SchemaResult;
-pub use gen::Ticket;
+pub use r#gen::Action;
+pub use r#gen::ActionType;
+pub use r#gen::BasicAuth;
+pub use r#gen::CancelFlightInfoRequest;
+pub use r#gen::CancelFlightInfoResult;
+pub use r#gen::CancelStatus;
+pub use r#gen::Criteria;
+pub use r#gen::Empty;
+pub use r#gen::FlightData;
+pub use r#gen::FlightDescriptor;
+pub use r#gen::FlightEndpoint;
+pub use r#gen::FlightInfo;
+pub use r#gen::HandshakeRequest;
+pub use r#gen::HandshakeResponse;
+pub use r#gen::Location;
+pub use r#gen::PollInfo;
+pub use r#gen::PutResult;
+pub use r#gen::RenewFlightEndpointRequest;
+pub use r#gen::Result;
+pub use r#gen::SchemaResult;
+pub use r#gen::Ticket;
+
+/// Helper to extract HTTP/gRPC trailers from a tonic stream.
+mod trailers;
 
 pub mod utils;
 
-#[cfg(feature = "flight-sql-experimental")]
+#[cfg(feature = "flight-sql")]
 pub mod sql;
+mod streams;
 
 use flight_descriptor::DescriptorType;
 
 /// SchemaAsIpc represents a pairing of a `Schema` with IpcWriteOptions
 pub struct SchemaAsIpc<'a> {
+    /// Data type representing a schema and its IPC write options
     pub pair: (&'a Schema, &'a IpcWriteOptions),
 }
 
@@ -130,12 +147,10 @@ pub struct IpcMessage(pub Bytes);
 
 // Useful conversion functions
 
-fn flight_schema_as_encoded_data(
-    arrow_schema: &Schema,
-    options: &IpcWriteOptions,
-) -> EncodedData {
+fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
-    data_gen.schema_to_bytes(arrow_schema, options)
+    let mut dict_tracker = writer::DictionaryTracker::new(false);
+    data_gen.schema_to_bytes_with_dictionary_tracker(arrow_schema, &mut dict_tracker, options)
 }
 
 fn flight_schema_as_flatbuffer(schema: &Schema, options: &IpcWriteOptions) -> IpcMessage {
@@ -225,7 +240,7 @@ impl fmt::Display for FlightEndpoint {
         write!(f, " ticket: ")?;
         match &self.ticket {
             Some(value) => write!(f, "{value}"),
-            None => write!(f, " none"),
+            None => write!(f, " None"),
         }?;
         write!(f, ", location: [")?;
         let mut sep = "";
@@ -234,6 +249,13 @@ impl fmt::Display for FlightEndpoint {
             sep = ", ";
         }
         write!(f, "]")?;
+        write!(f, ", expiration_time:")?;
+        match &self.expiration_time {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", app_metadata: ")?;
+        limited_fmt(f, &self.app_metadata, 8)?;
         write!(f, " }}")
     }
 }
@@ -257,6 +279,68 @@ impl fmt::Display for FlightInfo {
         }
         write!(f, "], total_records: {}", self.total_records)?;
         write!(f, ", total_bytes: {}", self.total_bytes)?;
+        write!(f, ", ordered: {}", self.ordered)?;
+        write!(f, ", app_metadata: ")?;
+        limited_fmt(f, &self.app_metadata, 8)?;
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for PollInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "PollInfo {{")?;
+        write!(f, " info:")?;
+        match &self.info {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", descriptor:")?;
+        match &self.flight_descriptor {
+            Some(d) => write!(f, " {d}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", progress:")?;
+        match &self.progress {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, ", expiration_time:")?;
+        match &self.expiration_time {
+            Some(value) => write!(f, " {value}"),
+            None => write!(f, " None"),
+        }?;
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for CancelFlightInfoRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CancelFlightInfoRequest {{")?;
+        write!(f, " info: ")?;
+        match &self.info {
+            Some(value) => write!(f, "{value}")?,
+            None => write!(f, "None")?,
+        };
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for CancelFlightInfoResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CancelFlightInfoResult {{")?;
+        write!(f, " status: {}", self.status().as_str_name())?;
+        write!(f, " }}")
+    }
+}
+
+impl fmt::Display for RenewFlightEndpointRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "RenewFlightEndpointRequest {{")?;
+        write!(f, " endpoint: ")?;
+        match &self.endpoint {
+            Some(value) => write!(f, "{value}")?,
+            None => write!(f, "None")?,
+        };
         write!(f, " }}")
     }
 }
@@ -310,16 +394,6 @@ impl TryFrom<SchemaAsIpc<'_>> for SchemaResult {
         //   a flatbuffer Message whose header is the Schema
         let IpcMessage(vals) = schema_to_ipc_format(schema_ipc)?;
         Ok(SchemaResult { schema: vals })
-    }
-}
-
-// TryFrom...
-
-impl TryFrom<i32> for DescriptorType {
-    type Error = ArrowError;
-
-    fn try_from(value: i32) -> ArrowResult<Self> {
-        value.try_into()
     }
 }
 
@@ -482,9 +556,6 @@ impl FlightInfo {
     ///   // Encode the Arrow schema
     ///   .try_with_schema(&get_schema())
     ///   .expect("encoding failed")
-    ///   .with_descriptor(
-    ///      FlightDescriptor::new_cmd("a command")
-    ///   )
     ///   .with_endpoint(
     ///      FlightEndpoint::new()
     ///        .with_ticket(Ticket::new("ticket contents")
@@ -503,6 +574,7 @@ impl FlightInfo {
             // https://github.com/apache/arrow-rs/blob/17ca4d51d0490f9c65f5adde144f677dbc8300e7/format/Flight.proto#L287-L289
             total_records: -1,
             total_bytes: -1,
+            app_metadata: Bytes::new(),
         }
     }
 
@@ -556,12 +628,104 @@ impl FlightInfo {
         self.ordered = ordered;
         self
     }
+
+    /// Add optional application specific metadata to the message
+    pub fn with_app_metadata(mut self, app_metadata: impl Into<Bytes>) -> Self {
+        self.app_metadata = app_metadata.into();
+        self
+    }
+}
+
+impl PollInfo {
+    /// Create a new, empty [`PollInfo`], providing information for a long-running query
+    ///
+    /// # Example:
+    /// ```
+    /// # use arrow_flight::{FlightInfo, PollInfo, FlightDescriptor};
+    /// # use prost_types::Timestamp;
+    /// // Create a new PollInfo
+    /// let poll_info = PollInfo::new()
+    ///   .with_info(FlightInfo::new())
+    ///   .with_descriptor(FlightDescriptor::new_cmd("RUN QUERY"))
+    ///   .try_with_progress(0.5)
+    ///   .expect("progress should've been valid")
+    ///   .with_expiration_time(
+    ///     "1970-01-01".parse().expect("invalid timestamp")
+    ///   );
+    /// ```
+    pub fn new() -> Self {
+        Self {
+            info: None,
+            flight_descriptor: None,
+            progress: None,
+            expiration_time: None,
+        }
+    }
+
+    /// Add the current available results for the poll call as a [`FlightInfo`]
+    pub fn with_info(mut self, info: FlightInfo) -> Self {
+        self.info = Some(info);
+        self
+    }
+
+    /// Add a [`FlightDescriptor`] that the client should use for the next poll call,
+    /// if the query is not yet complete
+    pub fn with_descriptor(mut self, flight_descriptor: FlightDescriptor) -> Self {
+        self.flight_descriptor = Some(flight_descriptor);
+        self
+    }
+
+    /// Set the query progress if known. Must be in the range [0.0, 1.0] else this will
+    /// return an error
+    pub fn try_with_progress(mut self, progress: f64) -> ArrowResult<Self> {
+        if !(0.0..=1.0).contains(&progress) {
+            return Err(ArrowError::InvalidArgumentError(format!(
+                "PollInfo progress must be in the range [0.0, 1.0], got {progress}"
+            )));
+        }
+        self.progress = Some(progress);
+        Ok(self)
+    }
+
+    /// Specify expiration time for this request
+    pub fn with_expiration_time(mut self, expiration_time: Timestamp) -> Self {
+        self.expiration_time = Some(expiration_time);
+        self
+    }
 }
 
 impl<'a> SchemaAsIpc<'a> {
+    /// Create a new `SchemaAsIpc` from a `Schema` and `IpcWriteOptions`
     pub fn new(schema: &'a Schema, options: &'a IpcWriteOptions) -> Self {
         SchemaAsIpc {
             pair: (schema, options),
+        }
+    }
+}
+
+impl CancelFlightInfoRequest {
+    /// Create a new [`CancelFlightInfoRequest`], providing the [`FlightInfo`]
+    /// of the query to cancel.
+    pub fn new(info: FlightInfo) -> Self {
+        Self { info: Some(info) }
+    }
+}
+
+impl CancelFlightInfoResult {
+    /// Create a new [`CancelFlightInfoResult`] from the provided [`CancelStatus`].
+    pub fn new(status: CancelStatus) -> Self {
+        Self {
+            status: status as i32,
+        }
+    }
+}
+
+impl RenewFlightEndpointRequest {
+    /// Create a new [`RenewFlightEndpointRequest`], providing the [`FlightEndpoint`]
+    /// for which is being requested an extension of its expiration.
+    pub fn new(endpoint: FlightEndpoint) -> Self {
+        Self {
+            endpoint: Some(endpoint),
         }
     }
 }
@@ -643,6 +807,18 @@ impl FlightEndpoint {
         self.location.push(Location { uri: uri.into() });
         self
     }
+
+    /// Specify expiration time for this stream
+    pub fn with_expiration_time(mut self, expiration_time: Timestamp) -> Self {
+        self.expiration_time = Some(expiration_time);
+        self
+    }
+
+    /// Add optional application specific metadata to the message
+    pub fn with_app_metadata(mut self, app_metadata: impl Into<Bytes>) -> Self {
+        self.app_metadata = app_metadata.into();
+        self
+    }
 }
 
 #[cfg(test)]
@@ -719,5 +895,27 @@ mod tests {
         let result: SchemaResult = schema_ipc.try_into().unwrap();
         let des_schema: Schema = (&result).try_into().unwrap();
         assert_eq!(schema, des_schema);
+    }
+
+    #[test]
+    fn test_dict_schema() {
+        // Test for https://github.com/apache/arrow-rs/issues/7058
+        let schema = Schema::new(vec![
+            Field::new(
+                "a",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+            Field::new(
+                "b",
+                DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8)),
+                false,
+            ),
+        ]);
+
+        let flight_info = FlightInfo::new().try_with_schema(&schema).unwrap();
+
+        let new_schema = Schema::try_from(flight_info).unwrap();
+        assert_eq!(schema, new_schema);
     }
 }

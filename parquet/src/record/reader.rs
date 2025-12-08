@@ -16,7 +16,7 @@
 // under the License.
 
 //! Contains implementation of record assembly and converting Parquet types into
-//! [`Row`](crate::record::Row)s.
+//! [`Row`]s.
 
 use std::{collections::HashMap, fmt, sync::Arc};
 
@@ -24,7 +24,7 @@ use crate::basic::{ConvertedType, Repetition};
 use crate::errors::{ParquetError, Result};
 use crate::file::reader::{FileReader, RowGroupReader};
 use crate::record::{
-    api::{make_list, make_map, make_row, Field, Row},
+    api::{Field, Row, make_list, make_map},
     triplet::TripletIter,
 };
 use crate::schema::types::{ColumnPath, SchemaDescPtr, SchemaDescriptor, Type, TypePtr};
@@ -65,7 +65,7 @@ impl TreeBuilder {
         &self,
         descr: SchemaDescPtr,
         row_group_reader: &dyn RowGroupReader,
-    ) -> Reader {
+    ) -> Result<Reader> {
         // Prepare lookup table of column path -> original column index
         // This allows to prune columns and map schema leaf nodes to the column readers
         let mut paths: HashMap<ColumnPath, usize> = HashMap::new();
@@ -82,20 +82,14 @@ impl TreeBuilder {
         let mut path = Vec::new();
 
         for field in descr.root_schema().get_fields() {
-            let reader = self.reader_tree(
-                field.clone(),
-                &mut path,
-                0,
-                0,
-                &paths,
-                row_group_reader,
-            );
+            let reader =
+                self.reader_tree(field.clone(), &mut path, 0, 0, &paths, row_group_reader)?;
             readers.push(reader);
         }
 
         // Return group reader for message type,
         // it is always required with definition level 0
-        Reader::GroupReader(None, 0, readers)
+        Ok(Reader::GroupReader(None, 0, readers))
     }
 
     /// Creates iterator of `Row`s directly from schema descriptor and row group.
@@ -103,9 +97,9 @@ impl TreeBuilder {
         &self,
         descr: SchemaDescPtr,
         row_group_reader: &dyn RowGroupReader,
-    ) -> ReaderIter {
+    ) -> Result<ReaderIter> {
         let num_records = row_group_reader.metadata().num_rows() as usize;
-        ReaderIter::new(self.build(descr, row_group_reader), num_records)
+        ReaderIter::new(self.build(descr, row_group_reader)?, num_records)
     }
 
     /// Builds tree of readers for the current schema recursively.
@@ -117,7 +111,7 @@ impl TreeBuilder {
         mut curr_rep_level: i16,
         paths: &HashMap<ColumnPath, usize>,
         row_group_reader: &dyn RowGroupReader,
-    ) -> Reader {
+    ) -> Result<Reader> {
         assert!(field.get_basic_info().has_repetition());
         // Update current definition and repetition levels for this type
         let repetition = field.get_basic_info().repetition();
@@ -135,23 +129,31 @@ impl TreeBuilder {
         path.push(String::from(field.name()));
         let reader = if field.is_primitive() {
             let col_path = ColumnPath::new(path.to_vec());
-            let orig_index = *paths.get(&col_path).unwrap();
+            let orig_index = *paths
+                .get(&col_path)
+                .ok_or(general_err!("Path {:?} not found", col_path))?;
             let col_descr = row_group_reader
                 .metadata()
                 .column(orig_index)
                 .column_descr_ptr();
-            let col_reader = row_group_reader.get_column_reader(orig_index).unwrap();
+            let col_reader = row_group_reader.get_column_reader(orig_index)?;
             let column = TripletIter::new(col_descr, col_reader, self.batch_size);
-            Reader::PrimitiveReader(field, Box::new(column))
+            let reader = Reader::PrimitiveReader(field.clone(), Box::new(column));
+            if repetition == Repetition::REPEATED {
+                Reader::RepeatedReader(
+                    field,
+                    curr_def_level - 1,
+                    curr_rep_level - 1,
+                    Box::new(reader),
+                )
+            } else {
+                reader
+            }
         } else {
             match field.get_basic_info().converted_type() {
                 // List types
                 ConvertedType::LIST => {
-                    assert_eq!(
-                        field.get_fields().len(),
-                        1,
-                        "Invalid list type {field:?}"
-                    );
+                    assert_eq!(field.get_fields().len(), 1, "Invalid list type {field:?}");
 
                     let repeated_field = field.get_fields()[0].clone();
                     assert_eq!(
@@ -169,7 +171,7 @@ impl TreeBuilder {
                             curr_rep_level,
                             paths,
                             row_group_reader,
-                        );
+                        )?;
 
                         Reader::RepeatedReader(
                             field,
@@ -189,7 +191,7 @@ impl TreeBuilder {
                             curr_rep_level + 1,
                             paths,
                             row_group_reader,
-                        );
+                        )?;
 
                         path.pop();
 
@@ -203,11 +205,7 @@ impl TreeBuilder {
                 }
                 // Map types (key-value pairs)
                 ConvertedType::MAP | ConvertedType::MAP_KEY_VALUE => {
-                    assert_eq!(
-                        field.get_fields().len(),
-                        1,
-                        "Invalid map type: {field:?}"
-                    );
+                    assert_eq!(field.get_fields().len(), 1, "Invalid map type: {field:?}");
                     assert!(
                         !field.get_fields()[0].is_primitive(),
                         "Invalid map type: {field:?}"
@@ -219,11 +217,15 @@ impl TreeBuilder {
                         Repetition::REPEATED,
                         "Invalid map type: {field:?}"
                     );
-                    assert_eq!(
-                        key_value_type.get_fields().len(),
-                        2,
-                        "Invalid map type: {field:?}"
-                    );
+                    // Parquet spec allows no value. In that case treat as a list. #1642
+                    if key_value_type.get_fields().len() != 1 {
+                        // If not a list, then there can only be 2 fields in the struct
+                        assert_eq!(
+                            key_value_type.get_fields().len(),
+                            2,
+                            "Invalid map type: {field:?}"
+                        );
+                    }
 
                     path.push(String::from(key_value_type.name()));
 
@@ -239,27 +241,37 @@ impl TreeBuilder {
                         curr_rep_level + 1,
                         paths,
                         row_group_reader,
-                    );
+                    )?;
 
-                    let value_type = &key_value_type.get_fields()[1];
-                    let value_reader = self.reader_tree(
-                        value_type.clone(),
-                        path,
-                        curr_def_level + 1,
-                        curr_rep_level + 1,
-                        paths,
-                        row_group_reader,
-                    );
+                    if key_value_type.get_fields().len() == 1 {
+                        path.pop();
+                        Reader::RepeatedReader(
+                            field,
+                            curr_def_level,
+                            curr_rep_level,
+                            Box::new(key_reader),
+                        )
+                    } else {
+                        let value_type = &key_value_type.get_fields()[1];
+                        let value_reader = self.reader_tree(
+                            value_type.clone(),
+                            path,
+                            curr_def_level + 1,
+                            curr_rep_level + 1,
+                            paths,
+                            row_group_reader,
+                        )?;
 
-                    path.pop();
+                        path.pop();
 
-                    Reader::KeyValueReader(
-                        field,
-                        curr_def_level,
-                        curr_rep_level,
-                        Box::new(key_reader),
-                        Box::new(value_reader),
-                    )
+                        Reader::KeyValueReader(
+                            field,
+                            curr_def_level,
+                            curr_rep_level,
+                            Box::new(key_reader),
+                            Box::new(value_reader),
+                        )
+                    }
                 }
                 // A repeated field that is neither contained by a `LIST`- or
                 // `MAP`-annotated group nor annotated by `LIST` or `MAP`
@@ -269,9 +281,8 @@ impl TreeBuilder {
                     let required_field = Type::group_type_builder(field.name())
                         .with_repetition(Repetition::REQUIRED)
                         .with_converted_type(field.get_basic_info().converted_type())
-                        .with_fields(&mut Vec::from(field.get_fields()))
-                        .build()
-                        .unwrap();
+                        .with_fields(field.get_fields().to_vec())
+                        .build()?;
 
                     path.pop();
 
@@ -282,14 +293,14 @@ impl TreeBuilder {
                         curr_rep_level,
                         paths,
                         row_group_reader,
-                    );
+                    )?;
 
-                    Reader::RepeatedReader(
+                    return Ok(Reader::RepeatedReader(
                         field,
                         curr_def_level - 1,
                         curr_rep_level - 1,
                         Box::new(reader),
-                    )
+                    ));
                 }
                 // Group types (structs)
                 _ => {
@@ -302,7 +313,7 @@ impl TreeBuilder {
                             curr_rep_level,
                             paths,
                             row_group_reader,
-                        );
+                        )?;
                         readers.push(reader);
                     }
                     Reader::GroupReader(Some(field), curr_def_level, readers)
@@ -311,24 +322,24 @@ impl TreeBuilder {
         };
         path.pop();
 
-        Reader::option(repetition, curr_def_level, reader)
+        Ok(Reader::option(repetition, curr_def_level, reader))
     }
 }
 
 /// Reader tree for record assembly
 pub enum Reader {
-    // Primitive reader with type information and triplet iterator
+    /// Primitive reader with type information and triplet iterator
     PrimitiveReader(TypePtr, Box<TripletIter>),
-    // Optional reader with definition level of a parent and a reader
+    /// Optional reader with definition level of a parent and a reader
     OptionReader(i16, Box<Reader>),
-    // Group (struct) reader with type information, definition level and list of child
-    // readers. When it represents message type, type information is None
+    /// Group (struct) reader with type information, definition level and list of child
+    /// readers. When it represents message type, type information is None
     GroupReader(Option<TypePtr>, i16, Vec<Reader>),
-    // Reader for repeated values, e.g. lists, contains type information, definition
-    // level, repetition level and a child reader
+    /// Reader for repeated values, e.g. lists, contains type information, definition
+    /// level, repetition level and a child reader
     RepeatedReader(TypePtr, i16, i16, Box<Reader>),
-    // Reader of key-value pairs, e.g. maps, contains type information, definition
-    // level, repetition level, child reader for keys and child reader for values
+    /// Reader of key-value pairs, e.g. maps, contains type information, definition
+    /// level, repetition level, child reader for keys and child reader for values
     KeyValueReader(TypePtr, i16, i16, Box<Reader>, Box<Reader>),
 }
 
@@ -348,6 +359,19 @@ impl Reader {
     /// <https://github.com/apache/parquet-format/blob/master/LogicalTypes.md>
     ///   #backward-compatibility-rules
     fn is_element_type(repeated_type: &Type) -> bool {
+        // For legacy 2-level list types whose element type is a 2-level list
+        //
+        //    // ARRAY<ARRAY<INT>> (nullable list, non-null elements)
+        //    optional group my_list (LIST) {
+        //      repeated group array (LIST) {
+        //        repeated int32 array;
+        //      };
+        //    }
+        //
+        if repeated_type.is_list() || repeated_type.has_single_repeated_child() {
+            return false;
+        }
+
         // For legacy 2-level list types with primitive element type, e.g.:
         //
         //    // ARRAY<INT> (nullable list, non-null elements)
@@ -395,14 +419,14 @@ impl Reader {
     /// Automatically advances all necessary readers.
     /// This must be called on the root level reader (i.e., for Message type).
     /// Otherwise, it will panic.
-    fn read(&mut self) -> Row {
+    fn read(&mut self) -> Result<Row> {
         match *self {
             Reader::GroupReader(_, _, ref mut readers) => {
                 let mut fields = Vec::new();
                 for reader in readers {
-                    fields.push((String::from(reader.field_name()), reader.read_field()));
+                    fields.push((String::from(reader.field_name()), reader.read_field()?));
                 }
-                make_row(fields)
+                Ok(Row::new(fields))
             }
             _ => panic!("Cannot call read() on {self}"),
         }
@@ -410,18 +434,18 @@ impl Reader {
 
     /// Reads current record as `Field` from the reader tree.
     /// Automatically advances all necessary readers.
-    fn read_field(&mut self) -> Field {
-        match *self {
+    fn read_field(&mut self) -> Result<Field> {
+        let field = match *self {
             Reader::PrimitiveReader(_, ref mut column) => {
-                let value = column.current_value();
-                column.read_next().unwrap();
+                let value = column.current_value()?;
+                column.read_next()?;
                 value
             }
             Reader::OptionReader(def_level, ref mut reader) => {
                 if reader.current_def_level() > def_level {
-                    reader.read_field()
+                    reader.read_field()?
                 } else {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                     Field::Null
                 }
             }
@@ -431,25 +455,22 @@ impl Reader {
                     if reader.repetition() != Repetition::OPTIONAL
                         || reader.current_def_level() > def_level
                     {
-                        fields.push((
-                            String::from(reader.field_name()),
-                            reader.read_field(),
-                        ));
+                        fields.push((String::from(reader.field_name()), reader.read_field()?));
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         fields.push((String::from(reader.field_name()), Field::Null));
                     }
                 }
-                let row = make_row(fields);
+                let row = Row::new(fields);
                 Field::Group(row)
             }
             Reader::RepeatedReader(_, def_level, rep_level, ref mut reader) => {
                 let mut elements = Vec::new();
                 loop {
                     if reader.current_def_level() > def_level {
-                        elements.push(reader.read_field());
+                        elements.push(reader.read_field()?);
                     } else {
-                        reader.advance_columns();
+                        reader.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -466,20 +487,14 @@ impl Reader {
                 }
                 Field::ListInternal(make_list(elements))
             }
-            Reader::KeyValueReader(
-                _,
-                def_level,
-                rep_level,
-                ref mut keys,
-                ref mut values,
-            ) => {
+            Reader::KeyValueReader(_, def_level, rep_level, ref mut keys, ref mut values) => {
                 let mut pairs = Vec::new();
                 loop {
                     if keys.current_def_level() > def_level {
-                        pairs.push((keys.read_field(), values.read_field()));
+                        pairs.push((keys.read_field()?, values.read_field()?));
                     } else {
-                        keys.advance_columns();
-                        values.advance_columns();
+                        keys.advance_columns()?;
+                        values.advance_columns()?;
                         // If the current definition level is equal to the definition
                         // level of this repeated type, then the
                         // result is an empty list and the repetition level
@@ -497,7 +512,8 @@ impl Reader {
 
                 Field::MapInternal(make_map(pairs))
             }
-        }
+        };
+        Ok(field)
     }
 
     /// Returns field name for the current reader.
@@ -506,7 +522,7 @@ impl Reader {
             Reader::PrimitiveReader(ref field, _) => field.name(),
             Reader::OptionReader(_, ref reader) => reader.field_name(),
             Reader::GroupReader(ref opt, ..) => match opt {
-                Some(ref field) => field.name(),
+                Some(field) => field.name(),
                 None => panic!("Field is None for group reader"),
             },
             Reader::RepeatedReader(ref field, ..) => field.name(),
@@ -520,7 +536,7 @@ impl Reader {
             Reader::PrimitiveReader(ref field, _) => field.get_basic_info().repetition(),
             Reader::OptionReader(_, ref reader) => reader.repetition(),
             Reader::GroupReader(ref opt, ..) => match opt {
-                Some(ref field) => field.get_basic_info().repetition(),
+                Some(field) => field.get_basic_info().repetition(),
                 None => panic!("Field is None for group reader"),
             },
             Reader::RepeatedReader(ref field, ..) => field.get_basic_info().repetition(),
@@ -571,25 +587,20 @@ impl Reader {
     }
 
     /// Advances leaf columns for the current reader.
-    fn advance_columns(&mut self) {
+    fn advance_columns(&mut self) -> Result<()> {
         match *self {
-            Reader::PrimitiveReader(_, ref mut column) => {
-                column.read_next().unwrap();
-            }
-            Reader::OptionReader(_, ref mut reader) => {
-                reader.advance_columns();
-            }
+            Reader::PrimitiveReader(_, ref mut column) => column.read_next().map(|_| ()),
+            Reader::OptionReader(_, ref mut reader) => reader.advance_columns(),
             Reader::GroupReader(_, _, ref mut readers) => {
                 for reader in readers {
-                    reader.advance_columns();
+                    reader.advance_columns()?;
                 }
+                Ok(())
             }
-            Reader::RepeatedReader(_, _, _, ref mut reader) => {
-                reader.advance_columns();
-            }
+            Reader::RepeatedReader(_, _, _, ref mut reader) => reader.advance_columns(),
             Reader::KeyValueReader(_, _, _, ref mut keys, ref mut values) => {
-                keys.advance_columns();
-                values.advance_columns();
+                keys.advance_columns()?;
+                values.advance_columns()
             }
         }
     }
@@ -612,13 +623,13 @@ impl fmt::Display for Reader {
 // Row iterators
 
 /// The enum Either with variants That represents a reference and a box of
-/// [`FileReader`](crate::file::reader::FileReader).
+/// [`FileReader`].
 enum Either<'a> {
     Left(&'a dyn FileReader),
     Right(Box<dyn FileReader>),
 }
 
-impl<'a> Either<'a> {
+impl Either<'_> {
     fn reader(&self) -> &dyn FileReader {
         match *self {
             Either::Left(r) => r,
@@ -627,9 +638,20 @@ impl<'a> Either<'a> {
     }
 }
 
-/// Iterator of [`Row`](crate::record::Row)s.
-/// It is used either for a single row group to iterate over data in that row group, or
-/// an entire file with auto buffering of all row groups.
+/// Access parquet data as an iterator of [`Row`]
+///
+/// # Caveats
+///
+/// Parquet stores data in a columnar fashion using [Dremel] encoding, and is therefore highly
+/// optimised for reading data by column, not row. As a consequence applications concerned with
+/// performance should prefer the columnar arrow or [ColumnReader] APIs.
+///
+/// Additionally the current implementation does not correctly handle repeated fields ([#2394]),
+/// and workloads looking to handle such schema should use the other APIs.
+///
+/// [#2394]: https://github.com/apache/arrow-rs/issues/2394
+/// [ColumnReader]: crate::file::reader::RowGroupReader::get_column_reader
+/// [Dremel]: https://research.google/pubs/pub36632/
 pub struct RowIter<'a> {
     descr: SchemaDescPtr,
     tree_builder: TreeBuilder,
@@ -640,7 +662,7 @@ pub struct RowIter<'a> {
 }
 
 impl<'a> RowIter<'a> {
-    /// Creates a new iterator of [`Row`](crate::record::Row)s.
+    /// Creates a new iterator of [`Row`]s.
     fn new(
         file_reader: Option<Either<'a>>,
         row_iter: Option<ReaderIter>,
@@ -662,34 +684,28 @@ impl<'a> RowIter<'a> {
         }
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for all row groups in a
+    /// Creates iterator of [`Row`]s for all row groups in a
     /// file.
     pub fn from_file(proj: Option<Type>, reader: &'a dyn FileReader) -> Result<Self> {
         let either = Either::Left(reader);
-        let descr = Self::get_proj_descr(
-            proj,
-            reader.metadata().file_metadata().schema_descr_ptr(),
-        )?;
+        let descr =
+            Self::get_proj_descr(proj, reader.metadata().file_metadata().schema_descr_ptr())?;
 
         Ok(Self::new(Some(either), None, descr))
     }
 
-    /// Creates iterator of [`Row`](crate::record::Row)s for a specific row group.
-    pub fn from_row_group(
-        proj: Option<Type>,
-        reader: &'a dyn RowGroupReader,
-    ) -> Result<Self> {
+    /// Creates iterator of [`Row`]s for a specific row group.
+    pub fn from_row_group(proj: Option<Type>, reader: &'a dyn RowGroupReader) -> Result<Self> {
         let descr = Self::get_proj_descr(proj, reader.metadata().schema_descr_ptr())?;
         let tree_builder = Self::tree_builder();
-        let row_iter = tree_builder.as_iter(descr.clone(), reader);
+        let row_iter = tree_builder.as_iter(descr.clone(), reader)?;
 
         // For row group we need to set `current_row_group` >= `num_row_groups`, because
         // we only have one row group and can't buffer more.
         Ok(Self::new(None, Some(row_iter), descr))
     }
 
-    /// Creates a iterator of [`Row`](crate::record::Row)s from a
-    /// [`FileReader`](crate::file::reader::FileReader) using the full file schema.
+    /// Creates a iterator of [`Row`]s from a [`FileReader`] using the full file schema.
     pub fn from_file_into(reader: Box<dyn FileReader>) -> Self {
         let either = Either::Right(reader);
         let descr = either
@@ -701,7 +717,7 @@ impl<'a> RowIter<'a> {
         Self::new(Some(either), None, descr)
     }
 
-    /// Tries to create a iterator of [`Row`](crate::record::Row)s using projections.
+    /// Tries to create a iterator of [`Row`]s using projections.
     /// Returns a error if a file reader is not the source of this iterator.
     ///
     /// The Projected schema can be a subset of or equal to the file schema,
@@ -725,10 +741,7 @@ impl<'a> RowIter<'a> {
     /// Helper method to get schema descriptor for projected schema.
     /// If projection is None, then full schema is returned.
     #[inline]
-    fn get_proj_descr(
-        proj: Option<Type>,
-        root_descr: SchemaDescPtr,
-    ) -> Result<SchemaDescPtr> {
+    fn get_proj_descr(proj: Option<Type>, root_descr: SchemaDescPtr) -> Result<SchemaDescPtr> {
         match proj {
             Some(projection) => {
                 // check if projection is part of file schema
@@ -742,6 +755,12 @@ impl<'a> RowIter<'a> {
         }
     }
 
+    /// Sets batch size for this row iter.
+    pub fn with_batch_size(mut self, batch_size: usize) -> Self {
+        self.tree_builder = self.tree_builder.with_batch_size(batch_size);
+        self
+    }
+
     /// Returns common tree builder, so the same settings are applied to both iterators
     /// from file reader and row group.
     #[inline]
@@ -750,10 +769,10 @@ impl<'a> RowIter<'a> {
     }
 }
 
-impl<'a> Iterator for RowIter<'a> {
-    type Item = Row;
+impl Iterator for RowIter<'_> {
+    type Item = Result<Row>;
 
-    fn next(&mut self) -> Option<Row> {
+    fn next(&mut self) -> Option<Result<Row>> {
         let mut row = None;
         if let Some(ref mut iter) = self.row_iter {
             row = iter.next();
@@ -768,14 +787,18 @@ impl<'a> Iterator for RowIter<'a> {
                     .get_row_group(self.current_row_group)
                     .expect("Row group is required to advance");
 
-                let mut iter = self
+                match self
                     .tree_builder
-                    .as_iter(self.descr.clone(), row_group_reader);
+                    .as_iter(self.descr.clone(), row_group_reader)
+                {
+                    Ok(mut iter) => {
+                        row = iter.next();
 
-                row = iter.next();
-
-                self.current_row_group += 1;
-                self.row_iter = Some(iter);
+                        self.current_row_group += 1;
+                        self.row_iter = Some(iter);
+                    }
+                    Err(e) => return Some(Err(e)),
+                }
             }
         }
 
@@ -783,27 +806,27 @@ impl<'a> Iterator for RowIter<'a> {
     }
 }
 
-/// Internal iterator of [`Row`](crate::record::Row)s for a reader.
+/// Internal iterator of [`Row`]s for a reader.
 pub struct ReaderIter {
     root_reader: Reader,
     records_left: usize,
 }
 
 impl ReaderIter {
-    fn new(mut root_reader: Reader, num_records: usize) -> Self {
+    fn new(mut root_reader: Reader, num_records: usize) -> Result<Self> {
         // Prepare root reader by advancing all column vectors
-        root_reader.advance_columns();
-        Self {
+        root_reader.advance_columns()?;
+        Ok(Self {
             root_reader,
             records_left: num_records,
-        }
+        })
     }
 }
 
 impl Iterator for ReaderIter {
-    type Item = Row;
+    type Item = Result<Row>;
 
-    fn next(&mut self) -> Option<Row> {
+    fn next(&mut self) -> Option<Result<Row>> {
         if self.records_left > 0 {
             self.records_left -= 1;
             Some(self.root_reader.read())
@@ -817,19 +840,20 @@ impl Iterator for ReaderIter {
 mod tests {
     use super::*;
 
-    use crate::errors::Result;
-    use crate::file::reader::{FileReader, SerializedFileReader};
-    use crate::record::api::{Field, Row, RowAccessor, RowFormatter};
+    use crate::data_type::Int64Type;
+    use crate::file::reader::SerializedFileReader;
+    use crate::file::writer::SerializedFileWriter;
+    use crate::record::api::RowAccessor;
     use crate::schema::parser::parse_message_type;
     use crate::util::test_common::file_util::{get_test_file, get_test_path};
-    use std::convert::TryFrom;
+    use bytes::Bytes;
 
     // Convenient macros to assemble row, list, map, and group.
 
     macro_rules! row {
         ($($e:tt)*) => {
             {
-                make_row(vec![$($e)*])
+                Row::new(vec![$($e)*])
             }
         }
     }
@@ -984,17 +1008,11 @@ mod tests {
                                     list![
                                         group![
                                             ("E".to_string(), Field::Int(10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("aaa".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("aaa".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(-10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("bbb".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("bbb".to_string()))
                                         ]
                                     ],
                                     list![group![
@@ -1074,10 +1092,7 @@ mod tests {
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("aaa".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("aaa".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Null),
@@ -1085,10 +1100,7 @@ mod tests {
                                         ],
                                         group![
                                             ("E".to_string(), Field::Int(-10)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("bbb".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("bbb".to_string()))
                                         ],
                                         group![
                                             ("E".to_string(), Field::Null),
@@ -1098,10 +1110,7 @@ mod tests {
                                     list![
                                         group![
                                             ("E".to_string(), Field::Int(11)),
-                                            (
-                                                "F".to_string(),
-                                                Field::Str("c".to_string())
-                                            )
+                                            ("F".to_string(), Field::Str("c".to_string()))
                                         ],
                                         Field::Null
                                     ],
@@ -1125,10 +1134,7 @@ mod tests {
                                 ),
                                 (
                                     Field::Str("g2".to_string()),
-                                    group![(
-                                        "H".to_string(),
-                                        group![("i".to_string(), list![])]
-                                    )]
+                                    group![("H".to_string(), group![("i".to_string(), list![])])]
                                 ),
                                 (Field::Str("g3".to_string()), Field::Null),
                                 (
@@ -1262,8 +1268,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![
                 ("c".to_string(), Field::Double(1.0)),
@@ -1313,6 +1318,21 @@ mod tests {
     }
 
     #[test]
+    fn test_into_columns_in_row() {
+        let r = row![
+            ("a".to_string(), Field::Str("My string".to_owned())),
+            ("b".to_string(), Field::Int(1))
+        ];
+        assert_eq!(
+            r.into_columns(),
+            vec![
+                ("a".to_string(), Field::Str("My string".to_owned())),
+                ("b".to_string(), Field::Int(1)),
+            ]
+        );
+    }
+
+    #[test]
     fn test_file_reader_rows_projection_map() {
         let schema = "
       message spark_schema {
@@ -1330,8 +1350,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_maps.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![(
                 "a".to_string(),
@@ -1397,8 +1416,7 @@ mod tests {
       }
     ";
         let schema = parse_message_type(schema).unwrap();
-        let rows =
-            test_file_reader_rows("nested_lists.snappy.parquet", Some(schema)).unwrap();
+        let rows = test_file_reader_rows("nested_lists.snappy.parquet", Some(schema)).unwrap();
         let expected_rows = vec![
             row![(
                 "a".to_string(),
@@ -1468,8 +1486,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "Invalid map type")]
-    fn test_file_reader_rows_invalid_map_type() {
+    fn test_file_reader_rows_nested_map_type() {
         let schema = "
       message spark_schema {
         OPTIONAL group a (MAP) {
@@ -1491,33 +1508,26 @@ mod tests {
     #[test]
     fn test_file_reader_iter() {
         let path = get_test_path("alltypes_plain.parquet");
-        let vec = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| RowIter::from_file_into(Box::new(r)))
-            .flat_map(|r| r.get_int(0))
-            .collect::<Vec<_>>();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let iter = RowIter::from_file_into(Box::new(reader));
 
-        assert_eq!(vec, vec![4, 5, 6, 7, 2, 3, 0, 1]);
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
     fn test_file_reader_iter_projection() {
         let path = get_test_path("alltypes_plain.parquet");
-        let values = vec![path]
-            .iter()
-            .map(|p| SerializedFileReader::try_from(p.as_path()).unwrap())
-            .flat_map(|r| {
-                let schema = "message schema { OPTIONAL INT32 id; }";
-                let proj = parse_message_type(schema).ok();
+        let reader = SerializedFileReader::try_from(path.as_path()).unwrap();
+        let schema = "message schema { OPTIONAL INT32 id; }";
+        let proj = parse_message_type(schema).ok();
 
-                RowIter::from_file_into(Box::new(r)).project(proj).unwrap()
-            })
-            .map(|r| format!("id:{}", r.fmt(0)))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let iter = RowIter::from_file_into(Box::new(reader))
+            .project(proj)
+            .unwrap();
+        let values: Vec<_> = iter.flat_map(|r| r.unwrap().get_int(0)).collect();
 
-        assert_eq!(values, "id:4, id:5, id:6, id:7, id:2, id:3, id:0, id:1");
+        assert_eq!(values, &[4, 5, 6, 7, 2, 3, 0, 1]);
     }
 
     #[test]
@@ -1614,11 +1624,266 @@ mod tests {
         assert_eq!(rows, expected_rows);
     }
 
+    #[test]
+    fn test_tree_reader_handle_nested_repeated_fields_with_no_annotation() {
+        // Create schema
+        let schema = Arc::new(
+            parse_message_type(
+                "
+            message schema {
+                REPEATED group level1 {
+                    REPEATED group level2 {
+                        REQUIRED group level3 {
+                            REQUIRED INT64 value3;
+                        }
+                    }
+                    REQUIRED INT64 value1;
+                }
+            }",
+            )
+            .unwrap(),
+        );
+
+        // Write Parquet file to buffer
+        let mut buffer: Vec<u8> = Vec::new();
+        let mut file_writer =
+            SerializedFileWriter::new(&mut buffer, schema, Default::default()).unwrap();
+        let mut row_group_writer = file_writer.next_row_group().unwrap();
+
+        // Write column level1.level2.level3.value3
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int64Type>()
+            .write_batch(&[30, 31, 32], Some(&[2, 2, 2]), Some(&[0, 0, 0]))
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Write column level1.value1
+        let mut column_writer = row_group_writer.next_column().unwrap().unwrap();
+        column_writer
+            .typed::<Int64Type>()
+            .write_batch(&[10, 11, 12], Some(&[1, 1, 1]), Some(&[0, 0, 0]))
+            .unwrap();
+        column_writer.close().unwrap();
+
+        // Finalize Parquet file
+        row_group_writer.close().unwrap();
+        file_writer.close().unwrap();
+        assert_eq!(&buffer[0..4], b"PAR1");
+
+        // Read Parquet file from buffer
+        let file_reader = SerializedFileReader::new(Bytes::from(buffer)).unwrap();
+        let rows: Vec<_> = file_reader
+            .get_row_iter(None)
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+
+        let expected_rows = vec![
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(30))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(10))
+                ]]
+            )],
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(31))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(11))
+                ]]
+            )],
+            row![(
+                "level1".to_string(),
+                list![group![
+                    (
+                        "level2".to_string(),
+                        list![group![(
+                            "level3".to_string(),
+                            group![("value3".to_string(), Field::Long(32))]
+                        )]]
+                    ),
+                    ("value1".to_string(), Field::Long(12))
+                ]]
+            )],
+        ];
+
+        assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_tree_reader_handle_primitive_repeated_fields_with_no_annotation() {
+        // In this test the REPEATED fields are primitives
+        let rows = test_file_reader_rows("repeated_primitive_no_list.parquet", None).unwrap();
+        let expected_rows = vec![
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list([0, 1, 2, 3].map(Field::Int).to_vec()))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["foo", "zero", "one", "two"]
+                            .map(|s| Field::Str(s.to_string()))
+                            .to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list([0, 1, 2, 3].map(Field::Int).to_vec()))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["foo", "zero", "one", "two"]
+                                    .map(|s| Field::Str(s.to_string()))
+                                    .to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list(vec![]))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["three"].map(|s| Field::Str(s.to_string())).to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list(vec![]))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["three"].map(|s| Field::Str(s.to_string())).to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list(vec![Field::Int(4)]))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["four"].map(|s| Field::Str(s.to_string())).to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list(vec![Field::Int(4)]))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["four"].map(|s| Field::Str(s.to_string())).to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+            row![
+                (
+                    "Int32_list".to_string(),
+                    Field::ListInternal(make_list([5, 6, 7, 8].map(Field::Int).to_vec()))
+                ),
+                (
+                    "String_list".to_string(),
+                    Field::ListInternal(make_list(
+                        ["five", "six", "seven", "eight"]
+                            .map(|s| Field::Str(s.to_string()))
+                            .to_vec()
+                    ))
+                ),
+                (
+                    "group_of_lists".to_string(),
+                    group![
+                        (
+                            "Int32_list_in_group".to_string(),
+                            Field::ListInternal(make_list([5, 6, 7, 8].map(Field::Int).to_vec()))
+                        ),
+                        (
+                            "String_list_in_group".to_string(),
+                            Field::ListInternal(make_list(
+                                ["five", "six", "seven", "eight"]
+                                    .map(|s| Field::Str(s.to_string()))
+                                    .to_vec()
+                            ))
+                        )
+                    ]
+                )
+            ],
+        ];
+        assert_eq!(rows, expected_rows);
+    }
+
+    #[test]
+    fn test_map_no_value() {
+        // File schema:
+        // message schema {
+        //   required group my_map (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //       optional int32 value;
+        //     }
+        //   }
+        //   required group my_map_no_v (MAP) {
+        //     repeated group key_value {
+        //       required int32 key;
+        //     }
+        //   }
+        //   required group my_list (LIST) {
+        //     repeated group list {
+        //       required int32 element;
+        //     }
+        //   }
+        // }
+        let rows = test_file_reader_rows("map_no_value.parquet", None).unwrap();
+
+        // the my_map_no_v and my_list columns should be equivalent lists by this point
+        for row in rows {
+            let cols = row.into_columns();
+            assert_eq!(cols[1].1, cols[2].1);
+        }
+    }
+
     fn test_file_reader_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {
         let file = get_test_file(file_name);
         let file_reader: Box<dyn FileReader> = Box::new(SerializedFileReader::new(file)?);
         let iter = file_reader.get_row_iter(schema)?;
-        Ok(iter.collect())
+        Ok(iter.map(|row| row.unwrap()).collect())
     }
 
     fn test_row_group_rows(file_name: &str, schema: Option<Type>) -> Result<Vec<Row>> {
@@ -1628,6 +1893,23 @@ mod tests {
         // group
         let row_group_reader = file_reader.get_row_group(0).unwrap();
         let iter = row_group_reader.get_row_iter(schema)?;
-        Ok(iter.collect())
+        Ok(iter.map(|row| row.unwrap()).collect())
+    }
+
+    #[test]
+    fn test_read_old_nested_list() {
+        let rows = test_file_reader_rows("old_list_structure.parquet", None).unwrap();
+        let expected_rows = vec![row![(
+            "a".to_string(),
+            Field::ListInternal(make_list(
+                [
+                    make_list([1, 2].map(Field::Int).to_vec()),
+                    make_list([3, 4].map(Field::Int).to_vec())
+                ]
+                .map(Field::ListInternal)
+                .to_vec()
+            ))
+        ),]];
+        assert_eq!(rows, expected_rows);
     }
 }

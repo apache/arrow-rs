@@ -54,11 +54,11 @@ fn test_parse_timezone_invalid() {
     let cases = [
         (
             "2015-01-20T17:35:20-24:00",
-            "Parser error: Invalid timezone \"-24:00\": '-24:00' is not a valid timezone",
+            "Parser error: Invalid timezone \"-24:00\": failed to parse timezone",
         ),
         (
             "2023-01-01 04:05:06.789 +07:30:00",
-            "Parser error: Invalid timezone \"+07:30:00\": '+07:30:00' is not a valid timezone"
+            "Parser error: Invalid timezone \"+07:30:00\": failed to parse timezone",
         ),
         (
             // Sunday, 12 March 2023, 02:00:00 clocks are turned forward 1 hour to

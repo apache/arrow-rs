@@ -60,14 +60,14 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
                     _ => 128, // Default bit width
                 };
 
-                if bit_width == 128 {
-                    Ok(DataType::Decimal128(precision, scale))
-                } else if bit_width == 256 {
-                    Ok(DataType::Decimal256(precision, scale))
-                } else {
-                    Err(ArrowError::ParseError(
+                match bit_width {
+                    32 => Ok(DataType::Decimal32(precision, scale)),
+                    64 => Ok(DataType::Decimal64(precision, scale)),
+                    128 => Ok(DataType::Decimal128(precision, scale)),
+                    256 => Ok(DataType::Decimal256(precision, scale)),
+                    _ => Err(ArrowError::ParseError(
                         "Decimal bit_width invalid".to_string(),
-                    ))
+                    )),
                 }
             }
             Some(s) if s == "floatingpoint" => match map.get("precision") {
@@ -124,26 +124,16 @@ pub fn data_type_from_json(json: &serde_json::Value) -> Result<DataType> {
             }
             Some(s) if s == "duration" => match map.get("unit") {
                 Some(p) if p == "SECOND" => Ok(DataType::Duration(TimeUnit::Second)),
-                Some(p) if p == "MILLISECOND" => {
-                    Ok(DataType::Duration(TimeUnit::Millisecond))
-                }
-                Some(p) if p == "MICROSECOND" => {
-                    Ok(DataType::Duration(TimeUnit::Microsecond))
-                }
-                Some(p) if p == "NANOSECOND" => {
-                    Ok(DataType::Duration(TimeUnit::Nanosecond))
-                }
+                Some(p) if p == "MILLISECOND" => Ok(DataType::Duration(TimeUnit::Millisecond)),
+                Some(p) if p == "MICROSECOND" => Ok(DataType::Duration(TimeUnit::Microsecond)),
+                Some(p) if p == "NANOSECOND" => Ok(DataType::Duration(TimeUnit::Nanosecond)),
                 _ => Err(ArrowError::ParseError(
                     "time unit missing or invalid".to_string(),
                 )),
             },
             Some(s) if s == "interval" => match map.get("unit") {
-                Some(p) if p == "DAY_TIME" => {
-                    Ok(DataType::Interval(IntervalUnit::DayTime))
-                }
-                Some(p) if p == "YEAR_MONTH" => {
-                    Ok(DataType::Interval(IntervalUnit::YearMonth))
-                }
+                Some(p) if p == "DAY_TIME" => Ok(DataType::Interval(IntervalUnit::DayTime)),
+                Some(p) if p == "YEAR_MONTH" => Ok(DataType::Interval(IntervalUnit::YearMonth)),
                 Some(p) if p == "MONTH_DAY_NANO" => {
                     Ok(DataType::Interval(IntervalUnit::MonthDayNano))
                 }
@@ -281,6 +271,9 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::LargeUtf8 => json!({"name": "largeutf8"}),
         DataType::Binary => json!({"name": "binary"}),
         DataType::LargeBinary => json!({"name": "largebinary"}),
+        DataType::BinaryView | DataType::Utf8View => {
+            unimplemented!("BinaryView/Utf8View not implemented")
+        }
         DataType::FixedSizeBinary(byte_width) => {
             json!({"name": "fixedsizebinary", "byteWidth": byte_width})
         }
@@ -288,6 +281,9 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
         DataType::Union(_, _) => json!({"name": "union"}),
         DataType::List(_) => json!({ "name": "list"}),
         DataType::LargeList(_) => json!({ "name": "largelist"}),
+        DataType::ListView(_) | DataType::LargeListView(_) => {
+            unimplemented!("ListView/LargeListView not implemented")
+        }
         DataType::FixedSizeList(_, length) => {
             json!({"name":"fixedsizelist", "listSize": length})
         }
@@ -341,6 +337,12 @@ pub fn data_type_to_json(data_type: &DataType) -> serde_json::Value {
             TimeUnit::Nanosecond => "NANOSECOND",
         }}),
         DataType::Dictionary(_, _) => json!({ "name": "dictionary"}),
+        DataType::Decimal32(precision, scale) => {
+            json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 32})
+        }
+        DataType::Decimal64(precision, scale) => {
+            json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 64})
+        }
         DataType::Decimal128(precision, scale) => {
             json!({"name": "decimal", "precision": precision, "scale": scale, "bitWidth": 128})
         }

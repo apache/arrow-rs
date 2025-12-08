@@ -23,9 +23,9 @@ use criterion::*;
 use arrow::array::*;
 use arrow::csv;
 use arrow::datatypes::*;
-use arrow::record_batch::RecordBatch;
 use std::env;
 use std::fs::File;
+use std::hint;
 use std::sync::Arc;
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -41,11 +41,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         "consectetur adipiscing elit",
         "sed do eiusmod tempor",
     ]);
-    let c2 = PrimitiveArray::<Float64Type>::from(vec![
-        Some(123.564532),
-        None,
-        Some(-556132.25),
-    ]);
+    let c2 = PrimitiveArray::<Float64Type>::from(vec![Some(123.564532), None, Some(-556132.25)]);
     let c3 = PrimitiveArray::<UInt32Type>::from(vec![3, 2, 1]);
     let c4 = BooleanArray::from(vec![Some(true), Some(false), None]);
 
@@ -62,7 +58,7 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("record_batches_to_csv", |b| {
         b.iter(|| {
             #[allow(clippy::unit_arg)]
-            criterion::black_box(for batch in &batches {
+            hint::black_box(for batch in &batches {
                 writer.write(batch).unwrap()
             });
         });

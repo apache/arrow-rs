@@ -21,11 +21,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs that touch certain files and changes to master
+# trigger for all PRs that touch certain files and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     paths:
       - .github/**
@@ -38,8 +38,10 @@ on:
       - arrow-integration-testing/**
       - arrow-ipc/**
       - arrow-json/**
+      - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
+      - arrow-pyarrow/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-sort/**
@@ -47,7 +49,6 @@ on:
       - arrow/**
 
 jobs:
-
   integration:
     name: Archery test With other arrows
     runs-on: ubuntu-latest
@@ -56,7 +57,19 @@ jobs:
     env:
       ARROW_USE_CCACHE: OFF
       ARROW_CPP_EXE_PATH: /build/cpp/debug
+      ARROW_NANOARROW_PATH: /build/nanoarrow
+      ARROW_RUST_EXE_PATH: /build/rust/debug
       BUILD_DOCS_CPP: OFF
+      ARROW_INTEGRATION_CPP: ON
+      ARROW_INTEGRATION_CSHARP: ON
+      ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
+      ARCHERY_INTEGRATION_WITH_DOTNET: "1"
+      ARCHERY_INTEGRATION_WITH_GO: "1"
+      ARCHERY_INTEGRATION_WITH_JAVA: "1"
+      ARCHERY_INTEGRATION_WITH_JS: "1"
+      ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
+      # https://github.com/apache/arrow/pull/38403/files#r1371281630
+      ARCHERY_INTEGRATION_WITH_RUST: "1"
       # These are necessary because the github runner overrides $HOME
       # https://github.com/actions/runner/issues/863
       RUSTUP_HOME: /root/.rustup
@@ -76,48 +89,46 @@ jobs:
       - name: Check cmake
         run: which cmake
       - name: Checkout Arrow
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow
           submodules: true
           fetch-depth: 0
       - name: Checkout Arrow Rust
-        uses: actions/checkout@v3
+        uses: actions/checkout@v6
         with:
           path: rust
+          submodules: true
           fetch-depth: 0
-      - name: Make build directory
-        run: mkdir /build
-      - name: Build Rust
-        run: conda run --no-capture-output ci/scripts/rust_build.sh $PWD /build
-      - name: Build C++
-        run: conda run --no-capture-output ci/scripts/cpp_build.sh $PWD /build
-      - name: Build C#
-        run: conda run --no-capture-output ci/scripts/csharp_build.sh $PWD /build
-      - name: Build Go
-        run: conda run --no-capture-output ci/scripts/go_build.sh $PWD
-      - name: Build Java
-        run: conda run --no-capture-output ci/scripts/java_build.sh $PWD /build
-      - name: Build JS
-        run: conda run --no-capture-output ci/scripts/js_build.sh $PWD /build
-      - name: Install archery
-        run: conda run --no-capture-output pip install -e dev/archery
-      - name: Run integration tests
-        run: |
-          conda run --no-capture-output archery integration \
-            --run-flight \
-            --with-cpp=1 \
-            --with-csharp=1 \
-            --with-java=1 \
-            --with-js=1 \
-            --with-go=1 \
-            --with-rust=1 \
-            --gold-dirs=testing/data/arrow-ipc-stream/integration/0.14.1 \
-            --gold-dirs=testing/data/arrow-ipc-stream/integration/0.17.1 \
-            --gold-dirs=testing/data/arrow-ipc-stream/integration/1.0.0-bigendian \
-            --gold-dirs=testing/data/arrow-ipc-stream/integration/1.0.0-littleendian \
-            --gold-dirs=testing/data/arrow-ipc-stream/integration/2.0.0-compression \
-            --gold-dirs=testing/data/arrow-ipc-stream/integration/4.0.0-shareddict
+      - name: Checkout Arrow .NET
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-dotnet
+          path: dotnet
+      - name: Checkout Arrow Go
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-go
+          path: go
+      - name: Checkout Arrow Java
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-java
+          path: java
+      - name: Checkout Arrow JavaScript
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-js
+          path: js
+      - name: Checkout Arrow nanoarrow
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-nanoarrow
+          path: nanoarrow
+      - name: Build
+        run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
+      - name: Run
+        run: conda run --no-capture-output ci/scripts/integration_arrow.sh $PWD /build
 
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:
@@ -125,9 +136,11 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [ stable ]
+        rust: [stable]
+        # PyArrow 15 was the first version to introduce StringView/BinaryView support
+        pyarrow: ["15", "16", "17"]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -136,31 +149,32 @@ jobs:
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt clippy
       - name: Cache Cargo
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /home/runner/.cargo
           key: cargo-maturin-cache-
       - name: Cache Rust dependencies
-        uses: actions/cache@v3
+        uses: actions/cache@v4
         with:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.
           key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v6
         with:
-          python-version: '3.7'
+          python-version: '3.8'
       - name: Upgrade pip and setuptools
         run: pip install --upgrade pip setuptools wheel virtualenv
       - name: Create virtualenv and install dependencies
         run: |
           virtualenv venv
           source venv/bin/activate
-          pip install maturin toml pytest pytz pyarrow>=5.0
+          pip install maturin toml pytest pytz pyarrow==${{ matrix.pyarrow }}
       - name: Run Rust tests
         run: |
           source venv/bin/activate
-          cargo test -p arrow --test pyarrow --features pyarrow
-      - name: Run tests
+          cd arrow-pyarrow-testing
+          cargo test
+      - name: Run Python tests
         run: |
           source venv/bin/activate
           cd arrow-pyarrow-integration-testing

@@ -25,10 +25,12 @@ use arrow_schema::{DataType, IntervalUnit};
 use half::f16;
 
 mod boolean;
+mod byte_view;
 mod dictionary;
 mod fixed_binary;
 mod fixed_list;
 mod list;
+mod list_view;
 mod null;
 mod primitive;
 mod run;
@@ -40,7 +42,10 @@ mod variable_size;
 // these methods assume the same type, len and null count.
 // For this reason, they are not exposed and are instead used
 // to build the generic functions below (`equal_range` and `equal`).
+use self::run::run_equal;
+use crate::equal::list_view::list_view_equal;
 use boolean::boolean_equal;
+use byte_view::byte_view_equal;
 use dictionary::dictionary_equal;
 use fixed_binary::fixed_binary_equal;
 use fixed_list::fixed_list_equal;
@@ -50,8 +55,6 @@ use primitive::primitive_equal;
 use structure::struct_equal;
 use union::union_equal;
 use variable_size::variable_sized_equal;
-
-use self::run::run_equal;
 
 /// Compares the values of two [ArrayData] starting at `lhs_start` and `rhs_start` respectively
 /// for `len` slots.
@@ -76,24 +79,18 @@ fn equal_values(
         DataType::Int64 => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float32 => primitive_equal::<f32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Float64 => primitive_equal::<f64>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::Decimal128(_, _) => {
-            primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len)
-        }
-        DataType::Decimal256(_, _) => {
-            primitive_equal::<i256>(lhs, rhs, lhs_start, rhs_start, len)
-        }
-        DataType::Date32
-        | DataType::Time32(_)
-        | DataType::Interval(IntervalUnit::YearMonth) => {
+        DataType::Decimal32(_, _) => primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal64(_, _) => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal128(_, _) => primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Decimal256(_, _) => primitive_equal::<i256>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::Date32 | DataType::Time32(_) | DataType::Interval(IntervalUnit::YearMonth) => {
             primitive_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::Date64
         | DataType::Interval(IntervalUnit::DayTime)
         | DataType::Time64(_)
         | DataType::Timestamp(_, _)
-        | DataType::Duration(_) => {
-            primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
-        }
+        | DataType::Duration(_) => primitive_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Interval(IntervalUnit::MonthDayNano) => {
             primitive_equal::<i128>(lhs, rhs, lhs_start, rhs_start, len)
         }
@@ -103,39 +100,26 @@ fn equal_values(
         DataType::LargeUtf8 | DataType::LargeBinary => {
             variable_sized_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
         }
-        DataType::FixedSizeBinary(_) => {
-            fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len)
+        DataType::FixedSizeBinary(_) => fixed_binary_equal(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::BinaryView | DataType::Utf8View => {
+            byte_view_equal(lhs, rhs, lhs_start, rhs_start, len)
         }
         DataType::List(_) => list_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
         DataType::LargeList(_) => list_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
-        DataType::FixedSizeList(_, _) => {
-            fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len)
-        }
+        DataType::ListView(_) => list_view_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::LargeListView(_) => list_view_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+        DataType::FixedSizeList(_, _) => fixed_list_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Struct(_) => struct_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Union(_, _) => union_equal(lhs, rhs, lhs_start, rhs_start, len),
         DataType::Dictionary(data_type, _) => match data_type.as_ref() {
             DataType::Int8 => dictionary_equal::<i8>(lhs, rhs, lhs_start, rhs_start, len),
-            DataType::Int16 => {
-                dictionary_equal::<i16>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::Int32 => {
-                dictionary_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::Int64 => {
-                dictionary_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt8 => {
-                dictionary_equal::<u8>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt16 => {
-                dictionary_equal::<u16>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt32 => {
-                dictionary_equal::<u32>(lhs, rhs, lhs_start, rhs_start, len)
-            }
-            DataType::UInt64 => {
-                dictionary_equal::<u64>(lhs, rhs, lhs_start, rhs_start, len)
-            }
+            DataType::Int16 => dictionary_equal::<i16>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::Int32 => dictionary_equal::<i32>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::Int64 => dictionary_equal::<i64>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt8 => dictionary_equal::<u8>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt16 => dictionary_equal::<u16>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt32 => dictionary_equal::<u32>(lhs, rhs, lhs_start, rhs_start, len),
+            DataType::UInt64 => dictionary_equal::<u64>(lhs, rhs, lhs_start, rhs_start, len),
             _ => unreachable!(),
         },
         DataType::Float16 => primitive_equal::<f16>(lhs, rhs, lhs_start, rhs_start, len),
@@ -156,17 +140,24 @@ fn equal_range(
 }
 
 /// Logically compares two [ArrayData].
+///
 /// Two arrays are logically equal if and only if:
 /// * their data types are equal
 /// * their lengths are equal
 /// * their null counts are equal
 /// * their null bitmaps are equal
 /// * each of their items are equal
-/// two items are equal when their in-memory representation is physically equal (i.e. same bit content).
+///
+/// Two items are equal when their in-memory representation is physically equal
+/// (i.e. has the same bit content).
+///
 /// The physical comparison depend on the data type.
+///
 /// # Panics
-/// This function may panic whenever any of the [ArrayData] does not follow the Arrow specification.
-/// (e.g. wrong number of buffers, buffer `len` does not correspond to the declared `len`)
+///
+/// This function may panic whenever any of the [ArrayData] does not follow the
+/// Arrow specification. (e.g. wrong number of buffers, buffer `len` does not
+/// correspond to the declared `len`)
 pub fn equal(lhs: &ArrayData, rhs: &ArrayData) -> bool {
     utils::base_equal(lhs, rhs)
         && lhs.null_count() == rhs.null_count()

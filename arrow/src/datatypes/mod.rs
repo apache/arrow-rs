@@ -18,20 +18,15 @@
 //! Defines the logical data types of Arrow arrays.
 //!
 //! The most important things you might be looking for are:
-//!  * [`Schema`](crate::datatypes::Schema) to describe a schema.
-//!  * [`Field`](crate::datatypes::Field) to describe one field within a schema.
-//!  * [`DataType`](crate::datatypes::DataType) to describe the type of a field.
+//!  * [`Schema`] to describe a schema.
+//!  * [`Field`] to describe one field within a schema.
+//!  * [`DataType`] to describe the type of a field.
 
 pub use arrow_array::types::*;
 pub use arrow_array::{ArrowNativeTypeOp, ArrowNumericType, ArrowPrimitiveType};
-pub use arrow_buffer::{i256, ArrowNativeType, ToByteSlice};
+pub use arrow_buffer::{ArrowNativeType, ToByteSlice, i256};
 pub use arrow_data::decimal::*;
 pub use arrow_schema::{
-    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaBuilder, SchemaRef,
-    TimeUnit, UnionFields, UnionMode,
+    DataType, Field, FieldRef, Fields, IntervalUnit, Schema, SchemaBuilder, SchemaRef, TimeUnit,
+    UnionFields, UnionMode,
 };
-
-#[cfg(feature = "ffi")]
-mod ffi;
-#[cfg(feature = "ffi")]
-pub use ffi::*;

@@ -125,36 +125,52 @@
 
 mod records;
 
-use arrow_array::builder::PrimitiveBuilder;
+use arrow_array::builder::{NullBuilder, PrimitiveBuilder};
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_cast::parse::{parse_decimal, string_to_datetime, Parser};
+use arrow_cast::parse::{Parser, parse_decimal, string_to_datetime};
 use arrow_schema::*;
 use chrono::{TimeZone, Utc};
 use csv::StringRecord;
-use lazy_static::lazy_static;
-use regex::RegexSet;
-use std::fmt;
+use regex::{Regex, RegexSet};
+use std::fmt::{self, Debug};
 use std::fs::File;
-use std::io::{BufRead, BufReader as StdBufReader, Read, Seek, SeekFrom};
-use std::sync::Arc;
+use std::io::{BufRead, BufReader as StdBufReader, Read};
+use std::sync::{Arc, LazyLock};
 
 use crate::map_csv_error;
 use crate::reader::records::{RecordDecoder, StringRecords};
 use arrow_array::timezone::Tz;
 
-lazy_static! {
-    /// Order should match [`InferredDataType`]
-    static ref REGEX_SET: RegexSet = RegexSet::new([
+/// Order should match [`InferredDataType`]
+static REGEX_SET: LazyLock<RegexSet> = LazyLock::new(|| {
+    RegexSet::new([
         r"(?i)^(true)$|^(false)$(?-i)", //BOOLEAN
-        r"^-?(\d+)$", //INTEGER
-        r"^-?((\d*\.\d+|\d+\.\d*)([eE]-?\d+)?|\d+([eE]-?\d+))$", //DECIMAL
-        r"^\d{4}-\d\d-\d\d$", //DATE32
+        r"^-?(\d+)$",                   //INTEGER
+        r"^-?((\d*\.\d+|\d+\.\d*)([eE][-+]?\d+)?|\d+([eE][-+]?\d+))$", //DECIMAL
+        r"^\d{4}-\d\d-\d\d$",           //DATE32
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d(?:[^\d\.].*)?$", //Timestamp(Second)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,3}(?:[^\d].*)?$", //Timestamp(Millisecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,6}(?:[^\d].*)?$", //Timestamp(Microsecond)
         r"^\d{4}-\d\d-\d\d[T ]\d\d:\d\d:\d\d\.\d{1,9}(?:[^\d].*)?$", //Timestamp(Nanosecond)
-    ]).unwrap();
+    ])
+    .unwrap()
+});
+
+/// A wrapper over `Option<Regex>` to check if the value is `NULL`.
+#[derive(Debug, Clone, Default)]
+struct NullRegex(Option<Regex>);
+
+impl NullRegex {
+    /// Returns true if the value should be considered as `NULL` according to
+    /// the provided regular expression.
+    #[inline]
+    fn is_null(&self, s: &str) -> bool {
+        match &self.0 {
+            Some(r) => r.is_match(s),
+            None => s.is_empty(),
+        }
+    }
 }
 
 #[derive(Default, Copy, Clone)]
@@ -177,6 +193,7 @@ impl InferredDataType {
     /// Returns the inferred data type
     fn get(&self) -> DataType {
         match self.packed {
+            0 => DataType::Null,
             1 => DataType::Boolean,
             2 => DataType::Int64,
             4 | 6 => DataType::Float64, // Promote Int64 to Float64
@@ -198,7 +215,14 @@ impl InferredDataType {
         self.packed |= if string.starts_with('"') {
             1 << 8 // Utf8
         } else if let Some(m) = REGEX_SET.matches(string).into_iter().next() {
-            1 << m
+            if m == 1 && string.len() >= 19 && string.parse::<i64>().is_err() {
+                // if overflow i64, fallback to utf8
+                1 << 8
+            } else {
+                1 << m
+            }
+        } else if string == "NaN" || string == "nan" || string == "inf" || string == "-inf" {
+            1 << 2 // Float64
         } else {
             1 << 8 // Utf8
         }
@@ -208,36 +232,71 @@ impl InferredDataType {
 /// The format specification for the CSV file
 #[derive(Debug, Clone, Default)]
 pub struct Format {
-    has_header: bool,
+    header: bool,
     delimiter: Option<u8>,
     escape: Option<u8>,
     quote: Option<u8>,
     terminator: Option<u8>,
+    comment: Option<u8>,
+    null_regex: NullRegex,
+    truncated_rows: bool,
 }
 
 impl Format {
+    /// Specify whether the CSV file has a header, defaults to `false`
+    ///
+    /// When `true`, the first row of the CSV file is treated as a header row
     pub fn with_header(mut self, has_header: bool) -> Self {
-        self.has_header = has_header;
+        self.header = has_header;
         self
     }
 
+    /// Specify a custom delimiter character, defaults to comma `','`
     pub fn with_delimiter(mut self, delimiter: u8) -> Self {
         self.delimiter = Some(delimiter);
         self
     }
 
+    /// Specify an escape character, defaults to `None`
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.escape = Some(escape);
         self
     }
 
+    /// Specify a custom quote character, defaults to double quote `'"'`
     pub fn with_quote(mut self, quote: u8) -> Self {
         self.quote = Some(quote);
         self
     }
 
+    /// Specify a custom terminator character, defaults to CRLF
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.terminator = Some(terminator);
+        self
+    }
+
+    /// Specify a comment character, defaults to `None`
+    ///
+    /// Lines starting with this character will be ignored
+    pub fn with_comment(mut self, comment: u8) -> Self {
+        self.comment = Some(comment);
+        self
+    }
+
+    /// Provide a regex to match null values, defaults to `^$`
+    pub fn with_null_regex(mut self, null_regex: Regex) -> Self {
+        self.null_regex = NullRegex(Some(null_regex));
+        self
+    }
+
+    /// Whether to allow truncated rows when parsing.
+    ///
+    /// By default this is set to `false` and will error if the CSV rows have different lengths.
+    /// When set to true then it will allow records with less than the expected number of columns
+    /// and fill the missing columns with nulls. If the record's schema is not nullable, then it
+    /// will still return an error.
+    pub fn with_truncated_rows(mut self, allow: bool) -> Self {
+        self.truncated_rows = allow;
         self
     }
 
@@ -256,7 +315,7 @@ impl Format {
 
         // get or create header names
         // when has_header is false, creates default column names with column_ prefix
-        let headers: Vec<String> = if self.has_header {
+        let headers: Vec<String> = if self.header {
             let headers = &csv_reader.headers().map_err(map_csv_error)?.clone();
             headers.iter().map(|s| s.to_string()).collect()
         } else {
@@ -268,8 +327,7 @@ impl Format {
 
         let header_length = headers.len();
         // keep track of inferred field types
-        let mut column_types: Vec<InferredDataType> =
-            vec![Default::default(); header_length];
+        let mut column_types: Vec<InferredDataType> = vec![Default::default(); header_length];
 
         let mut records_count = 0;
 
@@ -283,11 +341,9 @@ impl Format {
 
             // Note since we may be looking at a sample of the data, we make the safe assumption that
             // they could be nullable
-            for (i, column_type) in
-                column_types.iter_mut().enumerate().take(header_length)
-            {
+            for (i, column_type) in column_types.iter_mut().enumerate().take(header_length) {
                 if let Some(string) = record.get(i) {
-                    if !string.is_empty() {
+                    if !self.null_regex.is_null(string) {
                         column_type.update(string)
                     }
                 }
@@ -307,7 +363,8 @@ impl Format {
     /// Build a [`csv::Reader`] for this [`Format`]
     fn build_reader<R: Read>(&self, reader: R) -> csv::Reader<R> {
         let mut builder = csv::ReaderBuilder::new();
-        builder.has_headers(self.has_header);
+        builder.has_headers(self.header);
+        builder.flexible(self.truncated_rows);
 
         if let Some(c) = self.delimiter {
             builder.delimiter(c);
@@ -319,6 +376,9 @@ impl Format {
         if let Some(t) = self.terminator {
             builder.terminator(csv::Terminator::Any(t));
         }
+        if let Some(comment) = self.comment {
+            builder.comment(Some(comment));
+        }
         builder.from_reader(reader)
     }
 
@@ -326,6 +386,7 @@ impl Format {
     fn build_parser(&self) -> csv_core::Reader {
         let mut builder = csv_core::ReaderBuilder::new();
         builder.escape(self.escape);
+        builder.comment(self.comment);
 
         if let Some(c) = self.delimiter {
             builder.delimiter(c);
@@ -338,51 +399,6 @@ impl Format {
         }
         builder.build()
     }
-}
-
-/// Infer the schema of a CSV file by reading through the first n records of the file,
-/// with `max_read_records` controlling the maximum number of records to read.
-///
-/// If `max_read_records` is not set, the whole file is read to infer its schema.
-///
-/// Return inferred schema and number of records used for inference. This function does not change
-/// reader cursor offset.
-///
-/// The inferred schema will always have each field set as nullable.
-#[deprecated(note = "Use Format::infer_schema")]
-#[allow(deprecated)]
-pub fn infer_file_schema<R: Read + Seek>(
-    mut reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let saved_offset = reader.stream_position()?;
-    let r = infer_reader_schema(&mut reader, delimiter, max_read_records, has_header)?;
-    // return the reader seek back to the start
-    reader.seek(SeekFrom::Start(saved_offset))?;
-    Ok(r)
-}
-
-/// Infer schema of CSV records provided by struct that implements `Read` trait.
-///
-/// `max_read_records` controlling the maximum number of records to read. If `max_read_records` is
-/// not set, all records are read to infer the schema.
-///
-/// Return inferred schema and number of records used for inference.
-#[deprecated(note = "Use Format::infer_schema")]
-pub fn infer_reader_schema<R: Read>(
-    reader: R,
-    delimiter: u8,
-    max_read_records: Option<usize>,
-    has_header: bool,
-) -> Result<(Schema, usize), ArrowError> {
-    let format = Format {
-        delimiter: Some(delimiter),
-        has_header,
-        ..Default::default()
-    };
-    format.infer_schema(reader, max_read_records)
 }
 
 /// Infer schema from a list of CSV files by reading through first n records
@@ -401,7 +417,7 @@ pub fn infer_schema_from_files(
     let mut records_to_read = max_read_records.unwrap_or(usize::MAX);
     let format = Format {
         delimiter: Some(delimiter),
-        has_header,
+        header: has_header,
         ..Default::default()
     };
 
@@ -557,6 +573,9 @@ pub struct Decoder {
 
     /// A decoder for [`StringRecords`]
     record_decoder: RecordDecoder,
+
+    /// Check if the string matches this pattern for `NULL`.
+    null_regex: NullRegex,
 }
 
 impl Decoder {
@@ -579,8 +598,7 @@ impl Decoder {
             return Ok(bytes);
         }
 
-        let to_read =
-            self.batch_size.min(self.end - self.line_number) - self.record_decoder.len();
+        let to_read = self.batch_size.min(self.end - self.line_number) - self.record_decoder.len();
         let (_, bytes) = self.record_decoder.decode(buf, to_read)?;
         Ok(bytes)
     }
@@ -603,6 +621,7 @@ impl Decoder {
             Some(self.schema.metadata.clone()),
             self.projection.as_ref(),
             self.line_number,
+            &self.null_regex,
         )?;
         self.line_number += rows.len();
         Ok(Some(batch))
@@ -621,6 +640,7 @@ fn parse(
     metadata: Option<std::collections::HashMap<String, String>>,
     projection: Option<&Vec<usize>>,
     line_number: usize,
+    null_regex: &NullRegex,
 ) -> Result<RecordBatch, ArrowError> {
     let projection: Vec<usize> = match projection {
         Some(v) => v.clone(),
@@ -633,70 +653,86 @@ fn parse(
             let i = *i;
             let field = &fields[i];
             match field.data_type() {
-                DataType::Boolean => build_boolean_array(line_number, rows, i),
-                DataType::Decimal128(precision, scale) => {
-                    build_decimal_array::<Decimal128Type>(
-                        line_number,
-                        rows,
-                        i,
-                        *precision,
-                        *scale,
-                    )
+                DataType::Boolean => build_boolean_array(line_number, rows, i, null_regex),
+                DataType::Decimal32(precision, scale) => build_decimal_array::<Decimal32Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Decimal64(precision, scale) => build_decimal_array::<Decimal64Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Decimal128(precision, scale) => build_decimal_array::<Decimal128Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Decimal256(precision, scale) => build_decimal_array::<Decimal256Type>(
+                    line_number,
+                    rows,
+                    i,
+                    *precision,
+                    *scale,
+                    null_regex,
+                ),
+                DataType::Int8 => {
+                    build_primitive_array::<Int8Type>(line_number, rows, i, null_regex)
                 }
-                DataType::Decimal256(precision, scale) => {
-                    build_decimal_array::<Decimal256Type>(
-                        line_number,
-                        rows,
-                        i,
-                        *precision,
-                        *scale,
-                    )
-                }
-                DataType::Int8 => build_primitive_array::<Int8Type>(line_number, rows, i),
                 DataType::Int16 => {
-                    build_primitive_array::<Int16Type>(line_number, rows, i)
+                    build_primitive_array::<Int16Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Int32 => {
-                    build_primitive_array::<Int32Type>(line_number, rows, i)
+                    build_primitive_array::<Int32Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Int64 => {
-                    build_primitive_array::<Int64Type>(line_number, rows, i)
+                    build_primitive_array::<Int64Type>(line_number, rows, i, null_regex)
                 }
                 DataType::UInt8 => {
-                    build_primitive_array::<UInt8Type>(line_number, rows, i)
+                    build_primitive_array::<UInt8Type>(line_number, rows, i, null_regex)
                 }
                 DataType::UInt16 => {
-                    build_primitive_array::<UInt16Type>(line_number, rows, i)
+                    build_primitive_array::<UInt16Type>(line_number, rows, i, null_regex)
                 }
                 DataType::UInt32 => {
-                    build_primitive_array::<UInt32Type>(line_number, rows, i)
+                    build_primitive_array::<UInt32Type>(line_number, rows, i, null_regex)
                 }
                 DataType::UInt64 => {
-                    build_primitive_array::<UInt64Type>(line_number, rows, i)
+                    build_primitive_array::<UInt64Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Float32 => {
-                    build_primitive_array::<Float32Type>(line_number, rows, i)
+                    build_primitive_array::<Float32Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Float64 => {
-                    build_primitive_array::<Float64Type>(line_number, rows, i)
+                    build_primitive_array::<Float64Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Date32 => {
-                    build_primitive_array::<Date32Type>(line_number, rows, i)
+                    build_primitive_array::<Date32Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Date64 => {
-                    build_primitive_array::<Date64Type>(line_number, rows, i)
+                    build_primitive_array::<Date64Type>(line_number, rows, i, null_regex)
                 }
                 DataType::Time32(TimeUnit::Second) => {
-                    build_primitive_array::<Time32SecondType>(line_number, rows, i)
+                    build_primitive_array::<Time32SecondType>(line_number, rows, i, null_regex)
                 }
                 DataType::Time32(TimeUnit::Millisecond) => {
-                    build_primitive_array::<Time32MillisecondType>(line_number, rows, i)
+                    build_primitive_array::<Time32MillisecondType>(line_number, rows, i, null_regex)
                 }
                 DataType::Time64(TimeUnit::Microsecond) => {
-                    build_primitive_array::<Time64MicrosecondType>(line_number, rows, i)
+                    build_primitive_array::<Time64MicrosecondType>(line_number, rows, i, null_regex)
                 }
                 DataType::Time64(TimeUnit::Nanosecond) => {
-                    build_primitive_array::<Time64NanosecondType>(line_number, rows, i)
+                    build_primitive_array::<Time64NanosecondType>(line_number, rows, i, null_regex)
                 }
                 DataType::Timestamp(TimeUnit::Second, tz) => {
                     build_timestamp_array::<TimestampSecondType>(
@@ -704,6 +740,7 @@ fn parse(
                         rows,
                         i,
                         tz.as_deref(),
+                        null_regex,
                     )
                 }
                 DataType::Timestamp(TimeUnit::Millisecond, tz) => {
@@ -712,6 +749,7 @@ fn parse(
                         rows,
                         i,
                         tz.as_deref(),
+                        null_regex,
                     )
                 }
                 DataType::Timestamp(TimeUnit::Microsecond, tz) => {
@@ -720,6 +758,7 @@ fn parse(
                         rows,
                         i,
                         tz.as_deref(),
+                        null_regex,
                     )
                 }
                 DataType::Timestamp(TimeUnit::Nanosecond, tz) => {
@@ -728,12 +767,29 @@ fn parse(
                         rows,
                         i,
                         tz.as_deref(),
+                        null_regex,
                     )
                 }
+                DataType::Null => Ok(Arc::new({
+                    let mut builder = NullBuilder::new();
+                    builder.append_nulls(rows.len());
+                    builder.finish()
+                }) as ArrayRef),
                 DataType::Utf8 => Ok(Arc::new(
                     rows.iter()
-                        .map(|row| Some(row.get(i)))
+                        .map(|row| {
+                            let s = row.get(i);
+                            (!null_regex.is_null(s)).then_some(s)
+                        })
                         .collect::<StringArray>(),
+                ) as ArrayRef),
+                DataType::Utf8View => Ok(Arc::new(
+                    rows.iter()
+                        .map(|row| {
+                            let s = row.get(i);
+                            (!null_regex.is_null(s)).then_some(s)
+                        })
+                        .collect::<StringViewArray>(),
                 ) as ArrayRef),
                 DataType::Dictionary(key_type, value_type)
                     if value_type.as_ref() == &DataType::Utf8 =>
@@ -741,46 +797,70 @@ fn parse(
                     match key_type.as_ref() {
                         DataType::Int8 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int8Type>>(),
                         ) as ArrayRef),
                         DataType::Int16 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int16Type>>(),
                         ) as ArrayRef),
                         DataType::Int32 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int32Type>>(),
                         ) as ArrayRef),
                         DataType::Int64 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<Int64Type>>(),
                         ) as ArrayRef),
                         DataType::UInt8 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt8Type>>(),
                         ) as ArrayRef),
                         DataType::UInt16 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt16Type>>(),
                         ) as ArrayRef),
                         DataType::UInt32 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt32Type>>(),
                         ) as ArrayRef),
                         DataType::UInt64 => Ok(Arc::new(
                             rows.iter()
-                                .map(|row| row.get(i))
+                                .map(|row| {
+                                    let s = row.get(i);
+                                    (!null_regex.is_null(s)).then_some(s)
+                                })
                                 .collect::<DictionaryArray<UInt64Type>>(),
                         ) as ArrayRef),
                         _ => Err(ArrowError::ParseError(format!(
-                            "Unsupported dictionary key type {key_type:?}"
+                            "Unsupported dictionary key type {key_type}"
                         ))),
                     }
                 }
@@ -791,8 +871,7 @@ fn parse(
         })
         .collect();
 
-    let projected_fields: Fields =
-        projection.iter().map(|i| fields[*i].clone()).collect();
+    let projected_fields: Fields = projection.iter().map(|i| fields[*i].clone()).collect();
 
     let projected_schema = Arc::new(match metadata {
         None => Schema::new(projected_fields),
@@ -827,16 +906,16 @@ fn build_decimal_array<T: DecimalType>(
     col_idx: usize,
     precision: u8,
     scale: i8,
+    null_regex: &NullRegex,
 ) -> Result<ArrayRef, ArrowError> {
     let mut decimal_builder = PrimitiveBuilder::<T>::with_capacity(rows.len());
     for row in rows.iter() {
         let s = row.get(col_idx);
-        if s.is_empty() {
+        if null_regex.is_null(s) {
             // append null
             decimal_builder.append_null();
         } else {
-            let decimal_value: Result<T::Native, _> =
-                parse_decimal::<T>(s, precision, scale);
+            let decimal_value: Result<T::Native, _> = parse_decimal::<T>(s, precision, scale);
             match decimal_value {
                 Ok(v) => {
                     decimal_builder.append_value(v);
@@ -859,12 +938,13 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
     line_number: usize,
     rows: &StringRecords<'_>,
     col_idx: usize,
+    null_regex: &NullRegex,
 ) -> Result<ArrayRef, ArrowError> {
     rows.iter()
         .enumerate()
         .map(|(row_index, row)| {
             let s = row.get(col_idx);
-            if s.is_empty() {
+            if null_regex.is_null(s) {
                 return Ok(None);
             }
 
@@ -872,10 +952,12 @@ fn build_primitive_array<T: ArrowPrimitiveType + Parser>(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    T::DATA_TYPE,
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -888,14 +970,15 @@ fn build_timestamp_array<T: ArrowTimestampType>(
     rows: &StringRecords<'_>,
     col_idx: usize,
     timezone: Option<&str>,
+    null_regex: &NullRegex,
 ) -> Result<ArrayRef, ArrowError> {
     Ok(Arc::new(match timezone {
         Some(timezone) => {
             let tz: Tz = timezone.parse()?;
-            build_timestamp_array_impl::<T, _>(line_number, rows, col_idx, &tz)?
+            build_timestamp_array_impl::<T, _>(line_number, rows, col_idx, &tz, null_regex)?
                 .with_timezone(timezone)
         }
-        None => build_timestamp_array_impl::<T, _>(line_number, rows, col_idx, &Utc)?,
+        None => build_timestamp_array_impl::<T, _>(line_number, rows, col_idx, &Utc, null_regex)?,
     }))
 }
 
@@ -904,29 +987,36 @@ fn build_timestamp_array_impl<T: ArrowTimestampType, Tz: TimeZone>(
     rows: &StringRecords<'_>,
     col_idx: usize,
     timezone: &Tz,
+    null_regex: &NullRegex,
 ) -> Result<PrimitiveArray<T>, ArrowError> {
     rows.iter()
         .enumerate()
         .map(|(row_index, row)| {
             let s = row.get(col_idx);
-            if s.is_empty() {
+            if null_regex.is_null(s) {
                 return Ok(None);
             }
 
-            let date = string_to_datetime(timezone, s).map_err(|e| {
-                ArrowError::ParseError(format!(
-                    "Error parsing column {col_idx} at line {}: {}",
-                    line_number + row_index,
-                    e
-                ))
-            })?;
-
-            Ok(Some(match T::UNIT {
-                TimeUnit::Second => date.timestamp(),
-                TimeUnit::Millisecond => date.timestamp_millis(),
-                TimeUnit::Microsecond => date.timestamp_micros(),
-                TimeUnit::Nanosecond => date.timestamp_nanos(),
-            }))
+            let date = string_to_datetime(timezone, s)
+                .and_then(|date| match T::UNIT {
+                    TimeUnit::Second => Ok(date.timestamp()),
+                    TimeUnit::Millisecond => Ok(date.timestamp_millis()),
+                    TimeUnit::Microsecond => Ok(date.timestamp_micros()),
+                    TimeUnit::Nanosecond => date.timestamp_nanos_opt().ok_or_else(|| {
+                        ArrowError::ParseError(format!(
+                            "{} would overflow 64-bit signed nanoseconds",
+                            date.to_rfc3339(),
+                        ))
+                    }),
+                })
+                .map_err(|e| {
+                    ArrowError::ParseError(format!(
+                        "Error parsing column {col_idx} at line {}: {}",
+                        line_number + row_index,
+                        e
+                    ))
+                })?;
+            Ok(Some(date))
         })
         .collect()
 }
@@ -936,12 +1026,13 @@ fn build_boolean_array(
     line_number: usize,
     rows: &StringRecords<'_>,
     col_idx: usize,
+    null_regex: &NullRegex,
 ) -> Result<ArrayRef, ArrowError> {
     rows.iter()
         .enumerate()
         .map(|(row_index, row)| {
             let s = row.get(col_idx);
-            if s.is_empty() {
+            if null_regex.is_null(s) {
                 return Ok(None);
             }
             let parsed = parse_bool(s);
@@ -949,10 +1040,12 @@ fn build_boolean_array(
                 Some(e) => Ok(Some(e)),
                 None => Err(ArrowError::ParseError(format!(
                     // TODO: we should surface the underlying error here.
-                    "Error while parsing value {} for column {} at line {}",
+                    "Error while parsing value '{}' as type '{}' for column {} at line {}. Row data: '{}'",
                     s,
+                    "Boolean",
                     col_idx,
-                    line_number + row_index
+                    line_number + row_index,
+                    row
                 ))),
             }
         })
@@ -1009,13 +1102,13 @@ impl ReaderBuilder {
         }
     }
 
-    /// Set whether the CSV file has headers
-    pub fn has_header(mut self, has_header: bool) -> Self {
-        self.format.has_header = has_header;
+    /// Set whether the CSV file has a header
+    pub fn with_header(mut self, has_header: bool) -> Self {
+        self.format.header = has_header;
         self
     }
 
-    /// Overrides the [`Format`] of this [`ReaderBuilder]
+    /// Overrides the [Format] of this [ReaderBuilder]
     pub fn with_format(mut self, format: Format) -> Self {
         self.format = format;
         self
@@ -1027,18 +1120,33 @@ impl ReaderBuilder {
         self
     }
 
+    /// Set the given character as the CSV file's escape character
     pub fn with_escape(mut self, escape: u8) -> Self {
         self.format.escape = Some(escape);
         self
     }
 
+    /// Set the given character as the CSV file's quote character, by default it is double quote
     pub fn with_quote(mut self, quote: u8) -> Self {
         self.format.quote = Some(quote);
         self
     }
 
+    /// Provide a custom terminator character, defaults to CRLF
     pub fn with_terminator(mut self, terminator: u8) -> Self {
         self.format.terminator = Some(terminator);
+        self
+    }
+
+    /// Provide a comment character, lines starting with this character will be ignored
+    pub fn with_comment(mut self, comment: u8) -> Self {
+        self.format.comment = Some(comment);
+        self
+    }
+
+    /// Provide a regex to match null values, defaults to `^$`
+    pub fn with_null_regex(mut self, null_regex: Regex) -> Self {
+        self.format.null_regex = NullRegex(Some(null_regex));
         self
     }
 
@@ -1061,6 +1169,17 @@ impl ReaderBuilder {
         self
     }
 
+    /// Whether to allow truncated rows when parsing.
+    ///
+    /// By default this is set to `false` and will error if the CSV rows have different lengths.
+    /// When set to true then it will allow records with less than the expected number of columns
+    /// and fill the missing columns with nulls. If the record's schema is not nullable, then it
+    /// will still return an error.
+    pub fn with_truncated_rows(mut self, allow: bool) -> Self {
+        self.format.truncated_rows = allow;
+        self
+    }
+
     /// Create a new `Reader` from a non-buffered reader
     ///
     /// If `R: BufRead` consider using [`Self::build_buffered`] to avoid unnecessary additional
@@ -1070,10 +1189,7 @@ impl ReaderBuilder {
     }
 
     /// Create a new `BufReader` from a buffered reader
-    pub fn build_buffered<R: BufRead>(
-        self,
-        reader: R,
-    ) -> Result<BufReader<R>, ArrowError> {
+    pub fn build_buffered<R: BufRead>(self, reader: R) -> Result<BufReader<R>, ArrowError> {
         Ok(BufReader {
             reader,
             decoder: self.build_decoder(),
@@ -1083,9 +1199,13 @@ impl ReaderBuilder {
     /// Builds a decoder that can be used to decode CSV from an arbitrary byte stream
     pub fn build_decoder(self) -> Decoder {
         let delimiter = self.format.build_parser();
-        let record_decoder = RecordDecoder::new(delimiter, self.schema.fields().len());
+        let record_decoder = RecordDecoder::new(
+            delimiter,
+            self.schema.fields().len(),
+            self.format.truncated_rows,
+        );
 
-        let header = self.format.has_header as usize;
+        let header = self.format.header as usize;
 
         let (start, end) = match self.bounds {
             Some((start, end)) => (start + header, end + header),
@@ -1100,6 +1220,7 @@ impl ReaderBuilder {
             end,
             projection: self.projection,
             batch_size: self.batch_size,
+            null_regex: self.format.null_regex,
         }
     }
 }
@@ -1108,7 +1229,7 @@ impl ReaderBuilder {
 mod tests {
     use super::*;
 
-    use std::io::{Cursor, Write};
+    use std::io::{Cursor, Seek, SeekFrom, Write};
     use tempfile::NamedTempFile;
 
     use arrow_array::cast::AsArray;
@@ -1211,6 +1332,54 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_reader_with_decimal_3264() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("city", DataType::Utf8, false),
+            Field::new("lat", DataType::Decimal32(9, 6), false),
+            Field::new("lng", DataType::Decimal64(16, 6), false),
+        ]));
+
+        let file = File::open("test/data/decimal_test.csv").unwrap();
+
+        let mut csv = ReaderBuilder::new(schema).build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+        // access data from a primitive array
+        let lat = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<Decimal32Array>()
+            .unwrap();
+
+        assert_eq!("57.653484", lat.value_as_string(0));
+        assert_eq!("53.002666", lat.value_as_string(1));
+        assert_eq!("52.412811", lat.value_as_string(2));
+        assert_eq!("51.481583", lat.value_as_string(3));
+        assert_eq!("12.123456", lat.value_as_string(4));
+        assert_eq!("50.760000", lat.value_as_string(5));
+        assert_eq!("0.123000", lat.value_as_string(6));
+        assert_eq!("123.000000", lat.value_as_string(7));
+        assert_eq!("123.000000", lat.value_as_string(8));
+        assert_eq!("-50.760000", lat.value_as_string(9));
+
+        let lng = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<Decimal64Array>()
+            .unwrap();
+
+        assert_eq!("-3.335724", lng.value_as_string(0));
+        assert_eq!("-2.179404", lng.value_as_string(1));
+        assert_eq!("-1.778197", lng.value_as_string(2));
+        assert_eq!("-3.179090", lng.value_as_string(3));
+        assert_eq!("-3.179090", lng.value_as_string(4));
+        assert_eq!("0.290472", lng.value_as_string(5));
+        assert_eq!("0.290472", lng.value_as_string(6));
+        assert_eq!("0.290472", lng.value_as_string(7));
+        assert_eq!("0.290472", lng.value_as_string(8));
+        assert_eq!("0.290472", lng.value_as_string(9));
+    }
+
+    #[test]
     fn test_csv_from_buf_reader() {
         let schema = Schema::new(vec![
             Field::new("city", DataType::Utf8, false),
@@ -1218,14 +1387,13 @@ mod tests {
             Field::new("lng", DataType::Float64, false),
         ]);
 
-        let file_with_headers =
-            File::open("test/data/uk_cities_with_headers.csv").unwrap();
+        let file_with_headers = File::open("test/data/uk_cities_with_headers.csv").unwrap();
         let file_without_headers = File::open("test/data/uk_cities.csv").unwrap();
         let both_files = file_with_headers
             .chain(Cursor::new("\n".to_string()))
             .chain(file_without_headers);
         let mut csv = ReaderBuilder::new(Arc::new(schema))
-            .has_header(true)
+            .with_header(true)
             .build(both_files)
             .unwrap();
         let batch = csv.next().unwrap().unwrap();
@@ -1243,7 +1411,7 @@ mod tests {
             .unwrap();
 
         file.rewind().unwrap();
-        let builder = ReaderBuilder::new(Arc::new(schema)).has_header(true);
+        let builder = ReaderBuilder::new(Arc::new(schema)).with_header(true);
 
         let mut csv = builder.build(file).unwrap();
         let expected_schema = Schema::new(vec![
@@ -1402,18 +1570,52 @@ mod tests {
     }
 
     #[test]
+    fn test_csv_with_nullable_dictionary() {
+        let offset_type = vec![
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ];
+        for data_type in offset_type {
+            let file = File::open("test/data/dictionary_nullable_test.csv").unwrap();
+            let dictionary_type =
+                DataType::Dictionary(Box::new(data_type), Box::new(DataType::Utf8));
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("id", DataType::Utf8, false),
+                Field::new("name", dictionary_type.clone(), true),
+            ]));
+
+            let mut csv = ReaderBuilder::new(schema)
+                .build(file.try_clone().unwrap())
+                .unwrap();
+
+            let batch = csv.next().unwrap().unwrap();
+            assert_eq!(3, batch.num_rows());
+            assert_eq!(2, batch.num_columns());
+
+            let names = arrow_cast::cast(batch.column(1), &dictionary_type).unwrap();
+            assert!(!names.is_null(2));
+            assert!(names.is_null(1));
+        }
+    }
+    #[test]
     fn test_nulls() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
             Field::new("c_float", DataType::Float32, true),
-            Field::new("c_string", DataType::Utf8, false),
+            Field::new("c_string", DataType::Utf8, true),
             Field::new("c_bool", DataType::Boolean, false),
         ]));
 
         let file = File::open("test/data/null_test.csv").unwrap();
 
         let mut csv = ReaderBuilder::new(schema)
-            .has_header(true)
+            .with_header(true)
             .build(file)
             .unwrap();
 
@@ -1424,6 +1626,91 @@ mod tests {
         assert!(batch.column(1).is_null(2));
         assert!(!batch.column(1).is_null(3));
         assert!(!batch.column(1).is_null(4));
+    }
+
+    #[test]
+    fn test_init_nulls() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c_int", DataType::UInt64, true),
+            Field::new("c_float", DataType::Float32, true),
+            Field::new("c_string", DataType::Utf8, true),
+            Field::new("c_bool", DataType::Boolean, true),
+            Field::new("c_null", DataType::Null, true),
+        ]));
+        let file = File::open("test/data/init_null_test.csv").unwrap();
+
+        let mut csv = ReaderBuilder::new(schema)
+            .with_header(true)
+            .build(file)
+            .unwrap();
+
+        let batch = csv.next().unwrap().unwrap();
+
+        assert!(batch.column(1).is_null(0));
+        assert!(!batch.column(1).is_null(1));
+        assert!(batch.column(1).is_null(2));
+        assert!(!batch.column(1).is_null(3));
+        assert!(!batch.column(1).is_null(4));
+    }
+
+    #[test]
+    fn test_init_nulls_with_inference() {
+        let format = Format::default().with_header(true).with_delimiter(b',');
+
+        let mut file = File::open("test/data/init_null_test.csv").unwrap();
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new("c_int", DataType::Int64, true),
+            Field::new("c_float", DataType::Float64, true),
+            Field::new("c_string", DataType::Utf8, true),
+            Field::new("c_bool", DataType::Boolean, true),
+            Field::new("c_null", DataType::Null, true),
+        ]);
+        assert_eq!(schema, expected_schema);
+
+        let mut csv = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .build(file)
+            .unwrap();
+
+        let batch = csv.next().unwrap().unwrap();
+
+        assert!(batch.column(1).is_null(0));
+        assert!(!batch.column(1).is_null(1));
+        assert!(batch.column(1).is_null(2));
+        assert!(!batch.column(1).is_null(3));
+        assert!(!batch.column(1).is_null(4));
+    }
+
+    #[test]
+    fn test_custom_nulls() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c_int", DataType::UInt64, true),
+            Field::new("c_float", DataType::Float32, true),
+            Field::new("c_string", DataType::Utf8, true),
+            Field::new("c_bool", DataType::Boolean, true),
+        ]));
+
+        let file = File::open("test/data/custom_null_test.csv").unwrap();
+
+        let null_regex = Regex::new("^nil$").unwrap();
+
+        let mut csv = ReaderBuilder::new(schema)
+            .with_header(true)
+            .with_null_regex(null_regex)
+            .build(file)
+            .unwrap();
+
+        let batch = csv.next().unwrap().unwrap();
+
+        // "nil"s should be NULL
+        assert!(batch.column(0).is_null(1));
+        assert!(batch.column(1).is_null(2));
+        assert!(batch.column(3).is_null(4));
+        assert!(batch.column(2).is_null(3));
+        assert!(!batch.column(2).is_null(4));
     }
 
     #[test]
@@ -1442,7 +1729,7 @@ mod tests {
         let mut csv = builder.build(file).unwrap();
         let batch = csv.next().unwrap().unwrap();
 
-        assert_eq!(7, batch.num_rows());
+        assert_eq!(10, batch.num_rows());
         assert_eq!(6, batch.num_columns());
 
         let schema = batch.schema();
@@ -1457,8 +1744,7 @@ mod tests {
             schema.field(5).data_type()
         );
 
-        let names: Vec<&str> =
-            schema.fields().iter().map(|x| x.name().as_str()).collect();
+        let names: Vec<&str> = schema.fields().iter().map(|x| x.name().as_str()).collect();
         assert_eq!(
             names,
             vec![
@@ -1486,9 +1772,64 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_invalid_csv() {
-        let file = File::open("test/data/various_types_invalid.csv").unwrap();
+    fn test_custom_nulls_with_inference() {
+        let mut file = File::open("test/data/custom_null_test.csv").unwrap();
 
+        let null_regex = Regex::new("^nil$").unwrap();
+
+        let format = Format::default()
+            .with_header(true)
+            .with_null_regex(null_regex);
+
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let expected_schema = Schema::new(vec![
+            Field::new("c_int", DataType::Int64, true),
+            Field::new("c_float", DataType::Float64, true),
+            Field::new("c_string", DataType::Utf8, true),
+            Field::new("c_bool", DataType::Boolean, true),
+        ]);
+
+        assert_eq!(schema, expected_schema);
+
+        let builder = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .with_batch_size(512)
+            .with_projection(vec![0, 1, 2, 3]);
+
+        let mut csv = builder.build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        assert_eq!(5, batch.num_rows());
+        assert_eq!(4, batch.num_columns());
+
+        assert_eq!(batch.schema().as_ref(), &expected_schema);
+    }
+
+    #[test]
+    fn test_scientific_notation_with_inference() {
+        let mut file = File::open("test/data/scientific_notation_test.csv").unwrap();
+        let format = Format::default().with_header(false).with_delimiter(b',');
+
+        let (schema, _) = format.infer_schema(&mut file, None).unwrap();
+        file.rewind().unwrap();
+
+        let builder = ReaderBuilder::new(Arc::new(schema))
+            .with_format(format)
+            .with_batch_size(512)
+            .with_projection(vec![0, 1]);
+
+        let mut csv = builder.build(file).unwrap();
+        let batch = csv.next().unwrap().unwrap();
+
+        let schema = batch.schema();
+
+        assert_eq!(&DataType::Float64, schema.field(0).data_type());
+    }
+
+    fn invalid_csv_helper(file_name: &str) -> String {
+        let file = File::open(file_name).unwrap();
         let schema = Schema::new(vec![
             Field::new("c_int", DataType::UInt64, false),
             Field::new("c_float", DataType::Float32, false),
@@ -1497,22 +1838,47 @@ mod tests {
         ]);
 
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(true)
+            .with_header(true)
             .with_delimiter(b'|')
             .with_batch_size(512)
             .with_projection(vec![0, 1, 2, 3]);
 
         let mut csv = builder.build(file).unwrap();
-        match csv.next() {
-            Some(e) => match e {
-                Err(e) => assert_eq!(
-                    "ParseError(\"Error while parsing value 4.x4 for column 1 at line 4\")",
-                    format!("{e:?}")
-                ),
-                Ok(_) => panic!("should have failed"),
-            },
-            None => panic!("should have failed"),
-        }
+
+        csv.next().unwrap().unwrap_err().to_string()
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_float() {
+        let file_name = "test/data/various_invalid_types/invalid_float.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!(
+            "Parser error: Error while parsing value '4.x4' as type 'Float32' for column 1 at line 4. Row data: '[4,4.x4,,false]'",
+            error
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_int() {
+        let file_name = "test/data/various_invalid_types/invalid_int.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!(
+            "Parser error: Error while parsing value '2.3' as type 'UInt64' for column 0 at line 2. Row data: '[2.3,2.2,2.22,false]'",
+            error
+        );
+    }
+
+    #[test]
+    fn test_parse_invalid_csv_bool() {
+        let file_name = "test/data/various_invalid_types/invalid_bool.csv";
+
+        let error = invalid_csv_helper(file_name);
+        assert_eq!(
+            "Parser error: Error while parsing value 'none' as type 'Boolean' for column 3 at line 2. Row data: '[2,2.2,2.22,none]'",
+            error
+        );
     }
 
     /// Infer the data type of a record
@@ -1530,6 +1896,10 @@ mod tests {
         assert_eq!(infer_field_schema("10.2"), DataType::Float64);
         assert_eq!(infer_field_schema(".2"), DataType::Float64);
         assert_eq!(infer_field_schema("2."), DataType::Float64);
+        assert_eq!(infer_field_schema("NaN"), DataType::Float64);
+        assert_eq!(infer_field_schema("nan"), DataType::Float64);
+        assert_eq!(infer_field_schema("inf"), DataType::Float64);
+        assert_eq!(infer_field_schema("-inf"), DataType::Float64);
         assert_eq!(infer_field_schema("true"), DataType::Boolean);
         assert_eq!(infer_field_schema("trUe"), DataType::Boolean);
         assert_eq!(infer_field_schema("false"), DataType::Boolean);
@@ -1556,6 +1926,8 @@ mod tests {
             infer_field_schema("2021-12-19T13:12:30.123456789"),
             DataType::Timestamp(TimeUnit::Nanosecond, None)
         );
+        assert_eq!(infer_field_schema("–9223372036854775809"), DataType::Utf8);
+        assert_eq!(infer_field_schema("9223372036854775808"), DataType::Utf8);
     }
 
     #[test]
@@ -1598,16 +1970,11 @@ mod tests {
             -2203932304000
         );
         assert_eq!(
-            Date64Type::parse_formatted("1900-02-28 12:34:56", "%Y-%m-%d %H:%M:%S")
-                .unwrap(),
+            Date64Type::parse_formatted("1900-02-28 12:34:56", "%Y-%m-%d %H:%M:%S").unwrap(),
             -2203932304000
         );
         assert_eq!(
-            Date64Type::parse_formatted(
-                "1900-02-28 12:34:56+0030",
-                "%Y-%m-%d %H:%M:%S%z"
-            )
-            .unwrap(),
+            Date64Type::parse_formatted("1900-02-28 12:34:56+0030", "%Y-%m-%d %H:%M:%S%z").unwrap(),
             -2203932304000 - (30 * 60 * 1000)
         );
     }
@@ -1644,10 +2011,7 @@ mod tests {
 
     #[test]
     fn test_parse_timestamp() {
-        test_parse_timestamp_impl::<TimestampNanosecondType>(
-            None,
-            &[0, 0, -7_200_000_000_000],
-        );
+        test_parse_timestamp_impl::<TimestampNanosecondType>(None, &[0, 0, -7_200_000_000_000]);
         test_parse_timestamp_impl::<TimestampNanosecondType>(
             Some("+00:00".into()),
             &[0, 0, -7_200_000_000_000],
@@ -1664,10 +2028,7 @@ mod tests {
             Some("-03".into()),
             &[10_800_000, 0, -7_200_000],
         );
-        test_parse_timestamp_impl::<TimestampSecondType>(
-            Some("-03".into()),
-            &[10_800, 0, -7_200],
-        );
+        test_parse_timestamp_impl::<TimestampSecondType>(Some("-03".into()), &[10_800, 0, -7_200]);
     }
 
     #[test]
@@ -1715,7 +2076,7 @@ mod tests {
     #[test]
     fn test_bounded() {
         let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
-        let data = vec![
+        let data = [
             vec!["0"],
             vec!["1"],
             vec!["2"],
@@ -1757,7 +2118,7 @@ mod tests {
     #[test]
     fn test_empty_projection() {
         let schema = Schema::new(vec![Field::new("int", DataType::UInt32, false)]);
-        let data = vec![vec!["0"], vec!["1"]];
+        let data = [vec!["0"], vec!["1"]];
 
         let data = data
             .iter()
@@ -1824,7 +2185,7 @@ mod tests {
             Field::new("text2", DataType::Utf8, false),
         ]);
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(false)
+            .with_header(false)
             .with_quote(b'~'); // default is ", change to ~
 
         let mut csv_text = Vec::new();
@@ -1856,7 +2217,7 @@ mod tests {
             Field::new("text2", DataType::Utf8, false),
         ]);
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(false)
+            .with_header(false)
             .with_escape(b'\\'); // default is None, change to \
 
         let mut csv_text = Vec::new();
@@ -1888,7 +2249,7 @@ mod tests {
             Field::new("text2", DataType::Utf8, false),
         ]);
         let builder = ReaderBuilder::new(Arc::new(schema))
-            .has_header(false)
+            .with_header(false)
             .with_terminator(b'\n'); // default is CRLF, change to LF
 
         let mut csv_text = Vec::new();
@@ -1930,7 +2291,7 @@ mod tests {
         ]));
 
         for (idx, (bounds, has_header, expected)) in tests.into_iter().enumerate() {
-            let mut reader = ReaderBuilder::new(schema.clone()).has_header(has_header);
+            let mut reader = ReaderBuilder::new(schema.clone()).with_header(has_header);
             if let Some((start, end)) = bounds {
                 reader = reader.with_bounds(start, end);
             }
@@ -1978,10 +2339,137 @@ mod tests {
     }
 
     #[test]
+    fn test_truncated_rows() {
+        let data = "a,b,c\n1,2,3\n4,5\n\n6,7,8";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+            Field::new("c", DataType::Int32, true),
+        ]));
+
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.collect::<Result<Vec<_>, _>>();
+        assert!(batches.is_ok());
+        let batch = batches.unwrap().into_iter().next().unwrap();
+        // Empty rows are skipped by the underlying csv parser
+        assert_eq!(batch.num_rows(), 3);
+
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(false)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.collect::<Result<Vec<_>, _>>();
+        assert!(match batches {
+            Err(ArrowError::CsvError(e)) => e.to_string().contains("incorrect number of fields"),
+            _ => false,
+        });
+    }
+
+    #[test]
+    fn test_truncated_rows_csv() {
+        let file = File::open("test/data/truncated_rows.csv").unwrap();
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("Name", DataType::Utf8, true),
+            Field::new("Age", DataType::UInt32, true),
+            Field::new("Occupation", DataType::Utf8, true),
+            Field::new("DOB", DataType::Date32, true),
+        ]));
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_batch_size(24)
+            .with_truncated_rows(true);
+        let csv = reader.build(file).unwrap();
+        let batches = csv.collect::<Result<Vec<_>, _>>().unwrap();
+
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(batch.num_rows(), 6);
+        assert_eq!(batch.num_columns(), 4);
+        let name = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let age = batch
+            .column(1)
+            .as_any()
+            .downcast_ref::<UInt32Array>()
+            .unwrap();
+        let occupation = batch
+            .column(2)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .unwrap();
+        let dob = batch
+            .column(3)
+            .as_any()
+            .downcast_ref::<Date32Array>()
+            .unwrap();
+
+        assert_eq!(name.value(0), "A1");
+        assert_eq!(name.value(1), "B2");
+        assert!(name.is_null(2));
+        assert_eq!(name.value(3), "C3");
+        assert_eq!(name.value(4), "D4");
+        assert_eq!(name.value(5), "E5");
+
+        assert_eq!(age.value(0), 34);
+        assert_eq!(age.value(1), 29);
+        assert!(age.is_null(2));
+        assert_eq!(age.value(3), 45);
+        assert!(age.is_null(4));
+        assert_eq!(age.value(5), 31);
+
+        assert_eq!(occupation.value(0), "Engineer");
+        assert_eq!(occupation.value(1), "Doctor");
+        assert!(occupation.is_null(2));
+        assert_eq!(occupation.value(3), "Artist");
+        assert!(occupation.is_null(4));
+        assert!(occupation.is_null(5));
+
+        assert_eq!(dob.value(0), 5675);
+        assert!(dob.is_null(1));
+        assert!(dob.is_null(2));
+        assert_eq!(dob.value(3), -1858);
+        assert!(dob.is_null(4));
+        assert!(dob.is_null(5));
+    }
+
+    #[test]
+    fn test_truncated_rows_not_nullable_error() {
+        let data = "a,b,c\n1,2,3\n4,5";
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+
+        let reader = ReaderBuilder::new(schema.clone())
+            .with_header(true)
+            .with_truncated_rows(true)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let batches = reader.collect::<Result<Vec<_>, _>>();
+        assert!(match batches {
+            Err(ArrowError::InvalidArgumentError(e)) =>
+                e.to_string().contains("contains null values"),
+            _ => false,
+        });
+    }
+
+    #[test]
     fn test_buffered() {
         let tests = [
             ("test/data/uk_cities.csv", false, 37),
-            ("test/data/various_types.csv", true, 7),
+            ("test/data/various_types.csv", true, 10),
             ("test/data/decimal_test.csv", false, 10),
         ];
 
@@ -1995,7 +2483,7 @@ mod tests {
                 for capacity in [1, 3, 7, 100] {
                     let reader = ReaderBuilder::new(schema.clone())
                         .with_batch_size(batch_size)
-                        .has_header(has_header)
+                        .with_header(has_header)
                         .build(File::open(path).unwrap())
                         .unwrap();
 
@@ -2006,14 +2494,12 @@ mod tests {
                         expected_rows
                     );
 
-                    let buffered = std::io::BufReader::with_capacity(
-                        capacity,
-                        File::open(path).unwrap(),
-                    );
+                    let buffered =
+                        std::io::BufReader::with_capacity(capacity, File::open(path).unwrap());
 
                     let reader = ReaderBuilder::new(schema.clone())
                         .with_batch_size(batch_size)
-                        .has_header(has_header)
+                        .with_header(has_header)
                         .build_buffered(buffered)
                         .unwrap();
 
@@ -2025,17 +2511,27 @@ mod tests {
     }
 
     fn err_test(csv: &[u8], expected: &str) {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("text1", DataType::Utf8, false),
-            Field::new("text2", DataType::Utf8, false),
+        fn err_test_with_schema(csv: &[u8], expected: &str, schema: Arc<Schema>) {
+            let buffer = std::io::BufReader::with_capacity(2, Cursor::new(csv));
+            let b = ReaderBuilder::new(schema)
+                .with_batch_size(2)
+                .build_buffered(buffer)
+                .unwrap();
+            let err = b.collect::<Result<Vec<_>, _>>().unwrap_err().to_string();
+            assert_eq!(err, expected)
+        }
+
+        let schema_utf8 = Arc::new(Schema::new(vec![
+            Field::new("text1", DataType::Utf8, true),
+            Field::new("text2", DataType::Utf8, true),
         ]));
-        let buffer = std::io::BufReader::with_capacity(2, Cursor::new(csv));
-        let b = ReaderBuilder::new(schema)
-            .with_batch_size(2)
-            .build_buffered(buffer)
-            .unwrap();
-        let err = b.collect::<Result<Vec<_>, _>>().unwrap_err().to_string();
-        assert_eq!(err, expected)
+        err_test_with_schema(csv, expected, schema_utf8);
+
+        let schema_utf8view = Arc::new(Schema::new(vec![
+            Field::new("text1", DataType::Utf8View, true),
+            Field::new("text2", DataType::Utf8View, true),
+        ]));
+        err_test_with_schema(csv, expected, schema_utf8view);
     }
 
     #[test]
@@ -2132,7 +2628,7 @@ mod tests {
     #[test]
     fn test_inference() {
         let cases: &[(&[&str], DataType)] = &[
-            (&[], DataType::Utf8),
+            (&[], DataType::Null),
             (&["false", "12"], DataType::Utf8),
             (&["12", "cupcakes"], DataType::Utf8),
             (&["12", "12.4"], DataType::Float64),
@@ -2195,5 +2691,120 @@ mod tests {
             }
             assert_eq!(&t.get(), expected, "{values:?}")
         }
+    }
+
+    #[test]
+    fn test_record_length_mismatch() {
+        let csv = "\
+        a,b,c\n\
+        1,2,3\n\
+        4,5\n\
+        6,7,8";
+        let mut read = Cursor::new(csv.as_bytes());
+        let result = Format::default()
+            .with_header(true)
+            .infer_schema(&mut read, None);
+        assert!(result.is_err());
+        // Include line number in the error message to help locate and fix the issue
+        assert_eq!(
+            result.err().unwrap().to_string(),
+            "Csv error: Encountered unequal lengths between records on CSV file. Expected 3 records, found 2 records at line 3"
+        );
+    }
+
+    #[test]
+    fn test_comment() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int8, false),
+            Field::new("b", DataType::Int8, false),
+        ]);
+
+        let csv = "# comment1 \n1,2\n#comment2\n11,22";
+        let mut read = Cursor::new(csv.as_bytes());
+        let reader = ReaderBuilder::new(Arc::new(schema))
+            .with_comment(b'#')
+            .build(&mut read)
+            .unwrap();
+
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(batches.len(), 1);
+        let b = batches.first().unwrap();
+        assert_eq!(b.num_columns(), 2);
+        assert_eq!(
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .values(),
+            &vec![1, 11]
+        );
+        assert_eq!(
+            b.column(1)
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .unwrap()
+                .values(),
+            &vec![2, 22]
+        );
+    }
+
+    #[test]
+    fn test_parse_string_view_single_column() {
+        let csv = ["foo", "something_cannot_be_inlined", "foobar"].join("\n");
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c1",
+            DataType::Utf8View,
+            true,
+        )]));
+
+        let mut decoder = ReaderBuilder::new(schema).build_decoder();
+
+        let decoded = decoder.decode(csv.as_bytes()).unwrap();
+        assert_eq!(decoded, csv.len());
+        decoder.decode(&[]).unwrap();
+
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 3);
+        let col = batch.column(0).as_string_view();
+        assert_eq!(col.data_type(), &DataType::Utf8View);
+        assert_eq!(col.value(0), "foo");
+        assert_eq!(col.value(1), "something_cannot_be_inlined");
+        assert_eq!(col.value(2), "foobar");
+    }
+
+    #[test]
+    fn test_parse_string_view_multi_column() {
+        let csv = ["foo,", ",something_cannot_be_inlined", "foobarfoobar,bar"].join("\n");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("c1", DataType::Utf8View, true),
+            Field::new("c2", DataType::Utf8View, true),
+        ]));
+
+        let mut decoder = ReaderBuilder::new(schema).build_decoder();
+
+        let decoded = decoder.decode(csv.as_bytes()).unwrap();
+        assert_eq!(decoded, csv.len());
+        decoder.decode(&[]).unwrap();
+
+        let batch = decoder.flush().unwrap().unwrap();
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 3);
+        let c1 = batch.column(0).as_string_view();
+        let c2 = batch.column(1).as_string_view();
+        assert_eq!(c1.data_type(), &DataType::Utf8View);
+        assert_eq!(c2.data_type(), &DataType::Utf8View);
+
+        assert!(!c1.is_null(0));
+        assert!(c1.is_null(1));
+        assert!(!c1.is_null(2));
+        assert_eq!(c1.value(0), "foo");
+        assert_eq!(c1.value(2), "foobarfoobar");
+
+        assert!(c2.is_null(0));
+        assert!(!c2.is_null(1));
+        assert!(!c2.is_null(2));
+        assert_eq!(c2.value(1), "something_cannot_be_inlined");
+        assert_eq!(c2.value(2), "bar");
     }
 }

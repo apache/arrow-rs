@@ -25,6 +25,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
+use num_traits::Zero;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -33,11 +34,11 @@ use std::sync::Arc;
 /// # Arguments
 ///
 /// * `start` - The start index of all substrings.
-/// If `start >= 0`, then count from the start of the string,
-/// otherwise count from the end of the string.
+///   If `start >= 0`, then count from the start of the string,
+///   otherwise count from the end of the string.
 ///
 /// * `length`(option) - The length of all substrings.
-/// If `length` is [None], then the substring is from `start` to the end of the string.
+///   If `length` is [None], then the substring is from `start` to the end of the string.
 ///
 /// Attention: Both `start` and `length` are counted by byte, not by char.
 ///
@@ -52,10 +53,13 @@ use std::sync::Arc;
 /// ```
 ///
 /// # Error
-/// - The function errors when the passed array is not a [`GenericStringArray`], [`GenericBinaryArray`], [`FixedSizeBinaryArray`]
-///   or [`DictionaryArray`] with supported array type as its value type.
-/// - The function errors if the offset of a substring in the input array is at invalid char boundary (only for \[Large\]String array).
-/// It is recommended to use [`substring_by_char`] if the input array may contain non-ASCII chars.
+/// - The function errors when the passed array is not a [`GenericStringArray`],
+///   [`GenericBinaryArray`], [`FixedSizeBinaryArray`] or [`DictionaryArray`]
+///   with supported array type as its value type.
+/// - The function errors if the offset of a substring in the input array is
+///   at invalid char boundary (only for \[Large\]String array).
+///   It is recommended to use [`substring_by_char`] if the input array may
+///   contain non-ASCII chars.
 ///
 /// ## Example of trying to get an invalid utf-8 format substring
 /// ```
@@ -106,7 +110,7 @@ pub fn substring(
                 UInt64: UInt64Type
             )
         }
-        DataType::LargeBinary => binary_substring(
+        DataType::LargeBinary => byte_substring(
             array
                 .as_any()
                 .downcast_ref::<LargeBinaryArray>()
@@ -114,7 +118,7 @@ pub fn substring(
             start,
             length.map(|e| e as i64),
         ),
-        DataType::Binary => binary_substring(
+        DataType::Binary => byte_substring(
             array
                 .as_any()
                 .downcast_ref::<BinaryArray>()
@@ -131,7 +135,7 @@ pub fn substring(
             start as i32,
             length.map(|e| e as i32),
         ),
-        DataType::LargeUtf8 => utf8_substring(
+        DataType::LargeUtf8 => byte_substring(
             array
                 .as_any()
                 .downcast_ref::<LargeStringArray>()
@@ -139,7 +143,7 @@ pub fn substring(
             start,
             length.map(|e| e as i64),
         ),
-        DataType::Utf8 => utf8_substring(
+        DataType::Utf8 => byte_substring(
             array
                 .as_any()
                 .downcast_ref::<StringArray>()
@@ -154,22 +158,25 @@ pub fn substring(
     }
 }
 
+/// Substrings based on character index
+///
 /// # Arguments
 /// * `array` - The input string array
 ///
 /// * `start` - The start index of all substrings.
-/// If `start >= 0`, then count from the start of the string,
-/// otherwise count from the end of the string.
+///   If `start >= 0`, then count from the start of the string,
+///   otherwise count from the end of the string.
 ///
 /// * `length`(option) - The length of all substrings.
-/// If `length` is `None`, then the substring is from `start` to the end of the string.
+///   If `length` is `None`, then the substring is from `start` to the end of the string.
 ///
 /// Attention: Both `start` and `length` are counted by char.
 ///
 /// # Performance
-/// This function is slower than [substring].
-/// Theoretically, the time complexity is `O(n)` where `n` is the length of the value buffer.
-/// It is recommended to use [substring] if the input array only contains ASCII chars.
+///
+/// This function is slower than [substring]. Theoretically, the time complexity
+/// is `O(n)` where `n` is the length of the value buffer. It is recommended to
+/// use [substring] if the input array only contains ASCII chars.
 ///
 /// # Basic usage
 /// ```
@@ -224,11 +231,7 @@ pub fn substring_by_char<OffsetSize: OffsetSizeTrait>(
 /// * `length` - the char length of the substring
 ///
 /// Return the `start` and `end` offset (by byte) of the substring
-fn get_start_end_offset(
-    val: &str,
-    start: usize,
-    length: Option<usize>,
-) -> (usize, usize) {
+fn get_start_end_offset(val: &str, start: usize, length: Option<usize>) -> (usize, usize) {
     let len = val.len();
     let mut offset_char_iter = val.char_indices();
     let start_offset = offset_char_iter
@@ -246,125 +249,26 @@ fn get_start_end_offset(
     (start_offset, end_offset)
 }
 
-fn binary_substring<OffsetSize: OffsetSizeTrait>(
-    array: &GenericBinaryArray<OffsetSize>,
-    start: OffsetSize,
-    length: Option<OffsetSize>,
-) -> Result<ArrayRef, ArrowError> {
+fn byte_substring<T: ByteArrayType>(
+    array: &GenericByteArray<T>,
+    start: T::Offset,
+    length: Option<T::Offset>,
+) -> Result<ArrayRef, ArrowError>
+where
+    <T as ByteArrayType>::Native: PartialEq,
+{
     let offsets = array.value_offsets();
     let data = array.value_data();
-    let zero = OffsetSize::zero();
+    let zero = <T::Offset as Zero>::zero();
 
-    // start and end offsets of all substrings
-    let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
-        Vec::with_capacity(array.len());
-    let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
-    let mut len_so_far = zero;
-    new_offsets.push(zero);
-
-    offsets.windows(2).for_each(|pair| {
-        let new_start = match start.cmp(&zero) {
-            Ordering::Greater => (pair[0] + start).min(pair[1]),
-            Ordering::Equal => pair[0],
-            Ordering::Less => (pair[1] + start).max(pair[0]),
-        };
-        let new_end = match length {
-            Some(length) => (length + new_start).min(pair[1]),
-            None => pair[1],
-        };
-        len_so_far += new_end - new_start;
-        new_starts_ends.push((new_start, new_end));
-        new_offsets.push(len_so_far);
-    });
-
-    // concatenate substrings into a buffer
-    let mut new_values = MutableBuffer::new(new_offsets.last().unwrap().as_usize());
-
-    new_starts_ends
-        .iter()
-        .map(|(start, end)| {
-            let start = start.as_usize();
-            let end = end.as_usize();
-            &data[start..end]
-        })
-        .for_each(|slice| new_values.extend_from_slice(slice));
-
-    let data = unsafe {
-        ArrayData::new_unchecked(
-            GenericBinaryArray::<OffsetSize>::DATA_TYPE,
-            array.len(),
-            None,
-            array.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![Buffer::from_vec(new_offsets), new_values.into()],
-            vec![],
-        )
-    };
-    Ok(make_array(data))
-}
-
-fn fixed_size_binary_substring(
-    array: &FixedSizeBinaryArray,
-    old_len: i32,
-    start: i32,
-    length: Option<i32>,
-) -> Result<ArrayRef, ArrowError> {
-    let new_start = if start >= 0 {
-        start.min(old_len)
-    } else {
-        (old_len + start).max(0)
-    };
-    let new_len = match length {
-        Some(len) => len.min(old_len - new_start),
-        None => old_len - new_start,
-    };
-
-    // build value buffer
-    let num_of_elements = array.len();
-    let values = array.value_data();
-    let data = values.as_slice();
-    let mut new_values = MutableBuffer::new(num_of_elements * (new_len as usize));
-    (0..num_of_elements)
-        .map(|idx| {
-            let offset = array.value_offset(idx);
-            (
-                (offset + new_start) as usize,
-                (offset + new_start + new_len) as usize,
-            )
-        })
-        .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
-
-    let array_data = unsafe {
-        ArrayData::new_unchecked(
-            DataType::FixedSizeBinary(new_len),
-            num_of_elements,
-            None,
-            array.nulls().map(|b| b.inner().sliced()),
-            0,
-            vec![new_values.into()],
-            vec![],
-        )
-    };
-
-    Ok(make_array(array_data))
-}
-
-/// substring by byte
-fn utf8_substring<OffsetSize: OffsetSizeTrait>(
-    array: &GenericStringArray<OffsetSize>,
-    start: OffsetSize,
-    length: Option<OffsetSize>,
-) -> Result<ArrayRef, ArrowError> {
-    let offsets = array.value_offsets();
-    let data = array.value_data();
-    let zero = OffsetSize::zero();
-
-    // Check if `offset` is at a valid char boundary.
-    // If yes, return `offset`, else return error
+    // When array is [Large]StringArray, we will check whether `offset` is at a valid char boundary.
     let check_char_boundary = {
-        // Safety: a StringArray must contain valid UTF8 data
-        let data_str = unsafe { std::str::from_utf8_unchecked(data) };
-        |offset: OffsetSize| {
+        |offset: T::Offset| {
+            if !matches!(T::DATA_TYPE, DataType::Utf8 | DataType::LargeUtf8) {
+                return Ok(offset);
+            }
+            // Safety: a StringArray must contain valid UTF8 data
+            let data_str = unsafe { std::str::from_utf8_unchecked(data) };
             let offset_usize = offset.as_usize();
             if data_str.is_char_boundary(offset_usize) {
                 Ok(offset)
@@ -377,9 +281,8 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
     };
 
     // start and end offsets of all substrings
-    let mut new_starts_ends: Vec<(OffsetSize, OffsetSize)> =
-        Vec::with_capacity(array.len());
-    let mut new_offsets: Vec<OffsetSize> = Vec::with_capacity(array.len() + 1);
+    let mut new_starts_ends: Vec<(T::Offset, T::Offset)> = Vec::with_capacity(array.len());
+    let mut new_offsets: Vec<T::Offset> = Vec::with_capacity(array.len() + 1);
     let mut len_so_far = zero;
     new_offsets.push(zero);
 
@@ -415,7 +318,7 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
 
     let data = unsafe {
         ArrayData::new_unchecked(
-            GenericStringArray::<OffsetSize>::DATA_TYPE,
+            GenericByteArray::<T>::DATA_TYPE,
             array.len(),
             None,
             array.nulls().map(|b| b.inner().sliced()),
@@ -425,6 +328,51 @@ fn utf8_substring<OffsetSize: OffsetSizeTrait>(
         )
     };
     Ok(make_array(data))
+}
+
+fn fixed_size_binary_substring(
+    array: &FixedSizeBinaryArray,
+    old_len: i32,
+    start: i32,
+    length: Option<i32>,
+) -> Result<ArrayRef, ArrowError> {
+    let new_start = if start >= 0 {
+        start.min(old_len)
+    } else {
+        (old_len + start).max(0)
+    };
+    let new_len = match length {
+        Some(len) => len.min(old_len - new_start),
+        None => old_len - new_start,
+    };
+
+    // build value buffer
+    let num_of_elements = array.len();
+    let data = array.value_data();
+    let mut new_values = MutableBuffer::new(num_of_elements * (new_len as usize));
+    (0..num_of_elements)
+        .map(|idx| {
+            let offset = array.value_offset(idx);
+            (
+                (offset + new_start) as usize,
+                (offset + new_start + new_len) as usize,
+            )
+        })
+        .for_each(|(start, end)| new_values.extend_from_slice(&data[start..end]));
+
+    let array_data = unsafe {
+        ArrayData::new_unchecked(
+            DataType::FixedSizeBinary(new_len),
+            num_of_elements,
+            None,
+            array.nulls().map(|b| b.inner().sliced()),
+            0,
+            vec![new_values.into()],
+            vec![],
+        )
+    };
+
+    Ok(make_array(array_data))
 }
 
 #[cfg(test)]
@@ -454,7 +402,7 @@ mod tests {
     /// A helper macro to test the substring functions.
     /// # Arguments
     /// * `cases` - The test cases which is a vector of `(input, start, len, result)`.
-    /// Please look at [`gen_test_cases`] to find how to generate it.
+    ///   Please look at [`gen_test_cases`] to find how to generate it.
     /// * `array_ty` - The array type.
     /// * `substring_fn` - Either [`substring`] or [`substring_by_char`].
     macro_rules! do_test {
@@ -688,7 +636,7 @@ mod tests {
 
         let data = ArrayData::builder(DataType::FixedSizeBinary(5))
             .len(2)
-            .add_buffer(Buffer::from(&values[..]))
+            .add_buffer(Buffer::from(&values))
             .offset(1)
             .null_bit_buffer(Some(Buffer::from(bits_v)))
             .build()
@@ -712,8 +660,7 @@ mod tests {
     fn with_nulls_generic_string<O: OffsetSizeTrait>() {
         let input = vec![Some("hello"), None, Some("word")];
         // all-nulls array is always identical
-        let base_case =
-            gen_test_cases!(vec![None, None, None], (0, None, vec![None, None, None]));
+        let base_case = gen_test_cases!(vec![None, None, None], (0, None, vec![None, None, None]));
         let cases = gen_test_cases!(
             input,
             // identity
@@ -791,7 +738,7 @@ mod tests {
     }
 
     fn generic_string_with_non_zero_offset<O: OffsetSizeTrait>() {
-        let values = "hellotherearrow";
+        let values = b"hellotherearrow";
         let offsets = &[
             O::zero(),
             O::from_usize(5).unwrap(),
@@ -834,8 +781,7 @@ mod tests {
     fn with_nulls_generic_string_by_char<O: OffsetSizeTrait>() {
         let input = vec![Some("hello"), None, Some("Γ ⊢x:T")];
         // all-nulls array is always identical
-        let base_case =
-            gen_test_cases!(vec![None, None, None], (0, None, vec![None, None, None]));
+        let base_case = gen_test_cases!(vec![None, None, None], (0, None, vec![None, None, None]));
         let cases = gen_test_cases!(
             input,
             // identity
@@ -917,10 +863,8 @@ mod tests {
         let values = "S→T = Πx:S.T";
         let offsets = &[
             O::zero(),
-            O::from_usize(values.char_indices().nth(3).map(|(pos, _)| pos).unwrap())
-                .unwrap(),
-            O::from_usize(values.char_indices().nth(6).map(|(pos, _)| pos).unwrap())
-                .unwrap(),
+            O::from_usize(values.char_indices().nth(3).map(|(pos, _)| pos).unwrap()).unwrap(),
+            O::from_usize(values.char_indices().nth(6).map(|(pos, _)| pos).unwrap()).unwrap(),
             O::from_usize(values.len()).unwrap(),
         ];
         // set the first and third element to be valid
@@ -929,7 +873,7 @@ mod tests {
         let data = ArrayData::builder(GenericStringArray::<O>::DATA_TYPE)
             .len(2)
             .add_buffer(Buffer::from_slice_ref(offsets))
-            .add_buffer(Buffer::from(values))
+            .add_buffer(Buffer::from(values.as_bytes()))
             .null_bit_buffer(Some(Buffer::from(bitmap)))
             .offset(1)
             .build()
@@ -971,18 +915,13 @@ mod tests {
         let data: Vec<Option<&str>> = (0..TOTAL)
             .map(|n| {
                 let i = n % 5;
-                if i == 3 {
-                    None
-                } else {
-                    Some(v[i as usize])
-                }
+                if i == 3 { None } else { Some(v[i as usize]) }
             })
             .collect();
 
         let dict_array: DictionaryArray<K> = data.clone().into_iter().collect();
 
-        let expected: Vec<Option<&str>> =
-            data.iter().map(|opt| opt.map(|s| &s[1..3])).collect();
+        let expected: Vec<Option<&str>> = data.iter().map(|opt| opt.map(|s| &s[1..3])).collect();
 
         let res = substring(&dict_array, 1, Some(2)).unwrap();
         let actual = res.as_any().downcast_ref::<DictionaryArray<K>>().unwrap();
@@ -1019,5 +958,18 @@ mod tests {
         let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
         let err = substring(&array, 0, Some(5)).unwrap_err().to_string();
         assert!(err.contains("invalid utf-8 boundary"));
+    }
+
+    #[test]
+    fn non_utf8_bytes() {
+        // non-utf8 bytes
+        let bytes: &[u8] = &[0xE4, 0xBD, 0xA0, 0xE5, 0xA5, 0xBD, 0xE8, 0xAF, 0xAD];
+        let array = BinaryArray::from(vec![Some(bytes)]);
+        let arr = substring(&array, 0, Some(5)).unwrap();
+        let actual = arr.as_any().downcast_ref::<BinaryArray>().unwrap();
+
+        let expected_bytes: &[u8] = &[0xE4, 0xBD, 0xA0, 0xE5, 0xA5];
+        let expected = BinaryArray::from(vec![Some(expected_bytes)]);
+        assert_eq!(expected, *actual);
     }
 }

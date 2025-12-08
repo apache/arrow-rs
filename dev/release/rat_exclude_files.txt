@@ -14,11 +14,6 @@ parquet_derive/test/dependency/*
 Cargo.lock
 filtered_rat.txt
 rat.txt
-conbench/benchmarks.json
-conbench/requirements.txt
-conbench/requirements-test.txt
-conbench/.flake8
-conbench/.isort.cfg
 # auto-generated
 arrow-flight/src/arrow.flight.protocol.rs
 arrow-flight/src/sql/arrow.flight.protocol.sql.rs

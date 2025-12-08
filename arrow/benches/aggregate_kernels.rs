@@ -17,50 +17,157 @@
 
 #[macro_use]
 extern crate criterion;
-use criterion::Criterion;
+use criterion::{Criterion, Throughput};
+use rand::distr::{Distribution, StandardUniform};
 
 extern crate arrow;
 
 use arrow::compute::kernels::aggregate::*;
 use arrow::util::bench_util::*;
 use arrow::{array::*, datatypes::Float32Type};
+use arrow_array::types::{Float64Type, Int8Type, Int16Type, Int32Type, Int64Type};
 
-fn bench_sum(arr_a: &Float32Array) {
-    criterion::black_box(sum(arr_a).unwrap());
-}
+const BATCH_SIZE: usize = 64 * 1024;
 
-fn bench_min(arr_a: &Float32Array) {
-    criterion::black_box(min(arr_a).unwrap());
-}
-
-fn bench_max(arr_a: &Float32Array) {
-    criterion::black_box(max(arr_a).unwrap());
-}
-
-fn bench_min_string(arr_a: &StringArray) {
-    criterion::black_box(min_string(arr_a).unwrap());
+fn primitive_benchmark<T: ArrowNumericType>(c: &mut Criterion, name: &str)
+where
+    StandardUniform: Distribution<T::Native>,
+{
+    let nonnull_array = create_primitive_array::<T>(BATCH_SIZE, 0.0);
+    let nullable_array = create_primitive_array::<T>(BATCH_SIZE, 0.5);
+    c.benchmark_group(name)
+        .throughput(Throughput::Bytes(
+            (std::mem::size_of::<T::Native>() * BATCH_SIZE) as u64,
+        ))
+        .bench_function("sum nonnull", |b| b.iter(|| sum(&nonnull_array)))
+        .bench_function("min nonnull", |b| b.iter(|| min(&nonnull_array)))
+        .bench_function("max nonnull", |b| b.iter(|| max(&nonnull_array)))
+        .bench_function("sum nullable", |b| b.iter(|| sum(&nullable_array)))
+        .bench_function("min nullable", |b| b.iter(|| min(&nullable_array)))
+        .bench_function("max nullable", |b| b.iter(|| max(&nullable_array)));
 }
 
 fn add_benchmark(c: &mut Criterion) {
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.0);
+    primitive_benchmark::<Float32Type>(c, "float32");
+    primitive_benchmark::<Float64Type>(c, "float64");
 
-    c.bench_function("sum 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max 512", |b| b.iter(|| bench_max(&arr_a)));
+    primitive_benchmark::<Int8Type>(c, "int8");
+    primitive_benchmark::<Int16Type>(c, "int16");
+    primitive_benchmark::<Int32Type>(c, "int32");
+    primitive_benchmark::<Int64Type>(c, "int64");
 
-    let arr_a = create_primitive_array::<Float32Type>(512, 0.5);
+    {
+        let nonnull_strings = create_string_array_with_len::<i32>(BATCH_SIZE, 0.0, 16);
+        let nullable_strings = create_string_array_with_len::<i32>(BATCH_SIZE, 0.5, 16);
+        c.benchmark_group("string")
+            .throughput(Throughput::Elements(BATCH_SIZE as u64))
+            .bench_function("min nonnull", |b| b.iter(|| min_string(&nonnull_strings)))
+            .bench_function("max nonnull", |b| b.iter(|| max_string(&nonnull_strings)))
+            .bench_function("min nullable", |b| b.iter(|| min_string(&nullable_strings)))
+            .bench_function("max nullable", |b| b.iter(|| max_string(&nullable_strings)));
+    }
 
-    c.bench_function("sum nulls 512", |b| b.iter(|| bench_sum(&arr_a)));
-    c.bench_function("min nulls 512", |b| b.iter(|| bench_min(&arr_a)));
-    c.bench_function("max nulls 512", |b| b.iter(|| bench_max(&arr_a)));
+    {
+        let nonnull_strings = create_string_view_array_with_len(BATCH_SIZE, 0.0, 16, false);
+        let nullable_strings = create_string_view_array_with_len(BATCH_SIZE, 0.5, 16, false);
+        c.benchmark_group("string view")
+            .throughput(Throughput::Elements(BATCH_SIZE as u64))
+            .bench_function("min nonnull", |b| {
+                b.iter(|| min_string_view(&nonnull_strings))
+            })
+            .bench_function("max nonnull", |b| {
+                b.iter(|| max_string_view(&nonnull_strings))
+            })
+            .bench_function("min nullable", |b| {
+                b.iter(|| min_string_view(&nullable_strings))
+            })
+            .bench_function("max nullable", |b| {
+                b.iter(|| max_string_view(&nullable_strings))
+            });
+    }
 
-    let arr_b = create_string_array::<i32>(512, 0.0);
-    c.bench_function("min string 512", |b| b.iter(|| bench_min_string(&arr_b)));
-
-    let arr_b = create_string_array::<i32>(512, 0.5);
-    c.bench_function("min nulls string 512", |b| {
-        b.iter(|| bench_min_string(&arr_b))
-    });
+    {
+        let nonnull_bools_mixed = create_boolean_array(BATCH_SIZE, 0.0, 0.5);
+        let nonnull_bools_all_false = create_boolean_array(BATCH_SIZE, 0.0, 0.0);
+        let nonnull_bools_all_true = create_boolean_array(BATCH_SIZE, 0.0, 1.0);
+        let nullable_bool_mixed = create_boolean_array(BATCH_SIZE, 0.5, 0.5);
+        let nullable_bool_all_false = create_boolean_array(BATCH_SIZE, 0.5, 0.0);
+        let nullable_bool_all_true = create_boolean_array(BATCH_SIZE, 0.5, 1.0);
+        c.benchmark_group("bool")
+            .throughput(Throughput::Elements(BATCH_SIZE as u64))
+            .bench_function("min nonnull mixed", |b| {
+                b.iter(|| min_boolean(&nonnull_bools_mixed))
+            })
+            .bench_function("max nonnull mixed", |b| {
+                b.iter(|| max_boolean(&nonnull_bools_mixed))
+            })
+            .bench_function("or nonnull mixed", |b| {
+                b.iter(|| bool_or(&nonnull_bools_mixed))
+            })
+            .bench_function("and nonnull mixed", |b| {
+                b.iter(|| bool_and(&nonnull_bools_mixed))
+            })
+            .bench_function("min nonnull false", |b| {
+                b.iter(|| min_boolean(&nonnull_bools_all_false))
+            })
+            .bench_function("max nonnull false", |b| {
+                b.iter(|| max_boolean(&nonnull_bools_all_false))
+            })
+            .bench_function("or nonnull false", |b| {
+                b.iter(|| bool_or(&nonnull_bools_all_false))
+            })
+            .bench_function("and nonnull false", |b| {
+                b.iter(|| bool_and(&nonnull_bools_all_false))
+            })
+            .bench_function("min nonnull true", |b| {
+                b.iter(|| min_boolean(&nonnull_bools_all_true))
+            })
+            .bench_function("max nonnull true", |b| {
+                b.iter(|| max_boolean(&nonnull_bools_all_true))
+            })
+            .bench_function("or nonnull true", |b| {
+                b.iter(|| bool_or(&nonnull_bools_all_true))
+            })
+            .bench_function("and nonnull true", |b| {
+                b.iter(|| bool_and(&nonnull_bools_all_true))
+            })
+            .bench_function("min nullable mixed", |b| {
+                b.iter(|| min_boolean(&nullable_bool_mixed))
+            })
+            .bench_function("max nullable mixed", |b| {
+                b.iter(|| max_boolean(&nullable_bool_mixed))
+            })
+            .bench_function("or nullable mixed", |b| {
+                b.iter(|| bool_or(&nullable_bool_mixed))
+            })
+            .bench_function("and nullable mixed", |b| {
+                b.iter(|| bool_and(&nullable_bool_mixed))
+            })
+            .bench_function("min nullable false", |b| {
+                b.iter(|| min_boolean(&nullable_bool_all_false))
+            })
+            .bench_function("max nullable false", |b| {
+                b.iter(|| max_boolean(&nullable_bool_all_false))
+            })
+            .bench_function("or nullable false", |b| {
+                b.iter(|| bool_or(&nullable_bool_all_false))
+            })
+            .bench_function("and nullable false", |b| {
+                b.iter(|| bool_and(&nullable_bool_all_false))
+            })
+            .bench_function("min nullable true", |b| {
+                b.iter(|| min_boolean(&nullable_bool_all_true))
+            })
+            .bench_function("max nullable true", |b| {
+                b.iter(|| max_boolean(&nullable_bool_all_true))
+            })
+            .bench_function("or nullable true", |b| {
+                b.iter(|| bool_or(&nullable_bool_all_true))
+            })
+            .bench_function("and nullable true", |b| {
+                b.iter(|| bool_and(&nullable_bool_all_true))
+            });
+    }
 }
 
 criterion_group!(benches, add_benchmark);

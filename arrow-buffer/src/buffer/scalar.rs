@@ -15,9 +15,10 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::alloc::Deallocation;
 use crate::buffer::Buffer;
 use crate::native::ArrowNativeType;
-use crate::MutableBuffer;
+use crate::{BufferBuilder, MutableBuffer, OffsetBuffer};
 use std::fmt::Formatter;
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -28,19 +29,40 @@ use std::ops::Deref;
 /// with the following differences:
 ///
 /// - slicing and cloning is O(1).
-/// - it supports external allocated memory
+/// - support for external allocated memory (e.g. via FFI).
 ///
+/// See [`Buffer`] for more low-level memory management details.
+///
+/// # Example: Convert to/from Vec (without copies)
+///
+/// (See [`Buffer::from_vec`] and [`Buffer::into_vec`] for a lower level API)
 /// ```
 /// # use arrow_buffer::ScalarBuffer;
 /// // Zero-copy conversion from Vec
 /// let buffer = ScalarBuffer::from(vec![1, 2, 3]);
 /// assert_eq!(&buffer, &[1, 2, 3]);
+/// // convert the buffer back to Vec without copy assuming:
+/// // 1. the inner buffer is not sliced
+/// // 2. the inner buffer uses standard allocation
+/// // 3. there are no other references to the inner buffer
+/// let vec: Vec<i32> = buffer.into();
+/// assert_eq!(&vec, &[1, 2, 3]);
+/// ```
 ///
+/// # Example: Zero copy slicing
+/// ```
+/// # use arrow_buffer::ScalarBuffer;
+/// let buffer = ScalarBuffer::from(vec![1, 2, 3]);
+/// assert_eq!(&buffer, &[1, 2, 3]);
 /// // Zero-copy slicing
 /// let sliced = buffer.slice(1, 2);
 /// assert_eq!(&sliced, &[2, 3]);
+/// // Original buffer is unchanged
+/// assert_eq!(&buffer, &[1, 2, 3]);
+/// // converting the sliced buffer back to Vec incurs a copy
+/// let vec: Vec<i32> = sliced.into();
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
     /// Underlying data buffer
     buffer: Buffer,
@@ -62,13 +84,31 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     /// This method will panic if
     ///
     /// * `offset` or `len` would result in overflow
-    /// * `buffer` is not aligned to a multiple of `std::mem::size_of::<T>`
+    /// * `buffer` is not aligned to a multiple of `std::mem::align_of::<T>`
     /// * `bytes` is not large enough for the requested slice
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
         let size = std::mem::size_of::<T>();
         let byte_offset = offset.checked_mul(size).expect("offset overflow");
         let byte_len = len.checked_mul(size).expect("length overflow");
         buffer.slice_with_length(byte_offset, byte_len).into()
+    }
+
+    /// Unsafe function to create a new [`ScalarBuffer`] from a [`Buffer`].
+    /// Only use for testing purpose.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check if the `buffer` is aligned
+    pub unsafe fn new_unchecked(buffer: Buffer) -> Self {
+        Self {
+            buffer,
+            phantom: Default::default(),
+        }
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.buffer.shrink_to_fit();
     }
 
     /// Returns a zero-copy slice of this buffer with length `len` and starting at `offset`
@@ -84,6 +124,24 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     /// Returns the inner [`Buffer`], consuming self
     pub fn into_inner(self) -> Buffer {
         self.buffer
+    }
+
+    /// Returns true if this [`ScalarBuffer`] is equal to `other`, using pointer comparisons
+    /// to determine buffer equality. This is cheaper than `PartialEq::eq` but may
+    /// return false when the arrays are logically equal
+    #[inline]
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.buffer.ptr_eq(&other.buffer)
+    }
+
+    /// Returns the number of elements in the buffer
+    pub fn len(&self) -> usize {
+        self.buffer.len() / std::mem::size_of::<T>()
+    }
+
+    /// Returns if the buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -118,16 +176,29 @@ impl<T: ArrowNativeType> From<MutableBuffer> for ScalarBuffer<T> {
 impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
     fn from(buffer: Buffer) -> Self {
         let align = std::mem::align_of::<T>();
-        assert_eq!(
-            buffer.as_ptr().align_offset(align),
-            0,
-            "memory is not aligned"
-        );
+        let is_aligned = buffer.as_ptr().align_offset(align) == 0;
+
+        match buffer.deallocation() {
+            Deallocation::Standard(_) => assert!(
+                is_aligned,
+                "Memory pointer is not aligned with the specified scalar type"
+            ),
+            Deallocation::Custom(_, _) => assert!(
+                is_aligned,
+                "Memory pointer from external source (e.g, FFI) is not aligned with the specified scalar type. Before importing buffer through FFI, please make sure the allocation is aligned."
+            ),
+        }
 
         Self {
             buffer,
             phantom: Default::default(),
         }
+    }
+}
+
+impl<T: ArrowNativeType> From<OffsetBuffer<T>> for ScalarBuffer<T> {
+    fn from(value: OffsetBuffer<T>) -> Self {
+        value.into_inner()
     }
 }
 
@@ -140,7 +211,24 @@ impl<T: ArrowNativeType> From<Vec<T>> for ScalarBuffer<T> {
     }
 }
 
+impl<T: ArrowNativeType> From<ScalarBuffer<T>> for Vec<T> {
+    fn from(value: ScalarBuffer<T>) -> Self {
+        value
+            .buffer
+            .into_vec()
+            .unwrap_or_else(|buffer| buffer.typed_data::<T>().into())
+    }
+}
+
+impl<T: ArrowNativeType> From<BufferBuilder<T>> for ScalarBuffer<T> {
+    fn from(mut value: BufferBuilder<T>) -> Self {
+        let len = value.len();
+        Self::new(value.finish(), 0, len)
+    }
+}
+
 impl<T: ArrowNativeType> FromIterator<T> for ScalarBuffer<T> {
+    #[inline]
     fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
         iter.into_iter().collect::<Vec<_>>().into()
     }
@@ -179,8 +267,13 @@ impl<T: ArrowNativeType> PartialEq<ScalarBuffer<T>> for Vec<T> {
     }
 }
 
+/// If T implements Eq, then so does ScalarBuffer.
+impl<T: ArrowNativeType + Eq> Eq for ScalarBuffer<T> {}
+
 #[cfg(test)]
 mod tests {
+    use std::{ptr::NonNull, sync::Arc};
+
     use super::*;
 
     #[test]
@@ -207,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "memory is not aligned")]
+    #[should_panic(expected = "Memory pointer is not aligned with the specified scalar type")]
     fn test_unaligned() {
         let expected = [0_i32, 1, 2];
         let buffer = Buffer::from_iter(expected.iter().cloned());
@@ -216,18 +309,14 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_length_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 1, 3);
     }
 
     #[test]
-    #[should_panic(
-        expected = "the offset of the new Buffer cannot exceed the existing length"
-    )]
+    #[should_panic(expected = "the offset of the new Buffer cannot exceed the existing length")]
     fn test_offset_out_of_bounds() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 4, 0);
@@ -252,5 +341,69 @@ mod tests {
     fn test_end_overflow() {
         let buffer = Buffer::from_iter([0_i32, 1, 2]);
         ScalarBuffer::<i32>::new(buffer, 0, usize::MAX / 4 + 1);
+    }
+
+    #[test]
+    fn convert_from_buffer_builder() {
+        let input = vec![1, 2, 3, 4];
+        let buffer_builder = BufferBuilder::from(input.clone());
+        let scalar_buffer = ScalarBuffer::from(buffer_builder);
+        assert_eq!(scalar_buffer.as_ref(), input);
+    }
+
+    #[test]
+    fn into_vec() {
+        let input = vec![1u8, 2, 3, 4];
+
+        // No copy
+        let input_buffer = Buffer::from_vec(input.clone());
+        let input_ptr = input_buffer.as_ptr();
+        let input_len = input_buffer.len();
+        let scalar_buffer = ScalarBuffer::<u8>::new(input_buffer, 0, input_len);
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec.as_slice(), input.as_slice());
+        assert_eq!(vec.as_ptr(), input_ptr);
+
+        // Custom allocation - makes a copy
+        let mut input_clone = input.clone();
+        let input_ptr = NonNull::new(input_clone.as_mut_ptr()).unwrap();
+        let dealloc = Arc::new(());
+        let buffer =
+            unsafe { Buffer::from_custom_allocation(input_ptr, input_clone.len(), dealloc as _) };
+        let scalar_buffer = ScalarBuffer::<u8>::new(buffer, 0, input.len());
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec, input.as_slice());
+        assert_ne!(vec.as_ptr(), input_ptr.as_ptr());
+
+        // Offset - makes a copy
+        let input_buffer = Buffer::from_vec(input.clone());
+        let input_ptr = input_buffer.as_ptr();
+        let input_len = input_buffer.len();
+        let scalar_buffer = ScalarBuffer::<u8>::new(input_buffer, 1, input_len - 1);
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec.as_slice(), &input[1..]);
+        assert_ne!(vec.as_ptr(), input_ptr);
+
+        // Inner buffer Arc ref count != 0 - makes a copy
+        let buffer = Buffer::from_slice_ref(input.as_slice());
+        let scalar_buffer = ScalarBuffer::<u8>::new(buffer, 0, input.len());
+        let vec = Vec::from(scalar_buffer);
+        assert_eq!(vec, input.as_slice());
+        assert_ne!(vec.as_ptr(), input.as_ptr());
+    }
+
+    #[test]
+    fn scalar_buffer_impl_eq() {
+        fn are_equal<T: Eq>(a: &T, b: &T) -> bool {
+            a.eq(b)
+        }
+
+        assert!(
+            are_equal(
+                &ScalarBuffer::<i16>::from(vec![23]),
+                &ScalarBuffer::<i16>::from(vec![23])
+            ),
+            "ScalarBuffer should implement Eq if the inner type does"
+        );
     }
 }

@@ -80,15 +80,6 @@ pub const ALIGNMENT: usize = 1 << 5;
 #[cfg(target_arch = "sparc64")]
 pub const ALIGNMENT: usize = 1 << 6;
 
-// On ARM cache line sizes are fixed. both v6 and v7.
-// Need to add board specific or platform specific things later.
-/// Cache and allocation multiple alignment size
-#[cfg(target_arch = "thumbv6")]
-pub const ALIGNMENT: usize = 1 << 5;
-/// Cache and allocation multiple alignment size
-#[cfg(target_arch = "thumbv7")]
-pub const ALIGNMENT: usize = 1 << 5;
-
 // Operating Systems cache size determines this.
 // Currently no way to determine this without runtime inference.
 /// Cache and allocation multiple alignment size
@@ -107,13 +98,14 @@ pub const ALIGNMENT: usize = 1 << 5;
 // If you have smaller data with less padded functionality then use 32 with force option.
 // - https://devtalk.nvidia.com/default/topic/803600/variable-cache-line-width-/
 /// Cache and allocation multiple alignment size
-#[cfg(target_arch = "nvptx")]
-pub const ALIGNMENT: usize = 1 << 7;
-/// Cache and allocation multiple alignment size
 #[cfg(target_arch = "nvptx64")]
 pub const ALIGNMENT: usize = 1 << 7;
 
 // This size is same across all hardware for this architecture.
 /// Cache and allocation multiple alignment size
 #[cfg(target_arch = "aarch64")]
+pub const ALIGNMENT: usize = 1 << 6;
+
+/// Cache and allocation multiple alignment size
+#[cfg(target_arch = "loongarch64")]
 pub const ALIGNMENT: usize = 1 << 6;

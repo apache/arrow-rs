@@ -17,15 +17,15 @@
 
 use std::marker::PhantomData;
 
+use arrow_array::Array;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::DecimalType;
-use arrow_array::Array;
 use arrow_cast::parse::parse_decimal;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 pub struct DecimalArrayDecoder<D: DecimalType> {
     precision: u8,
@@ -62,6 +62,32 @@ where
                 TapeElement::Number(idx) => {
                     let s = tape.get_string(idx);
                     let value = parse_decimal::<D>(s, self.precision, self.scale)?;
+                    builder.append_value(value)
+                }
+                TapeElement::I64(high) => match tape.get(*p + 1) {
+                    TapeElement::I32(low) => {
+                        let val = (((high as i64) << 32) | (low as u32) as i64).to_string();
+                        let value = parse_decimal::<D>(&val, self.precision, self.scale)?;
+                        builder.append_value(value)
+                    }
+                    _ => unreachable!(),
+                },
+                TapeElement::I32(val) => {
+                    let s = val.to_string();
+                    let value = parse_decimal::<D>(&s, self.precision, self.scale)?;
+                    builder.append_value(value)
+                }
+                TapeElement::F64(high) => match tape.get(*p + 1) {
+                    TapeElement::F32(low) => {
+                        let val = f64::from_bits(((high as u64) << 32) | low as u64).to_string();
+                        let value = parse_decimal::<D>(&val, self.precision, self.scale)?;
+                        builder.append_value(value)
+                    }
+                    _ => unreachable!(),
+                },
+                TapeElement::F32(val) => {
+                    let s = f32::from_bits(val).to_string();
+                    let value = parse_decimal::<D>(&s, self.precision, self.scale)?;
                     builder.append_value(value)
                 }
                 _ => return Err(tape.error(*p, "decimal")),

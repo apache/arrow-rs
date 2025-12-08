@@ -15,32 +15,35 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use bytes::Bytes;
+
 use crate::basic::Encoding;
 use crate::column::page::{Page, PageIterator};
 use crate::column::page::{PageMetadata, PageReader};
 use crate::data_type::DataType;
-use crate::encodings::encoding::{get_encoder, Encoder};
+use crate::encodings::encoding::{Encoder, get_encoder};
 use crate::encodings::levels::LevelEncoder;
 use crate::errors::Result;
-use crate::schema::types::ColumnDescPtr;
-use crate::util::memory::ByteBufferPtr;
+use crate::schema::types::{ColumnDescPtr, ColumnDescriptor, ColumnPath, Type as SchemaType};
 use std::iter::Peekable;
 use std::mem;
+use std::sync::Arc;
 
 pub trait DataPageBuilder {
     fn add_rep_levels(&mut self, max_level: i16, rep_levels: &[i16]);
     fn add_def_levels(&mut self, max_level: i16, def_levels: &[i16]);
     fn add_values<T: DataType>(&mut self, encoding: Encoding, values: &[T::T]);
-    fn add_indices(&mut self, indices: ByteBufferPtr);
+    fn add_indices(&mut self, indices: Bytes);
     fn consume(self) -> Page;
 }
 
-/// A utility struct for building data pages (v1 or v2). Callers must call:
-///   - add_rep_levels()
-///   - add_def_levels()
-///   - add_values() for normal data page / add_indices() for dictionary data page
-///   - consume()
-/// in order to populate and obtain a data page.
+/// A utility struct for building data pages (v1 or v2). Callers must call the
+/// following functions in order to populate and obtain a data page:
+///
+/// - add_rep_levels()
+/// - add_def_levels()
+/// - add_values() for normal data page / add_indices() for dictionary data page
+/// - consume()
 pub struct DataPageBuilderImpl {
     encoding: Option<Encoding>,
     num_values: u32,
@@ -48,13 +51,14 @@ pub struct DataPageBuilderImpl {
     rep_levels_byte_len: u32,
     def_levels_byte_len: u32,
     datapage_v2: bool,
+    type_width: i32,
 }
 
 impl DataPageBuilderImpl {
     // `num_values` is the number of non-null values to put in the data page.
     // `datapage_v2` flag is used to indicate if the generated data page should use V2
     // format or not.
-    pub fn new(_desc: ColumnDescPtr, num_values: u32, datapage_v2: bool) -> Self {
+    pub fn new(desc: ColumnDescPtr, num_values: u32, datapage_v2: bool) -> Self {
         DataPageBuilderImpl {
             encoding: None,
             num_values,
@@ -62,6 +66,7 @@ impl DataPageBuilderImpl {
             rep_levels_byte_len: 0,
             def_levels_byte_len: 0,
             datapage_v2,
+            type_width: desc.type_length(),
         }
     }
 
@@ -105,25 +110,38 @@ impl DataPageBuilder for DataPageBuilderImpl {
             self.num_values,
             values.len()
         );
+        // Create test column descriptor.
+        let desc = {
+            let ty = SchemaType::primitive_type_builder("t", T::get_physical_type())
+                .with_length(self.type_width)
+                .build()
+                .unwrap();
+            Arc::new(ColumnDescriptor::new(
+                Arc::new(ty),
+                0,
+                0,
+                ColumnPath::new(vec![]),
+            ))
+        };
         self.encoding = Some(encoding);
         let mut encoder: Box<dyn Encoder<T>> =
-            get_encoder::<T>(encoding).expect("get_encoder() should be OK");
+            get_encoder::<T>(encoding, &desc).expect("get_encoder() should be OK");
         encoder.put(values).expect("put() should be OK");
         let encoded_values = encoder
             .flush_buffer()
             .expect("consume_buffer() should be OK");
-        self.buffer.extend_from_slice(encoded_values.data());
+        self.buffer.extend_from_slice(&encoded_values);
     }
 
-    fn add_indices(&mut self, indices: ByteBufferPtr) {
+    fn add_indices(&mut self, indices: Bytes) {
         self.encoding = Some(Encoding::RLE_DICTIONARY);
-        self.buffer.extend_from_slice(indices.data());
+        self.buffer.extend_from_slice(&indices);
     }
 
     fn consume(self) -> Page {
         if self.datapage_v2 {
             Page::DataPageV2 {
-                buf: ByteBufferPtr::new(self.buffer),
+                buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
                 num_nulls: 0, /* set to dummy value - don't need this when reading
@@ -137,7 +155,7 @@ impl DataPageBuilder for DataPageBuilderImpl {
             }
         } else {
             Page::DataPage {
-                buf: ByteBufferPtr::new(self.buffer),
+                buf: Bytes::from(self.buffer),
                 num_values: self.num_values,
                 encoding: self.encoding.unwrap(),
                 def_level_encoding: Encoding::RLE,

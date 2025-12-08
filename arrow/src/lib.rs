@@ -40,8 +40,10 @@
 //! assert_eq!(array.values(), &[1, 0, 3])
 //! ```
 //!
-//! It is also possible to write generic code. For example, the following is generic over
-//! all primitively typed arrays
+//! It is also possible to write generic code for different concrete types.
+//! For example, since the following function is generic over all primitively
+//! typed arrays, when invoked the Rust compiler will generate specialized implementations
+//! with optimized code for each concrete type.
 //!
 //! ```rust
 //! # use std::iter::Sum;
@@ -60,7 +62,10 @@
 //! assert_eq!(sum(&TimestampNanosecondArray::from(vec![1, 2, 3])), 6);
 //! ```
 //!
-//! And the following is generic over all arrays with comparable values
+//! And the following uses [`ArrayAccessor`] to implement a generic function
+//! over all arrays with comparable values.
+//!
+//! [`ArrayAccessor`]: array::ArrayAccessor
 //!
 //! ```rust
 //! # use arrow::array::{ArrayAccessor, ArrayIter, Int32Array, StringArray};
@@ -81,10 +86,11 @@
 //!
 //! # Type Erasure / Trait Objects
 //!
-//! It is often the case that code wishes to handle any type of array, without necessarily knowing
-//! its concrete type. This use-case is catered for by a combination of [`Array`]
-//! and [`DataType`](datatypes::DataType), with the former providing a type-erased container for
-//! the array, and the latter identifying the concrete type of array.
+//! It is common to write code that handles any type of array, without necessarily
+//! knowing its concrete type. This is done using the [`Array`] trait and using
+//! [`DataType`] to determine the appropriate `downcast_ref`.
+//!
+//! [`DataType`]: datatypes::DataType
 //!
 //! ```rust
 //! # use arrow::array::{Array, Float32Array};
@@ -96,14 +102,18 @@
 //!
 //! fn impl_dyn(array: &dyn Array) {
 //!     match array.data_type() {
+//!         // downcast `dyn Array` to concrete `StringArray`
 //!         DataType::Utf8 => impl_string(array.as_any().downcast_ref().unwrap()),
+//!         // downcast `dyn Array` to concrete `Float32Array`
 //!         DataType::Float32 => impl_f32(array.as_any().downcast_ref().unwrap()),
 //!         _ => unimplemented!()
 //!     }
 //! }
 //! ```
 //!
-//! To facilitate downcasting, the [`AsArray`](crate::array::AsArray) extension trait can be used
+//! You can use the [`AsArray`] extension trait to facilitate downcasting:
+//!
+//! [`AsArray`]: crate::array::AsArray
 //!
 //! ```rust
 //! # use arrow::array::{Array, Float32Array, AsArray};
@@ -160,7 +170,7 @@
 //!
 //! # Compute Kernels
 //!
-//! The [`compute`](compute) module provides optimised implementations of many common operations,
+//! The [`compute`] module provides optimised implementations of many common operations,
 //! for example the `parse_strings` operation above could also be implemented as follows:
 //!
 //! ```
@@ -184,22 +194,26 @@
 //!
 //! This module also implements many common vertical operations:
 //!
-//! * All mathematical binary operators, such as [`subtract`](compute::kernels::arithmetic::subtract)
-//! * All boolean binary operators such as [`equality`](compute::kernels::comparison::eq)
+//! * All mathematical binary operators, such as [`sub`](compute::kernels::numeric::sub)
+//! * All boolean binary operators such as [`equality`](compute::kernels::cmp::eq)
 //! * [`cast`](compute::kernels::cast::cast)
 //! * [`filter`](compute::kernels::filter::filter)
-//! * [`take`](compute::kernels::take::take) and [`limit`](compute::kernels::limit::limit)
+//! * [`take`](compute::kernels::take::take)
 //! * [`sort`](compute::kernels::sort::sort)
 //! * some string operators such as [`substring`](compute::kernels::substring::substring) and [`length`](compute::kernels::length::length)
 //!
 //! ```
-//! # use arrow::compute::gt_scalar;
+//! # use arrow::compute::kernels::cmp::gt;
 //! # use arrow_array::cast::AsArray;
 //! # use arrow_array::Int32Array;
 //! # use arrow_array::types::Int32Type;
 //! # use arrow_select::filter::filter;
 //! let array = Int32Array::from_iter(0..100);
-//! let predicate = gt_scalar(&array, 60).unwrap();
+//! // Create a 32-bit integer scalar (single) value:
+//! let scalar = Int32Array::new_scalar(60);
+//! // find all rows in the array that are greater than 60
+//! let predicate = gt(&array, &scalar).unwrap();
+//! // copy all matching rows into a new array
 //! let filtered = filter(&array, &predicate).unwrap();
 //!
 //! let expected = Int32Array::from_iter(61..100);
@@ -229,6 +243,10 @@
 //! let batch = RecordBatch::try_from_iter([("col1", col_1), ("col_2", col_2)]).unwrap();
 //! ```
 //!
+//! # Pretty Printing
+//!
+//! See the [`util::pretty`] module (requires the `prettyprint` crate feature)
+//!
 //! # IO
 //!
 //! This crate provides readers and writers for various formats to/from [`RecordBatch`]
@@ -237,7 +255,9 @@
 //! * CSV: [`Reader`](csv::reader::Reader) and [`Writer`](csv::writer::Writer)
 //! * IPC: [`Reader`](ipc::reader::StreamReader) and [`Writer`](ipc::writer::FileWriter)
 //!
-//! Parquet is published as a [separate crate](https://crates.io/crates/parquet)
+//! Support for [Apache Parquet] is published as a [separate parquet crate](https://crates.io/crates/parquet)
+//!
+//! Support for [Apache Avro] is published as a [separate arrow-avro crate](https://crates.io/crates/arrow-avro)
 //!
 //! # Serde Compatibility
 //!
@@ -312,8 +332,8 @@
 //! Some functionality is also distributed independently of this crate:
 //!
 //! * [`arrow-flight`] - support for [Arrow Flight RPC]
-//! * [`arrow-integration-test`] - support for [Arrow JSON Test Format]
-//! * [`parquet`](https://docs.rs/parquet/latest/parquet/) - support for [Apache Parquet]
+//! * [`parquet`](https://docs.rs/parquet) - support for [Apache Parquet]
+//! * [`arrow-avro`](https://docs.rs/arrow-avro) - support for [Apache Avro]
 //!
 //! # Safety and Security
 //!
@@ -322,7 +342,7 @@
 //!
 //! If you think you have found an instance where this is possible, please file
 //! a ticket in our [issue tracker] and it will be triaged and fixed. For more information on
-//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/master/arrow#safety).
+//! arrow's use of unsafe, see [here](https://github.com/apache/arrow-rs/tree/main/arrow#safety).
 //!
 //! # Higher-level Processing
 //!
@@ -340,21 +360,29 @@
 //! [`Buffer`]: buffer::Buffer
 //! [`RecordBatch`]: record_batch::RecordBatch
 //! [`arrow-flight`]: https://docs.rs/arrow-flight/latest/arrow_flight/
-//! [`arrow-integration-test`]: https://docs.rs/arrow-integration-test/latest/arrow_integration_test/
 //! [`parquet`]: https://docs.rs/parquet/latest/parquet/
 //! [Arrow Flight RPC]: https://arrow.apache.org/docs/format/Flight.html
 //! [Arrow JSON Test Format]: https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format
 //! [Apache Parquet]: https://parquet.apache.org/
+//! [Apache Avro]: https://avro.apache.org/
 //! [DataFusion]: https://github.com/apache/arrow-datafusion
 //! [issue tracker]: https://github.com/apache/arrow-rs/issues
-//!
 
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(clippy::redundant_clone)]
 #![warn(missing_debug_implementations)]
+#![warn(missing_docs)]
 #![allow(rustdoc::invalid_html_tags)]
 pub use arrow_array::{downcast_dictionary_array, downcast_primitive_array};
 
 pub use arrow_buffer::{alloc, buffer};
+
+/// Arrow crate version
+pub const ARROW_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod array;
 pub mod compute;
@@ -363,19 +391,20 @@ pub use arrow_csv as csv;
 pub mod datatypes;
 pub mod error;
 #[cfg(feature = "ffi")]
-pub mod ffi;
+pub use arrow_array::ffi;
 #[cfg(feature = "ffi")]
-pub mod ffi_stream;
+pub use arrow_array::ffi_stream;
 #[cfg(feature = "ipc")]
 pub use arrow_ipc as ipc;
 #[cfg(feature = "json")]
 pub use arrow_json as json;
 #[cfg(feature = "pyarrow")]
-pub mod pyarrow;
+pub use arrow_pyarrow as pyarrow;
 
+/// Contains the `RecordBatch` type and associated traits
 pub mod record_batch {
     pub use arrow_array::{
-        RecordBatch, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
+        RecordBatch, RecordBatchIterator, RecordBatchOptions, RecordBatchReader, RecordBatchWriter,
     };
 }
 pub use arrow_array::temporal_conversions;

@@ -18,9 +18,9 @@
 //! Contains declarations to bind to the [C Data Interface](https://arrow.apache.org/docs/format/CDataInterface.html).
 
 use crate::bit_mask::set_bits;
-use crate::{layout, ArrayData};
+use crate::{ArrayData, layout};
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{Buffer, MutableBuffer};
+use arrow_buffer::{Buffer, MutableBuffer, ScalarBuffer};
 use arrow_schema::DataType;
 use std::ffi::c_void;
 
@@ -71,15 +71,15 @@ unsafe extern "C" fn release_array(array: *mut FFI_ArrowArray) {
     if array.is_null() {
         return;
     }
-    let array = &mut *array;
+    let array = unsafe { &mut *array };
 
     // take ownership of `private_data`, therefore dropping it`
-    let private = Box::from_raw(array.private_data as *mut ArrayPrivateData);
+    let private = unsafe { Box::from_raw(array.private_data as *mut ArrayPrivateData) };
     for child in private.children.iter() {
-        let _ = Box::from_raw(*child);
+        let _ = unsafe { Box::from_raw(*child) };
     }
     if !private.dictionary.is_null() {
-        let _ = Box::from_raw(private.dictionary);
+        let _ = unsafe { Box::from_raw(private.dictionary) };
     }
 
     array.release = None;
@@ -121,7 +121,7 @@ impl FFI_ArrowArray {
     pub fn new(data: &ArrayData) -> Self {
         let data_layout = layout(data.data_type());
 
-        let buffers = if data_layout.can_contain_null_mask {
+        let mut buffers = if data_layout.can_contain_null_mask {
             // * insert the null buffer at the start
             // * make all others `Option<Buffer>`.
             std::iter::once(align_nulls(data.offset(), data.nulls()))
@@ -132,7 +132,7 @@ impl FFI_ArrowArray {
         };
 
         // `n_buffers` is the number of buffers by the spec.
-        let n_buffers = {
+        let mut n_buffers = {
             data_layout.buffers.len() + {
                 // If the layout has a null buffer by Arrow spec.
                 // Note that even the array doesn't have a null buffer because it has
@@ -141,10 +141,22 @@ impl FFI_ArrowArray {
             }
         } as i64;
 
+        if data_layout.variadic {
+            // Save the lengths of all variadic buffers into a new buffer.
+            // The first buffer is `views`, and the rest are variadic.
+            let mut data_buffers_lengths = Vec::new();
+            for buffer in data.buffers().iter().skip(1) {
+                data_buffers_lengths.push(buffer.len() as i64);
+                n_buffers += 1;
+            }
+
+            buffers.push(Some(ScalarBuffer::from(data_buffers_lengths).into_inner()));
+            n_buffers += 1;
+        }
+
         let buffers_ptr = buffers
             .iter()
             .flat_map(|maybe_buffer| match maybe_buffer {
-                // note that `raw_data` takes into account the buffer's offset
                 Some(b) => Some(b.as_ptr() as *const c_void),
                 // This is for null buffer. We only put a null pointer for
                 // null buffer if by spec it can contain null mask.
@@ -168,6 +180,12 @@ impl FFI_ArrowArray {
             .collect::<Box<_>>();
         let n_children = children.len() as i64;
 
+        // As in the IPC format, emit null_count = length for Null type
+        let null_count = match data.data_type() {
+            DataType::Null => data.len(),
+            _ => data.null_count(),
+        };
+
         // create the private data owning everything.
         // any other data must be added here, e.g. via a struct, to track lifetime.
         let mut private_data = Box::new(ArrayPrivateData {
@@ -179,7 +197,7 @@ impl FFI_ArrowArray {
 
         Self {
             length: data.len() as i64,
-            null_count: data.null_count() as i64,
+            null_count: null_count as i64,
             offset: data.offset() as i64,
             n_buffers,
             n_children,
@@ -189,6 +207,22 @@ impl FFI_ArrowArray {
             release: Some(release_array),
             private_data: Box::into_raw(private_data) as *mut c_void,
         }
+    }
+
+    /// Takes ownership of the pointed to [`FFI_ArrowArray`]
+    ///
+    /// This acts to [move] the data out of `array`, setting the release callback to NULL
+    ///
+    /// # Safety
+    ///
+    /// * `array` must be [valid] for reads and writes
+    /// * `array` must be properly aligned
+    /// * `array` must point to a properly initialized value of [`FFI_ArrowArray`]
+    ///
+    /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
+    /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
+    pub unsafe fn from_raw(array: *mut FFI_ArrowArray) -> Self {
+        unsafe { std::ptr::replace(array, Self::empty()) }
     }
 
     /// create an empty `FFI_ArrowArray`, which can be used to import data into
@@ -237,10 +271,25 @@ impl FFI_ArrowArray {
         self.null_count as usize
     }
 
+    /// Returns the null count, checking for validity
+    #[inline]
+    pub fn null_count_opt(&self) -> Option<usize> {
+        usize::try_from(self.null_count).ok()
+    }
+
+    /// Set the null count of the array
+    ///
+    /// # Safety
+    /// Null count must match that of null buffer
+    #[inline]
+    pub unsafe fn set_null_count(&mut self, null_count: i64) {
+        self.null_count = null_count;
+    }
+
     /// Returns the buffer at the provided index
     ///
     /// # Panic
-    /// Panics if index exceeds the number of buffers or the buffer is not correctly aligned
+    /// Panics if index >= self.num_buffers() or the buffer is not correctly aligned
     #[inline]
     pub fn buffer(&self, index: usize) -> *const u8 {
         assert!(!self.buffers.is_null());
@@ -302,6 +351,6 @@ mod tests {
 
         assert_eq!(0, private_data.buffers_ptr.len());
 
-        Box::into_raw(private_data);
+        let _ = Box::into_raw(private_data);
     }
 }

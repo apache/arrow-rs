@@ -17,38 +17,47 @@
 
 //! A FlightSQL Client [`FlightSqlServiceClient`]
 
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
 use std::collections::HashMap;
 use std::str::FromStr;
 use tonic::metadata::AsciiMetadataKey;
 
+use crate::decode::FlightRecordBatchStream;
+use crate::encode::FlightDataEncoderBuilder;
+use crate::error::FlightError;
 use crate::flight_service_client::FlightServiceClient;
-use crate::sql::server::{CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT};
-use crate::sql::{
-    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
-    ActionCreatePreparedStatementResult, Any, CommandGetCatalogs,
-    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys,
-    CommandGetImportedKeys, CommandGetPrimaryKeys, CommandGetSqlInfo,
-    CommandGetTableTypes, CommandGetTables, CommandGetXdbcTypeInfo,
-    CommandPreparedStatementQuery, CommandStatementQuery, CommandStatementUpdate,
-    DoPutUpdateResult, ProstMessageExt, SqlInfo,
+use crate::sql::r#gen::action_end_transaction_request::EndTransaction;
+use crate::sql::server::{
+    BEGIN_TRANSACTION, CLOSE_PREPARED_STATEMENT, CREATE_PREPARED_STATEMENT, END_TRANSACTION,
 };
+use crate::sql::{
+    ActionBeginTransactionRequest, ActionBeginTransactionResult,
+    ActionClosePreparedStatementRequest, ActionCreatePreparedStatementRequest,
+    ActionCreatePreparedStatementResult, ActionEndTransactionRequest, Any, CommandGetCatalogs,
+    CommandGetCrossReference, CommandGetDbSchemas, CommandGetExportedKeys, CommandGetImportedKeys,
+    CommandGetPrimaryKeys, CommandGetSqlInfo, CommandGetTableTypes, CommandGetTables,
+    CommandGetXdbcTypeInfo, CommandPreparedStatementQuery, CommandPreparedStatementUpdate,
+    CommandStatementIngest, CommandStatementQuery, CommandStatementUpdate,
+    DoPutPreparedStatementResult, DoPutUpdateResult, ProstMessageExt, SqlInfo,
+};
+use crate::streams::FallibleRequestStream;
+use crate::trailers::extract_lazy_trailers;
 use crate::{
-    Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest,
-    HandshakeResponse, IpcMessage, PutResult, Ticket,
+    Action, FlightData, FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse,
+    IpcMessage, PutResult, Ticket,
 };
 use arrow_array::RecordBatch;
 use arrow_buffer::Buffer;
 use arrow_ipc::convert::fb_to_schema;
 use arrow_ipc::reader::read_record_batch;
-use arrow_ipc::{root_as_message, MessageHeader};
+use arrow_ipc::{MessageHeader, root_as_message};
 use arrow_schema::{ArrowError, Schema, SchemaRef};
-use futures::{stream, TryStreamExt};
+use futures::{Stream, TryStreamExt, stream};
 use prost::Message;
 use tonic::transport::Channel;
-use tonic::{IntoRequest, Streaming};
+use tonic::{IntoRequest, IntoStreamingRequest, Streaming};
 
 /// A FlightSQLServiceClient is an endpoint for retrieving or storing Arrow data
 /// by FlightSQL protocol.
@@ -65,10 +74,14 @@ pub struct FlightSqlServiceClient<T> {
 impl FlightSqlServiceClient<Channel> {
     /// Creates a new FlightSql client that connects to a server over an arbitrary tonic `Channel`
     pub fn new(channel: Channel) -> Self {
-        let flight_client = FlightServiceClient::new(channel);
-        FlightSqlServiceClient {
+        Self::new_from_inner(FlightServiceClient::new(channel))
+    }
+
+    /// Creates a new higher level client with the provided lower level client
+    pub fn new_from_inner(inner: FlightServiceClient<Channel>) -> Self {
+        Self {
             token: None,
-            flight_client,
+            flight_client: inner,
             headers: HashMap::default(),
         }
     }
@@ -91,6 +104,16 @@ impl FlightSqlServiceClient<Channel> {
     /// Set auth token to the given value.
     pub fn set_token(&mut self, token: String) {
         self.token = Some(token);
+    }
+
+    /// Clear the auth token.
+    pub fn clear_token(&mut self) {
+        self.token = None;
+    }
+
+    /// Share the bearer token with potentially different `DoGet` clients
+    pub fn token(&self) -> Option<&String> {
+        self.token.as_ref()
     }
 
     /// Set header value.
@@ -128,13 +151,12 @@ impl FlightSqlServiceClient<Channel> {
         self.get_flight_info_for_command(cmd).await
     }
 
-    /// Perform a `handshake` with the server, passing credentials and establishing a session
-    /// Returns arbitrary auth/handshake info binary blob
-    pub async fn handshake(
-        &mut self,
-        username: &str,
-        password: &str,
-    ) -> Result<Bytes, ArrowError> {
+    /// Perform a `handshake` with the server, passing credentials and establishing a session.
+    ///
+    /// If the server returns an "authorization" header, it is automatically parsed and set as
+    /// a token for future requests. Any other data returned by the server in the handshake
+    /// response is returned as a binary blob.
+    pub async fn handshake(&mut self, username: &str, password: &str) -> Result<Bytes, ArrowError> {
         let cmd = HandshakeRequest {
             protocol_version: 0,
             payload: Default::default(),
@@ -150,11 +172,11 @@ impl FlightSqlServiceClient<Channel> {
             .flight_client
             .handshake(req)
             .await
-            .map_err(|e| ArrowError::IoError(format!("Can't handshake {e}")))?;
+            .map_err(|e| ArrowError::IpcError(format!("Can't handshake {e}")))?;
         if let Some(auth) = resp.metadata().get("authorization") {
-            let auth = auth.to_str().map_err(|_| {
-                ArrowError::ParseError("Can't read auth header".to_string())
-            })?;
+            let auth = auth
+                .to_str()
+                .map_err(|_| ArrowError::ParseError("Can't read auth header".to_string()))?;
             let bearer = "Bearer ";
             if !auth.starts_with(bearer) {
                 Err(ArrowError::ParseError("Invalid auth header!".to_string()))?;
@@ -162,10 +184,11 @@ impl FlightSqlServiceClient<Channel> {
             let auth = auth[bearer.len()..].to_string();
             self.token = Some(auth);
         }
-        let responses: Vec<HandshakeResponse> =
-            resp.into_inner().try_collect().await.map_err(|_| {
-                ArrowError::ParseError("Can't collect responses".to_string())
-            })?;
+        let responses: Vec<HandshakeResponse> = resp
+            .into_inner()
+            .try_collect()
+            .await
+            .map_err(|_| ArrowError::ParseError("Can't collect responses".to_string()))?;
         let resp = match responses.as_slice() {
             [resp] => resp.payload.clone(),
             [] => Bytes::new(),
@@ -205,9 +228,54 @@ impl FlightSqlServiceClient<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any =
-            Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        Ok(result.record_count)
+    }
+
+    /// Execute a bulk ingest on the server and return the number of records added
+    pub async fn execute_ingest<S>(
+        &mut self,
+        command: CommandStatementIngest,
+        stream: S,
+    ) -> Result<i64, ArrowError>
+    where
+        S: Stream<Item = crate::error::Result<RecordBatch>> + Send + 'static,
+    {
+        let (sender, receiver) = futures::channel::oneshot::channel();
+
+        let descriptor = FlightDescriptor::new_cmd(command.as_any().encode_to_vec());
+        let flight_data = FlightDataEncoderBuilder::new()
+            .with_flight_descriptor(Some(descriptor))
+            .build(stream);
+
+        // Intercept client errors and send them to the one shot channel above
+        let flight_data = Box::pin(flight_data);
+        let flight_data: FallibleRequestStream<FlightData, FlightError> =
+            FallibleRequestStream::new(sender, flight_data);
+
+        let req = self.set_request_headers(flight_data.into_streaming_request())?;
+        let mut result = self
+            .flight_client
+            .do_put(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+
+        // check if the there were any errors in the input stream provided note
+        // if receiver.await fails, it means the sender was dropped and there is
+        // no message to return.
+        if let Ok(msg) = receiver.await {
+            return Err(ArrowError::ExternalError(Box::new(msg)));
+        }
+
+        let result = result
+            .message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 
@@ -229,14 +297,22 @@ impl FlightSqlServiceClient<Channel> {
     pub async fn do_get(
         &mut self,
         ticket: impl IntoRequest<Ticket>,
-    ) -> Result<Streaming<FlightData>, ArrowError> {
+    ) -> Result<FlightRecordBatchStream, ArrowError> {
         let req = self.set_request_headers(ticket.into_request())?;
-        Ok(self
+
+        let (md, response_stream, _ext) = self
             .flight_client
             .do_get(req)
             .await
             .map_err(status_to_arrow_error)?
-            .into_inner())
+            .into_parts();
+        let (response_stream, trailers) = extract_lazy_trailers(response_stream);
+
+        Ok(FlightRecordBatchStream::new_from_flight_data(
+            response_stream.map_err(|status| status.into()),
+        )
+        .with_headers(md)
+        .with_trailers(trailers))
     }
 
     /// Push a stream to the flight service associated with a particular flight stream.
@@ -379,8 +455,57 @@ impl FlightSqlServiceClient<Channel> {
         ))
     }
 
+    /// Request to begin a transaction.
+    pub async fn begin_transaction(&mut self) -> Result<Bytes, ArrowError> {
+        let cmd = ActionBeginTransactionRequest {};
+        let action = Action {
+            r#type: BEGIN_TRANSACTION.to_string(),
+            body: cmd.as_any().encode_to_vec().into(),
+        };
+        let req = self.set_request_headers(action.into_request())?;
+        let mut result = self
+            .flight_client
+            .do_action(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+        let result = result
+            .message()
+            .await
+            .map_err(status_to_arrow_error)?
+            .unwrap();
+        let any = Any::decode(&*result.body).map_err(decode_error_to_arrow_error)?;
+        let begin_result: ActionBeginTransactionResult = any.unpack()?.unwrap();
+        Ok(begin_result.transaction_id)
+    }
+
+    /// Request to commit/rollback a transaction.
+    pub async fn end_transaction(
+        &mut self,
+        transaction_id: Bytes,
+        action: EndTransaction,
+    ) -> Result<(), ArrowError> {
+        let cmd = ActionEndTransactionRequest {
+            transaction_id,
+            action: action as i32,
+        };
+        let action = Action {
+            r#type: END_TRANSACTION.to_string(),
+            body: cmd.as_any().encode_to_vec().into(),
+        };
+        let req = self.set_request_headers(action.into_request())?;
+        let _ = self
+            .flight_client
+            .do_action(req)
+            .await
+            .map_err(status_to_arrow_error)?
+            .into_inner();
+        Ok(())
+    }
+
     /// Explicitly shut down and clean up the client.
     pub async fn close(&mut self) -> Result<(), ArrowError> {
+        // TODO: consume self instead of &mut self to explicitly prevent reuse?
         Ok(())
     }
 
@@ -390,16 +515,16 @@ impl FlightSqlServiceClient<Channel> {
     ) -> Result<tonic::Request<T>, ArrowError> {
         for (k, v) in &self.headers {
             let k = AsciiMetadataKey::from_str(k.as_str()).map_err(|e| {
-                ArrowError::IoError(format!("Cannot convert header key \"{k}\": {e}"))
+                ArrowError::ParseError(format!("Cannot convert header key \"{k}\": {e}"))
             })?;
             let v = v.parse().map_err(|e| {
-                ArrowError::IoError(format!("Cannot convert header value \"{v}\": {e}"))
+                ArrowError::ParseError(format!("Cannot convert header value \"{v}\": {e}"))
             })?;
             req.metadata_mut().insert(k, v);
         }
         if let Some(token) = &self.token {
             let val = format!("Bearer {token}").parse().map_err(|e| {
-                ArrowError::IoError(format!("Cannot convert token to header value: {e}"))
+                ArrowError::ParseError(format!("Cannot convert token to header value: {e}"))
             })?;
             req.metadata_mut().insert("authorization", val);
         }
@@ -435,9 +560,12 @@ impl PreparedStatement<Channel> {
 
     /// Executes the prepared statement query on the server.
     pub async fn execute(&mut self) -> Result<FlightInfo, ArrowError> {
+        self.write_bind_params().await?;
+
         let cmd = CommandPreparedStatementQuery {
             prepared_statement_handle: self.handle.clone(),
         };
+
         let result = self
             .flight_sql_client
             .get_flight_info_for_command(cmd)
@@ -447,7 +575,9 @@ impl PreparedStatement<Channel> {
 
     /// Executes the prepared statement update query on the server.
     pub async fn execute_update(&mut self) -> Result<i64, ArrowError> {
-        let cmd = CommandPreparedStatementQuery {
+        self.write_bind_params().await?;
+
+        let cmd = CommandPreparedStatementUpdate {
             prepared_statement_handle: self.handle.clone(),
         };
         let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
@@ -463,9 +593,8 @@ impl PreparedStatement<Channel> {
             .await
             .map_err(status_to_arrow_error)?
             .unwrap();
-        let any =
-            Any::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
-        let result: DoPutUpdateResult = any.unpack()?.unwrap();
+        let result: DoPutUpdateResult =
+            Message::decode(&*result.app_metadata).map_err(decode_error_to_arrow_error)?;
         Ok(result.record_count)
     }
 
@@ -480,12 +609,60 @@ impl PreparedStatement<Channel> {
     }
 
     /// Set a RecordBatch that contains the parameters that will be bind.
-    pub fn set_parameters(
-        &mut self,
-        parameter_binding: RecordBatch,
-    ) -> Result<(), ArrowError> {
+    pub fn set_parameters(&mut self, parameter_binding: RecordBatch) -> Result<(), ArrowError> {
         self.parameter_binding = Some(parameter_binding);
         Ok(())
+    }
+
+    /// Submit parameters to the server, if any have been set on this prepared statement instance
+    /// Updates our stored prepared statement handle with the handle given by the server response.
+    async fn write_bind_params(&mut self) -> Result<(), ArrowError> {
+        if let Some(ref params_batch) = self.parameter_binding {
+            let cmd = CommandPreparedStatementQuery {
+                prepared_statement_handle: self.handle.clone(),
+            };
+
+            let descriptor = FlightDescriptor::new_cmd(cmd.as_any().encode_to_vec());
+            let flight_stream_builder = FlightDataEncoderBuilder::new()
+                .with_flight_descriptor(Some(descriptor))
+                .with_schema(params_batch.schema());
+            let flight_data = flight_stream_builder
+                .build(futures::stream::iter(
+                    self.parameter_binding.clone().map(Ok),
+                ))
+                .try_collect::<Vec<_>>()
+                .await
+                .map_err(flight_error_to_arrow_error)?;
+
+            // Attempt to update the stored handle with any updated handle in the DoPut result.
+            // Older servers do not respond with a result for DoPut, so skip this step when
+            // the stream closes with no response.
+            if let Some(result) = self
+                .flight_sql_client
+                .do_put(stream::iter(flight_data))
+                .await?
+                .message()
+                .await
+                .map_err(status_to_arrow_error)?
+            {
+                if let Some(handle) = self.unpack_prepared_statement_handle(&result)? {
+                    self.handle = handle;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Decodes the app_metadata stored in a [`PutResult`] as a
+    /// [`DoPutPreparedStatementResult`] and then returns
+    /// the inner prepared statement handle as [`Bytes`]
+    fn unpack_prepared_statement_handle(
+        &self,
+        put_result: &PutResult,
+    ) -> Result<Option<Bytes>, ArrowError> {
+        let result: DoPutPreparedStatementResult =
+            Message::decode(&*put_result.app_metadata).map_err(decode_error_to_arrow_error)?;
+        Ok(result.prepared_statement_handle)
     }
 
     /// Close the prepared statement, so that this PreparedStatement can not used
@@ -504,16 +681,25 @@ impl PreparedStatement<Channel> {
 }
 
 fn decode_error_to_arrow_error(err: prost::DecodeError) -> ArrowError {
-    ArrowError::IoError(err.to_string())
+    ArrowError::IpcError(err.to_string())
 }
 
 fn status_to_arrow_error(status: tonic::Status) -> ArrowError {
-    ArrowError::IoError(format!("{status:?}"))
+    ArrowError::IpcError(format!("{status:?}"))
 }
 
-// A polymorphic structure to natively represent different types of data contained in `FlightData`
+fn flight_error_to_arrow_error(err: FlightError) -> ArrowError {
+    match err {
+        FlightError::Arrow(e) => e,
+        e => ArrowError::ExternalError(Box::new(e)),
+    }
+}
+
+/// A polymorphic structure to natively represent different types of data contained in `FlightData`
 pub enum ArrowFlightData {
+    /// A record batch
     RecordBatch(RecordBatch),
+    /// A schema
     Schema(Schema),
 }
 
@@ -522,23 +708,20 @@ pub fn arrow_data_from_flight_data(
     flight_data: FlightData,
     arrow_schema_ref: &SchemaRef,
 ) -> Result<ArrowFlightData, ArrowError> {
-    let ipc_message = root_as_message(&flight_data.data_header[..]).map_err(|err| {
-        ArrowError::ParseError(format!("Unable to get root as message: {err:?}"))
-    })?;
+    let ipc_message = root_as_message(&flight_data.data_header[..])
+        .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
 
     match ipc_message.header_type() {
         MessageHeader::RecordBatch => {
-            let ipc_record_batch =
-                ipc_message.header_as_record_batch().ok_or_else(|| {
-                    ArrowError::ComputeError(
-                        "Unable to convert flight data header to a record batch"
-                            .to_string(),
-                    )
-                })?;
+            let ipc_record_batch = ipc_message.header_as_record_batch().ok_or_else(|| {
+                ArrowError::ComputeError(
+                    "Unable to convert flight data header to a record batch".to_string(),
+                )
+            })?;
 
             let dictionaries_by_field = HashMap::new();
             let record_batch = read_record_batch(
-                &Buffer::from(&flight_data.data_body),
+                &Buffer::from(flight_data.data_body),
                 ipc_record_batch,
                 arrow_schema_ref.clone(),
                 &dictionaries_by_field,
@@ -560,13 +743,11 @@ pub fn arrow_data_from_flight_data(
         MessageHeader::DictionaryBatch => {
             let _ = ipc_message.header_as_dictionary_batch().ok_or_else(|| {
                 ArrowError::ComputeError(
-                    "Unable to convert flight data header to a dictionary batch"
-                        .to_string(),
+                    "Unable to convert flight data header to a dictionary batch".to_string(),
                 )
             })?;
             Err(ArrowError::NotYetImplemented(
-                "no idea on how to convert an ipc dictionary batch to an arrow type"
-                    .to_string(),
+                "no idea on how to convert an ipc dictionary batch to an arrow type".to_string(),
             ))
         }
         MessageHeader::Tensor => {
@@ -586,8 +767,7 @@ pub fn arrow_data_from_flight_data(
                 )
             })?;
             Err(ArrowError::NotYetImplemented(
-                "no idea on how to convert an ipc sparse tensor to an arrow type"
-                    .to_string(),
+                "no idea on how to convert an ipc sparse tensor to an arrow type".to_string(),
             ))
         }
         _ => Err(ArrowError::ComputeError(format!(

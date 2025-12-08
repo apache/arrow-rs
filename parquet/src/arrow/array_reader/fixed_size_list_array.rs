@@ -22,8 +22,8 @@ use crate::arrow::array_reader::ArrayReader;
 use crate::errors::ParquetError;
 use crate::errors::Result;
 use arrow_array::FixedSizeListArray;
-use arrow_array::{builder::BooleanBufferBuilder, new_empty_array, Array, ArrayRef};
-use arrow_data::{transform::MutableArrayData, ArrayData};
+use arrow_array::{Array, ArrayRef, builder::BooleanBufferBuilder, new_empty_array};
+use arrow_data::{ArrayData, transform::MutableArrayData};
 use arrow_schema::DataType as ArrowType;
 
 /// Implementation of fixed-size list array reader.
@@ -77,7 +77,7 @@ impl ArrayReader for FixedSizeListArrayReader {
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let next_batch_array = self.item_reader.consume_batch()?;
-        if next_batch_array.len() == 0 {
+        if next_batch_array.is_empty() {
             return Ok(new_empty_array(&self.data_type));
         }
 
@@ -138,7 +138,7 @@ impl ArrayReader for FixedSizeListArrayReader {
                             "Encountered misaligned row with length {} (expected length {})",
                             row_len,
                             self.fixed_size
-                        ))
+                        ));
                     }
                     row_len = 0;
 
@@ -225,17 +225,15 @@ impl ArrayReader for FixedSizeListArrayReader {
 mod tests {
     use super::*;
     use crate::arrow::{
-        array_reader::{test_util::InMemoryArrayReader, ListArrayReader},
-        arrow_reader::{
-            ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader,
-        },
         ArrowWriter,
+        array_reader::{ListArrayReader, test_util::InMemoryArrayReader},
+        arrow_reader::{ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReader},
     };
     use arrow::datatypes::{Field, Int32Type};
     use arrow_array::{
+        FixedSizeListArray, ListArray, PrimitiveArray, RecordBatch,
         builder::{FixedSizeListBuilder, Int32Builder, ListBuilder},
         cast::AsArray,
-        FixedSizeListArray, ListArray, PrimitiveArray, RecordBatch,
     };
     use arrow_buffer::Buffer;
     use arrow_data::ArrayDataBuilder;
@@ -279,10 +277,7 @@ mod tests {
         let mut list_array_reader = FixedSizeListArrayReader::new(
             Box::new(item_array_reader),
             3,
-            ArrowType::FixedSizeList(
-                Arc::new(Field::new("item", ArrowType::Int32, true)),
-                3,
-            ),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 3),
             2,
             1,
             true,
@@ -328,10 +323,7 @@ mod tests {
         let mut list_array_reader = FixedSizeListArrayReader::new(
             Box::new(item_array_reader),
             2,
-            ArrowType::FixedSizeList(
-                Arc::new(Field::new("item", ArrowType::Int32, true)),
-                2,
-            ),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 2),
             1,
             1,
             false,
@@ -354,14 +346,10 @@ mod tests {
         //   [[4, 5]],
         //   [[null, null]],
         // ]
-        let l2_type = ArrowType::FixedSizeList(
-            Arc::new(Field::new("item", ArrowType::Int32, true)),
-            2,
-        );
-        let l1_type = ArrowType::FixedSizeList(
-            Arc::new(Field::new("item", l2_type.clone(), false)),
-            1,
-        );
+        let l2_type =
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 2);
+        let l1_type =
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(l2_type.clone(), false)), 1);
 
         let array = PrimitiveArray::<Int32Type>::from(vec![
             None,
@@ -413,14 +401,8 @@ mod tests {
             Some(vec![0, 0, 2, 0, 2, 0, 0, 2, 0, 2]),
         );
 
-        let l2 = FixedSizeListArrayReader::new(
-            Box::new(item_array_reader),
-            2,
-            l2_type,
-            4,
-            2,
-            false,
-        );
+        let l2 =
+            FixedSizeListArrayReader::new(Box::new(item_array_reader), 2, l2_type, 4, 2, false);
         let mut l1 = FixedSizeListArrayReader::new(Box::new(l2), 1, l1_type, 3, 1, true);
 
         let expected_1 = expected.slice(0, 2);
@@ -454,10 +436,7 @@ mod tests {
         let mut list_array_reader = FixedSizeListArrayReader::new(
             Box::new(item_array_reader),
             0,
-            ArrowType::FixedSizeList(
-                Arc::new(Field::new("item", ArrowType::Int32, true)),
-                0,
-            ),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 0),
             2,
             1,
             true,
@@ -473,8 +452,7 @@ mod tests {
     #[test]
     fn test_nested_var_list() {
         // [[[1, null, 3], null], [[4], []], [[5, 6], [null, null]], null]
-        let mut builder =
-            FixedSizeListBuilder::new(ListBuilder::new(Int32Builder::new()), 2);
+        let mut builder = FixedSizeListBuilder::new(ListBuilder::new(Int32Builder::new()), 2);
         builder.values().append_value([Some(1), None, Some(3)]);
         builder.values().append_null();
         builder.append(true);
@@ -503,12 +481,9 @@ mod tests {
             None,
         ]));
 
-        let inner_type =
-            ArrowType::List(Arc::new(Field::new("item", ArrowType::Int32, true)));
-        let list_type = ArrowType::FixedSizeList(
-            Arc::new(Field::new("item", inner_type.clone(), true)),
-            2,
-        );
+        let inner_type = ArrowType::List(Arc::new(Field::new_list_field(ArrowType::Int32, true)));
+        let list_type =
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(inner_type.clone(), true)), 2);
 
         let item_array_reader = InMemoryArrayReader::new(
             ArrowType::Int32,
@@ -517,22 +492,11 @@ mod tests {
             Some(vec![0, 2, 2, 1, 0, 1, 0, 2, 1, 2, 0]),
         );
 
-        let inner_array_reader = ListArrayReader::<i32>::new(
-            Box::new(item_array_reader),
-            inner_type,
-            4,
-            2,
-            true,
-        );
+        let inner_array_reader =
+            ListArrayReader::<i32>::new(Box::new(item_array_reader), inner_type, 4, 2, true);
 
-        let mut list_array_reader = FixedSizeListArrayReader::new(
-            Box::new(inner_array_reader),
-            2,
-            list_type,
-            2,
-            1,
-            true,
-        );
+        let mut list_array_reader =
+            FixedSizeListArrayReader::new(Box::new(inner_array_reader), 2, list_type, 2, 1, true);
         let actual = list_array_reader.next_batch(1024).unwrap();
         let actual = actual
             .as_any()
@@ -564,19 +528,14 @@ mod tests {
         );
 
         // [null, 2, 3, null, 5]
-        let primitive = PrimitiveArray::<Int32Type>::from_iter(vec![
-            None,
-            Some(2),
-            Some(3),
-            None,
-            Some(5),
-        ]);
+        let primitive =
+            PrimitiveArray::<Int32Type>::from_iter(vec![None, Some(2), Some(3), None, Some(5)]);
 
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "list",
                 ArrowType::FixedSizeList(
-                    Arc::new(Field::new("item", ArrowType::Int32, true)),
+                    Arc::new(Field::new_list_field(ArrowType::Int32, true)),
                     4,
                 ),
                 true,
@@ -643,10 +602,7 @@ mod tests {
 
         let schema = Arc::new(Schema::new(vec![Field::new(
             "list",
-            ArrowType::FixedSizeList(
-                Arc::new(Field::new("item", ArrowType::Int32, true)),
-                4,
-            ),
+            ArrowType::FixedSizeList(Arc::new(Field::new_list_field(ArrowType::Int32, true)), 4),
             true,
         )]));
 

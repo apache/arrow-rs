@@ -38,8 +38,8 @@ fn parse_fixed_offset(tz: &str) -> Option<FixedOffset> {
     if values.iter().any(|x| *x > 9) {
         return None;
     }
-    let secs = (values[0] * 10 + values[1]) as i32 * 60 * 60
-        + (values[2] * 10 + values[3]) as i32 * 60;
+    let secs =
+        (values[0] * 10 + values[1]) as i32 * 60 * 60 + (values[2] * 10 + values[3]) as i32 * 60;
 
     match bytes[0] {
         b'+' => FixedOffset::east_opt(secs),
@@ -53,6 +53,7 @@ mod private {
     use super::*;
     use chrono::offset::TimeZone;
     use chrono::{LocalResult, NaiveDate, NaiveDateTime, Offset};
+    use std::fmt::Display;
     use std::str::FromStr;
 
     /// An [`Offset`] for [`Tz`]
@@ -97,6 +98,15 @@ mod private {
         }
     }
 
+    impl Display for Tz {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self.0 {
+                TzInner::Timezone(tz) => tz.fmt(f),
+                TzInner::Offset(offset) => offset.fmt(f),
+            }
+        }
+    }
+
     macro_rules! tz {
         ($s:ident, $tz:ident, $b:block) => {
             match $s.0 {
@@ -122,10 +132,7 @@ mod private {
             })
         }
 
-        fn offset_from_local_datetime(
-            &self,
-            local: &NaiveDateTime,
-        ) -> LocalResult<Self::Offset> {
+        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
             tz!(self, tz, {
                 tz.offset_from_local_datetime(local).map(|x| TzOffset {
                     tz: *self,
@@ -231,6 +238,15 @@ mod private {
                 sydney_offset_with_dst
             );
         }
+
+        #[test]
+        fn test_timezone_display() {
+            let test_cases = ["UTC", "America/Los_Angeles", "-08:00", "+05:30"];
+            for &case in &test_cases {
+                let tz: Tz = case.parse().unwrap();
+                assert_eq!(tz.to_string(), case);
+            }
+        }
     }
 }
 
@@ -238,7 +254,7 @@ mod private {
 mod private {
     use super::*;
     use chrono::offset::TimeZone;
-    use chrono::{FixedOffset, LocalResult, NaiveDate, NaiveDateTime, Offset};
+    use chrono::{LocalResult, NaiveDate, NaiveDateTime, Offset};
     use std::str::FromStr;
 
     /// An [`Offset`] for [`Tz`]
@@ -285,10 +301,7 @@ mod private {
             self.0.offset_from_local_date(local).map(TzOffset)
         }
 
-        fn offset_from_local_datetime(
-            &self,
-            local: &NaiveDateTime,
-        ) -> LocalResult<Self::Offset> {
+        fn offset_from_local_datetime(&self, local: &NaiveDateTime) -> LocalResult<Self::Offset> {
             self.0.offset_from_local_datetime(local).map(TzOffset)
         }
 

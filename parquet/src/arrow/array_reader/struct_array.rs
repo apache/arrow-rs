@@ -17,7 +17,7 @@
 
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{builder::BooleanBufferBuilder, Array, ArrayRef, StructArray};
+use arrow_array::{Array, ArrayRef, StructArray, builder::BooleanBufferBuilder};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType as ArrowType;
 use std::any::Any;
@@ -70,7 +70,7 @@ impl ArrayReader for StructArrayReader {
                 Some(expected) => {
                     if expected != child_read {
                         return Err(general_err!(
-                            "StructArrayReader out of sync in read_records, expected {} skipped, got {}",
+                            "StructArrayReader out of sync in read_records, expected {} read, got {}",
                             expected,
                             child_read
                         ));
@@ -112,10 +112,10 @@ impl ArrayReader for StructArrayReader {
             .collect::<Result<Vec<_>>>()?;
 
         // check that array child data has same size
-        let children_array_len =
-            children_array.first().map(|arr| arr.len()).ok_or_else(|| {
-                general_err!("Struct array reader should have at least one child!")
-            })?;
+        let children_array_len = children_array
+            .first()
+            .map(|arr| arr.len())
+            .ok_or_else(|| general_err!("Struct array reader should have at least one child!"))?;
 
         let all_children_len_eq = children_array
             .iter()
@@ -169,8 +169,7 @@ impl ArrayReader for StructArrayReader {
                 return Err(general_err!("Failed to decode level data for struct array"));
             }
 
-            array_data_builder =
-                array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
+            array_data_builder = array_data_builder.null_bit_buffer(Some(bitmap_builder.into()));
         }
 
         let array_data = unsafe { array_data_builder.build_unchecked() };
@@ -213,8 +212,8 @@ impl ArrayReader for StructArrayReader {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
     use crate::arrow::array_reader::ListArrayReader;
+    use crate::arrow::array_reader::test_util::InMemoryArrayReader;
     use arrow::buffer::Buffer;
     use arrow::datatypes::Field;
     use arrow_array::cast::AsArray;
@@ -282,13 +281,12 @@ mod tests {
         //    null,
         // ]
 
-        let expected_l =
-            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
-                Some(vec![Some(1), Some(2), None]),
-                Some(vec![]),
-                None,
-                None,
-            ]));
+        let expected_l = Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), None]),
+            Some(vec![]),
+            None,
+            None,
+        ]));
 
         let validity = Buffer::from([0b00000111]);
         let struct_fields = vec![(

@@ -15,12 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, GenericListArray, OffsetSizeTrait};
-use arrow_buffer::Buffer;
 use arrow_buffer::NullBufferBuilder;
-use arrow_data::ArrayData;
-use arrow_schema::Field;
+use arrow_buffer::{Buffer, OffsetBuffer};
+use arrow_schema::{Field, FieldRef};
 use std::any::Any;
 use std::sync::Arc;
 
@@ -28,6 +27,58 @@ use std::sync::Arc;
 ///
 /// Use [`ListBuilder`] to build [`ListArray`]s and [`LargeListBuilder`] to build [`LargeListArray`]s.
 ///
+/// # Example
+///
+/// Here is code that constructs a ListArray with the contents:
+/// `[[A,B,C], [], NULL, [D], [NULL, F]]`
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_array::{builder::ListBuilder, builder::StringBuilder, ArrayRef, StringArray, Array};
+/// #
+/// let values_builder = StringBuilder::new();
+/// let mut builder = ListBuilder::new(values_builder);
+///
+/// // [A, B, C]
+/// builder.values().append_value("A");
+/// builder.values().append_value("B");
+/// builder.values().append_value("C");
+/// builder.append(true);
+///
+/// // [ ] (empty list)
+/// builder.append(true);
+///
+/// // Null
+/// builder.append(false);
+///
+/// // [D]
+/// builder.values().append_value("D");
+/// builder.append(true);
+///
+/// // [NULL, F]
+/// builder.values().append_null();
+/// builder.values().append_value("F");
+/// builder.append(true);
+///
+/// // Build the array
+/// let array = builder.finish();
+///
+/// // Values is a string array
+/// // "A", "B" "C", "?", "D", NULL, "F"
+/// assert_eq!(
+///   array.values().as_ref(),
+///   &StringArray::from(vec![
+///     Some("A"), Some("B"), Some("C"),
+///     Some("D"), None, Some("F")
+///   ])
+/// );
+///
+/// // Offsets are indexes into the values array
+/// assert_eq!(
+///   array.value_offsets(),
+///   &[0, 3, 3, 3, 4, 6]
+/// );
+/// ```
 ///
 /// [`ListBuilder`]: crate::builder::ListBuilder
 /// [`ListArray`]: crate::array::ListArray
@@ -35,9 +86,10 @@ use std::sync::Arc;
 /// [`LargeListArray`]: crate::array::LargeListArray
 #[derive(Debug)]
 pub struct GenericListBuilder<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> {
-    offsets_builder: BufferBuilder<OffsetSize>,
+    offsets_builder: Vec<OffsetSize>,
     null_buffer_builder: NullBufferBuilder,
     values_builder: T,
+    field: Option<FieldRef>,
 }
 
 impl<O: OffsetSizeTrait, T: ArrayBuilder + Default> Default for GenericListBuilder<O, T> {
@@ -56,12 +108,26 @@ impl<OffsetSize: OffsetSizeTrait, T: ArrayBuilder> GenericListBuilder<OffsetSize
     /// Creates a new [`GenericListBuilder`] from a given values array builder
     /// `capacity` is the number of items to pre-allocate space for in this builder
     pub fn with_capacity(values_builder: T, capacity: usize) -> Self {
-        let mut offsets_builder = BufferBuilder::<OffsetSize>::new(capacity + 1);
-        offsets_builder.append(OffsetSize::zero());
+        let mut offsets_builder = Vec::with_capacity(capacity + 1);
+        offsets_builder.push(OffsetSize::zero());
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
             values_builder,
+            field: None,
+        }
+    }
+
+    /// Override the field passed to [`GenericListArray::new`]
+    ///
+    /// By default a nullable field is created with the name `item`
+    ///
+    /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
+    /// field's data type does not match that of `T`
+    pub fn with_field(self, field: impl Into<FieldRef>) -> Self {
+        Self {
+            field: Some(field.into()),
+            ..self
         }
     }
 }
@@ -89,11 +155,6 @@ where
     /// Returns the number of array slots in the builder
     fn len(&self) -> usize {
         self.null_buffer_builder.len()
-    }
-
-    /// Returns whether the number of array slots is zero
-    fn is_empty(&self) -> bool {
-        self.null_buffer_builder.is_empty()
     }
 
     /// Builds the array and reset this builder.
@@ -131,7 +192,7 @@ where
     /// Panics if the length of [`Self::values`] exceeds `OffsetSize::MAX`
     #[inline]
     pub fn append(&mut self, is_valid: bool) {
-        self.offsets_builder.append(self.next_offset());
+        self.offsets_builder.push(self.next_offset());
         self.null_buffer_builder.append(is_valid);
     }
 
@@ -205,8 +266,17 @@ where
     /// See [`Self::append_value`] for an example use.
     #[inline]
     pub fn append_null(&mut self) {
-        self.offsets_builder.append(self.next_offset());
+        self.offsets_builder.push(self.next_offset());
         self.null_buffer_builder.append_null();
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        let next_offset = self.next_offset();
+        self.offsets_builder
+            .extend(std::iter::repeat_n(next_offset, n));
+        self.null_buffer_builder.append_n_nulls(n);
     }
 
     /// Appends an optional value into this [`GenericListBuilder`]
@@ -226,58 +296,47 @@ where
 
     /// Builds the [`GenericListArray`] and reset this builder.
     pub fn finish(&mut self) -> GenericListArray<OffsetSize> {
-        let len = self.len();
-        let values_arr = self.values_builder.finish();
-        let values_data = values_arr.to_data();
+        let values = self.values_builder.finish();
+        let nulls = self.null_buffer_builder.finish();
 
-        let offset_buffer = self.offsets_builder.finish();
-        let null_bit_buffer = self.null_buffer_builder.finish();
-        self.offsets_builder.append(OffsetSize::zero());
-        let field = Arc::new(Field::new(
-            "item",
-            values_data.data_type().clone(),
-            true, // TODO: find a consistent way of getting this
-        ));
-        let data_type = GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field);
-        let array_data_builder = ArrayData::builder(data_type)
-            .len(len)
-            .add_buffer(offset_buffer)
-            .add_child_data(values_data)
-            .nulls(null_bit_buffer);
+        let offsets = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
+        // Safety: Safe by construction
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
+        self.offsets_builder.push(OffsetSize::zero());
 
-        let array_data = unsafe { array_data_builder.build_unchecked() };
+        let field = match &self.field {
+            Some(f) => f.clone(),
+            None => Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+        };
 
-        GenericListArray::<OffsetSize>::from(array_data)
+        GenericListArray::new(field, offsets, values, nulls)
     }
 
     /// Builds the [`GenericListArray`] without resetting the builder.
     pub fn finish_cloned(&self) -> GenericListArray<OffsetSize> {
-        let len = self.len();
-        let values_arr = self.values_builder.finish_cloned();
-        let values_data = values_arr.to_data();
-
-        let offset_buffer = Buffer::from_slice_ref(self.offsets_builder.as_slice());
+        let values = self.values_builder.finish_cloned();
         let nulls = self.null_buffer_builder.finish_cloned();
-        let field = Arc::new(Field::new(
-            "item",
-            values_data.data_type().clone(),
-            true, // TODO: find a consistent way of getting this
-        ));
-        let data_type = GenericListArray::<OffsetSize>::DATA_TYPE_CONSTRUCTOR(field);
-        let array_data_builder = ArrayData::builder(data_type)
-            .len(len)
-            .add_buffer(offset_buffer)
-            .add_child_data(values_data)
-            .nulls(nulls);
 
-        let array_data = unsafe { array_data_builder.build_unchecked() };
+        let offsets = Buffer::from_slice_ref(self.offsets_builder.as_slice());
+        // Safety: safe by construction
+        let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
 
-        GenericListArray::<OffsetSize>::from(array_data)
+        let field = match &self.field {
+            Some(f) => f.clone(),
+            None => Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+        };
+
+        GenericListArray::new(field, offsets, values, nulls)
     }
 
     /// Returns the current offsets buffer as a slice
     pub fn offsets_slice(&self) -> &[OffsetSize] {
         self.offsets_builder.as_slice()
+    }
+
+    /// Returns the current null buffer as a slice
+    pub fn validity_slice(&self) -> Option<&[u8]> {
+        self.null_buffer_builder.as_slice()
     }
 }
 
@@ -304,10 +363,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::builder::{Int32Builder, ListBuilder};
+    use crate::Int32Array;
+    use crate::builder::{Int32Builder, ListBuilder, make_builder};
     use crate::cast::AsArray;
     use crate::types::Int32Type;
-    use crate::{Array, Int32Array};
     use arrow_schema::DataType;
 
     fn _test_generic_list_array_builder<O: OffsetSizeTrait>() {
@@ -356,7 +415,7 @@ mod tests {
         let values_builder = Int32Builder::with_capacity(10);
         let mut builder = GenericListBuilder::<O, _>::new(values_builder);
 
-        //  [[0, 1, 2], null, [3, null, 5], [6, 7]]
+        //  [[0, 1, 2], null, [3, null, 5], [6, 7], null, null, [8]]
         builder.values().append_value(0);
         builder.values().append_value(1);
         builder.values().append_value(2);
@@ -369,14 +428,20 @@ mod tests {
         builder.values().append_value(6);
         builder.values().append_value(7);
         builder.append(true);
+        builder.append_nulls(2);
+        builder.values().append_value(8);
+        builder.append(true);
 
         let list_array = builder.finish();
 
         assert_eq!(DataType::Int32, list_array.value_type());
-        assert_eq!(4, list_array.len());
-        assert_eq!(1, list_array.null_count());
+        assert_eq!(7, list_array.len());
+        assert_eq!(3, list_array.null_count());
         assert_eq!(O::from_usize(3).unwrap(), list_array.value_offsets()[2]);
+        assert_eq!(O::from_usize(9).unwrap(), list_array.value_offsets()[7]);
         assert_eq!(O::from_usize(3).unwrap(), list_array.value_length(2));
+        assert!(list_array.is_null(4));
+        assert!(list_array.is_null(5));
     }
 
     #[test]
@@ -493,10 +558,264 @@ mod tests {
         let array = builder.finish();
         assert_eq!(array.value_offsets(), [0, 4, 4, 6, 6]);
         assert_eq!(array.null_count(), 1);
+        assert_eq!(array.logical_null_count(), 1);
         assert!(array.is_null(3));
         let elements = array.values().as_primitive::<Int32Type>();
         assert_eq!(elements.values(), &[1, 2, 7, 0, 4, 5]);
         assert_eq!(elements.null_count(), 1);
+        assert_eq!(elements.logical_null_count(), 1);
         assert!(elements.is_null(3));
+    }
+
+    #[test]
+    fn test_boxed_primitive_array_builder() {
+        let values_builder = make_builder(&DataType::Int32, 5);
+        let mut builder = ListBuilder::new(values_builder);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_slice(&[1, 2, 3]);
+        builder.append(true);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_slice(&[4, 5, 6]);
+        builder.append(true);
+
+        let arr = builder.finish();
+        assert_eq!(2, arr.len());
+
+        let elements = arr.values().as_primitive::<Int32Type>();
+        assert_eq!(elements.values(), &[1, 2, 3, 4, 5, 6]);
+    }
+
+    #[test]
+    fn test_boxed_list_list_array_builder() {
+        // This test is same as `test_list_list_array_builder` but uses boxed builders.
+        let values_builder = make_builder(
+            &DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            10,
+        );
+        test_boxed_generic_list_generic_list_array_builder::<i32>(values_builder);
+    }
+
+    #[test]
+    fn test_boxed_large_list_large_list_array_builder() {
+        // This test is same as `test_list_list_array_builder` but uses boxed builders.
+        let values_builder = make_builder(
+            &DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            10,
+        );
+        test_boxed_generic_list_generic_list_array_builder::<i64>(values_builder);
+    }
+
+    fn test_boxed_generic_list_generic_list_array_builder<O: OffsetSizeTrait + PartialEq>(
+        values_builder: Box<dyn ArrayBuilder>,
+    ) {
+        let mut builder: GenericListBuilder<O, Box<dyn ArrayBuilder>> =
+            GenericListBuilder::<O, Box<dyn ArrayBuilder>>::new(values_builder);
+
+        //  [[[1, 2], [3, 4]], [[5, 6, 7], null, [8]], null, [[9, 10]]]
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(1);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(2);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(3);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(4);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder.append(true);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(5);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(6);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an (Large)ListBuilder")
+            .append_value(7);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(false);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(8);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder.append(true);
+
+        builder.append(false);
+
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(9);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .values()
+            .as_any_mut()
+            .downcast_mut::<Int32Builder>()
+            .expect("should be an Int32Builder")
+            .append_value(10);
+        builder
+            .values()
+            .as_any_mut()
+            .downcast_mut::<GenericListBuilder<O, Box<dyn ArrayBuilder>>>()
+            .expect("should be an (Large)ListBuilder")
+            .append(true);
+        builder.append(true);
+
+        let l1 = builder.finish();
+
+        assert_eq!(4, l1.len());
+        assert_eq!(1, l1.null_count());
+
+        assert_eq!(l1.value_offsets(), &[0, 2, 5, 5, 6].map(O::usize_as));
+        let l2 = l1.values().as_list::<O>();
+
+        assert_eq!(6, l2.len());
+        assert_eq!(1, l2.null_count());
+        assert_eq!(l2.value_offsets(), &[0, 2, 4, 7, 7, 8, 10].map(O::usize_as));
+
+        let i1 = l2.values().as_primitive::<Int32Type>();
+        assert_eq!(10, i1.len());
+        assert_eq!(0, i1.null_count());
+        assert_eq!(i1.values(), &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    }
+
+    #[test]
+    fn test_with_field() {
+        let field = Arc::new(Field::new("bar", DataType::Int32, false));
+        let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
+        builder.append_value([Some(1), Some(2), Some(3)]);
+        builder.append_null(); // This is fine as nullability refers to nullability of values
+        builder.append_value([Some(4)]);
+        let array = builder.finish();
+        assert_eq!(array.len(), 3);
+        assert_eq!(array.data_type(), &DataType::List(field.clone()));
+
+        builder.append_value([Some(4), Some(5)]);
+        let array = builder.finish();
+        assert_eq!(array.data_type(), &DataType::List(field));
+        assert_eq!(array.len(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Non-nullable field of ListArray \\\"item\\\" cannot contain nulls")]
+    fn test_checks_nullability() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, false));
+        let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
+        builder.append_value([Some(1), None]);
+        builder.finish();
+    }
+
+    #[test]
+    #[should_panic(expected = "ListArray expected data type Int64 got Int32")]
+    fn test_checks_data_type() {
+        let field = Arc::new(Field::new_list_field(DataType::Int64, false));
+        let mut builder = ListBuilder::new(Int32Builder::new()).with_field(field.clone());
+        builder.append_value([Some(1)]);
+        builder.finish();
     }
 }

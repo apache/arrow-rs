@@ -17,28 +17,24 @@
 
 //! Integration test for "mid level" Client
 
-mod common {
-    pub mod server;
-}
+mod common;
+
+use crate::common::fixture::TestFixture;
 use arrow_array::{RecordBatch, UInt64Array};
 use arrow_flight::{
-    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder,
-    error::FlightError, Action, ActionType, Criteria, Empty, FlightClient, FlightData,
-    FlightDescriptor, FlightInfo, HandshakeRequest, HandshakeResponse, PutResult, Ticket,
+    Action, ActionType, CancelFlightInfoRequest, CancelFlightInfoResult, CancelStatus, Criteria,
+    Empty, FlightClient, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
+    HandshakeRequest, HandshakeResponse, PollInfo, PutResult, RenewFlightEndpointRequest, Ticket,
+    decode::FlightRecordBatchStream, encode::FlightDataEncoderBuilder, error::FlightError,
 };
 use arrow_schema::{DataType, Field, Schema};
 use bytes::Bytes;
 use common::server::TestFlightServer;
 use futures::{Future, StreamExt, TryStreamExt};
-use tokio::{net::TcpListener, task::JoinHandle};
-use tonic::{
-    transport::{Channel, Uri},
-    Status,
-};
+use prost::Message;
+use tonic::Status;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
-
-const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
+use std::sync::Arc;
 
 #[tokio::test]
 async fn test_handshake() {
@@ -105,6 +101,7 @@ fn test_flight_info(request: &FlightDescriptor) -> FlightInfo {
         total_bytes: 123,
         total_records: 456,
         ordered: false,
+        app_metadata: Bytes::new(),
     }
 }
 
@@ -140,6 +137,47 @@ async fn test_get_flight_info_error() {
     .await;
 }
 
+fn test_poll_info(request: &FlightDescriptor) -> PollInfo {
+    PollInfo {
+        info: Some(test_flight_info(request)),
+        flight_descriptor: None,
+        progress: Some(1.0),
+        expiration_time: None,
+    }
+}
+
+#[tokio::test]
+async fn test_poll_flight_info() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
+
+        let expected_response = test_poll_info(&request);
+        test_server.set_poll_flight_info_response(Ok(expected_response.clone()));
+
+        let response = client.poll_flight_info(request.clone()).await.unwrap();
+
+        assert_eq!(response, expected_response);
+        assert_eq!(test_server.take_poll_flight_info_request(), Some(request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_poll_flight_info_error() {
+    do_test(|test_server, mut client| async move {
+        let request = FlightDescriptor::new_cmd(b"My Command".to_vec());
+
+        let e = Status::unauthenticated("DENIED");
+        test_server.set_poll_flight_info_response(Err(e.clone()));
+
+        let response = client.poll_flight_info(request.clone()).await.unwrap_err();
+        expect_status(response, e);
+    })
+    .await;
+}
+
 // TODO more negative  tests (like if there are endpoints defined, etc)
 
 #[tokio::test]
@@ -158,18 +196,42 @@ async fn test_do_get() {
 
         let response = vec![Ok(batch.clone())];
         test_server.set_do_get_response(response);
-        let response_stream = client
+        let mut response_stream = client
             .do_get(ticket.clone())
             .await
             .expect("error making request");
 
+        assert_eq!(
+            response_stream
+                .headers()
+                .get("test-resp-header")
+                .expect("header exists")
+                .to_str()
+                .unwrap(),
+            "some_val",
+        );
+
+        // trailers are not available before stream exhaustion
+        assert!(response_stream.trailers().is_none());
+
         let expected_response = vec![batch];
-        let response: Vec<_> = response_stream
+        let response: Vec<_> = (&mut response_stream)
             .try_collect()
             .await
             .expect("Error streaming data");
-
         assert_eq!(response, expected_response);
+
+        assert_eq!(
+            response_stream
+                .trailers()
+                .expect("stream exhausted")
+                .get("test-trailer")
+                .expect("trailer exists")
+                .to_str()
+                .unwrap(),
+            "trailer_val",
+        );
+
         assert_eq!(test_server.take_do_get_request(), Some(ticket));
         ensure_metadata(&client, &test_server);
     })
@@ -246,8 +308,7 @@ async fn test_do_put() {
             },
         ];
 
-        test_server
-            .set_do_put_response(expected_response.clone().into_iter().map(Ok).collect());
+        test_server.set_do_put_response(expected_response.clone().into_iter().map(Ok).collect());
 
         let input_stream = futures::stream::iter(input_flight_data.clone()).map(Ok);
 
@@ -421,12 +482,11 @@ async fn test_do_exchange() {
         let input_flight_data = test_flight_data().await;
         let output_flight_data = test_flight_data2().await;
 
-        test_server.set_do_exchange_response(
-            output_flight_data.clone().into_iter().map(Ok).collect(),
-        );
+        test_server
+            .set_do_exchange_response(output_flight_data.clone().into_iter().map(Ok).collect());
 
         let response_stream = client
-            .do_exchange(futures::stream::iter(input_flight_data.clone()))
+            .do_exchange(futures::stream::iter(input_flight_data.clone()).map(Ok))
             .await
             .expect("error making request");
 
@@ -461,7 +521,7 @@ async fn test_do_exchange_error() {
         let input_flight_data = test_flight_data().await;
 
         let response = client
-            .do_exchange(futures::stream::iter(input_flight_data.clone()))
+            .do_exchange(futures::stream::iter(input_flight_data.clone()).map(Ok))
             .await;
         let response = match response {
             Ok(_) => panic!("unexpected success"),
@@ -505,7 +565,7 @@ async fn test_do_exchange_error_stream() {
         test_server.set_do_exchange_response(response);
 
         let response_stream = client
-            .do_exchange(futures::stream::iter(input_flight_data.clone()))
+            .do_exchange(futures::stream::iter(input_flight_data.clone()).map(Ok))
             .await
             .expect("error making request");
 
@@ -517,6 +577,97 @@ async fn test_do_exchange_error_stream() {
 
         expect_status(response, e);
         // server still got the request
+        assert_eq!(
+            test_server.take_do_exchange_request(),
+            Some(input_flight_data)
+        );
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_exchange_error_stream_client() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let e = Status::invalid_argument("bad arg: client");
+
+        // input stream to client sends good FlightData followed by an error
+        let input_flight_data = test_flight_data().await;
+        let input_stream = futures::stream::iter(input_flight_data.clone())
+            .map(Ok)
+            .chain(futures::stream::iter(vec![Err(FlightError::from(
+                e.clone(),
+            ))]));
+
+        let output_flight_data = FlightData::new()
+            .with_descriptor(FlightDescriptor::new_cmd("Sample command"))
+            .with_data_body("body".as_bytes())
+            .with_data_header("header".as_bytes())
+            .with_app_metadata("metadata".as_bytes());
+
+        // server responds with one good message
+        let response = vec![Ok(output_flight_data)];
+        test_server.set_do_exchange_response(response);
+
+        let response_stream = client
+            .do_exchange(input_stream)
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, _> = response_stream.try_collect().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        // expect to the error made from the client
+        expect_status(response, e);
+        // server still got the request messages until the client sent the error
+        assert_eq!(
+            test_server.take_do_exchange_request(),
+            Some(input_flight_data)
+        );
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_do_exchange_error_client_and_server() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let e_client = Status::invalid_argument("bad arg: client");
+        let e_server = Status::invalid_argument("bad arg: server");
+
+        // input stream to client sends good FlightData followed by an error
+        let input_flight_data = test_flight_data().await;
+        let input_stream = futures::stream::iter(input_flight_data.clone())
+            .map(Ok)
+            .chain(futures::stream::iter(vec![Err(FlightError::from(
+                e_client.clone(),
+            ))]));
+
+        // server responds with an error (e.g. because it got truncated data)
+        let response = vec![Err(e_server)];
+        test_server.set_do_exchange_response(response);
+
+        let response_stream = client
+            .do_exchange(input_stream)
+            .await
+            .expect("error making request");
+
+        let response: Result<Vec<_>, _> = response_stream.try_collect().await;
+        let response = match response {
+            Ok(_) => panic!("unexpected success"),
+            Err(e) => e,
+        };
+
+        // expect to the error made from the client (not the server)
+        expect_status(response, e_client);
+        // server still got the request messages until the client sent the error
         assert_eq!(
             test_server.take_do_exchange_request(),
             Some(input_flight_data)
@@ -829,6 +980,105 @@ async fn test_do_action_error_in_stream() {
     .await;
 }
 
+#[tokio::test]
+async fn test_cancel_flight_info() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let expected_response = CancelFlightInfoResult::new(CancelStatus::Cancelled);
+        let response = expected_response.encode_to_vec();
+        let response = Ok(arrow_flight::Result::new(response));
+        test_server.set_do_action_response(vec![response]);
+
+        let request = CancelFlightInfoRequest::new(FlightInfo::new());
+        let actual_response = client
+            .cancel_flight_info(request.clone())
+            .await
+            .expect("error making request");
+
+        let expected_request = Action::new("CancelFlightInfo", request.encode_to_vec());
+        assert_eq!(actual_response, expected_response);
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_cancel_flight_info_error_no_response() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        test_server.set_do_action_response(vec![]);
+
+        let request = CancelFlightInfoRequest::new(FlightInfo::new());
+        let err = client
+            .cancel_flight_info(request.clone())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Protocol error: Received no response for cancel_flight_info call"
+        );
+        // server still got the request
+        let expected_request = Action::new("CancelFlightInfo", request.encode_to_vec());
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_renew_flight_endpoint() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        let expected_response = FlightEndpoint::new().with_app_metadata(vec![1]);
+        let response = expected_response.encode_to_vec();
+        let response = Ok(arrow_flight::Result::new(response));
+        test_server.set_do_action_response(vec![response]);
+
+        let request =
+            RenewFlightEndpointRequest::new(FlightEndpoint::new().with_app_metadata(vec![0]));
+        let actual_response = client
+            .renew_flight_endpoint(request.clone())
+            .await
+            .expect("error making request");
+
+        let expected_request = Action::new("RenewFlightEndpoint", request.encode_to_vec());
+        assert_eq!(actual_response, expected_response);
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn test_renew_flight_endpoint_error_no_response() {
+    do_test(|test_server, mut client| async move {
+        client.add_header("foo-header", "bar-header-value").unwrap();
+
+        test_server.set_do_action_response(vec![]);
+
+        let request = RenewFlightEndpointRequest::new(FlightEndpoint::new());
+        let err = client
+            .renew_flight_endpoint(request.clone())
+            .await
+            .unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Protocol error: Received no response for renew_flight_endpoint call"
+        );
+        // server still got the request
+        let expected_request = Action::new("RenewFlightEndpoint", request.encode_to_vec());
+        assert_eq!(test_server.take_do_action_request(), Some(expected_request));
+        ensure_metadata(&client, &test_server);
+    })
+    .await;
+}
+
 async fn test_flight_data() -> Vec<FlightData> {
     let batch = RecordBatch::try_from_iter(vec![(
         "col",
@@ -866,7 +1116,7 @@ where
     Fut: Future<Output = ()>,
 {
     let test_server = TestFlightServer::new();
-    let fixture = TestFixture::new(&test_server).await;
+    let fixture = TestFixture::new(test_server.service()).await;
     let client = FlightClient::new(fixture.channel().await);
 
     // run the test function
@@ -898,90 +1148,4 @@ fn expect_status(error: FlightError, expected: Status) {
         expected.details(),
         "Got {status:?} want {expected:?}"
     );
-}
-
-/// Creates and manages a running TestServer with a background task
-struct TestFixture {
-    /// channel to send shutdown command
-    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
-
-    /// Address the server is listening on
-    addr: SocketAddr,
-
-    // handle for the server task
-    handle: Option<JoinHandle<Result<(), tonic::transport::Error>>>,
-}
-
-impl TestFixture {
-    /// create a new test fixture from the server
-    pub async fn new(test_server: &TestFlightServer) -> Self {
-        // let OS choose a a free port
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        println!("Listening on {addr}");
-
-        // prepare the shutdown channel
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
-        let server_timeout = Duration::from_secs(DEFAULT_TIMEOUT_SECONDS);
-
-        let shutdown_future = async move {
-            rx.await.ok();
-        };
-
-        let serve_future = tonic::transport::Server::builder()
-            .timeout(server_timeout)
-            .add_service(test_server.service())
-            .serve_with_incoming_shutdown(
-                tokio_stream::wrappers::TcpListenerStream::new(listener),
-                shutdown_future,
-            );
-
-        // Run the server in its own background task
-        let handle = tokio::task::spawn(serve_future);
-
-        Self {
-            shutdown: Some(tx),
-            addr,
-            handle: Some(handle),
-        }
-    }
-
-    /// Return a [`Channel`] connected to the TestServer
-    pub async fn channel(&self) -> Channel {
-        let url = format!("http://{}", self.addr);
-        let uri: Uri = url.parse().expect("Valid URI");
-        Channel::builder(uri)
-            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECONDS))
-            .connect()
-            .await
-            .expect("error connecting to server")
-    }
-
-    /// Stops the test server and waits for the server to shutdown
-    pub async fn shutdown_and_wait(mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).expect("server quit early");
-        }
-        if let Some(handle) = self.handle.take() {
-            println!("Waiting on server to finish");
-            handle
-                .await
-                .expect("task join error (panic?)")
-                .expect("Server Error found at shutdown");
-        }
-    }
-}
-
-impl Drop for TestFixture {
-    fn drop(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            shutdown.send(()).ok();
-        }
-        if self.handle.is_some() {
-            // tests should properly clean up TestFixture
-            println!("TestFixture::Drop called prior to `shutdown_and_wait`");
-        }
-    }
 }

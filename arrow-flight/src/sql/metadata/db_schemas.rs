@@ -22,11 +22,11 @@
 use std::sync::Arc;
 
 use arrow_arith::boolean::and;
-use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch};
-use arrow_ord::comparison::eq_utf8_scalar;
+use arrow_array::{ArrayRef, RecordBatch, StringArray, builder::StringBuilder};
+use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
-use arrow_string::like::like_utf8_scalar;
+use arrow_string::like::like;
 use once_cell::sync::Lazy;
 
 use super::lexsort_to_indices;
@@ -38,7 +38,7 @@ use crate::sql::CommandGetDbSchemas;
 /// Builds rows like this:
 ///
 /// * catalog_name: utf8,
-/// * db_schema_name: utf8,
+/// * db_schema_name: utf8 not null
 pub struct GetDbSchemasBuilder {
     // Specifies the Catalog to search for the tables.
     // - An empty string retrieves those without a catalog.
@@ -95,11 +95,7 @@ impl GetDbSchemasBuilder {
     /// Append a row
     ///
     /// In case the catalog should be considered as empty, pass in an empty string '""'.
-    pub fn append(
-        &mut self,
-        catalog_name: impl AsRef<str>,
-        schema_name: impl AsRef<str>,
-    ) {
+    pub fn append(&mut self, catalog_name: impl AsRef<str>, schema_name: impl AsRef<str>) {
         self.catalog_name.append_value(catalog_name);
         self.db_schema_name.append_value(schema_name);
     }
@@ -122,14 +118,13 @@ impl GetDbSchemasBuilder {
 
         if let Some(db_schema_filter_pattern) = db_schema_filter_pattern {
             // use like kernel to get wildcard matching
-            filters.push(like_utf8_scalar(
-                &db_schema_name,
-                &db_schema_filter_pattern,
-            )?)
+            let scalar = StringArray::new_scalar(db_schema_filter_pattern);
+            filters.push(like(&db_schema_name, &scalar)?)
         }
 
         if let Some(catalog_filter_name) = catalog_filter {
-            filters.push(eq_utf8_scalar(&catalog_name, &catalog_filter_name)?);
+            let scalar = StringArray::new_scalar(catalog_filter_name);
+            filters.push(eq(&catalog_name, &scalar)?);
         }
 
         // `AND` any filters together
@@ -182,7 +177,7 @@ fn get_db_schemas_schema() -> SchemaRef {
 /// The schema for GetDbSchemas
 static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
+        Field::new("catalog_name", DataType::Utf8, true),
         Field::new("db_schema_name", DataType::Utf8, false),
     ]))
 });

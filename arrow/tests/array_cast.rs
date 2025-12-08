@@ -15,29 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{
-    PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder,
-};
+use arrow_array::builder::{PrimitiveDictionaryBuilder, StringDictionaryBuilder, UnionBuilder};
 use arrow_array::cast::AsArray;
 use arrow_array::types::{
-    ArrowDictionaryKeyType, Decimal128Type, Decimal256Type, Int16Type, Int32Type,
-    Int64Type, Int8Type, TimestampMicrosecondType, UInt16Type, UInt32Type, UInt64Type,
-    UInt8Type,
+    ArrowDictionaryKeyType, Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type, Int8Type,
+    Int16Type, Int32Type, Int64Type, TimestampMicrosecondType, UInt8Type, UInt16Type, UInt32Type,
+    UInt64Type,
 };
 use arrow_array::{
-    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array,
-    Date64Array, Decimal128Array, DurationMicrosecondArray, DurationMillisecondArray,
-    DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, Int16Array, Int32Array,
-    Int64Array, Int8Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
-    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray,
-    ListArray, NullArray, PrimitiveArray, StringArray, StructArray,
-    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray,
-    Time64NanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt16Array, UInt32Array,
-    UInt64Array, UInt8Array, UnionArray,
+    Array, ArrayRef, ArrowPrimitiveType, BinaryArray, BooleanArray, Date32Array, Date64Array,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, DurationMicrosecondArray,
+    DurationMillisecondArray, DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, Int8Array, Int16Array,
+    Int32Array, Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray,
+    IntervalYearMonthArray, LargeBinaryArray, LargeListArray, LargeStringArray, ListArray,
+    NullArray, PrimitiveArray, StringArray, StructArray, Time32MillisecondArray, Time32SecondArray,
+    Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
+    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt8Array,
+    UInt16Array, UInt32Array, UInt64Array, UnionArray,
 };
-use arrow_buffer::{i256, Buffer};
+use arrow_buffer::{Buffer, IntervalDayTime, IntervalMonthDayNano, i256};
 use arrow_cast::pretty::pretty_format_columns;
 use arrow_cast::{can_cast_types, cast};
 use arrow_data::ArrayData;
@@ -49,14 +46,9 @@ use std::sync::Arc;
 
 #[test]
 fn test_cast_timestamp_to_string() {
-    let a = TimestampMillisecondArray::from(vec![
-        Some(864000000005),
-        Some(1545696000001),
-        None,
-    ])
-    .with_timezone("UTC".to_string());
+    let a = TimestampMillisecondArray::from(vec![Some(864000000005), Some(1545696000001), None])
+        .with_timezone("UTC".to_string());
     let array = Arc::new(a) as ArrayRef;
-    dbg!(&array);
     let b = cast(&array, &DataType::Utf8).unwrap();
     let c = b.as_any().downcast_ref::<StringArray>().unwrap();
     assert_eq!(&DataType::Utf8, c.data_type());
@@ -83,8 +75,7 @@ fn test_cast_timestamp_with_timezone_daylight_1() {
     let to_type = DataType::Timestamp(TimeUnit::Nanosecond, None);
     let timestamp_array = cast(&string_array, &to_type).unwrap();
 
-    let to_type =
-        DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
     let timestamp_array = cast(&timestamp_array, &to_type).unwrap();
 
     let string_array = cast(&timestamp_array, &DataType::Utf8).unwrap();
@@ -102,8 +93,7 @@ fn test_cast_timestamp_with_timezone_daylight_2() {
         Some("2010-07-01T07:00:00.123456789"),
         None,
     ]));
-    let to_type =
-        DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
+    let to_type = DataType::Timestamp(TimeUnit::Millisecond, Some("America/New_York".into()));
     let timestamp_array = cast(&string_array, &to_type).unwrap();
 
     // Check intermediate representation is correct
@@ -135,8 +125,7 @@ fn test_cast_timestamp_with_timezone_daylight_3() {
         Some("2010-07-01T00:00:00.123456789"),
         None,
     ]));
-    let to_type =
-        DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
+    let to_type = DataType::Timestamp(TimeUnit::Microsecond, Some("America/New_York".into()));
     let timestamp_array = cast(&string_array, &to_type).unwrap();
 
     // Check intermediate representation is correct
@@ -175,13 +164,22 @@ fn test_can_cast_types() {
             // check for mismatch
             match (cast_result, reported_cast_ability) {
                 (Ok(_), false) => {
-                    panic!("Was able to cast array {:?} from {:?} to {:?} but can_cast_types reported false",
-                           array, array.data_type(), to_type)
+                    panic!(
+                        "Was able to cast array {:?} from {:?} to {:?} but can_cast_types reported false",
+                        array,
+                        array.data_type(),
+                        to_type
+                    )
                 }
                 (Err(e), true) => {
-                    panic!("Was not able to cast array {:?} from {:?} to {:?} but can_cast_types reported true. \
+                    panic!(
+                        "Was not able to cast array {:?} from {:?} to {:?} but can_cast_types reported true. \
                                 Error was {:?}",
-                           array, array.data_type(), to_type, e)
+                        array,
+                        array.data_type(),
+                        to_type,
+                        e
+                    )
                 }
                 // otherwise it was a match
                 _ => {}
@@ -192,7 +190,7 @@ fn test_can_cast_types() {
 
 /// Create instances of arrays with varying types for cast tests
 fn get_arrays_of_all_types() -> Vec<ArrayRef> {
-    let tz_name = String::from("+08:00");
+    let tz_name = "+08:00";
     let binary_data: Vec<&[u8]> = vec![b"foo", b"bar"];
     vec![
         Arc::new(BinaryArray::from(binary_data.clone())),
@@ -220,8 +218,7 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(StructArray::from(vec![
             (
                 Arc::new(Field::new("a", DataType::Boolean, false)),
-                Arc::new(BooleanArray::from(vec![false, false, true, true]))
-                    as Arc<dyn Array>,
+                Arc::new(BooleanArray::from(vec![false, false, true, true])) as Arc<dyn Array>,
             ),
             (
                 Arc::new(Field::new("b", DataType::Int32, false)),
@@ -252,17 +249,9 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(TimestampMillisecondArray::from(vec![1000, 2000])),
         Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(TimestampNanosecondArray::from(vec![1000, 2000])),
-        Arc::new(
-            TimestampSecondArray::from(vec![1000, 2000]).with_timezone(tz_name.clone()),
-        ),
-        Arc::new(
-            TimestampMillisecondArray::from(vec![1000, 2000])
-                .with_timezone(tz_name.clone()),
-        ),
-        Arc::new(
-            TimestampMicrosecondArray::from(vec![1000, 2000])
-                .with_timezone(tz_name.clone()),
-        ),
+        Arc::new(TimestampSecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
+        Arc::new(TimestampMillisecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
+        Arc::new(TimestampMicrosecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
         Arc::new(TimestampNanosecondArray::from(vec![1000, 2000]).with_timezone(tz_name)),
         Arc::new(Date32Array::from(vec![1000, 2000])),
         Arc::new(Date64Array::from(vec![1000, 2000])),
@@ -271,13 +260,49 @@ fn get_arrays_of_all_types() -> Vec<ArrayRef> {
         Arc::new(Time64MicrosecondArray::from(vec![1000, 2000])),
         Arc::new(Time64NanosecondArray::from(vec![1000, 2000])),
         Arc::new(IntervalYearMonthArray::from(vec![1000, 2000])),
-        Arc::new(IntervalDayTimeArray::from(vec![1000, 2000])),
-        Arc::new(IntervalMonthDayNanoArray::from(vec![1000, 2000])),
+        Arc::new(IntervalDayTimeArray::from(vec![
+            IntervalDayTime::new(0, 1000),
+            IntervalDayTime::new(0, 2000),
+        ])),
+        Arc::new(IntervalMonthDayNanoArray::from(vec![
+            IntervalMonthDayNano::new(0, 0, 1000),
+            IntervalMonthDayNano::new(0, 0, 1000),
+        ])),
         Arc::new(DurationSecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMillisecondArray::from(vec![1000, 2000])),
         Arc::new(DurationMicrosecondArray::from(vec![1000, 2000])),
         Arc::new(DurationNanosecondArray::from(vec![1000, 2000])),
-        Arc::new(create_decimal_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        Arc::new(create_decimal32_array(vec![Some(1), Some(2), Some(3)], 9, 0).unwrap()),
+        Arc::new(create_decimal64_array(vec![Some(1), Some(2), Some(3)], 18, 0).unwrap()),
+        Arc::new(create_decimal128_array(vec![Some(1), Some(2), Some(3)], 38, 0).unwrap()),
+        Arc::new(
+            create_decimal256_array(
+                vec![
+                    Some(i256::from_i128(1)),
+                    Some(i256::from_i128(2)),
+                    Some(i256::from_i128(3)),
+                ],
+                40,
+                0,
+            )
+            .unwrap(),
+        ),
+        make_dictionary_primitive::<Int8Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int16Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int32Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int64Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt8Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt16Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt32Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt64Type, Decimal32Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int8Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int16Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int32Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<Int64Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt8Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt16Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt32Type, Decimal64Type>(vec![1, 2]),
+        make_dictionary_primitive::<UInt64Type, Decimal64Type>(vec![1, 2]),
         make_dictionary_primitive::<Int8Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int16Type, Decimal128Type>(vec![1, 2]),
         make_dictionary_primitive::<Int32Type, Decimal128Type>(vec![1, 2]),
@@ -331,7 +356,7 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
 
     // Construct a fixed size list array from the above two
     let list_data_type =
-        DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int32, true)), 2);
+        DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, true)), 2);
     let list_data = ArrayData::builder(list_data_type)
         .len(5)
         .add_child_data(value_data)
@@ -341,11 +366,11 @@ fn make_fixed_size_list_array() -> FixedSizeListArray {
 }
 
 fn make_fixed_size_binary_array() -> FixedSizeBinaryArray {
-    let values: [u8; 15] = *b"hellotherearrow";
+    let values: &[u8; 15] = b"hellotherearrow";
 
     let array_data = ArrayData::builder(DataType::FixedSizeBinary(5))
         .len(3)
-        .add_buffer(Buffer::from(&values[..]))
+        .add_buffer(Buffer::from(values))
         .build()
         .unwrap();
     FixedSizeBinaryArray::from(array_data)
@@ -364,8 +389,7 @@ fn make_list_array() -> ListArray {
     let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
 
     // Construct a list array from the above two
-    let list_data_type =
-        DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+    let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -389,7 +413,7 @@ fn make_large_list_array() -> LargeListArray {
 
     // Construct a list array from the above two
     let list_data_type =
-        DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+        DataType::LargeList(Arc::new(Field::new_list_field(DataType::Int32, true)));
     let list_data = ArrayData::builder(list_data_type)
         .len(3)
         .add_buffer(value_offsets)
@@ -428,7 +452,29 @@ fn make_dictionary_utf8<K: ArrowDictionaryKeyType>() -> ArrayRef {
     Arc::new(b.finish())
 }
 
-fn create_decimal_array(
+fn create_decimal32_array(
+    array: Vec<Option<i32>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal32Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal32Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal64_array(
+    array: Vec<Option<i64>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal64Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal64Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal128_array(
     array: Vec<Option<i128>>,
     precision: u8,
     scale: i8,
@@ -436,6 +482,17 @@ fn create_decimal_array(
     array
         .into_iter()
         .collect::<Decimal128Array>()
+        .with_precision_and_scale(precision, scale)
+}
+
+fn create_decimal256_array(
+    array: Vec<Option<i256>>,
+    precision: u8,
+    scale: i8,
+) -> Result<Decimal256Array, ArrowError> {
+    array
+        .into_iter()
+        .collect::<Decimal256Array>()
         .with_precision_and_scale(precision, scale)
 }
 
@@ -484,12 +541,12 @@ fn get_all_types() -> Vec<DataType> {
         LargeBinary,
         Utf8,
         LargeUtf8,
-        List(Arc::new(Field::new("item", DataType::Int8, true))),
-        List(Arc::new(Field::new("item", DataType::Utf8, true))),
-        FixedSizeList(Arc::new(Field::new("item", DataType::Int8, true)), 10),
-        FixedSizeList(Arc::new(Field::new("item", DataType::Utf8, false)), 10),
-        LargeList(Arc::new(Field::new("item", DataType::Int8, true))),
-        LargeList(Arc::new(Field::new("item", DataType::Utf8, false))),
+        List(Arc::new(Field::new_list_field(DataType::Int8, true))),
+        List(Arc::new(Field::new_list_field(DataType::Utf8, true))),
+        FixedSizeList(Arc::new(Field::new_list_field(DataType::Int8, true)), 10),
+        FixedSizeList(Arc::new(Field::new_list_field(DataType::Utf8, false)), 10),
+        LargeList(Arc::new(Field::new_list_field(DataType::Int8, true))),
+        LargeList(Arc::new(Field::new_list_field(DataType::Utf8, false))),
         Struct(Fields::from(vec![
             Field::new("f1", DataType::Int32, true),
             Field::new("f2", DataType::Utf8, true),
@@ -507,8 +564,7 @@ fn get_all_types() -> Vec<DataType> {
         Decimal128(38, 0),
     ];
 
-    let dictionary_key_types =
-        vec![Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64];
+    let dictionary_key_types = vec![Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64];
 
     let mut dictionary_types = dictionary_key_types
         .into_iter()
@@ -519,6 +575,8 @@ fn get_all_types() -> Vec<DataType> {
                 Dictionary(Box::new(key_type.clone()), Box::new(LargeUtf8)),
                 Dictionary(Box::new(key_type.clone()), Box::new(Binary)),
                 Dictionary(Box::new(key_type.clone()), Box::new(LargeBinary)),
+                Dictionary(Box::new(key_type.clone()), Box::new(Decimal32(9, 0))),
+                Dictionary(Box::new(key_type.clone()), Box::new(Decimal64(18, 0))),
                 Dictionary(Box::new(key_type.clone()), Box::new(Decimal128(38, 0))),
                 Dictionary(Box::new(key_type), Box::new(Decimal256(76, 0))),
             ]
@@ -564,9 +622,7 @@ fn test_timestamp_cast_utf8() {
 }
 
 fn format_timezone(tz: &str) -> Result<String, ArrowError> {
-    let array = Arc::new(
-        TimestampSecondArray::from(vec![Some(11111111), None]).with_timezone(tz),
-    );
+    let array = Arc::new(TimestampSecondArray::from(vec![Some(11111111), None]).with_timezone(tz));
     Ok(pretty_format_columns("f", &[array])?.to_string())
 }
 
@@ -606,7 +662,7 @@ fn test_pretty_format_timestamp_second_with_incorrect_fixed_offset_timezone() {
     let err = format_timezone("08:00").unwrap_err().to_string();
     assert_eq!(
         err,
-        "Parser error: Invalid timezone \"08:00\": '08:00' is not a valid timezone"
+        "Parser error: Invalid timezone \"08:00\": failed to parse timezone"
     );
 }
 
@@ -615,6 +671,6 @@ fn test_pretty_format_timestamp_second_with_unknown_timezone() {
     let err = format_timezone("unknown").unwrap_err().to_string();
     assert_eq!(
         err,
-        "Parser error: Invalid timezone \"unknown\": 'unknown' is not a valid timezone"
+        "Parser error: Invalid timezone \"unknown\": failed to parse timezone"
     );
 }

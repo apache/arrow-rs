@@ -24,5 +24,5 @@ add-sections={"documentation":{"prefix":"**Documentation updates:**","labels":["
 #pull-requests=false
 # so that the component is shown associated with the issue
 issue-line-labels=arrow,parquet,arrow-flight
-exclude-labels=development-process,invalid,object-store
+exclude-labels=development-process,invalid,object-store,question
 breaking_labels=api-change

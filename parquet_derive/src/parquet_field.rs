@@ -86,7 +86,7 @@ impl Field {
 
         let vals_builder = match &self.ty {
             Type::TypePath(_) => self.copied_direct_vals(),
-            Type::Option(ref first_type) => match **first_type {
+            Type::Option(first_type) => match **first_type {
                 Type::TypePath(_) => self.option_into_vals(),
                 Type::Reference(_, ref second_type) => match **second_type {
                     Type::TypePath(_) => self.option_into_vals(),
@@ -98,7 +98,7 @@ impl Field {
                 },
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
-            Type::Reference(_, ref first_type) => match **first_type {
+            Type::Reference(_, first_type) => match **first_type {
                 Type::TypePath(_) => self.copied_direct_vals(),
                 Type::Option(ref second_type) => match **second_type {
                     Type::TypePath(_) => self.option_into_vals(),
@@ -122,7 +122,7 @@ impl Field {
                 },
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
-            Type::Vec(ref first_type) => match **first_type {
+            Type::Vec(first_type) => match **first_type {
                 Type::TypePath(_) => self.copied_direct_vals(),
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
@@ -131,24 +131,24 @@ impl Field {
 
         let definition_levels = match &self.ty {
             Type::TypePath(_) => None,
-            Type::Option(ref first_type) => match **first_type {
+            Type::Option(first_type) => match **first_type {
                 Type::TypePath(_) => Some(self.optional_definition_levels()),
                 Type::Option(_) => unimplemented!("Unsupported nesting encountered"),
                 Type::Reference(_, ref second_type)
                 | Type::Vec(ref second_type)
-                | Type::Array(ref second_type)
+                | Type::Array(ref second_type, _)
                 | Type::Slice(ref second_type) => match **second_type {
                     Type::TypePath(_) => Some(self.optional_definition_levels()),
                     _ => unimplemented!("Unsupported nesting encountered"),
                 },
             },
-            Type::Reference(_, ref first_type)
-            | Type::Vec(ref first_type)
-            | Type::Array(ref first_type)
-            | Type::Slice(ref first_type) => match **first_type {
+            Type::Reference(_, first_type)
+            | Type::Vec(first_type)
+            | Type::Array(first_type, _)
+            | Type::Slice(first_type) => match **first_type {
                 Type::TypePath(_) => None,
                 Type::Vec(ref second_type)
-                | Type::Array(ref second_type)
+                | Type::Array(ref second_type, _)
                 | Type::Slice(ref second_type) => match **second_type {
                     Type::TypePath(_) => None,
                     Type::Reference(_, ref third_type) => match **third_type {
@@ -161,13 +161,11 @@ impl Field {
                     match **second_type {
                         Type::TypePath(_) => Some(self.optional_definition_levels()),
                         Type::Vec(ref third_type)
-                        | Type::Array(ref third_type)
+                        | Type::Array(ref third_type, _)
                         | Type::Slice(ref third_type) => match **third_type {
                             Type::TypePath(_) => Some(self.optional_definition_levels()),
                             Type::Reference(_, ref fourth_type) => match **fourth_type {
-                                Type::TypePath(_) => {
-                                    Some(self.optional_definition_levels())
-                                }
+                                Type::TypePath(_) => Some(self.optional_definition_levels()),
                                 _ => unimplemented!("Unsupported definition encountered"),
                             },
                             _ => unimplemented!("Unsupported definition encountered"),
@@ -175,9 +173,7 @@ impl Field {
                         Type::Reference(_, ref third_type) => match **third_type {
                             Type::TypePath(_) => Some(self.optional_definition_levels()),
                             Type::Slice(ref fourth_type) => match **fourth_type {
-                                Type::TypePath(_) => {
-                                    Some(self.optional_definition_levels())
-                                }
+                                Type::TypePath(_) => Some(self.optional_definition_levels()),
                                 _ => unimplemented!("Unsupported definition encountered"),
                             },
                             _ => unimplemented!("Unsupported definition encountered"),
@@ -196,7 +192,7 @@ impl Field {
         // this expression just switches between non-nullable and nullable write statements
         let write_batch_expr = if definition_levels.is_some() {
             quote! {
-                if let #column_writer(ref mut typed) = column_writer.untyped() {
+                if let #column_writer(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{#ident})
@@ -204,7 +200,7 @@ impl Field {
             }
         } else {
             quote! {
-                if let #column_writer(ref mut typed) = column_writer.untyped() {
+                if let #column_writer(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{#ident})
@@ -219,6 +215,76 @@ impl Field {
                 #vals_builder
 
                 #write_batch_expr
+            }
+        }
+    }
+
+    /// Takes the parsed field of the struct and emits a valid
+    /// column reader snippet. Should match exactly what you
+    /// would write by hand.
+    ///
+    /// Can only generate writers for basic structs, for example:
+    ///
+    /// struct Record {
+    ///   a_bool: bool
+    /// }
+    ///
+    /// but not
+    ///
+    /// struct UnsupportedNestedRecord {
+    ///   a_property: bool,
+    ///   nested_record: Record
+    /// }
+    ///
+    /// because this parsing logic is not sophisticated enough for definition
+    /// levels beyond 2.
+    ///
+    /// `Option` types and references not supported, but the column itself can be nullable
+    /// (i.e., def_level==1), as long as the values are all valid.
+    pub fn reader_snippet(&self) -> proc_macro2::TokenStream {
+        let ident = &self.ident;
+        let column_reader = self.ty.column_reader();
+
+        // generate the code to read the column into a vector `vals`
+        let write_batch_expr = quote! {
+            let mut vals = Vec::new();
+            if let #column_reader(mut typed) = column_reader {
+                let mut definition_levels = Vec::new();
+                let (total_num, valid_num, decoded_num) = typed.read_records(
+                    num_records, Some(&mut definition_levels), None, &mut vals)?;
+                if valid_num != decoded_num {
+                    panic!("Support only valid records, found {} null records in column type {}",
+                        decoded_num - valid_num, stringify!{#ident});
+                }
+            } else {
+                panic!("Schema and struct disagree on type for {}", stringify!{#ident});
+            }
+        };
+
+        // generate the code to convert each element of `vals` to the correct type and then write
+        // it to its field in the corresponding struct
+        let vals_writer = match &self.ty {
+            Type::TypePath(_) => self.copied_direct_fields(),
+            Type::Reference(_, first_type) => match **first_type {
+                Type::TypePath(_) => self.copied_direct_fields(),
+                Type::Slice(ref second_type) => match **second_type {
+                    Type::TypePath(_) => self.copied_direct_fields(),
+                    ref f => unimplemented!("Unsupported: {:#?}", f),
+                },
+                ref f => unimplemented!("Unsupported: {:#?}", f),
+            },
+            Type::Vec(first_type) => match **first_type {
+                Type::TypePath(_) => self.copied_direct_fields(),
+                ref f => unimplemented!("Unsupported: {:#?}", f),
+            },
+            f => unimplemented!("Unsupported: {:#?}", f),
+        };
+
+        quote! {
+            {
+                #write_batch_expr
+
+                #vals_writer
             }
         }
     }
@@ -257,32 +323,29 @@ impl Field {
         let logical_type = self.ty.logical_type();
         let repetition = self.ty.repetition();
         let converted_type = self.ty.converted_type();
+        let length = self.ty.length();
+
+        let mut builder = quote! {
+            ParquetType::primitive_type_builder(#field_name, #physical_type)
+                .with_logical_type(#logical_type)
+                .with_repetition(#repetition)
+        };
 
         if let Some(converted_type) = converted_type {
-            quote! {
-                fields.push(ParquetType::primitive_type_builder(#field_name, #physical_type)
-                    .with_logical_type(#logical_type)
-                    .with_repetition(#repetition)
-                    .with_converted_type(#converted_type)
-                    .build().unwrap().into()
-                )
-            }
-        } else {
-            quote! {
-                fields.push(ParquetType::primitive_type_builder(#field_name, #physical_type)
-                    .with_logical_type(#logical_type)
-                    .with_repetition(#repetition)
-                    .build().unwrap().into()
-                )
-            }
+            builder = quote! { #builder.with_converted_type(#converted_type) };
         }
+
+        if let Some(length) = length {
+            builder = quote! { #builder.with_length(#length) };
+        }
+
+        quote! {  fields.push(#builder.build().unwrap().into()) }
     }
 
     fn option_into_vals(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
         let is_a_byte_buf = self.is_a_byte_buf;
-        let is_a_timestamp =
-            self.third_party_type == Some(ThirdPartyType::ChronoNaiveDateTime);
+        let is_a_timestamp = self.third_party_type == Some(ThirdPartyType::ChronoNaiveDateTime);
         let is_a_date = self.third_party_type == Some(ThirdPartyType::ChronoNaiveDate);
         let is_a_uuid = self.third_party_type == Some(ThirdPartyType::Uuid);
         let copy_to_vec = !matches!(
@@ -293,7 +356,7 @@ impl Field {
         let binding = if copy_to_vec {
             quote! { let Some(inner) = rec.#field_name }
         } else {
-            quote! { let Some(ref inner) = rec.#field_name }
+            quote! { let Some(inner) = &rec.#field_name }
         };
 
         let some = if is_a_timestamp {
@@ -324,33 +387,74 @@ impl Field {
         }
     }
 
+    // generates code to read `field_name` from each record into a vector `vals`
     fn copied_direct_vals(&self) -> proc_macro2::TokenStream {
         let field_name = &self.ident;
-        let is_a_byte_buf = self.is_a_byte_buf;
-        let is_a_timestamp =
-            self.third_party_type == Some(ThirdPartyType::ChronoNaiveDateTime);
-        let is_a_date = self.third_party_type == Some(ThirdPartyType::ChronoNaiveDate);
-        let is_a_uuid = self.third_party_type == Some(ThirdPartyType::Uuid);
 
-        let access = if is_a_timestamp {
-            quote! { rec.#field_name.timestamp_millis() }
-        } else if is_a_date {
-            quote! { rec.#field_name.signed_duration_since(::chrono::NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32 }
-        } else if is_a_uuid {
-            quote! { (&rec.#field_name.to_string()[..]).into() }
-        } else if is_a_byte_buf {
-            quote! { (&rec.#field_name[..]).into() }
-        } else {
-            // Type might need converting to a physical type
-            match self.ty.physical_type() {
-                parquet::basic::Type::INT32 => quote! { rec.#field_name as i32 },
-                parquet::basic::Type::INT64 => quote! { rec.#field_name as i64 },
-                _ => quote! { rec.#field_name },
+        let access = match self.third_party_type {
+            Some(ThirdPartyType::ChronoNaiveDateTime) => {
+                quote! { rec.#field_name.timestamp_millis() }
+            }
+            Some(ThirdPartyType::ChronoNaiveDate) => {
+                quote! { rec.#field_name.signed_duration_since(::chrono::NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32 }
+            }
+            Some(ThirdPartyType::Uuid) => {
+                quote! { rec.#field_name.as_bytes().to_vec().into() }
+            }
+            _ => {
+                if self.is_a_byte_buf {
+                    quote! { (&rec.#field_name[..]).into() }
+                } else {
+                    // Type might need converting to a physical type
+                    match self.ty.physical_type() {
+                        parquet::basic::Type::INT32 => quote! { rec.#field_name as i32 },
+                        parquet::basic::Type::INT64 => quote! { rec.#field_name as i64 },
+                        _ => quote! { rec.#field_name },
+                    }
+                }
             }
         };
 
         quote! {
             let vals: Vec<_> = records.iter().map(|rec| #access).collect();
+        }
+    }
+
+    // generates code to read a vector `records` into `field_name` for each record
+    fn copied_direct_fields(&self) -> proc_macro2::TokenStream {
+        let field_name = &self.ident;
+
+        let value = match self.third_party_type {
+            Some(ThirdPartyType::ChronoNaiveDateTime) => {
+                quote! { ::chrono::naive::NaiveDateTime::from_timestamp_millis(vals[i]).unwrap() }
+            }
+            Some(ThirdPartyType::ChronoNaiveDate) => {
+                // NaiveDateTime::UNIX_EPOCH.num_days_from_ce() == 719163
+                quote! {
+                    ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i].saturating_add(719163)).unwrap()
+                }
+            }
+            Some(ThirdPartyType::Uuid) => {
+                quote! { ::uuid::Uuid::from_bytes(vals[i].data().try_into().unwrap()) }
+            }
+            _ => match &self.ty {
+                Type::TypePath(_) => match self.ty.last_part().as_str() {
+                    "String" => quote! { String::from(std::str::from_utf8(vals[i].data())
+                    .expect("invalid UTF-8 sequence")) },
+                    t => {
+                        let s: proc_macro2::TokenStream = t.parse().unwrap();
+                        quote! { vals[i] as #s }
+                    }
+                },
+                Type::Vec(_) => quote! { vals[i].data().to_vec() },
+                f => unimplemented!("Unsupported: {:#?}", f),
+            },
+        };
+
+        quote! {
+            for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
+                r.#field_name = #value;
+            }
         }
     }
 
@@ -370,7 +474,7 @@ impl Field {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, PartialEq)]
 enum Type {
-    Array(Box<Type>),
+    Array(Box<Type>, syn::Expr),
     Option(Box<Type>),
     Slice(Box<Type>),
     Vec(Box<Type>),
@@ -402,6 +506,29 @@ impl Type {
         }
     }
 
+    /// Takes a rust type and returns the appropriate
+    /// parquet-rs column reader
+    fn column_reader(&self) -> syn::TypePath {
+        use parquet::basic::Type as BasicType;
+
+        match self.physical_type() {
+            BasicType::BOOLEAN => {
+                syn::parse_quote!(ColumnReader::BoolColumnReader)
+            }
+            BasicType::INT32 => syn::parse_quote!(ColumnReader::Int32ColumnReader),
+            BasicType::INT64 => syn::parse_quote!(ColumnReader::Int64ColumnReader),
+            BasicType::INT96 => syn::parse_quote!(ColumnReader::Int96ColumnReader),
+            BasicType::FLOAT => syn::parse_quote!(ColumnReader::FloatColumnReader),
+            BasicType::DOUBLE => syn::parse_quote!(ColumnReader::DoubleColumnReader),
+            BasicType::BYTE_ARRAY => {
+                syn::parse_quote!(ColumnReader::ByteArrayColumnReader)
+            }
+            BasicType::FIXED_LEN_BYTE_ARRAY => {
+                syn::parse_quote!(ColumnReader::FixedLenByteArrayColumnReader)
+            }
+        }
+    }
+
     /// Helper to simplify a nested field definition to its leaf type
     ///
     /// Ex:
@@ -415,17 +542,14 @@ impl Type {
         Type::leaf_type_recursive_helper(self, None)
     }
 
-    fn leaf_type_recursive_helper<'a>(
-        ty: &'a Type,
-        parent_ty: Option<&'a Type>,
-    ) -> &'a Type {
+    fn leaf_type_recursive_helper<'a>(ty: &'a Type, parent_ty: Option<&'a Type>) -> &'a Type {
         match ty {
             Type::TypePath(_) => parent_ty.unwrap_or(ty),
-            Type::Option(ref first_type)
-            | Type::Vec(ref first_type)
-            | Type::Array(ref first_type)
-            | Type::Slice(ref first_type)
-            | Type::Reference(_, ref first_type) => {
+            Type::Option(first_type)
+            | Type::Vec(first_type)
+            | Type::Array(first_type, _)
+            | Type::Slice(first_type)
+            | Type::Reference(_, first_type) => {
                 Type::leaf_type_recursive_helper(first_type, Some(ty))
             }
         }
@@ -438,12 +562,12 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::TypePath(ref type_) => type_,
-            Type::Option(ref first_type)
-            | Type::Vec(ref first_type)
-            | Type::Array(ref first_type)
-            | Type::Slice(ref first_type)
-            | Type::Reference(_, ref first_type) => match **first_type {
+            Type::TypePath(type_) => type_,
+            Type::Option(first_type)
+            | Type::Vec(first_type)
+            | Type::Array(first_type, _)
+            | Type::Slice(first_type)
+            | Type::Reference(_, first_type) => match **first_type {
                 Type::TypePath(ref type_) => type_,
                 _ => unimplemented!("leaf_type() should only return shallow types"),
             },
@@ -488,14 +612,14 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::Array(ref first_type) => {
+            Type::Array(first_type, _length) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return BasicType::FIXED_LEN_BYTE_ARRAY;
                     }
                 }
             }
-            Type::Vec(ref first_type) | Type::Slice(ref first_type) => {
+            Type::Vec(first_type) | Type::Slice(first_type) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return BasicType::BYTE_ARRAY;
@@ -519,8 +643,29 @@ impl Type {
             }
             "f32" => BasicType::FLOAT,
             "f64" => BasicType::DOUBLE,
-            "String" | "str" | "Uuid" | "Arc < str >" => BasicType::BYTE_ARRAY,
+            "String" | "str" | "Arc < str >" => BasicType::BYTE_ARRAY,
+            "Uuid" => BasicType::FIXED_LEN_BYTE_ARRAY,
             f => unimplemented!("{} currently is not supported", f),
+        }
+    }
+
+    fn length(&self) -> Option<syn::Expr> {
+        let last_part = self.last_part();
+        let leaf_type = self.leaf_type_recursive();
+
+        // `[u8; N]` => Some(N)
+        if let Type::Array(first_type, length) = leaf_type {
+            if let Type::TypePath(_) = **first_type {
+                if last_part == "u8" {
+                    return Some(length.clone());
+                }
+            }
+        }
+
+        match last_part.trim() {
+            // Uuid => [u8; 16] => Some(16)
+            "Uuid" => Some(syn::parse_quote!(16)),
+            _ => None,
         }
     }
 
@@ -529,14 +674,14 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::Array(ref first_type) => {
+            Type::Array(first_type, _length) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return quote! { None };
                     }
                 }
             }
-            Type::Vec(ref first_type) | Type::Slice(ref first_type) => {
+            Type::Vec(first_type) | Type::Slice(first_type) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return quote! { None };
@@ -598,9 +743,7 @@ impl Type {
         let last_part = self.last_part();
 
         match last_part.trim() {
-            "NaiveDateTime" => {
-                Some(quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS })
-            }
+            "NaiveDateTime" => Some(quote! { ::parquet::basic::ConvertedType::TIMESTAMP_MILLIS }),
             _ => None,
         }
     }
@@ -621,10 +764,10 @@ impl Type {
 
     fn from_type(f: &syn::Field, ty: &syn::Type) -> Self {
         match ty {
-            syn::Type::Path(ref p) => Type::from_type_path(f, p),
-            syn::Type::Reference(ref tr) => Type::from_type_reference(f, tr),
-            syn::Type::Array(ref ta) => Type::from_type_array(f, ta),
-            syn::Type::Slice(ref ts) => Type::from_type_slice(f, ts),
+            syn::Type::Path(p) => Type::from_type_path(f, p),
+            syn::Type::Reference(tr) => Type::from_type_reference(f, tr),
+            syn::Type::Array(ta) => Type::from_type_array(f, ta),
+            syn::Type::Slice(ts) => Type::from_type_slice(f, ts),
             other => unimplemented!(
                 "Unable to derive {:?} - it is currently an unsupported type\n{:#?}",
                 f.ident.as_ref().unwrap(),
@@ -636,10 +779,9 @@ impl Type {
     fn from_type_path(f: &syn::Field, p: &syn::TypePath) -> Self {
         let last_segment = p.path.segments.last().unwrap();
 
-        let is_vec =
-            last_segment.ident == syn::Ident::new("Vec", proc_macro2::Span::call_site());
-        let is_option = last_segment.ident
-            == syn::Ident::new("Option", proc_macro2::Span::call_site());
+        let is_vec = last_segment.ident == syn::Ident::new("Vec", proc_macro2::Span::call_site());
+        let is_option =
+            last_segment.ident == syn::Ident::new("Option", proc_macro2::Span::call_site());
 
         if is_vec || is_option {
             let generic_type = match &last_segment.arguments {
@@ -648,7 +790,7 @@ impl Type {
                     let first_arg = &angle_args.args[0];
 
                     match first_arg {
-                        syn::GenericArgument::Type(ref typath) => typath.clone(),
+                        syn::GenericArgument::Type(typath) => typath.clone(),
                         other => unimplemented!("Unsupported: {:#?}", other),
                     }
                 }
@@ -673,7 +815,7 @@ impl Type {
 
     fn from_type_array(f: &syn::Field, ta: &syn::TypeArray) -> Self {
         let inner_type = Type::from_type(f, ta.elem.as_ref());
-        Type::Array(Box::new(inner_type))
+        Type::Array(Box::new(inner_type), ta.len.clone())
     }
 
     fn from_type_slice(f: &syn::Field, ts: &syn::TypeSlice) -> Self {
@@ -685,7 +827,7 @@ impl Type {
 #[cfg(test)]
 mod test {
     use super::*;
-    use syn::{self, Data, DataStruct, DeriveInput};
+    use syn::{Data, DataStruct, DeriveInput};
 
     fn extract_fields(input: proc_macro2::TokenStream) -> Vec<syn::Field> {
         let input: DeriveInput = syn::parse2(input).unwrap();
@@ -715,13 +857,50 @@ mod test {
                         {
                             let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter as i64 ) . collect ( );
 
-                            if let ColumnWriter::Int64ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                            if let ColumnWriter::Int64ColumnWriter ( typed ) = column_writer.untyped() {
                                 typed . write_batch ( & vals [ .. ] , None , None ) ?;
                             }  else {
                                 panic!("Schema and struct disagree on type for {}" , stringify!{ counter } )
                             }
                         }
                    }).to_string()
+        )
+    }
+
+    #[test]
+    fn test_generating_a_simple_reader_snippet() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ABoringStruct {
+            counter: usize,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let counter = Field::from(&fields[0]);
+
+        let snippet = counter.reader_snippet().to_string();
+        assert_eq!(
+            snippet,
+            (quote! {
+                 {
+                    let mut vals = Vec::new();
+                    if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
+                        let mut definition_levels = Vec::new();
+                        let (total_num, valid_num, decoded_num) = typed.read_records(
+                            num_records, Some(&mut definition_levels), None, &mut vals)?;
+                        if valid_num != decoded_num {
+                            panic!("Support only valid records, found {} null records in column type {}",
+                                decoded_num - valid_num, stringify!{counter});
+                        }
+                    } else {
+                        panic!("Schema and struct disagree on type for {}", stringify!{counter});
+                    }
+                    for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
+                        r.counter = vals[i] as usize;
+                    }
+                 }
+            })
+            .to_string()
         )
     }
 
@@ -745,14 +924,14 @@ mod test {
                 let definition_levels : Vec < i16 > = self . iter ( ) . map ( | rec | if rec . optional_str . is_some ( ) { 1 } else { 0 } ) . collect ( ) ;
 
                 let vals: Vec <_> = records.iter().filter_map( |rec| {
-                    if let Some ( ref inner ) = rec . optional_str {
+                    if let Some ( inner ) = &rec . optional_str {
                         Some ( (&inner[..]).into() )
                     } else {
                         None
                     }
                 }).collect();
 
-                if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                if let ColumnWriter::ByteArrayColumnWriter ( typed ) = column_writer.untyped() {
                     typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify ! { optional_str } )
@@ -769,14 +948,14 @@ mod test {
                         let definition_levels : Vec < i16 > = self . iter ( ) . map ( | rec | if rec . optional_string . is_some ( ) { 1 } else { 0 } ) . collect ( ) ;
 
                         let vals: Vec <_> = records.iter().filter_map( |rec| {
-                            if let Some ( ref inner ) = rec . optional_string {
+                            if let Some ( inner ) = &rec . optional_string {
                                 Some ( (&inner[..]).into() )
                             } else {
                                 None
                             }
                         }).collect();
 
-                        if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::ByteArrayColumnWriter ( typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         } else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_string } )
@@ -799,7 +978,7 @@ mod test {
                             }
                         }).collect();
 
-                        if let ColumnWriter::Int32ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::Int32ColumnWriter ( typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         }  else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_dumb_int } )
@@ -830,6 +1009,32 @@ mod test {
             vec![
                 syn::parse_quote!(ColumnWriter::BoolColumnWriter),
                 syn::parse_quote!(ColumnWriter::ByteArrayColumnWriter)
+            ]
+        );
+    }
+
+    #[test]
+    fn test_converting_to_column_reader_type() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ABasicStruct {
+            yes_no: bool,
+            name: String,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let processed: Vec<_> = fields.iter().map(Field::from).collect();
+
+        let column_readers: Vec<_> = processed
+            .iter()
+            .map(|field| field.ty.column_reader())
+            .collect();
+
+        assert_eq!(
+            column_readers,
+            vec![
+                syn::parse_quote!(ColumnReader::BoolColumnReader),
+                syn::parse_quote!(ColumnReader::ByteArrayColumnReader)
             ]
         );
     }
@@ -918,6 +1123,7 @@ mod test {
             a_fix_byte_buf: [u8; 10],
             a_complex_option: ::std::option::Option<&Vec<u8>>,
             a_complex_vec: &::std::vec::Vec<&Option<u8>>,
+            a_uuid: ::uuid::Uuid,
           }
         };
 
@@ -937,7 +1143,42 @@ mod test {
                 BasicType::BYTE_ARRAY,
                 BasicType::FIXED_LEN_BYTE_ARRAY,
                 BasicType::BYTE_ARRAY,
-                BasicType::INT32
+                BasicType::INT32,
+                BasicType::FIXED_LEN_BYTE_ARRAY,
+            ]
+        )
+    }
+
+    #[test]
+    fn test_type_length() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct LotsOfInnerTypes {
+            a_buf: ::std::vec::Vec<u8>,
+            a_number: i32,
+            a_verbose_option: ::std::option::Option<bool>,
+            a_silly_string: String,
+            a_fix_byte_buf: [u8; 10],
+            a_complex_option: ::std::option::Option<&Vec<u8>>,
+            a_complex_vec: &::std::vec::Vec<&Option<u8>>,
+            a_uuid: ::uuid::Uuid,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let converted_fields: Vec<_> = fields.iter().map(Type::from).collect();
+        let lengths: Vec<_> = converted_fields.iter().map(|ty| ty.length()).collect();
+
+        assert_eq!(
+            lengths,
+            vec![
+                None,
+                None,
+                None,
+                None,
+                Some(syn::parse_quote!(10)),
+                None,
+                None,
+                Some(syn::parse_quote!(16)),
             ]
         )
     }
@@ -1007,7 +1248,7 @@ mod test {
     }
 
     #[test]
-    fn test_chrono_timestamp_millis() {
+    fn test_chrono_timestamp_millis_write() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct ATimestampStruct {
             henceforth: chrono::NaiveDateTime,
@@ -1020,7 +1261,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.timestamp_millis() ).collect();
-                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -1040,7 +1281,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1050,7 +1291,38 @@ mod test {
     }
 
     #[test]
-    fn test_chrono_date() {
+    fn test_chrono_timestamp_millis_read() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ATimestampStruct {
+            henceforth: chrono::NaiveDateTime,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let when = Field::from(&fields[0]);
+        assert_eq!(when.reader_snippet().to_string(),(quote!{
+            {
+                let mut vals = Vec::new();
+                if let ColumnReader::Int64ColumnReader(mut typed) = column_reader {
+                    let mut definition_levels = Vec::new();
+                    let (total_num, valid_num, decoded_num) = typed.read_records(
+                        num_records, Some(&mut definition_levels), None, &mut vals)?;
+                    if valid_num != decoded_num {
+                        panic!("Support only valid records, found {} null records in column type {}",
+                            decoded_num - valid_num, stringify!{henceforth});
+                    }
+                } else {
+                    panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
+                }
+                for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
+                    r.henceforth = ::chrono::naive::NaiveDateTime::from_timestamp_millis(vals[i]).unwrap();
+                }
+            }
+        }).to_string());
+    }
+
+    #[test]
+    fn test_chrono_date_write() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct ATimestampStruct {
             henceforth: chrono::NaiveDate,
@@ -1063,7 +1335,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.signed_duration_since(::chrono::NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32).collect();
-                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -1083,7 +1355,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1093,7 +1365,38 @@ mod test {
     }
 
     #[test]
-    fn test_uuid() {
+    fn test_chrono_date_read() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct ATimestampStruct {
+            henceforth: chrono::NaiveDate,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let when = Field::from(&fields[0]);
+        assert_eq!(when.reader_snippet().to_string(),(quote!{
+            {
+                let mut vals = Vec::new();
+                if let ColumnReader::Int32ColumnReader(mut typed) = column_reader {
+                    let mut definition_levels = Vec::new();
+                    let (total_num, valid_num, decoded_num) = typed.read_records(
+                        num_records, Some(&mut definition_levels), None, &mut vals)?;
+                    if valid_num != decoded_num {
+                        panic!("Support only valid records, found {} null records in column type {}",
+                            decoded_num - valid_num, stringify!{henceforth});
+                    }
+                } else {
+                    panic!("Schema and struct disagree on type for {}", stringify!{ henceforth });
+                }
+                for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
+                    r.henceforth = ::chrono::naive::NaiveDate::from_num_days_from_ce_opt(vals[i].saturating_add(719163)).unwrap();
+                }
+            }
+        }).to_string());
+    }
+
+    #[test]
+    fn test_uuid_write() {
         let snippet: proc_macro2::TokenStream = quote! {
           struct AUuidStruct {
             unique_id: uuid::Uuid,
@@ -1105,8 +1408,8 @@ mod test {
         let when = Field::from(&fields[0]);
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
-                let vals : Vec<_> = records.iter().map(|rec| (&rec.unique_id.to_string()[..]).into() ).collect();
-                if let ColumnWriter::ByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                let vals : Vec<_> = records.iter().map(|rec| rec.unique_id.as_bytes().to_vec().into() ).collect();
+                if let ColumnWriter::FixedLenByteArrayColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ unique_id })
@@ -1119,17 +1422,48 @@ mod test {
             {
                 let definition_levels : Vec<i16> = self.iter().map(|rec| if rec.maybe_unique_id.is_some() { 1 } else { 0 }).collect();
                 let vals : Vec<_> = records.iter().filter_map(|rec| {
-                    if let Some(ref inner) = rec.maybe_unique_id {
+                    if let Some(inner) = &rec.maybe_unique_id {
                         Some((&inner.to_string()[..]).into())
                     } else {
                         None
                     }
                 }).collect();
 
-                if let ColumnWriter::ByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::FixedLenByteArrayColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_unique_id })
+                }
+            }
+        }).to_string());
+    }
+
+    #[test]
+    fn test_uuid_read() {
+        let snippet: proc_macro2::TokenStream = quote! {
+          struct AUuidStruct {
+            unique_id: uuid::Uuid,
+          }
+        };
+
+        let fields = extract_fields(snippet);
+        let when = Field::from(&fields[0]);
+        assert_eq!(when.reader_snippet().to_string(),(quote!{
+            {
+                let mut vals = Vec::new();
+                if let ColumnReader::FixedLenByteArrayColumnReader(mut typed) = column_reader {
+                    let mut definition_levels = Vec::new();
+                    let (total_num, valid_num, decoded_num) = typed.read_records(
+                        num_records, Some(&mut definition_levels), None, &mut vals)?;
+                    if valid_num != decoded_num {
+                        panic!("Support only valid records, found {} null records in column type {}",
+                            decoded_num - valid_num, stringify!{unique_id});
+                    }
+                } else {
+                    panic!("Schema and struct disagree on type for {}", stringify!{ unique_id });
+                }
+                for (i, r) in &mut records[..num_records].iter_mut().enumerate() {
+                    r.unique_id = ::uuid::Uuid::from_bytes(vals[i].data().try_into().unwrap());
                 }
             }
         }).to_string());
