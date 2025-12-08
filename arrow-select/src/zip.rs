@@ -19,10 +19,7 @@
 
 use crate::filter::{SlicesIterator, prep_null_mask_filter};
 use arrow_array::cast::AsArray;
-use arrow_array::types::{
-    BinaryType, ByteArrayType, ByteViewType, LargeBinaryType, LargeUtf8Type, StringViewType,
-    Utf8Type,
-};
+use arrow_array::types::{BinaryType, BinaryViewType, ByteArrayType, ByteViewType, LargeBinaryType, LargeUtf8Type, StringViewType, Utf8Type};
 use arrow_array::*;
 use arrow_buffer::{
     BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, OffsetBufferBuilder,
@@ -289,6 +286,9 @@ impl ScalarZipper {
             },
             DataType::Utf8View => {
                 Arc::new(ByteViewScalarImpl::<StringViewType>::new(truthy, falsy)) as Arc<dyn ZipImpl>
+            },
+            DataType::BinaryView => {
+                Arc::new(ByteViewScalarImpl::<BinaryViewType>::new(truthy, falsy)) as Arc<dyn ZipImpl>
             },
             _ => {
                 Arc::new(FallbackImpl::new(truthy, falsy)) as Arc<dyn ZipImpl>
@@ -1417,6 +1417,21 @@ mod test {
             Some("world"),
             Some("hello"),
             Some("world"),
+        ]);
+        assert_eq!(actual, &expected);
+    }
+
+    #[test]
+    fn test_zip_kernel_scalar_binary_array_view() {
+        let scalar_truthy = Scalar::new(BinaryViewArray::from_iter_values(vec![b"hello"]));
+        let scalar_falsy = Scalar::new(BinaryViewArray::from_iter_values(vec![b"world"]));
+
+        let mask = BooleanArray::from(vec![true, false]);
+        let out = zip(&mask, &scalar_truthy, &scalar_falsy).unwrap();
+        let actual = out.as_byte_view();
+        let expected = BinaryViewArray::from_iter_values(vec![
+            b"hello",
+            b"world",
         ]);
         assert_eq!(actual, &expected);
     }
