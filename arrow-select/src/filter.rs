@@ -296,11 +296,11 @@ impl FilterBuilder {
 pub enum IterationStrategy {
     /// A lazily evaluated iterator of ranges (slices)
     ///
-    /// Best for high selectivity filters (> 80% of rows selected)
+    /// Best for low selectivity filters
     SlicesIterator,
     /// A lazily evaluated iterator of indices
     ///
-    /// Best for low selectivity filters (< 80% of rows selected)
+    /// Best for high selectivity filters
     IndexIterator,
     /// A precomputed list of indices
     Indices(Vec<usize>),
