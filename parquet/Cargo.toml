@@ -273,5 +273,10 @@ name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
 
+[[bench]]
+name = "metadata_flatbuf"
+harness = false
+required-features = ["arrow", "flatbuffers_metadata"]
+
 [lib]
 bench = false
