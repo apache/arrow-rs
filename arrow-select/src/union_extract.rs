@@ -19,10 +19,10 @@
 
 use crate::take::take;
 use arrow_array::{
-    make_array, new_empty_array, new_null_array, Array, ArrayRef, BooleanArray, Int32Array, Scalar,
-    UnionArray,
+    Array, ArrayRef, BooleanArray, Int32Array, Scalar, UnionArray, make_array, new_empty_array,
+    new_null_array,
 };
-use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer, ScalarBuffer, bit_util};
 use arrow_data::layout;
 use arrow_schema::{ArrowError, DataType, UnionFields};
 use std::cmp::Ordering;
@@ -257,7 +257,7 @@ fn extract_dense(
                 //case 6: some type_ids matches our target, but not all. For selected values, take the value pointed by the offset. For unselected, use a valid null
                 Ok(take(
                     target,
-                    &Int32Array::new(offsets.clone(), Some(selected.into())),
+                    &Int32Array::try_new(offsets.clone(), Some(selected.into()))?,
                     None,
                 )?)
             }
@@ -341,7 +341,7 @@ fn eq_scalar_inner(chunk_size: usize, type_ids: &[i8], target: i8) -> BoolValue 
             .copied()
             .enumerate()
             .fold(0, |packed, (bit_idx, v)| {
-                packed | ((v == target) as u64) << bit_idx
+                packed | (((v == target) as u64) << bit_idx)
             })
     }));
 
@@ -399,8 +399,8 @@ fn is_sequential_generic<const N: usize>(offsets: &[i32]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{eq_scalar_inner, is_sequential_generic, union_extract, BoolValue};
-    use arrow_array::{new_null_array, Array, Int32Array, NullArray, StringArray, UnionArray};
+    use super::{BoolValue, eq_scalar_inner, is_sequential_generic, union_extract};
+    use arrow_array::{Array, Int32Array, NullArray, StringArray, UnionArray, new_null_array};
     use arrow_buffer::{BooleanBuffer, ScalarBuffer};
     use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
     use std::sync::Arc;

@@ -24,8 +24,8 @@ pub(crate) fn cast_values_to_list<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let values = cast_with_options(array, to.data_type(), cast_options)?;
-    let offsets = OffsetBuffer::from_lengths(std::iter::repeat(1).take(values.len()));
-    let list = GenericListArray::<O>::new(to.clone(), offsets, values, None);
+    let offsets = OffsetBuffer::from_repeated_length(1, values.len());
+    let list = GenericListArray::<O>::try_new(to.clone(), offsets, values, None)?;
     Ok(Arc::new(list))
 }
 
@@ -37,7 +37,7 @@ pub(crate) fn cast_values_to_fixed_size_list(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let values = cast_with_options(array, to.data_type(), cast_options)?;
-    let list = FixedSizeListArray::new(to.clone(), size, values, None);
+    let list = FixedSizeListArray::try_new(to.clone(), size, values, None)?;
     Ok(Arc::new(list))
 }
 
@@ -88,6 +88,17 @@ where
     let mut mutable = MutableArrayData::new(vec![&values], nullable, cap);
     // The end position in values of the last incorrectly-sized list slice
     let mut last_pos = 0;
+
+    // Need to flag when previous vector(s) are empty/None to distinguish from 'All slices were correct length' cases.
+    let is_prev_empty = if array.offsets().len() < 2 {
+        false
+    } else {
+        let first_offset = array.offsets()[0].as_usize();
+        let second_offset = array.offsets()[1].as_usize();
+
+        first_offset == 0 && second_offset == 0
+    };
+
     for (idx, w) in array.offsets().windows(2).enumerate() {
         let start_pos = w[0].as_usize();
         let end_pos = w[1].as_usize();
@@ -113,7 +124,7 @@ where
     }
 
     let values = match last_pos {
-        0 => array.values().slice(0, cap), // All slices were the correct length
+        0 if !is_prev_empty => array.values().slice(0, cap), // All slices were the correct length
         _ => {
             if mutable.len() != cap {
                 // Remaining slices were all correct length
@@ -129,7 +140,7 @@ where
 
     // Construct the FixedSizeListArray
     let nulls = nulls.map(|mut x| x.finish().into());
-    let array = FixedSizeListArray::new(field.clone(), size, values, nulls);
+    let array = FixedSizeListArray::try_new(field.clone(), size, values, nulls)?;
     Ok(Arc::new(array))
 }
 
@@ -141,12 +152,12 @@ pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<O>();
     let values = cast_with_options(list.values(), to.data_type(), cast_options)?;
-    Ok(Arc::new(GenericListArray::<O>::new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         to.clone(),
         list.offsets().clone(),
         values,
         list.nulls().cloned(),
-    )))
+    )?))
 }
 
 /// Cast the container type of List/Largelist array along with the inner datatype
@@ -173,10 +184,10 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     // Safety: valid offsets and checked for overflow
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
 
-    Ok(Arc::new(GenericListArray::<O>::new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         field.clone(),
         offsets,
         values,
         nulls,
-    )))
+    )?))
 }

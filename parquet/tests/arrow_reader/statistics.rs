@@ -23,28 +23,29 @@ use std::fs::File;
 use std::sync::Arc;
 
 use super::make_test_file_rg;
-use super::{struct_array, Scenario};
+use super::{Scenario, struct_array};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::datatypes::{
-    i256, Date32Type, Date64Type, TimestampMicrosecondType, TimestampMillisecondType,
-    TimestampNanosecondType, TimestampSecondType,
+    Date32Type, Date64Type, TimestampMicrosecondType, TimestampMillisecondType,
+    TimestampNanosecondType, TimestampSecondType, i256,
 };
 use arrow_array::{
-    make_array, new_null_array, Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray,
-    Date32Array, Date64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray, Float16Array,
-    Float32Array, Float64Array, Int16Array, Int32Array, Int64Array, Int8Array, LargeBinaryArray,
-    LargeStringArray, RecordBatch, StringArray, StringViewArray, Time32MillisecondArray,
-    Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray, TimestampMicrosecondArray,
-    TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
-    UInt32Array, UInt64Array, UInt8Array,
+    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
+    Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array, FixedSizeBinaryArray,
+    Float16Array, Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    LargeBinaryArray, LargeStringArray, RecordBatch, StringArray, StringViewArray,
+    Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, make_array,
+    new_null_array,
 };
 use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use half::f16;
+use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
 use parquet::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
 };
-use parquet::arrow::ArrowWriter;
 use parquet::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::file::statistics::{Statistics, ValueStatistics};
@@ -82,7 +83,7 @@ impl Int64Case {
                 Int64Array::from_iter(
                     v64.into_iter()
                         .map(Some)
-                        .chain(std::iter::repeat(None).take(self.null_values)),
+                        .chain(std::iter::repeat_n(None, self.null_values)),
                 )
                 .to_data(),
             )],
@@ -212,6 +213,8 @@ struct Test<'a> {
     expected_max: ArrayRef,
     expected_null_counts: UInt64Array,
     expected_row_counts: Option<UInt64Array>,
+    expected_max_value_exact: BooleanArray,
+    expected_min_value_exact: BooleanArray,
     /// Which column to extract statistics from
     column_name: &'static str,
     /// What statistics should be checked?
@@ -245,6 +248,8 @@ impl Test<'_> {
             expected_max,
             expected_null_counts,
             expected_row_counts,
+            expected_max_value_exact: expected_max_exact,
+            expected_min_value_exact: expected_min_exact,
             column_name,
             check,
         } = self;
@@ -328,6 +333,24 @@ impl Test<'_> {
                 "{column_name}: Mismatch with expected row counts. \
                 Actual: {row_counts:?}. Expected: {expected_row_counts:?}"
             );
+
+            let is_max_value_exact = converter
+                .row_group_is_max_value_exact(reader.metadata().row_groups().iter())
+                .unwrap();
+            assert_eq!(
+                is_max_value_exact, expected_max_exact,
+                "{column_name}: Mismatch with expected max value exactness. \
+                Actual: {is_max_value_exact:?}. Expected: {expected_max_exact:?}"
+            );
+
+            let is_min_value_exact = converter
+                .row_group_is_min_value_exact(reader.metadata().row_groups().iter())
+                .unwrap();
+            assert_eq!(
+                is_min_value_exact, expected_min_exact,
+                "{column_name}: Mismatch with expected min value exactness. \
+                Actual: {is_min_value_exact:?}. Expected: {expected_min_exact:?}"
+            );
         }
     }
 
@@ -354,7 +377,49 @@ impl Test<'_> {
 //
 // Remaining cases
 //   f64::NAN
-// - Using truncated statistics  ("exact min value" and "exact max value" https://docs.rs/parquet/latest/parquet/file/statistics/enum.Statistics.html#method.max_is_exact)
+
+#[tokio::test]
+async fn test_max_and_min_value_truncated() {
+    let reader = TestReader {
+        scenario: Scenario::TruncatedUTF8,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        // min is truncated to
+        // 1. `"a".repeat(64)`, original value is `"a".repeat(64) + "1"`
+        // 2. `"e".repeat(64)`, original value is `"e".repeat(64) + "5"`
+        // 3. "j", as expected with no truncation
+        expected_min: Arc::new(StringArray::from(vec![
+            &("a".repeat(64)),
+            &("e".repeat(64)),
+            "j",
+        ])),
+        // max is truncated to
+        // 1. `"d".repeat(63) + "e"`, original value is `"d".repeat(64) + "4"`
+        // 2. `"i".repeat(63) + "j"`, original value is `"i".repeat(64) + "6"`
+        // 3. `"n".repeat(63) + "o"`, original value is `"n".repeat(64) + "14"`
+        expected_max: Arc::new(StringArray::from(vec![
+            "d".repeat(63) + "e",
+            "i".repeat(63) + "j",
+            "n".repeat(63) + "o",
+        ])),
+        // no nulls
+        expected_null_counts: UInt64Array::from(vec![1, 0, 0]),
+        // 3 rows
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // all max values are truncated
+        expected_max_value_exact: BooleanArray::from(vec![false, false, false]),
+        // min values are truncated in the first two row groups
+        expected_min_value_exact: BooleanArray::from(vec![false, false, true]),
+        column_name: "utf8",
+        check: Check::Both,
+    }
+    .run()
+}
 
 #[tokio::test]
 async fn test_one_row_group_without_null() {
@@ -377,6 +442,9 @@ async fn test_one_row_group_without_null() {
         expected_null_counts: UInt64Array::from(vec![0]),
         // 3 rows
         expected_row_counts: Some(UInt64Array::from(vec![3])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true]),
+        expected_min_value_exact: BooleanArray::from(vec![true]),
         column_name: "i64",
         check: Check::Both,
     }
@@ -404,6 +472,9 @@ async fn test_one_row_group_with_null_and_negative() {
         expected_null_counts: UInt64Array::from(vec![2]),
         // 8 rows
         expected_row_counts: Some(UInt64Array::from(vec![8])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true]),
+        expected_min_value_exact: BooleanArray::from(vec![true]),
         column_name: "i64",
         check: Check::Both,
     }
@@ -431,6 +502,9 @@ async fn test_two_row_group_with_null() {
         expected_null_counts: UInt64Array::from(vec![0, 2]),
         // row counts are [10, 5]
         expected_row_counts: Some(UInt64Array::from(vec![10, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "i64",
         check: Check::Both,
     }
@@ -458,6 +532,8 @@ async fn test_two_row_groups_with_all_nulls_in_one() {
         expected_null_counts: UInt64Array::from(vec![1, 3]),
         // row counts are [5, 3]
         expected_row_counts: Some(UInt64Array::from(vec![5, 3])),
+        expected_max_value_exact: BooleanArray::from(vec![true, false]),
+        expected_min_value_exact: BooleanArray::from(vec![true, false]),
         column_name: "i64",
         check: Check::Both,
     }
@@ -489,6 +565,8 @@ async fn test_multiple_data_pages_nulls_and_negatives() {
         expected_max: Arc::new(Int64Array::from(vec![Some(2), Some(6), Some(9), None])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 1, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 2])),
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, false]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, false]),
         column_name: "i64",
         check: Check::DataPage,
     }
@@ -526,6 +604,9 @@ async fn test_data_page_stats_with_all_null_page() {
         DataType::Utf8,
         DataType::LargeUtf8,
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+        DataType::Decimal32(8, 2),   // as INT32
+        DataType::Decimal64(8, 2),   // as INT32
+        DataType::Decimal64(10, 2),  // as INT64
         DataType::Decimal128(8, 2),  // as INT32
         DataType::Decimal128(10, 2), // as INT64
         DataType::Decimal128(20, 2), // as FIXED_LEN_BYTE_ARRAY
@@ -551,6 +632,8 @@ async fn test_data_page_stats_with_all_null_page() {
             expected_max: new_null_array(expected_data_type, 1),
             expected_null_counts: UInt64Array::from(vec![4]),
             expected_row_counts: Some(UInt64Array::from(vec![4])),
+            expected_max_value_exact: BooleanArray::from(vec![false]),
+            expected_min_value_exact: BooleanArray::from(vec![false]),
             column_name: "col",
             check: Check::DataPage,
         }
@@ -585,6 +668,9 @@ async fn test_int_64() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "i64",
         check: Check::Both,
     }
@@ -611,6 +697,9 @@ async fn test_int_32() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "i32",
         check: Check::Both,
     }
@@ -637,6 +726,9 @@ async fn test_int_16() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "i16",
         check: Check::Both,
     }
@@ -663,6 +755,9 @@ async fn test_int_8() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "i8",
         check: Check::Both,
     }
@@ -699,6 +794,9 @@ async fn test_float_16() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "f",
         check: Check::Both,
     }
@@ -725,6 +823,9 @@ async fn test_float_32() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "f",
         check: Check::Both,
     }
@@ -751,6 +852,9 @@ async fn test_float_64() {
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "f",
         check: Check::Both,
     }
@@ -801,6 +905,9 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "nanos",
         check: Check::Both,
     }
@@ -830,6 +937,9 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "nanos_timezoned",
         check: Check::Both,
     }
@@ -852,6 +962,9 @@ async fn test_timestamp() {
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "micros",
         check: Check::Both,
     }
@@ -881,6 +994,9 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "micros_timezoned",
         check: Check::Both,
     }
@@ -903,6 +1019,9 @@ async fn test_timestamp() {
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "millis",
         check: Check::Both,
     }
@@ -932,6 +1051,10 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+
         column_name: "millis_timezoned",
         check: Check::Both,
     }
@@ -954,6 +1077,10 @@ async fn test_timestamp() {
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+
         column_name: "seconds",
         check: Check::Both,
     }
@@ -983,6 +1110,10 @@ async fn test_timestamp() {
         expected_null_counts: UInt64Array::from(vec![1, 1, 1, 1]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+
         column_name: "seconds_timezoned",
         check: Check::Both,
     }
@@ -1029,6 +1160,9 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "nanos",
         check: Check::Both,
     }
@@ -1056,6 +1190,9 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "nanos_timezoned",
         check: Check::Both,
     }
@@ -1076,6 +1213,9 @@ async fn test_timestamp_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "micros",
         check: Check::Both,
     }
@@ -1103,6 +1243,9 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "micros_timezoned",
         check: Check::Both,
     }
@@ -1123,6 +1266,9 @@ async fn test_timestamp_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "millis",
         check: Check::Both,
     }
@@ -1150,6 +1296,9 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "millis_timezoned",
         check: Check::Both,
     }
@@ -1170,6 +1319,9 @@ async fn test_timestamp_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "seconds",
         check: Check::Both,
     }
@@ -1197,6 +1349,9 @@ async fn test_timestamp_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![1, 2, 1]),
         // row counts are [8, 8, 4]
         expected_row_counts: Some(UInt64Array::from(vec![8, 8, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "seconds_timezoned",
         check: Check::Both,
     }
@@ -1235,6 +1390,9 @@ async fn test_dates_32_diff_rg_sizes() {
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         // row counts are [13, 7]
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "date32",
         check: Check::Both,
     }
@@ -1258,6 +1416,9 @@ async fn test_time32_second_diff_rg_sizes() {
         expected_max: Arc::new(Time32SecondArray::from(vec![18509, 18513, 18517, 18521])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "second",
         check: Check::Both,
     }
@@ -1285,6 +1446,9 @@ async fn test_time32_millisecond_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "millisecond",
         check: Check::Both,
     }
@@ -1318,6 +1482,9 @@ async fn test_time64_microsecond_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "microsecond",
         check: Check::Both,
     }
@@ -1351,6 +1518,9 @@ async fn test_time64_nanosecond_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]), // Assuming 1 null per row group for simplicity
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
         column_name: "nanosecond",
         check: Check::Both,
     }
@@ -1378,6 +1548,9 @@ async fn test_dates_64_diff_rg_sizes() {
         ])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "date64",
         check: Check::Both,
     }
@@ -1406,6 +1579,9 @@ async fn test_uint() {
         expected_max: Arc::new(UInt8Array::from(vec![3, 4, 6, 250, 254])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
         column_name: "u8",
         check: Check::Both,
     }
@@ -1417,6 +1593,9 @@ async fn test_uint() {
         expected_max: Arc::new(UInt16Array::from(vec![3, 4, 6, 250, 254])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
         column_name: "u16",
         check: Check::Both,
     }
@@ -1428,6 +1607,9 @@ async fn test_uint() {
         expected_max: Arc::new(UInt32Array::from(vec![3, 4, 6, 250, 254])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
         column_name: "u32",
         check: Check::Both,
     }
@@ -1439,6 +1621,9 @@ async fn test_uint() {
         expected_max: Arc::new(UInt64Array::from(vec![3, 4, 6, 250, 254])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![4, 4, 4, 4, 4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true, true]),
         column_name: "u64",
         check: Check::Both,
     }
@@ -1462,6 +1647,9 @@ async fn test_int32_range() {
         expected_max: Arc::new(Int32Array::from(vec![300000])),
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true]),
+        expected_min_value_exact: BooleanArray::from(vec![true]),
         column_name: "i",
         check: Check::Both,
     }
@@ -1485,6 +1673,9 @@ async fn test_uint32_range() {
         expected_max: Arc::new(UInt32Array::from(vec![300000])),
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![4])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true]),
+        expected_min_value_exact: BooleanArray::from(vec![true]),
         column_name: "u",
         check: Check::Both,
     }
@@ -1507,6 +1698,9 @@ async fn test_numeric_limits_unsigned() {
         expected_max: Arc::new(UInt8Array::from(vec![100, u8::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "u8",
         check: Check::Both,
     }
@@ -1518,6 +1712,9 @@ async fn test_numeric_limits_unsigned() {
         expected_max: Arc::new(UInt16Array::from(vec![100, u16::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "u16",
         check: Check::Both,
     }
@@ -1529,6 +1726,9 @@ async fn test_numeric_limits_unsigned() {
         expected_max: Arc::new(UInt32Array::from(vec![100, u32::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "u32",
         check: Check::Both,
     }
@@ -1540,6 +1740,9 @@ async fn test_numeric_limits_unsigned() {
         expected_max: Arc::new(UInt64Array::from(vec![100, u64::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "u64",
         check: Check::Both,
     }
@@ -1562,6 +1765,9 @@ async fn test_numeric_limits_signed() {
         expected_max: Arc::new(Int8Array::from(vec![100, i8::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "i8",
         check: Check::Both,
     }
@@ -1573,6 +1779,9 @@ async fn test_numeric_limits_signed() {
         expected_max: Arc::new(Int16Array::from(vec![100, i16::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "i16",
         check: Check::Both,
     }
@@ -1584,6 +1793,9 @@ async fn test_numeric_limits_signed() {
         expected_max: Arc::new(Int32Array::from(vec![100, i32::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "i32",
         check: Check::Both,
     }
@@ -1595,6 +1807,9 @@ async fn test_numeric_limits_signed() {
         expected_max: Arc::new(Int64Array::from(vec![100, i64::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "i64",
         check: Check::Both,
     }
@@ -1617,6 +1832,9 @@ async fn test_numeric_limits_float() {
         expected_max: Arc::new(Float32Array::from(vec![100.0, f32::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "f32",
         check: Check::Both,
     }
@@ -1628,6 +1846,9 @@ async fn test_numeric_limits_float() {
         expected_max: Arc::new(Float64Array::from(vec![100.0, f64::MAX])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "f64",
         check: Check::Both,
     }
@@ -1639,6 +1860,9 @@ async fn test_numeric_limits_float() {
         expected_max: Arc::new(Float32Array::from(vec![100.0, -100.0])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "f32_nan",
         check: Check::Both,
     }
@@ -1650,6 +1874,9 @@ async fn test_numeric_limits_float() {
         expected_max: Arc::new(Float64Array::from(vec![100.0, -100.0])),
         expected_null_counts: UInt64Array::from(vec![0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "f64_nan",
         check: Check::Both,
     }
@@ -1673,6 +1900,10 @@ async fn test_float64() {
         expected_max: Arc::new(Float64Array::from(vec![-1.0, 0.0, 4.0, 9.0])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+
         column_name: "f",
         check: Check::Both,
     }
@@ -1706,6 +1937,10 @@ async fn test_float16() {
         )),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true, true]),
+
         column_name: "f",
         check: Check::Both,
     }
@@ -1713,11 +1948,77 @@ async fn test_float16() {
 }
 
 #[tokio::test]
-async fn test_decimal() {
-    // This creates a parquet file of 1 column "decimal_col" with decimal data type and precicion 9, scale 2
+async fn test_decimal32() {
+    // This creates a parquet file of 1 column "decimal32_col" with decimal data type and precision 9, scale 2
     // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
     let reader = TestReader {
-        scenario: Scenario::Decimal,
+        scenario: Scenario::Decimal32,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(
+            Decimal32Array::from(vec![100, -500, 2000])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+        ),
+        expected_max: Arc::new(
+            Decimal32Array::from(vec![600, 600, 6000])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+        ),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
+        column_name: "decimal32_col",
+        check: Check::Both,
+    }
+    .run();
+}
+#[tokio::test]
+async fn test_decimal64() {
+    // This creates a parquet file of 1 column "decimal64_col" with decimal data type and precision 9, scale 2
+    // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
+    let reader = TestReader {
+        scenario: Scenario::Decimal64,
+        row_per_group: 5,
+    }
+    .build()
+    .await;
+
+    Test {
+        reader: &reader,
+        expected_min: Arc::new(
+            Decimal64Array::from(vec![100, -500, 2000])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+        ),
+        expected_max: Arc::new(
+            Decimal64Array::from(vec![600, 600, 6000])
+                .with_precision_and_scale(9, 2)
+                .unwrap(),
+        ),
+        expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
+        expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
+        column_name: "decimal64_col",
+        check: Check::Both,
+    }
+    .run();
+}
+#[tokio::test]
+async fn test_decimal128() {
+    // This creates a parquet file of 1 column "decimal128_col" with decimal data type and precision 9, scale 2
+    // file has 3 record batches, each has 5 rows. They will be saved into 3 row groups
+    let reader = TestReader {
+        scenario: Scenario::Decimal128,
         row_per_group: 5,
     }
     .build()
@@ -1737,7 +2038,10 @@ async fn test_decimal() {
         ),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
-        column_name: "decimal_col",
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
+        column_name: "decimal128_col",
         check: Check::Both,
     }
     .run();
@@ -1767,6 +2071,9 @@ async fn test_decimal_256() {
         ),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "decimal256_col",
         check: Check::Both,
     }
@@ -1787,6 +2094,9 @@ async fn test_dictionary() {
         expected_max: Arc::new(StringArray::from(vec!["def", "fffff"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "string_dict_i8",
         check: Check::Both,
     }
@@ -1798,6 +2108,9 @@ async fn test_dictionary() {
         expected_max: Arc::new(StringArray::from(vec!["def", "fffff"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "string_dict_i32",
         check: Check::Both,
     }
@@ -1809,6 +2122,9 @@ async fn test_dictionary() {
         expected_max: Arc::new(Int64Array::from(vec![0, 100])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 2])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "int_dict_i8",
         check: Check::Both,
     }
@@ -1847,6 +2163,9 @@ async fn test_byte() {
         ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "name",
         check: Check::Both,
     }
@@ -1867,6 +2186,9 @@ async fn test_byte() {
         ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "service_string",
         check: Check::Both,
     }
@@ -1886,6 +2208,9 @@ async fn test_byte() {
         expected_max: Arc::new(BinaryArray::from(expected_service_binary_max_values)),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "service_binary",
         check: Check::Both,
     }
@@ -1903,6 +2228,9 @@ async fn test_byte() {
         expected_max: Arc::new(FixedSizeBinaryArray::try_from_iter(max_input.into_iter()).unwrap()),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "service_fixedsize",
         check: Check::Both,
     }
@@ -1924,6 +2252,9 @@ async fn test_byte() {
         )),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "service_large_binary",
         check: Check::Both,
     }
@@ -1957,6 +2288,9 @@ async fn test_period_in_column_names() {
         ])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "name",
         check: Check::Both,
     }
@@ -1969,6 +2303,9 @@ async fn test_period_in_column_names() {
         expected_max: Arc::new(StringArray::from(vec!["frontend", "frontend", "backend"])),
         expected_null_counts: UInt64Array::from(vec![0, 0, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "service.name",
         check: Check::Both,
     }
@@ -1993,6 +2330,9 @@ async fn test_boolean() {
         expected_max: Arc::new(BooleanArray::from(vec![true, false])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "bool",
         check: Check::Both,
     }
@@ -2020,6 +2360,8 @@ async fn test_struct() {
         expected_max: Arc::new(struct_array(vec![(Some(2), Some(8.5), Some(14.0))])),
         expected_null_counts: UInt64Array::from(vec![0]),
         expected_row_counts: Some(UInt64Array::from(vec![3])),
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "struct",
         check: Check::RowGroup,
     }
@@ -2043,6 +2385,9 @@ async fn test_utf8() {
         expected_max: Arc::new(StringArray::from(vec!["d", "i"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "utf8",
         check: Check::Both,
     }
@@ -2055,6 +2400,9 @@ async fn test_utf8() {
         expected_max: Arc::new(LargeStringArray::from(vec!["d", "i"])),
         expected_null_counts: UInt64Array::from(vec![1, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "large_utf8",
         check: Check::Both,
     }
@@ -2082,6 +2430,9 @@ async fn test_utf8_view() {
         ])),
         expected_null_counts: UInt64Array::from(vec![1, 3, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "utf8_view",
         check: Check::Both,
     }
@@ -2109,6 +2460,9 @@ async fn test_binary_view() {
         expected_max: Arc::new(BinaryViewArray::from(expected_max)),
         expected_null_counts: UInt64Array::from(vec![1, 3, 0]),
         expected_row_counts: Some(UInt64Array::from(vec![5, 5, 5])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true, true]),
         column_name: "binary_view",
         check: Check::Both,
     }
@@ -2135,6 +2489,8 @@ async fn test_missing_statistics() {
         expected_max: Arc::new(Int64Array::from(vec![None])),
         expected_null_counts: UInt64Array::from(vec![None]),
         expected_row_counts: Some(UInt64Array::from(vec![3])), // still has row count statistics
+        expected_max_value_exact: BooleanArray::from(vec![None]),
+        expected_min_value_exact: BooleanArray::from(vec![None]),
         column_name: "i64",
         check: Check::Both,
     }
@@ -2216,6 +2572,9 @@ async fn test_column_not_found() {
         expected_max: Arc::new(Int64Array::from(vec![18564, 21865])),
         expected_null_counts: UInt64Array::from(vec![2, 2]),
         expected_row_counts: Some(UInt64Array::from(vec![13, 7])),
+        // stats are exact
+        expected_max_value_exact: BooleanArray::from(vec![true, true]),
+        expected_min_value_exact: BooleanArray::from(vec![true, true]),
         column_name: "not_a_column",
         check: Check::Both,
     }
@@ -2251,6 +2610,8 @@ async fn test_column_non_existent() {
         expected_null_counts: UInt64Array::from(vec![None, None, None, None]),
         // row counts are [5, 5, 5, 5]
         expected_row_counts: None,
+        expected_max_value_exact: BooleanArray::from(vec![None, None, None, None]),
+        expected_min_value_exact: BooleanArray::from(vec![None, None, None, None]),
         column_name: "i_do_not_exist",
         check: Check::Both,
     }
@@ -2265,9 +2626,9 @@ mod test {
     use super::*;
     use arrow::util::test_util::parquet_test_data;
     use arrow_array::{
-        new_empty_array, ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array,
-        Int16Array, Int32Array, Int64Array, Int8Array, RecordBatch, StringArray,
-        TimestampNanosecondArray,
+        ArrayRef, BooleanArray, Decimal128Array, Float32Array, Float64Array, Int8Array, Int16Array,
+        Int32Array, Int64Array, RecordBatch, StringArray, TimestampNanosecondArray,
+        new_empty_array,
     };
     use arrow_schema::{DataType, SchemaRef, TimeUnit};
     use bytes::Bytes;
@@ -2316,6 +2677,8 @@ mod test {
             // DataType::Struct(Fields),
             // DataType::Union(UnionFields, UnionMode),
             // DataType::Dictionary(Box<DataType>, Box<DataType>),
+            // DataType::Decimal32(u8, i8),
+            // DataType::Decimal64(u8, i8),
             // DataType::Decimal128(u8, i8),
             // DataType::Decimal256(u8, i8),
             // DataType::Map(FieldRef, bool),

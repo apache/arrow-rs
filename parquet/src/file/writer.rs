@@ -15,28 +15,34 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Contains file writer API, and provides methods to write row groups and columns by
-//! using row group writers and column writers respectively.
+//! [`SerializedFileWriter`]: Low level Parquet writer API
 
 use crate::bloom_filter::Sbbf;
-use crate::format as parquet;
-use crate::format::{ColumnIndex, OffsetIndex};
-use crate::thrift::TSerializable;
+use crate::file::metadata::thrift::PageHeader;
+use crate::file::page_index::column_index::ColumnIndexMetaData;
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use std::fmt::Debug;
 use std::io::{BufWriter, IoSlice, Read};
 use std::{io::Write, sync::Arc};
-use thrift::protocol::TCompactOutputProtocol;
 
-use crate::column::writer::{get_typed_column_writer_mut, ColumnCloseResult, ColumnWriterImpl};
+use crate::column::page_encryption::PageEncryptor;
+use crate::column::writer::{ColumnCloseResult, ColumnWriterImpl, get_typed_column_writer_mut};
 use crate::column::{
     page::{CompressedPage, PageWriteSpec, PageWriter},
-    writer::{get_column_writer, ColumnWriter},
+    writer::{ColumnWriter, get_column_writer},
 };
 use crate::data_type::DataType;
+#[cfg(feature = "encryption")]
+use crate::encryption::encrypt::{
+    FileEncryptionProperties, FileEncryptor, get_column_crypto_metadata,
+};
 use crate::errors::{ParquetError, Result};
+#[cfg(feature = "encryption")]
+use crate::file::PARQUET_MAGIC_ENCR_FOOTER;
 use crate::file::properties::{BloomFilterPosition, WriterPropertiesPtr};
 use crate::file::reader::ChunkReader;
-use crate::file::{metadata::*, PARQUET_MAGIC};
+use crate::file::{PARQUET_MAGIC, metadata::*};
 use crate::schema::types::{ColumnDescPtr, SchemaDescPtr, SchemaDescriptor, TypePtr};
 
 /// A wrapper around a [`Write`] that keeps track of the number
@@ -121,8 +127,8 @@ pub type OnCloseRowGroup<'a, W> = Box<
             &'a mut TrackedWrite<W>,
             RowGroupMetaData,
             Vec<Option<Sbbf>>,
-            Vec<Option<ColumnIndex>>,
-            Vec<Option<OffsetIndex>>,
+            Vec<Option<ColumnIndexMetaData>>,
+            Vec<Option<OffsetIndexMetaData>>,
         ) -> Result<()>
         + 'a
         + Send,
@@ -132,7 +138,14 @@ pub type OnCloseRowGroup<'a, W> = Box<
 // Serialized impl for file & row group writers
 
 /// Parquet file writer API.
-/// Provides methods to write row groups sequentially.
+///
+/// This is a low level API for writing Parquet files directly, and handles
+/// tracking the location of file structures such as row groups and column
+/// chunks, and writing the metadata and file footer.
+///
+/// Data is written to row groups using  [`SerializedRowGroupWriter`] and
+/// columns using [`SerializedColumnWriter`]. The `SerializedFileWriter` tracks
+/// where all the data is written, and assembles the final file metadata.
 ///
 /// The main workflow should be as following:
 /// - Create file writer, this will open a new file and potentially write some metadata.
@@ -142,17 +155,18 @@ pub type OnCloseRowGroup<'a, W> = Box<
 /// - After all row groups have been written, close the file writer using `close` method.
 pub struct SerializedFileWriter<W: Write> {
     buf: TrackedWrite<W>,
-    schema: TypePtr,
     descr: SchemaDescPtr,
     props: WriterPropertiesPtr,
     row_groups: Vec<RowGroupMetaData>,
     bloom_filters: Vec<Vec<Option<Sbbf>>>,
-    column_indexes: Vec<Vec<Option<ColumnIndex>>>,
-    offset_indexes: Vec<Vec<Option<OffsetIndex>>>,
+    column_indexes: Vec<Vec<Option<ColumnIndexMetaData>>>,
+    offset_indexes: Vec<Vec<Option<OffsetIndexMetaData>>>,
     row_group_index: usize,
     // kv_metadatas will be appended to `props` when `write_metadata`
     kv_metadatas: Vec<KeyValue>,
     finished: bool,
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
 impl<W: Write> Debug for SerializedFileWriter<W> {
@@ -171,11 +185,16 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Creates new file writer.
     pub fn new(buf: W, schema: TypePtr, properties: WriterPropertiesPtr) -> Result<Self> {
         let mut buf = TrackedWrite::new(buf);
-        Self::start_file(&mut buf)?;
+
+        let schema_descriptor = SchemaDescriptor::new(schema.clone());
+
+        #[cfg(feature = "encryption")]
+        let file_encryptor = Self::get_file_encryptor(&properties, &schema_descriptor)?;
+
+        Self::start_file(&properties, &mut buf)?;
         Ok(Self {
             buf,
-            schema: schema.clone(),
-            descr: Arc::new(SchemaDescriptor::new(schema)),
+            descr: Arc::new(schema_descriptor),
             props: properties,
             row_groups: vec![],
             bloom_filters: vec![],
@@ -184,15 +203,35 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             row_group_index: 0,
             kv_metadatas: Vec::new(),
             finished: false,
+            #[cfg(feature = "encryption")]
+            file_encryptor,
         })
     }
 
+    #[cfg(feature = "encryption")]
+    fn get_file_encryptor(
+        properties: &WriterPropertiesPtr,
+        schema_descriptor: &SchemaDescriptor,
+    ) -> Result<Option<Arc<FileEncryptor>>> {
+        if let Some(file_encryption_properties) = properties.file_encryption_properties() {
+            file_encryption_properties.validate_encrypted_column_names(schema_descriptor)?;
+
+            Ok(Some(Arc::new(FileEncryptor::new(Arc::clone(
+                file_encryption_properties,
+            ))?)))
+        } else {
+            Ok(None)
+        }
+    }
+
     /// Creates new row group from this file writer.
-    /// In case of IO error or Thrift error, returns `Err`.
     ///
-    /// There can be at most 2^15 row groups in a file; and row groups have
-    /// to be written sequentially. Every time the next row group is requested, the
-    /// previous row group must be finalised and closed using `RowGroupWriter::close` method.
+    /// Note: Parquet files are limited to at most 2^15 row groups in a file; and row groups must
+    /// be written sequentially.
+    ///
+    /// Every time the next row group is requested, the previous row group must
+    /// be finalised and closed using the [`SerializedRowGroupWriter::close`]
+    /// method or an error will be returned.
     pub fn next_row_group(&mut self) -> Result<SerializedRowGroupWriter<'_, W>> {
         self.assert_previous_writer_closed()?;
         let ordinal = self.row_group_index;
@@ -241,6 +280,9 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             ordinal,
             Some(Box::new(on_close)),
         );
+        #[cfg(feature = "encryption")]
+        let row_group_writer = row_group_writer.with_file_encryptor(self.file_encryptor.clone());
+
         Ok(row_group_writer)
     }
 
@@ -254,7 +296,7 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub fn finish(&mut self) -> Result<parquet::FileMetaData> {
+    pub fn finish(&mut self) -> Result<ParquetMetaData> {
         self.assert_previous_writer_closed()?;
         let metadata = self.write_metadata()?;
         self.buf.flush()?;
@@ -262,18 +304,29 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     }
 
     /// Closes and finalises file writer, returning the file metadata.
-    pub fn close(mut self) -> Result<parquet::FileMetaData> {
+    pub fn close(mut self) -> Result<ParquetMetaData> {
         self.finish()
     }
 
     /// Writes magic bytes at the beginning of the file.
-    fn start_file(buf: &mut TrackedWrite<W>) -> Result<()> {
-        buf.write_all(&PARQUET_MAGIC)?;
+    #[cfg(not(feature = "encryption"))]
+    fn start_file(_properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+        buf.write_all(get_file_magic())?;
         Ok(())
     }
 
-    /// Assembles and writes metadata at the end of the file.
-    fn write_metadata(&mut self) -> Result<parquet::FileMetaData> {
+    /// Writes magic bytes at the beginning of the file.
+    #[cfg(feature = "encryption")]
+    fn start_file(properties: &WriterPropertiesPtr, buf: &mut TrackedWrite<W>) -> Result<()> {
+        let magic = get_file_magic(properties.file_encryption_properties.as_ref());
+
+        buf.write_all(magic)?;
+        Ok(())
+    }
+
+    /// Assembles and writes metadata at the end of the file. This will take ownership
+    /// of `row_groups` and the page index structures.
+    fn write_metadata(&mut self) -> Result<ParquetMetaData> {
         self.finished = true;
 
         // write out any remaining bloom filters after all row groups
@@ -287,25 +340,32 @@ impl<W: Write + Send> SerializedFileWriter<W> {
             None => Some(self.kv_metadatas.clone()),
         };
 
-        let row_groups = self
-            .row_groups
-            .iter()
-            .map(|v| v.to_thrift())
-            .collect::<Vec<_>>();
+        // take ownership of metadata
+        let row_groups = std::mem::take(&mut self.row_groups);
+        let column_indexes = std::mem::take(&mut self.column_indexes);
+        let offset_indexes = std::mem::take(&mut self.offset_indexes);
 
         let mut encoder = ThriftMetadataWriter::new(
             &mut self.buf,
-            &self.schema,
             &self.descr,
             row_groups,
             Some(self.props.created_by().to_string()),
             self.props.writer_version().as_num(),
         );
+
+        #[cfg(feature = "encryption")]
+        {
+            encoder = encoder.with_file_encryptor(self.file_encryptor.clone());
+        }
+
         if let Some(key_value_metadata) = key_value_metadata {
             encoder = encoder.with_key_value_metadata(key_value_metadata)
         }
-        encoder = encoder.with_column_indexes(&self.column_indexes);
-        encoder = encoder.with_offset_indexes(&self.offset_indexes);
+
+        encoder = encoder.with_column_indexes(column_indexes);
+        if !self.props.offset_index_disabled() {
+            encoder = encoder.with_offset_indexes(offset_indexes);
+        }
         encoder.finish()
     }
 
@@ -332,6 +392,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         &self.descr
     }
 
+    /// Returns a reference to schema descriptor Arc.
+    #[cfg(feature = "arrow")]
+    pub(crate) fn schema_descr_ptr(&self) -> &SchemaDescPtr {
+        &self.descr
+    }
+
     /// Returns a reference to the writer properties
     pub fn properties(&self) -> &WriterPropertiesPtr {
         &self.props
@@ -342,9 +408,31 @@ impl<W: Write + Send> SerializedFileWriter<W> {
         self.buf.inner()
     }
 
+    /// Writes the given buf bytes to the internal buffer.
+    ///
+    /// This can be used to write raw data to an in-progress Parquet file, for
+    /// example, custom index structures or other payloads. Other Parquet readers
+    /// will skip this data when reading the files.
+    ///
+    /// It's safe to use this method to write data to the underlying writer,
+    /// because it will ensure that the buffering and byte‐counting layers are used.
+    pub fn write_all(&mut self, buf: &[u8]) -> std::io::Result<()> {
+        self.buf.write_all(buf)
+    }
+
+    /// Flushes underlying writer
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.buf.flush()
+    }
+
     /// Returns a mutable reference to the underlying writer.
     ///
-    /// It is inadvisable to directly write to the underlying writer.
+    /// **Warning**: if you write directly to this writer, you will skip
+    /// the `TrackedWrite` buffering and byte‐counting layers, which can cause
+    /// the file footer’s recorded offsets and sizes to diverge from reality,
+    /// resulting in an unreadable or corrupted Parquet file.
+    ///
+    /// If you want to write safely to the underlying writer, use [`Self::write_all`].
     pub fn inner_mut(&mut self) -> &mut W {
         self.buf.inner_mut()
     }
@@ -360,6 +448,12 @@ impl<W: Write + Send> SerializedFileWriter<W> {
     /// Returns the number of bytes written to this instance
     pub fn bytes_written(&self) -> usize {
         self.buf.bytes_written()
+    }
+
+    /// Get the file encryptor used by this instance to encrypt data
+    #[cfg(feature = "encryption")]
+    pub(crate) fn file_encryptor(&self) -> Option<Arc<FileEncryptor>> {
+        self.file_encryptor.clone()
     }
 }
 
@@ -403,6 +497,7 @@ fn write_bloom_filters<W: Write + Send>(
 }
 
 /// Parquet row group writer API.
+///
 /// Provides methods to access column writers in an iterator-like fashion, order is
 /// guaranteed to match the order of schema leaves (column descriptors).
 ///
@@ -411,7 +506,7 @@ fn write_bloom_filters<W: Write + Send>(
 ///   more columns are available to write.
 /// - Once done writing a column, close column writer with `close`
 /// - Once all columns have been written, close row group writer with `close`
-///   method. THe close method will return row group metadata and is no-op
+///   method. The close method will return row group metadata and is no-op
 ///   on already closed row group.
 pub struct SerializedRowGroupWriter<'a, W: Write> {
     descr: SchemaDescPtr,
@@ -424,11 +519,13 @@ pub struct SerializedRowGroupWriter<'a, W: Write> {
     row_group_metadata: Option<RowGroupMetaDataPtr>,
     column_chunks: Vec<ColumnChunkMetaData>,
     bloom_filters: Vec<Option<Sbbf>>,
-    column_indexes: Vec<Option<ColumnIndex>>,
-    offset_indexes: Vec<Option<OffsetIndex>>,
+    column_indexes: Vec<Option<ColumnIndexMetaData>>,
+    offset_indexes: Vec<Option<OffsetIndexMetaData>>,
     row_group_index: i16,
     file_offset: i64,
     on_close: Option<OnCloseRowGroup<'a, W>>,
+    #[cfg(feature = "encryption")]
+    file_encryptor: Option<Arc<FileEncryptor>>,
 }
 
 impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
@@ -465,7 +562,19 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
             offset_indexes: Vec::with_capacity(num_columns),
             total_bytes_written: 0,
             total_uncompressed_bytes: 0,
+            #[cfg(feature = "encryption")]
+            file_encryptor: None,
         }
+    }
+
+    #[cfg(feature = "encryption")]
+    /// Set the file encryptor to use for encrypting row group data and metadata
+    pub(crate) fn with_file_encryptor(
+        mut self,
+        file_encryptor: Option<Arc<FileEncryptor>>,
+    ) -> Self {
+        self.file_encryptor = file_encryptor;
+        self
     }
 
     /// Advance `self.column_index` returning the next [`ColumnDescPtr`] if any
@@ -523,12 +632,24 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         ) -> Result<C>,
     {
         self.assert_previous_writer_closed()?;
+
+        let encryptor_context = self.get_page_encryptor_context();
+
         Ok(match self.next_column_desc() {
             Some(column) => {
                 let props = self.props.clone();
                 let (buf, on_close) = self.get_on_close();
-                let page_writer = Box::new(SerializedPageWriter::new(buf));
-                Some(factory(column, props, page_writer, Box::new(on_close))?)
+
+                let page_writer = SerializedPageWriter::new(buf);
+                let page_writer =
+                    Self::set_page_writer_encryptor(&column, encryptor_context, page_writer)?;
+
+                Some(factory(
+                    column,
+                    props,
+                    Box::new(page_writer),
+                    Box::new(on_close),
+                )?)
             }
             None => None,
         })
@@ -544,12 +665,20 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         })
     }
 
-    /// Append an encoded column chunk from another source without decoding it
+    /// Append an encoded column chunk from `reader` directly to the underlying
+    /// writer.
     ///
-    /// This can be used for efficiently concatenating or projecting parquet data,
-    /// or encoding parquet data to temporary in-memory buffers
+    /// This method can be used for efficiently concatenating or projecting
+    /// Parquet data, or encoding Parquet data to temporary in-memory buffers.
     ///
-    /// See [`Self::next_column`] for writing data that isn't already encoded
+    /// Arguments:
+    /// - `reader`: a [`ChunkReader`] containing the encoded column data
+    /// - `close`: the [`ColumnCloseResult`] metadata returned from closing
+    ///   the column writer that wrote the data in `reader`.
+    ///
+    /// See Also:
+    /// 1. [`get_column_writer`]  for creating writers that can encode data.
+    /// 2. [`Self::next_column`] for writing data that isn't already encoded
     pub fn append_column<R: ChunkReader>(
         &mut self,
         reader: &R,
@@ -588,7 +717,7 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         let map_offset = |x| x - src_offset + write_offset as i64;
         let mut builder = ColumnChunkMetaData::builder(metadata.column_descr_ptr())
             .set_compression(metadata.compression())
-            .set_encodings(metadata.encodings().clone())
+            .set_encodings_mask(*metadata.encodings_mask())
             .set_total_compressed_size(metadata.compressed_size())
             .set_total_uncompressed_size(metadata.uncompressed_size())
             .set_num_values(metadata.num_values())
@@ -605,6 +734,13 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         if let Some(statistics) = metadata.statistics() {
             builder = builder.set_statistics(statistics.clone())
         }
+        if let Some(geo_statistics) = metadata.geo_statistics() {
+            builder = builder.set_geo_statistics(Box::new(geo_statistics.clone()))
+        }
+        if let Some(page_encoding_stats) = metadata.page_encoding_stats() {
+            builder = builder.set_page_encoding_stats(page_encoding_stats.clone())
+        }
+        builder = self.set_column_crypto_metadata(builder, &metadata);
         close.metadata = builder.build()?;
 
         if let Some(offsets) = close.offset_index.as_mut() {
@@ -649,6 +785,75 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         Ok(metadata)
     }
 
+    /// Set the column crypto metadata for a column chunk
+    #[cfg(feature = "encryption")]
+    fn set_column_crypto_metadata(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+        metadata: &ColumnChunkMetaData,
+    ) -> ColumnChunkMetaDataBuilder {
+        if let Some(file_encryptor) = self.file_encryptor.as_ref() {
+            builder.set_column_crypto_metadata(get_column_crypto_metadata(
+                file_encryptor.properties(),
+                &metadata.column_descr_ptr(),
+            ))
+        } else {
+            builder
+        }
+    }
+
+    /// Get context required to create a [`PageEncryptor`] for a column
+    #[cfg(feature = "encryption")]
+    fn get_page_encryptor_context(&self) -> PageEncryptorContext {
+        PageEncryptorContext {
+            file_encryptor: self.file_encryptor.clone(),
+            row_group_index: self.row_group_index as usize,
+            column_index: self.column_index,
+        }
+    }
+
+    /// Set the [`PageEncryptor`] on a page writer if a column is encrypted
+    #[cfg(feature = "encryption")]
+    fn set_page_writer_encryptor<'b>(
+        column: &ColumnDescPtr,
+        context: PageEncryptorContext,
+        page_writer: SerializedPageWriter<'b, W>,
+    ) -> Result<SerializedPageWriter<'b, W>> {
+        let page_encryptor = PageEncryptor::create_if_column_encrypted(
+            &context.file_encryptor,
+            context.row_group_index,
+            context.column_index,
+            &column.path().string(),
+        )?;
+
+        Ok(page_writer.with_page_encryptor(page_encryptor))
+    }
+
+    /// No-op implementation of setting the column crypto metadata for a column chunk
+    #[cfg(not(feature = "encryption"))]
+    fn set_column_crypto_metadata(
+        &self,
+        builder: ColumnChunkMetaDataBuilder,
+        _metadata: &ColumnChunkMetaData,
+    ) -> ColumnChunkMetaDataBuilder {
+        builder
+    }
+
+    #[cfg(not(feature = "encryption"))]
+    fn get_page_encryptor_context(&self) -> PageEncryptorContext {
+        PageEncryptorContext {}
+    }
+
+    /// No-op implementation of setting a [`PageEncryptor`] for when encryption is disabled
+    #[cfg(not(feature = "encryption"))]
+    fn set_page_writer_encryptor<'b>(
+        _column: &ColumnDescPtr,
+        _context: PageEncryptorContext,
+        page_writer: SerializedPageWriter<'b, W>,
+    ) -> Result<SerializedPageWriter<'b, W>> {
+        Ok(page_writer)
+    }
+
     #[inline]
     fn assert_previous_writer_closed(&self) -> Result<()> {
         if self.column_index != self.column_chunks.len() {
@@ -658,6 +863,17 @@ impl<'a, W: Write + Send> SerializedRowGroupWriter<'a, W> {
         }
     }
 }
+
+/// Context required to create a [`PageEncryptor`] for a column
+#[cfg(feature = "encryption")]
+struct PageEncryptorContext {
+    file_encryptor: Option<Arc<FileEncryptor>>,
+    row_group_index: usize,
+    column_index: usize,
+}
+
+#[cfg(not(feature = "encryption"))]
+struct PageEncryptorContext {}
 
 /// A wrapper around a [`ColumnWriter`] that invokes a callback on [`Self::close`]
 pub struct SerializedColumnWriter<'a> {
@@ -699,34 +915,83 @@ impl<'a> SerializedColumnWriter<'a> {
 /// `SerializedPageWriter` should not be used after calling `close()`.
 pub struct SerializedPageWriter<'a, W: Write> {
     sink: &'a mut TrackedWrite<W>,
+    #[cfg(feature = "encryption")]
+    page_encryptor: Option<PageEncryptor>,
 }
 
 impl<'a, W: Write> SerializedPageWriter<'a, W> {
     /// Creates new page writer.
     pub fn new(sink: &'a mut TrackedWrite<W>) -> Self {
-        Self { sink }
+        Self {
+            sink,
+            #[cfg(feature = "encryption")]
+            page_encryptor: None,
+        }
     }
 
     /// Serializes page header into Thrift.
     /// Returns number of bytes that have been written into the sink.
     #[inline]
-    fn serialize_page_header(&mut self, header: parquet::PageHeader) -> Result<usize> {
+    fn serialize_page_header(&mut self, header: PageHeader) -> Result<usize> {
         let start_pos = self.sink.bytes_written();
-        {
-            let mut protocol = TCompactOutputProtocol::new(&mut self.sink);
-            header.write_to_out_protocol(&mut protocol)?;
+        match self.page_encryptor_and_sink_mut() {
+            Some((page_encryptor, sink)) => {
+                page_encryptor.encrypt_page_header(&header, sink)?;
+            }
+            None => {
+                let mut protocol = ThriftCompactOutputProtocol::new(&mut self.sink);
+                header.write_thrift(&mut protocol)?;
+            }
         }
         Ok(self.sink.bytes_written() - start_pos)
     }
 }
 
+#[cfg(feature = "encryption")]
+impl<'a, W: Write> SerializedPageWriter<'a, W> {
+    /// Set the encryptor to use to encrypt page data
+    fn with_page_encryptor(mut self, page_encryptor: Option<PageEncryptor>) -> Self {
+        self.page_encryptor = page_encryptor;
+        self
+    }
+
+    fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
+        self.page_encryptor.as_mut()
+    }
+
+    fn page_encryptor_and_sink_mut(
+        &mut self,
+    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
+        self.page_encryptor.as_mut().map(|pe| (pe, &mut self.sink))
+    }
+}
+
+#[cfg(not(feature = "encryption"))]
+impl<'a, W: Write> SerializedPageWriter<'a, W> {
+    fn page_encryptor_mut(&mut self) -> Option<&mut PageEncryptor> {
+        None
+    }
+
+    fn page_encryptor_and_sink_mut(
+        &mut self,
+    ) -> Option<(&mut PageEncryptor, &mut &'a mut TrackedWrite<W>)> {
+        None
+    }
+}
+
 impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
     fn write_page(&mut self, page: CompressedPage) -> Result<PageWriteSpec> {
+        let page = match self.page_encryptor_mut() {
+            Some(page_encryptor) => page_encryptor.encrypt_compressed_page(page)?,
+            None => page,
+        };
+
         let page_type = page.page_type();
         let start_pos = self.sink.bytes_written() as u64;
 
-        let page_header = page.to_thrift_header();
+        let page_header = page.to_thrift_header()?;
         let header_size = self.serialize_page_header(page_header)?;
+
         self.sink.write_all(page.data())?;
 
         let mut spec = PageWriteSpec::new();
@@ -737,6 +1002,11 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         spec.bytes_written = self.sink.bytes_written() as u64 - start_pos;
         spec.num_values = page.num_values();
 
+        if let Some(page_encryptor) = self.page_encryptor_mut() {
+            if page.compressed_page().is_data_page() {
+                page_encryptor.increment_page();
+            }
+        }
         Ok(spec)
     }
 
@@ -744,6 +1014,25 @@ impl<W: Write + Send> PageWriter for SerializedPageWriter<'_, W> {
         self.sink.flush()?;
         Ok(())
     }
+}
+
+/// Get the magic bytes at the start and end of the file that identify this
+/// as a Parquet file.
+#[cfg(feature = "encryption")]
+pub(crate) fn get_file_magic(
+    file_encryption_properties: Option<&Arc<FileEncryptionProperties>>,
+) -> &'static [u8; 4] {
+    match file_encryption_properties.as_ref() {
+        Some(encryption_properties) if encryption_properties.encrypt_footer() => {
+            &PARQUET_MAGIC_ENCR_FOOTER
+        }
+        _ => &PARQUET_MAGIC,
+    }
+}
+
+#[cfg(not(feature = "encryption"))]
+pub(crate) fn get_file_magic() -> &'static [u8; 4] {
+    &PARQUET_MAGIC
 }
 
 #[cfg(test)]
@@ -756,29 +1045,30 @@ mod tests {
     use std::fs::File;
 
     #[cfg(feature = "arrow")]
-    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    #[cfg(feature = "arrow")]
     use crate::arrow::ArrowWriter;
+    #[cfg(feature = "arrow")]
+    use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
     use crate::basic::{
         ColumnOrder, Compression, ConvertedType, Encoding, LogicalType, Repetition, SortOrder, Type,
     };
     use crate::column::page::{Page, PageReader};
     use crate::column::reader::get_typed_column_reader;
-    use crate::compression::{create_codec, Codec, CodecOptionsBuilder};
+    use crate::compression::{Codec, CodecOptionsBuilder, create_codec};
     use crate::data_type::{BoolType, ByteArrayType, Int32Type};
-    use crate::file::page_index::index::Index;
+    use crate::file::page_index::column_index::ColumnIndexMetaData;
     use crate::file::properties::EnabledStatistics;
     use crate::file::serialized_reader::ReadOptionsBuilder;
+    use crate::file::statistics::{from_thrift_page_stats, page_stats_to_thrift};
     use crate::file::{
         properties::{ReaderProperties, WriterProperties, WriterVersion},
         reader::{FileReader, SerializedFileReader, SerializedPageReader},
-        statistics::{from_thrift, to_thrift, Statistics},
+        statistics::Statistics,
     };
-    use crate::format::SortingColumn;
     use crate::record::{Row, RowAccessor};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types;
     use crate::schema::types::{ColumnDescriptor, ColumnPath};
+    use crate::util::test_common::file_util::get_test_file;
     use crate::util::test_common::rand_gen::RandGen;
 
     #[test]
@@ -1132,7 +1422,7 @@ mod tests {
 
     #[test]
     fn test_page_writer_data_pages() {
-        let pages = vec![
+        let pages = [
             Page::DataPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5, 6, 7, 8]),
                 num_values: 10,
@@ -1160,7 +1450,7 @@ mod tests {
 
     #[test]
     fn test_page_writer_dict_pages() {
-        let pages = vec![
+        let pages = [
             Page::DictionaryPage {
                 buf: Bytes::from(vec![1, 2, 3, 4, 5]),
                 num_values: 5,
@@ -1224,8 +1514,11 @@ mod tests {
                         encoding,
                         def_level_encoding,
                         rep_level_encoding,
-                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
-                            .unwrap(),
+                        statistics: from_thrift_page_stats(
+                            physical_type,
+                            page_stats_to_thrift(statistics.as_ref()),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DataPageV2 {
@@ -1254,8 +1547,11 @@ mod tests {
                         def_levels_byte_len,
                         rep_levels_byte_len,
                         is_compressed: compressor.is_some(),
-                        statistics: from_thrift(physical_type, to_thrift(statistics.as_ref()))
-                            .unwrap(),
+                        statistics: from_thrift_page_stats(
+                            physical_type,
+                            page_stats_to_thrift(statistics.as_ref()),
+                        )
+                        .unwrap(),
                     }
                 }
                 Page::DictionaryPage {
@@ -1307,6 +1603,7 @@ mod tests {
 
             let props = ReaderProperties::builder()
                 .set_backward_compatible_lz4(false)
+                .set_read_page_statistics(true)
                 .build();
             let mut page_reader = SerializedPageReader::new_with_properties(
                 Arc::new(reader),
@@ -1345,7 +1642,10 @@ mod tests {
         assert_eq!(&left.buffer(), &right.buffer());
         assert_eq!(left.num_values(), right.num_values());
         assert_eq!(left.encoding(), right.encoding());
-        assert_eq!(to_thrift(left.statistics()), to_thrift(right.statistics()));
+        assert_eq!(
+            page_stats_to_thrift(left.statistics()),
+            page_stats_to_thrift(right.statistics())
+        );
     }
 
     /// Tests roundtrip of i32 data written using `W` and read using `R`
@@ -1353,7 +1653,7 @@ mod tests {
         file: W,
         data: Vec<Vec<i32>>,
         compression: Compression,
-    ) -> crate::format::FileMetaData
+    ) -> ParquetMetaData
     where
         W: Write + Send,
         R: ChunkReader + From<W> + 'static,
@@ -1368,7 +1668,7 @@ mod tests {
         data: Vec<Vec<D::T>>,
         value: F,
         compression: Compression,
-    ) -> crate::format::FileMetaData
+    ) -> ParquetMetaData
     where
         W: Write + Send,
         R: ChunkReader + From<W> + 'static,
@@ -1439,7 +1739,7 @@ mod tests {
 
     /// File write-read roundtrip.
     /// `data` consists of arrays of values for each row group.
-    fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> crate::format::FileMetaData {
+    fn test_file_roundtrip(file: File, data: Vec<Vec<i32>>) -> ParquetMetaData {
         test_roundtrip_i32::<File, File>(file, data, Compression::UNCOMPRESSED)
     }
 
@@ -1514,13 +1814,12 @@ mod tests {
     fn test_column_offset_index_file() {
         let file = tempfile::tempfile().unwrap();
         let file_metadata = test_file_roundtrip(file, vec![vec![1, 2, 3, 4, 5]]);
-        file_metadata.row_groups.iter().for_each(|row_group| {
-            row_group.columns.iter().for_each(|column_chunk| {
-                assert_ne!(None, column_chunk.column_index_offset);
-                assert_ne!(None, column_chunk.column_index_length);
-
-                assert_ne!(None, column_chunk.offset_index_offset);
-                assert_ne!(None, column_chunk.offset_index_length);
+        file_metadata.row_groups().iter().for_each(|row_group| {
+            row_group.columns().iter().for_each(|column_chunk| {
+                assert!(column_chunk.column_index_offset().is_some());
+                assert!(column_chunk.column_index_length().is_some());
+                assert!(column_chunk.offset_index_offset().is_some());
+                assert!(column_chunk.offset_index_length().is_some());
             })
         });
     }
@@ -1613,29 +1912,22 @@ mod tests {
         let metadata = row_group_writer.close().unwrap();
         writer.close().unwrap();
 
-        let thrift = metadata.to_thrift();
-        let encoded_stats: Vec<_> = thrift
-            .columns
-            .into_iter()
-            .map(|x| x.meta_data.unwrap().statistics.unwrap())
-            .collect();
-
         // decimal
-        let s = &encoded_stats[0];
+        let s = page_stats_to_thrift(metadata.column(0).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // i32
-        let s = &encoded_stats[1];
+        let s = page_stats_to_thrift(metadata.column(1).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
         assert_eq!(s.max_value.as_deref(), Some(3_i32.to_le_bytes().as_ref()));
 
         // u32
-        let s = &encoded_stats[2];
+        let s = page_stats_to_thrift(metadata.column(2).statistics()).unwrap();
         assert_eq!(s.min.as_deref(), None);
         assert_eq!(s.max.as_deref(), None);
         assert_eq!(s.min_value.as_deref(), Some(1_i32.to_le_bytes().as_ref()));
@@ -1742,6 +2034,7 @@ mod tests {
         let props = WriterProperties::builder()
             .set_statistics_enabled(EnabledStatistics::None)
             .set_column_statistics_enabled("a".into(), EnabledStatistics::Page)
+            .set_offset_index_disabled(true) // this should be ignored because of the line above
             .build();
         let mut file = Vec::with_capacity(1024);
         let mut file_writer =
@@ -1760,15 +2053,15 @@ mod tests {
         row_group_writer.close().unwrap();
 
         let metadata = file_writer.finish().unwrap();
-        assert_eq!(metadata.row_groups.len(), 1);
-        let row_group = &metadata.row_groups[0];
-        assert_eq!(row_group.columns.len(), 2);
+        assert_eq!(metadata.num_row_groups(), 1);
+        let row_group = metadata.row_group(0);
+        assert_eq!(row_group.num_columns(), 2);
         // Column "a" has both offset and column index, as requested
-        assert!(row_group.columns[0].offset_index_offset.is_some());
-        assert!(row_group.columns[0].column_index_offset.is_some());
+        assert!(row_group.column(0).offset_index_offset().is_some());
+        assert!(row_group.column(0).column_index_offset().is_some());
         // Column "b" should only have offset index
-        assert!(row_group.columns[1].offset_index_offset.is_some());
-        assert!(row_group.columns[1].column_index_offset.is_none());
+        assert!(row_group.column(1).offset_index_offset().is_some());
+        assert!(row_group.column(1).column_index_offset().is_none());
 
         let err = file_writer.next_row_group().err().unwrap().to_string();
         assert_eq!(err, "Parquet error: SerializedFileWriter already finished");
@@ -1787,9 +2080,9 @@ mod tests {
         assert_eq!(column_index[0].len(), 2); // 2 column
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, Index::INT32(_)), "{a_idx:?}");
+        assert!(matches!(a_idx, ColumnIndexMetaData::INT32(_)), "{a_idx:?}");
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, Index::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
     }
 
     #[test]
@@ -1822,9 +2115,8 @@ mod tests {
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
 
-        assert_eq!(file_metadata.row_groups.len(), 1);
-        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        assert_eq!(file_metadata.num_row_groups(), 1);
+        assert_eq!(file_metadata.row_group(0).num_columns(), 1);
 
         let check_def_hist = |def_hist: &[i64]| {
             assert_eq!(def_hist.len(), 2);
@@ -1832,29 +2124,26 @@ mod tests {
             assert_eq!(def_hist[1], 7);
         };
 
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
-        let meta_data = file_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap();
-        assert!(meta_data.size_statistics.is_some());
-        let size_stats = meta_data.size_statistics.as_ref().unwrap();
+        let meta_data = file_metadata.row_group(0).column(0);
 
-        assert!(size_stats.repetition_level_histogram.is_none());
-        assert!(size_stats.definition_level_histogram.is_some());
-        assert!(size_stats.unencoded_byte_array_data_bytes.is_some());
+        assert!(meta_data.repetition_level_histogram().is_none());
+        assert!(meta_data.definition_level_histogram().is_some());
+        assert!(meta_data.unencoded_byte_array_data_bytes().is_some());
         assert_eq!(
             unenc_size,
-            size_stats.unencoded_byte_array_data_bytes.unwrap()
+            meta_data.unencoded_byte_array_data_bytes().unwrap()
         );
-        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
+        check_def_hist(meta_data.definition_level_histogram().unwrap().values());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rfile_metadata = reader.metadata().file_metadata();
-        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(
+            rfile_metadata.num_rows(),
+            file_metadata.file_metadata().num_rows()
+        );
         assert_eq!(reader.num_row_groups(), 1);
         let rowgroup = reader.get_row_group(0).unwrap();
         assert_eq!(rowgroup.num_columns(), 1);
@@ -1873,16 +2162,16 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Index::BYTE_ARRAY(index) = &column_index[0][0] {
-            assert_eq!(index.indexes.len(), 1);
-            &index.indexes[0]
+        let col_idx = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
+            assert_eq!(index.num_pages(), 1);
+            index
         } else {
             unreachable!()
         };
 
-        assert!(col_idx.repetition_level_histogram().is_none());
-        assert!(col_idx.definition_level_histogram().is_some());
-        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
+        assert!(col_idx.repetition_level_histogram(0).is_none());
+        assert!(col_idx.definition_level_histogram(0).is_some());
+        check_def_hist(col_idx.definition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
@@ -1974,9 +2263,8 @@ mod tests {
         row_group_writer.close().unwrap();
         let file_metadata = writer.close().unwrap();
 
-        assert_eq!(file_metadata.row_groups.len(), 1);
-        assert_eq!(file_metadata.row_groups[0].columns.len(), 1);
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
+        assert_eq!(file_metadata.num_row_groups(), 1);
+        assert_eq!(file_metadata.row_group(0).num_columns(), 1);
 
         let check_def_hist = |def_hist: &[i64]| {
             assert_eq!(def_hist.len(), 4);
@@ -1994,25 +2282,22 @@ mod tests {
 
         // check that histograms are set properly in the write and read metadata
         // also check that unencoded_byte_array_data_bytes is not set
-        assert!(file_metadata.row_groups[0].columns[0].meta_data.is_some());
-        let meta_data = file_metadata.row_groups[0].columns[0]
-            .meta_data
-            .as_ref()
-            .unwrap();
-        assert!(meta_data.size_statistics.is_some());
-        let size_stats = meta_data.size_statistics.as_ref().unwrap();
-        assert!(size_stats.repetition_level_histogram.is_some());
-        assert!(size_stats.definition_level_histogram.is_some());
-        assert!(size_stats.unencoded_byte_array_data_bytes.is_none());
-        check_def_hist(size_stats.definition_level_histogram.as_ref().unwrap());
-        check_rep_hist(size_stats.repetition_level_histogram.as_ref().unwrap());
+        let meta_data = file_metadata.row_group(0).column(0);
+        assert!(meta_data.repetition_level_histogram().is_some());
+        assert!(meta_data.definition_level_histogram().is_some());
+        assert!(meta_data.unencoded_byte_array_data_bytes().is_none());
+        check_def_hist(meta_data.definition_level_histogram().unwrap().values());
+        check_rep_hist(meta_data.repetition_level_histogram().unwrap().values());
 
         // check that the read metadata is also correct
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rfile_metadata = reader.metadata().file_metadata();
-        assert_eq!(rfile_metadata.num_rows(), file_metadata.num_rows);
+        assert_eq!(
+            rfile_metadata.num_rows(),
+            file_metadata.file_metadata().num_rows()
+        );
         assert_eq!(reader.num_row_groups(), 1);
         let rowgroup = reader.get_row_group(0).unwrap();
         assert_eq!(rowgroup.num_columns(), 1);
@@ -2028,15 +2313,15 @@ mod tests {
         let column_index = reader.metadata().column_index().unwrap();
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let Index::INT32(index) = &column_index[0][0] {
-            assert_eq!(index.indexes.len(), 1);
-            &index.indexes[0]
+        let col_idx = if let ColumnIndexMetaData::INT32(index) = &column_index[0][0] {
+            assert_eq!(index.num_pages(), 1);
+            index
         } else {
             unreachable!()
         };
 
-        check_def_hist(col_idx.definition_level_histogram().unwrap().values());
-        check_rep_hist(col_idx.repetition_level_histogram().unwrap().values());
+        check_def_hist(col_idx.definition_level_histogram(0).unwrap());
+        check_rep_hist(col_idx.repetition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
         let offset_index = reader.metadata().offset_index().unwrap();
@@ -2112,11 +2397,14 @@ mod tests {
 
         // Make sure byte_stream_split encoding was used
         let check_encoding = |x: usize, filemeta: &ParquetMetaData| {
-            assert!(filemeta
-                .row_group(0)
-                .column(x)
-                .encodings()
-                .contains(&Encoding::BYTE_STREAM_SPLIT));
+            assert!(
+                filemeta
+                    .row_group(0)
+                    .column(x)
+                    .encodings()
+                    .collect::<Vec<_>>()
+                    .contains(&Encoding::BYTE_STREAM_SPLIT)
+            );
         };
 
         check_encoding(1, filemeta);
@@ -2154,5 +2442,75 @@ mod tests {
             };
             start += 1;
         }
+    }
+
+    #[test]
+    fn test_rewrite_no_page_indexes() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Optional)
+            .parse_and_finish(&file)
+            .unwrap();
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let schema = metadata.file_metadata().schema_descr().root_schema_ptr();
+        let output = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
+
+        for rg in metadata.row_groups() {
+            let mut rg_out = writer.next_row_group().unwrap();
+            for column in rg.columns() {
+                let result = ColumnCloseResult {
+                    bytes_written: column.compressed_size() as _,
+                    rows_written: rg.num_rows() as _,
+                    metadata: column.clone(),
+                    bloom_filter: None,
+                    column_index: None,
+                    offset_index: None,
+                };
+                rg_out.append_column(&file, result).unwrap();
+            }
+            rg_out.close().unwrap();
+        }
+        writer.close().unwrap();
+    }
+
+    #[test]
+    fn test_rewrite_missing_column_index() {
+        // this file has an INT96 column that lacks a column index entry
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let metadata = ParquetMetaDataReader::new()
+            .with_page_index_policy(PageIndexPolicy::Optional)
+            .parse_and_finish(&file)
+            .unwrap();
+
+        let props = Arc::new(WriterProperties::builder().build());
+        let schema = metadata.file_metadata().schema_descr().root_schema_ptr();
+        let output = Vec::<u8>::new();
+        let mut writer = SerializedFileWriter::new(output, schema, props).unwrap();
+
+        let column_indexes = metadata.column_index();
+        let offset_indexes = metadata.offset_index();
+
+        for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
+            let rg_column_indexes = column_indexes.and_then(|ci| ci.get(rg_idx));
+            let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
+            let mut rg_out = writer.next_row_group().unwrap();
+            for (col_idx, column) in rg.columns().iter().enumerate() {
+                let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
+                let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
+                let result = ColumnCloseResult {
+                    bytes_written: column.compressed_size() as _,
+                    rows_written: rg.num_rows() as _,
+                    metadata: column.clone(),
+                    bloom_filter: None,
+                    column_index,
+                    offset_index,
+                };
+                rg_out.append_column(&file, result).unwrap();
+            }
+            rg_out.close().unwrap();
+        }
+        writer.close().unwrap();
     }
 }

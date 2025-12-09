@@ -27,7 +27,7 @@ This file documents the release process for the "Rust Arrow Crates": `arrow`, `a
 
 The Rust Arrow Crates are interconnected (e.g. `parquet` has an optional dependency on `arrow`) so we increment and release all of them together.
 
-If any code has been merged to master that has a breaking API change, as defined
+If any code has been merged to main that has a breaking API change, as defined
 in [Rust RFC 1105] he major version number is incremented (e.g. `9.0.2` to `10.0.2`).
 Otherwise the new minor version incremented (e.g. `9.0.2` to `9.1.0`).
 
@@ -46,24 +46,24 @@ crates.io, the Rust ecosystem's package manager.
 We create a `CHANGELOG.md` so our users know what has been changed between releases.
 
 The CHANGELOG is created automatically using
-[update_change_log.sh](https://github.com/apache/arrow-rs/blob/master/dev/release/update_change_log.sh)
+[update_change_log.sh](https://github.com/apache/arrow-rs/blob/main/dev/release/update_change_log.sh)
 
 This script creates a changelog using github issues and the
 labels associated with them.
 
 ## Prepare CHANGELOG and version:
 
-Now prepare a PR to update `CHANGELOG.md` and versions on `master` to reflect the planned release.
+Now prepare a PR to update `CHANGELOG.md` and versions on `main` to reflect the planned release.
 
 Do this in the root of this repository. For example [#2323](https://github.com/apache/arrow-rs/pull/2323)
 
 ```bash
-git checkout master
+git checkout main
 git pull
 git checkout -b <RELEASE_BRANCH>
 
 # Update versions. Make sure to run it before the next step since we do not want CHANGELOG-old.md affected.
-sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md`
+sed -i '' -e 's/14.0.0/39.0.0/g' `find . -name 'Cargo.toml' -or -name '*.md' | grep -v CHANGELOG.md | grep -v README.md`
 git commit -a -m 'Update version'
 
 # ensure your github token is available
@@ -72,7 +72,7 @@ export ARROW_GITHUB_API_TOKEN=<TOKEN>
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
-# commit the intial changes
+# commit the initial changes
 git commit -a -m 'Create changelog'
 
 # run automated script to copy labels to issues based on referenced PRs
@@ -84,7 +84,7 @@ python dev/release/label_issues.py
 
 # review change log / edit issues and labels if needed, rerun, repeat as necessary
 # note you need to revert changes to CHANGELOG-old.md if you want to rerun the script
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+./dev/release/update_change_log.sh
 
 # Commit the changes
 git commit -a -m 'Update changelog'
@@ -96,7 +96,7 @@ Note that when reviewing the change log, rather than editing the
 `CHANGELOG.md`, it is preferred to update the issues and their labels
 (e.g. add `invalid` label to exclude them from release notes)
 
-Merge this PR to `master` prior to the next step.
+Merge this PR to `main` prior to the next step.
 
 ## Prepare release candidate tarball
 
@@ -105,24 +105,24 @@ create a release candidate using the following steps. Note you need to
 be a committer to run these scripts as they upload to the apache `svn`
 distribution servers.
 
+### Pick a Release Candidate (RC) number
+
+Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
+
 ### Create git tag for the release:
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
 Use a string such as `43.0.0` as the `<version>`.
 
-Create and push the tag thusly:
+Create and push the tag thusly (for example, for version `4.1.0` and `rc2` would be `4.1.0-rc2`):
 
 ```shell
 git fetch apache
-git tag <version> apache/master
+git tag <version>-<rc> apache/main
 # push tag to apache
-git push apache <version>
+git push apache <version>-<rc>
 ```
-
-### Pick an Release Candidate (RC) number
-
-Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 ### Create, sign, and upload tarball
 
@@ -191,15 +191,30 @@ If the release is not approved, fix whatever the problem is and try again with t
 
 ### If the release is approved,
 
-Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
+Then, create a new release on GitHub using the tag `<version>` (e.g. `4.1.0`).
 
-Rust Arrow Crates:
+Push the release tag to github
+
+```shell
+git tag <version> <version>-<rc>
+git push apache <version>
+```
+
+Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-rs-4.1.0/, using the `release-tarball.sh` script:
 
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
 ```
 
 Congratulations! The release is now official!
+
+### Check the GitHub release
+
+The [`release.yml`] workflow automatically creates a github release for the tag.
+Check that the release is created and contains the correct changelog here:
+https://github.com/apache/arrow-rs/releases
+
+[`release.yml`]: https://github.com/apache/arrow-rs/blob/main/.github/workflows/release.yml#L1-L0
 
 ### Publish on Crates.io
 
@@ -229,17 +244,23 @@ Rust Arrow Crates:
 (cd arrow-data && cargo publish)
 (cd arrow-array && cargo publish)
 (cd arrow-select && cargo publish)
+(cd arrow-ord && cargo publish)
 (cd arrow-cast && cargo publish)
 (cd arrow-ipc && cargo publish)
 (cd arrow-csv && cargo publish)
 (cd arrow-json && cargo publish)
 (cd arrow-avro && cargo publish)
-(cd arrow-ord && cargo publish)
 (cd arrow-arith && cargo publish)
 (cd arrow-string && cargo publish)
 (cd arrow-row && cargo publish)
+(cd arrow-pyarrow && cargo publish)
 (cd arrow && cargo publish)
+(cd arrow-avro && cargo publish)
 (cd arrow-flight && cargo publish)
+(cd parquet-variant && cargo publish)
+(cd parquet-variant-json && cargo publish)
+(cd parquet-variant-compute && cargo publish)
+(cd parquet-geospatial && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 (cd arrow-integration-test && cargo publish)

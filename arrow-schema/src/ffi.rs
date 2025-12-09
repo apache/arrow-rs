@@ -38,10 +38,11 @@ use crate::{
     ArrowError, DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit, UnionFields, UnionMode,
 };
 use bitflags::bitflags;
+use std::borrow::Cow;
 use std::sync::Arc;
 use std::{
     collections::HashMap,
-    ffi::{c_char, c_void, CStr, CString},
+    ffi::{CStr, CString, c_char, c_void},
 };
 
 bitflags! {
@@ -97,20 +98,20 @@ unsafe extern "C" fn release_schema(schema: *mut FFI_ArrowSchema) {
     if schema.is_null() {
         return;
     }
-    let schema = &mut *schema;
+    let schema = unsafe { &mut *schema };
 
     // take ownership back to release it.
-    drop(CString::from_raw(schema.format as *mut c_char));
+    drop(unsafe { CString::from_raw(schema.format as *mut c_char) });
     if !schema.name.is_null() {
-        drop(CString::from_raw(schema.name as *mut c_char));
+        drop(unsafe { CString::from_raw(schema.name as *mut c_char) });
     }
     if !schema.private_data.is_null() {
-        let private_data = Box::from_raw(schema.private_data as *mut SchemaPrivateData);
+        let private_data = unsafe { Box::from_raw(schema.private_data as *mut SchemaPrivateData) };
         for child in private_data.children.iter() {
-            drop(Box::from_raw(*child))
+            drop(unsafe { Box::from_raw(*child) })
         }
         if !private_data.dictionary.is_null() {
-            drop(Box::from_raw(private_data.dictionary));
+            drop(unsafe { Box::from_raw(private_data.dictionary) });
         }
 
         drop(private_data);
@@ -241,7 +242,7 @@ impl FFI_ArrowSchema {
     /// [move]: https://arrow.apache.org/docs/format/CDataInterface.html#moving-an-array
     /// [valid]: https://doc.rust-lang.org/std/ptr/index.html#safety
     pub unsafe fn from_raw(schema: *mut FFI_ArrowSchema) -> Self {
-        std::ptr::replace(schema, Self::empty())
+        unsafe { std::ptr::replace(schema, Self::empty()) }
     }
 
     /// Create an empty [`FFI_ArrowSchema`]
@@ -455,6 +456,14 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                 let c_child = c_schema.child(0);
                 DataType::LargeList(Arc::new(Field::try_from(c_child)?))
             }
+            "+vl" => {
+                let c_child = c_schema.child(0);
+                DataType::ListView(Arc::new(Field::try_from(c_child)?))
+            }
+            "+vL" => {
+                let c_child = c_schema.child(0);
+                DataType::LargeListView(Arc::new(Field::try_from(c_child)?))
+            }
             "+s" => {
                 let fields = c_schema.children().map(Field::try_from);
                 DataType::Struct(fields.collect::<Result<_, ArrowError>>()?)
@@ -482,7 +491,7 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                                 "FixedSizeBinary requires an integer parameter representing number of bytes per element".to_string())
                         })?;
                         DataType::FixedSizeBinary(parsed_num_bytes)
-                    },
+                    }
                     // FixedSizeList type in format "+w:num_elems"
                     ["+w", num_elems] => {
                         let c_child = c_schema.child(0);
@@ -490,58 +499,63 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                             ArrowError::CDataInterface(
                                 "The FixedSizeList type requires an integer parameter representing number of elements per list".to_string())
                         })?;
-                        DataType::FixedSizeList(Arc::new(Field::try_from(c_child)?), parsed_num_elems)
-                    },
-                    // Decimal types in format "d:precision,scale" or "d:precision,scale,bitWidth"
-                    ["d", extra] => {
-                        match extra.splitn(3, ',').collect::<Vec<&str>>().as_slice() {
-                            [precision, scale] => {
-                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
-                                    ArrowError::CDataInterface(
-                                        "The decimal type requires an integer precision".to_string(),
-                                    )
-                                })?;
-                                let parsed_scale = scale.parse::<i8>().map_err(|_| {
-                                    ArrowError::CDataInterface(
-                                        "The decimal type requires an integer scale".to_string(),
-                                    )
-                                })?;
-                                DataType::Decimal128(parsed_precision, parsed_scale)
-                            },
-                            [precision, scale, bits] => {
-                                if *bits != "128" && *bits != "256" {
-                                    return Err(ArrowError::CDataInterface("Only 128/256 bit wide decimal is supported in the Rust implementation".to_string()));
-                                }
-                                let parsed_precision = precision.parse::<u8>().map_err(|_| {
-                                    ArrowError::CDataInterface(
-                                        "The decimal type requires an integer precision".to_string(),
-                                    )
-                                })?;
-                                let parsed_scale = scale.parse::<i8>().map_err(|_| {
-                                    ArrowError::CDataInterface(
-                                        "The decimal type requires an integer scale".to_string(),
-                                    )
-                                })?;
-                                if *bits == "128" {
-                                    DataType::Decimal128(parsed_precision, parsed_scale)
-                                } else {
-                                    DataType::Decimal256(parsed_precision, parsed_scale)
-                                }
-                            }
-                            _ => {
-                                return Err(ArrowError::CDataInterface(format!(
-                                    "The decimal pattern \"d:{extra:?}\" is not supported in the Rust implementation"
-                                )))
-                            }
-                        }
+                        DataType::FixedSizeList(
+                            Arc::new(Field::try_from(c_child)?),
+                            parsed_num_elems,
+                        )
                     }
+                    // Decimal types in format "d:precision,scale" or "d:precision,scale,bitWidth"
+                    ["d", extra] => match extra.splitn(3, ',').collect::<Vec<&str>>().as_slice() {
+                        [precision, scale] => {
+                            let parsed_precision = precision.parse::<u8>().map_err(|_| {
+                                ArrowError::CDataInterface(
+                                    "The decimal type requires an integer precision".to_string(),
+                                )
+                            })?;
+                            let parsed_scale = scale.parse::<i8>().map_err(|_| {
+                                ArrowError::CDataInterface(
+                                    "The decimal type requires an integer scale".to_string(),
+                                )
+                            })?;
+                            DataType::Decimal128(parsed_precision, parsed_scale)
+                        }
+                        [precision, scale, bits] => {
+                            let parsed_precision = precision.parse::<u8>().map_err(|_| {
+                                ArrowError::CDataInterface(
+                                    "The decimal type requires an integer precision".to_string(),
+                                )
+                            })?;
+                            let parsed_scale = scale.parse::<i8>().map_err(|_| {
+                                ArrowError::CDataInterface(
+                                    "The decimal type requires an integer scale".to_string(),
+                                )
+                            })?;
+                            match *bits {
+                                    "32" => DataType::Decimal32(parsed_precision, parsed_scale),
+                                    "64" => DataType::Decimal64(parsed_precision, parsed_scale),
+                                    "128" => DataType::Decimal128(parsed_precision, parsed_scale),
+                                    "256" => DataType::Decimal256(parsed_precision, parsed_scale),
+                                    _ => return Err(ArrowError::CDataInterface("Only 32/64/128/256 bit wide decimals are supported in the Rust implementation".to_string())),
+                                }
+                        }
+                        _ => {
+                            return Err(ArrowError::CDataInterface(format!(
+                                "The decimal pattern \"d:{extra:?}\" is not supported in the Rust implementation"
+                            )));
+                        }
+                    },
                     // DenseUnion
                     ["+ud", extra] => {
-                        let type_ids = extra.split(',').map(|t| t.parse::<i8>().map_err(|_| {
-                            ArrowError::CDataInterface(
-                                "The Union type requires an integer type id".to_string(),
-                            )
-                        })).collect::<Result<Vec<_>, ArrowError>>()?;
+                        let type_ids = extra
+                            .split(',')
+                            .map(|t| {
+                                t.parse::<i8>().map_err(|_| {
+                                    ArrowError::CDataInterface(
+                                        "The Union type requires an integer type id".to_string(),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, ArrowError>>()?;
                         let mut fields = Vec::with_capacity(type_ids.len());
                         for idx in 0..c_schema.n_children {
                             let c_child = c_schema.child(idx as usize);
@@ -551,7 +565,8 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
 
                         if fields.len() != type_ids.len() {
                             return Err(ArrowError::CDataInterface(
-                                "The Union type requires same number of fields and type ids".to_string(),
+                                "The Union type requires same number of fields and type ids"
+                                    .to_string(),
                             ));
                         }
 
@@ -559,11 +574,16 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                     }
                     // SparseUnion
                     ["+us", extra] => {
-                        let type_ids = extra.split(',').map(|t| t.parse::<i8>().map_err(|_| {
-                            ArrowError::CDataInterface(
-                                "The Union type requires an integer type id".to_string(),
-                            )
-                        })).collect::<Result<Vec<_>, ArrowError>>()?;
+                        let type_ids = extra
+                            .split(',')
+                            .map(|t| {
+                                t.parse::<i8>().map_err(|_| {
+                                    ArrowError::CDataInterface(
+                                        "The Union type requires an integer type id".to_string(),
+                                    )
+                                })
+                            })
+                            .collect::<Result<Vec<_>, ArrowError>>()?;
                         let mut fields = Vec::with_capacity(type_ids.len());
                         for idx in 0..c_schema.n_children {
                             let c_child = c_schema.child(idx as usize);
@@ -573,7 +593,8 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
 
                         if fields.len() != type_ids.len() {
                             return Err(ArrowError::CDataInterface(
-                                "The Union type requires same number of fields and type ids".to_string(),
+                                "The Union type requires same number of fields and type ids"
+                                    .to_string(),
                             ));
                         }
 
@@ -585,22 +606,14 @@ impl TryFrom<&FFI_ArrowSchema> for DataType {
                     ["tsm", ""] => DataType::Timestamp(TimeUnit::Millisecond, None),
                     ["tsu", ""] => DataType::Timestamp(TimeUnit::Microsecond, None),
                     ["tsn", ""] => DataType::Timestamp(TimeUnit::Nanosecond, None),
-                    ["tss", tz] => {
-                        DataType::Timestamp(TimeUnit::Second, Some(Arc::from(*tz)))
-                    }
-                    ["tsm", tz] => {
-                        DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from(*tz)))
-                    }
-                    ["tsu", tz] => {
-                        DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from(*tz)))
-                    }
-                    ["tsn", tz] => {
-                        DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from(*tz)))
-                    }
+                    ["tss", tz] => DataType::Timestamp(TimeUnit::Second, Some(Arc::from(*tz))),
+                    ["tsm", tz] => DataType::Timestamp(TimeUnit::Millisecond, Some(Arc::from(*tz))),
+                    ["tsu", tz] => DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::from(*tz))),
+                    ["tsn", tz] => DataType::Timestamp(TimeUnit::Nanosecond, Some(Arc::from(*tz))),
                     _ => {
                         return Err(ArrowError::CDataInterface(format!(
                             "The datatype \"{other:?}\" is still not supported in Rust implementation"
-                        )))
+                        )));
                     }
                 }
             }
@@ -652,6 +665,8 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
         let children = match dtype {
             DataType::List(child)
             | DataType::LargeList(child)
+            | DataType::ListView(child)
+            | DataType::LargeListView(child)
             | DataType::FixedSizeList(child, _)
             | DataType::Map(child, _) => {
                 vec![FFI_ArrowSchema::try_from(child.as_ref())?]
@@ -685,57 +700,67 @@ impl TryFrom<&DataType> for FFI_ArrowSchema {
     }
 }
 
-fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
+fn get_format_string(dtype: &DataType) -> Result<Cow<'static, str>, ArrowError> {
     match dtype {
-        DataType::Null => Ok("n".to_string()),
-        DataType::Boolean => Ok("b".to_string()),
-        DataType::Int8 => Ok("c".to_string()),
-        DataType::UInt8 => Ok("C".to_string()),
-        DataType::Int16 => Ok("s".to_string()),
-        DataType::UInt16 => Ok("S".to_string()),
-        DataType::Int32 => Ok("i".to_string()),
-        DataType::UInt32 => Ok("I".to_string()),
-        DataType::Int64 => Ok("l".to_string()),
-        DataType::UInt64 => Ok("L".to_string()),
-        DataType::Float16 => Ok("e".to_string()),
-        DataType::Float32 => Ok("f".to_string()),
-        DataType::Float64 => Ok("g".to_string()),
-        DataType::BinaryView => Ok("vz".to_string()),
-        DataType::Binary => Ok("z".to_string()),
-        DataType::LargeBinary => Ok("Z".to_string()),
-        DataType::Utf8View => Ok("vu".to_string()),
-        DataType::Utf8 => Ok("u".to_string()),
-        DataType::LargeUtf8 => Ok("U".to_string()),
-        DataType::FixedSizeBinary(num_bytes) => Ok(format!("w:{num_bytes}")),
-        DataType::FixedSizeList(_, num_elems) => Ok(format!("+w:{num_elems}")),
-        DataType::Decimal128(precision, scale) => Ok(format!("d:{precision},{scale}")),
-        DataType::Decimal256(precision, scale) => Ok(format!("d:{precision},{scale},256")),
-        DataType::Date32 => Ok("tdD".to_string()),
-        DataType::Date64 => Ok("tdm".to_string()),
-        DataType::Time32(TimeUnit::Second) => Ok("tts".to_string()),
-        DataType::Time32(TimeUnit::Millisecond) => Ok("ttm".to_string()),
-        DataType::Time64(TimeUnit::Microsecond) => Ok("ttu".to_string()),
-        DataType::Time64(TimeUnit::Nanosecond) => Ok("ttn".to_string()),
-        DataType::Timestamp(TimeUnit::Second, None) => Ok("tss:".to_string()),
-        DataType::Timestamp(TimeUnit::Millisecond, None) => Ok("tsm:".to_string()),
-        DataType::Timestamp(TimeUnit::Microsecond, None) => Ok("tsu:".to_string()),
-        DataType::Timestamp(TimeUnit::Nanosecond, None) => Ok("tsn:".to_string()),
-        DataType::Timestamp(TimeUnit::Second, Some(tz)) => Ok(format!("tss:{tz}")),
-        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(format!("tsm:{tz}")),
-        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(format!("tsu:{tz}")),
-        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(format!("tsn:{tz}")),
-        DataType::Duration(TimeUnit::Second) => Ok("tDs".to_string()),
-        DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".to_string()),
-        DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".to_string()),
-        DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".to_string()),
-        DataType::Interval(IntervalUnit::YearMonth) => Ok("tiM".to_string()),
-        DataType::Interval(IntervalUnit::DayTime) => Ok("tiD".to_string()),
-        DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".to_string()),
-        DataType::List(_) => Ok("+l".to_string()),
-        DataType::LargeList(_) => Ok("+L".to_string()),
-        DataType::Struct(_) => Ok("+s".to_string()),
-        DataType::Map(_, _) => Ok("+m".to_string()),
-        DataType::RunEndEncoded(_, _) => Ok("+r".to_string()),
+        DataType::Null => Ok("n".into()),
+        DataType::Boolean => Ok("b".into()),
+        DataType::Int8 => Ok("c".into()),
+        DataType::UInt8 => Ok("C".into()),
+        DataType::Int16 => Ok("s".into()),
+        DataType::UInt16 => Ok("S".into()),
+        DataType::Int32 => Ok("i".into()),
+        DataType::UInt32 => Ok("I".into()),
+        DataType::Int64 => Ok("l".into()),
+        DataType::UInt64 => Ok("L".into()),
+        DataType::Float16 => Ok("e".into()),
+        DataType::Float32 => Ok("f".into()),
+        DataType::Float64 => Ok("g".into()),
+        DataType::BinaryView => Ok("vz".into()),
+        DataType::Binary => Ok("z".into()),
+        DataType::LargeBinary => Ok("Z".into()),
+        DataType::Utf8View => Ok("vu".into()),
+        DataType::Utf8 => Ok("u".into()),
+        DataType::LargeUtf8 => Ok("U".into()),
+        DataType::FixedSizeBinary(num_bytes) => Ok(Cow::Owned(format!("w:{num_bytes}"))),
+        DataType::FixedSizeList(_, num_elems) => Ok(Cow::Owned(format!("+w:{num_elems}"))),
+        DataType::Decimal32(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},32")))
+        }
+        DataType::Decimal64(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},64")))
+        }
+        DataType::Decimal128(precision, scale) => Ok(Cow::Owned(format!("d:{precision},{scale}"))),
+        DataType::Decimal256(precision, scale) => {
+            Ok(Cow::Owned(format!("d:{precision},{scale},256")))
+        }
+        DataType::Date32 => Ok("tdD".into()),
+        DataType::Date64 => Ok("tdm".into()),
+        DataType::Time32(TimeUnit::Second) => Ok("tts".into()),
+        DataType::Time32(TimeUnit::Millisecond) => Ok("ttm".into()),
+        DataType::Time64(TimeUnit::Microsecond) => Ok("ttu".into()),
+        DataType::Time64(TimeUnit::Nanosecond) => Ok("ttn".into()),
+        DataType::Timestamp(TimeUnit::Second, None) => Ok("tss:".into()),
+        DataType::Timestamp(TimeUnit::Millisecond, None) => Ok("tsm:".into()),
+        DataType::Timestamp(TimeUnit::Microsecond, None) => Ok("tsu:".into()),
+        DataType::Timestamp(TimeUnit::Nanosecond, None) => Ok("tsn:".into()),
+        DataType::Timestamp(TimeUnit::Second, Some(tz)) => Ok(Cow::Owned(format!("tss:{tz}"))),
+        DataType::Timestamp(TimeUnit::Millisecond, Some(tz)) => Ok(Cow::Owned(format!("tsm:{tz}"))),
+        DataType::Timestamp(TimeUnit::Microsecond, Some(tz)) => Ok(Cow::Owned(format!("tsu:{tz}"))),
+        DataType::Timestamp(TimeUnit::Nanosecond, Some(tz)) => Ok(Cow::Owned(format!("tsn:{tz}"))),
+        DataType::Duration(TimeUnit::Second) => Ok("tDs".into()),
+        DataType::Duration(TimeUnit::Millisecond) => Ok("tDm".into()),
+        DataType::Duration(TimeUnit::Microsecond) => Ok("tDu".into()),
+        DataType::Duration(TimeUnit::Nanosecond) => Ok("tDn".into()),
+        DataType::Interval(IntervalUnit::YearMonth) => Ok("tiM".into()),
+        DataType::Interval(IntervalUnit::DayTime) => Ok("tiD".into()),
+        DataType::Interval(IntervalUnit::MonthDayNano) => Ok("tin".into()),
+        DataType::List(_) => Ok("+l".into()),
+        DataType::LargeList(_) => Ok("+L".into()),
+        DataType::ListView(_) => Ok("+vl".into()),
+        DataType::LargeListView(_) => Ok("+vL".into()),
+        DataType::Struct(_) => Ok("+s".into()),
+        DataType::Map(_, _) => Ok("+m".into()),
+        DataType::RunEndEncoded(_, _) => Ok("+r".into()),
         DataType::Dictionary(key_data_type, _) => get_format_string(key_data_type),
         DataType::Union(fields, mode) => {
             let formats = fields
@@ -743,8 +768,8 @@ fn get_format_string(dtype: &DataType) -> Result<String, ArrowError> {
                 .map(|(t, _)| t.to_string())
                 .collect::<Vec<_>>();
             match mode {
-                UnionMode::Dense => Ok(format!("{}:{}", "+ud", formats.join(","))),
-                UnionMode::Sparse => Ok(format!("{}:{}", "+us", formats.join(","))),
+                UnionMode::Dense => Ok(Cow::Owned(format!("{}:{}", "+ud", formats.join(",")))),
+                UnionMode::Sparse => Ok(Cow::Owned(format!("{}:{}", "+us", formats.join(",")))),
             }
         }
         other => Err(ArrowError::CDataInterface(format!(
@@ -861,6 +886,16 @@ mod tests {
             DataType::Int16,
             false,
         ))));
+        round_trip_type(DataType::ListView(Arc::new(Field::new(
+            "a",
+            DataType::Int16,
+            false,
+        ))));
+        round_trip_type(DataType::LargeListView(Arc::new(Field::new(
+            "a",
+            DataType::Int16,
+            false,
+        ))));
         round_trip_type(DataType::Struct(Fields::from(vec![Field::new(
             "a",
             DataType::Utf8,
@@ -920,6 +955,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_ordered() {
+        #[allow(deprecated)]
         let schema = Schema::new(vec![Field::new_dict(
             "dict",
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),

@@ -69,6 +69,3 @@ pub(super) fn byte_view_equal(
     }
     true
 }
-
-#[cfg(test)]
-mod tests {}

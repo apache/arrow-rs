@@ -21,11 +21,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs and changes to master
+# trigger for all PRs and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 
 jobs:
@@ -34,28 +34,20 @@ jobs:
   docs:
     name: Rustdocs are clean
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
-      - name: Install python dev
-        run: |
-          apt update
-          apt install -y libpython3.11-dev
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
+      - name: Install Nightly Rust
+        run: rustup install nightly
       - name: Run cargo doc
-        run: cargo doc --document-private-items --no-deps --workspace --all-features
+        run: cargo +nightly doc --document-private-items --no-deps --workspace --all-features
       - name: Fix file permissions
         shell: sh
         run: |
@@ -64,22 +56,22 @@ jobs:
               echo "::warning title=Invalid file permissions automatically fixed::$line"
           done
       - name: Upload artifacts
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           name: crate-docs
           path: target/doc
 
   deploy:
-    # Only deploy if a push to master
-    if: github.ref_name == 'master' && github.event_name == 'push'
+    # Only deploy if a push to main
+    if: github.ref_name == 'main' && github.event_name == 'push'
     needs: docs
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download crate docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v6
         with:
           name: crate-docs
           path: website/build
@@ -90,7 +82,7 @@ jobs:
           cp .asf.yaml ./website/build/.asf.yaml
       - name: Deploy to gh-pages
         uses: peaceiris/actions-gh-pages@v4.0.0
-        if: github.event_name == 'push' && github.ref_name == 'master'
+        if: github.event_name == 'push' && github.ref_name == 'main'
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: website/build

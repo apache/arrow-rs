@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::{ArrayBuilder, BufferBuilder};
+use crate::builder::ArrayBuilder;
 use crate::{Array, ArrayRef, MapArray, StructArray};
 use arrow_buffer::Buffer;
 use arrow_buffer::{NullBuffer, NullBufferBuilder};
@@ -56,11 +56,12 @@ use std::sync::Arc;
 /// ```
 #[derive(Debug)]
 pub struct MapBuilder<K: ArrayBuilder, V: ArrayBuilder> {
-    offsets_builder: BufferBuilder<i32>,
+    offsets_builder: Vec<i32>,
     null_buffer_builder: NullBufferBuilder,
     field_names: MapFieldNames,
     key_builder: K,
     value_builder: V,
+    key_field: Option<FieldRef>,
     value_field: Option<FieldRef>,
 }
 
@@ -99,21 +100,35 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         value_builder: V,
         capacity: usize,
     ) -> Self {
-        let mut offsets_builder = BufferBuilder::<i32>::new(capacity + 1);
-        offsets_builder.append(0);
+        let mut offsets_builder = Vec::with_capacity(capacity + 1);
+        offsets_builder.push(0);
         Self {
             offsets_builder,
             null_buffer_builder: NullBufferBuilder::new(capacity),
             field_names: field_names.unwrap_or_default(),
             key_builder,
             value_builder,
+            key_field: None,
             value_field: None,
         }
     }
 
     /// Override the field passed to [`MapBuilder::new`]
     ///
-    /// By default a nullable field is created with the name `values`
+    /// By default, a non-nullable field is created with the name `keys`
+    ///
+    /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
+    /// field's data type does not match that of `K` or the field is nullable
+    pub fn with_keys_field(self, field: impl Into<FieldRef>) -> Self {
+        Self {
+            key_field: Some(field.into()),
+            ..self
+        }
+    }
+
+    /// Override the field passed to [`MapBuilder::new`]
+    ///
+    /// By default, a nullable field is created with the name `values`
     ///
     /// Note: [`Self::finish`] and [`Self::finish_cloned`] will panic if the
     /// field's data type does not match that of `V`
@@ -151,7 +166,7 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
                 self.value_builder.len()
             )));
         }
-        self.offsets_builder.append(self.key_builder.len() as i32);
+        self.offsets_builder.push(self.key_builder.len() as i32);
         self.null_buffer_builder.append(is_valid);
         Ok(())
     }
@@ -162,8 +177,8 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
         // Build the keys
         let keys_arr = self.key_builder.finish();
         let values_arr = self.value_builder.finish();
-        let offset_buffer = self.offsets_builder.finish();
-        self.offsets_builder.append(0);
+        let offset_buffer = Buffer::from_vec(std::mem::take(&mut self.offsets_builder));
+        self.offsets_builder.push(0);
         let null_bit_buffer = self.null_buffer_builder.finish();
 
         self.finish_helper(keys_arr, values_arr, offset_buffer, null_bit_buffer, len)
@@ -194,11 +209,17 @@ impl<K: ArrayBuilder, V: ArrayBuilder> MapBuilder<K, V> {
             keys_arr.null_count()
         );
 
-        let keys_field = Arc::new(Field::new(
-            self.field_names.key.as_str(),
-            keys_arr.data_type().clone(),
-            false, // always non-nullable
-        ));
+        let keys_field = match &self.key_field {
+            Some(f) => {
+                assert!(!f.is_nullable(), "Keys field must not be nullable");
+                f.clone()
+            }
+            None => Arc::new(Field::new(
+                self.field_names.key.as_str(),
+                keys_arr.data_type().clone(),
+                false, // always non-nullable
+            )),
+        };
         let values_field = match &self.value_field {
             Some(f) => f.clone(),
             None => Arc::new(Field::new(
@@ -262,10 +283,10 @@ impl<K: ArrayBuilder, V: ArrayBuilder> ArrayBuilder for MapBuilder<K, V> {
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::{make_builder, Int32Builder, StringBuilder};
-    use crate::{Int32Array, StringArray};
-
     use super::*;
+    use crate::builder::{Int32Builder, StringBuilder, make_builder};
+    use crate::{Int32Array, StringArray};
+    use std::collections::HashMap;
 
     #[test]
     #[should_panic(expected = "Keys array must have no null values, found 1 null value(s)")]
@@ -376,5 +397,68 @@ mod tests {
                 false
             )
         );
+    }
+
+    #[test]
+    fn test_with_keys_field() {
+        let mut key_metadata = HashMap::new();
+        key_metadata.insert("foo".to_string(), "bar".to_string());
+        let key_field = Arc::new(
+            Field::new("keys", DataType::Int32, false).with_metadata(key_metadata.clone()),
+        );
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+            .with_keys_field(key_field.clone());
+        builder.keys().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+        let map = builder.finish();
+
+        assert_eq!(map.len(), 1);
+        assert_eq!(
+            map.data_type(),
+            &DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(
+                        vec![
+                            Arc::new(
+                                Field::new("keys", DataType::Int32, false)
+                                    .with_metadata(key_metadata)
+                            ),
+                            Arc::new(Field::new("values", DataType::Int32, true))
+                        ]
+                        .into()
+                    ),
+                    false,
+                )),
+                false
+            )
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "Keys field must not be nullable")]
+    fn test_with_nullable_keys_field() {
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+            .with_keys_field(Arc::new(Field::new("keys", DataType::Int32, true)));
+
+        builder.keys().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+
+        builder.finish();
+    }
+
+    #[test]
+    #[should_panic(expected = "Incorrect datatype")]
+    fn test_keys_field_type_mismatch() {
+        let mut builder = MapBuilder::new(None, Int32Builder::new(), Int32Builder::new())
+            .with_keys_field(Arc::new(Field::new("keys", DataType::Utf8, false)));
+
+        builder.keys().append_value(1);
+        builder.values().append_value(2);
+        builder.append(true).unwrap();
+
+        builder.finish();
     }
 }

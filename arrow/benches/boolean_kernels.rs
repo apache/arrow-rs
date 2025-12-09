@@ -25,17 +25,18 @@ extern crate arrow;
 
 use arrow::array::*;
 use arrow::compute::kernels::boolean as boolean_kernels;
+use std::hint;
 
 fn bench_and(lhs: &BooleanArray, rhs: &BooleanArray) {
-    criterion::black_box(boolean_kernels::and(lhs, rhs).unwrap());
+    hint::black_box(boolean_kernels::and(lhs, rhs).unwrap());
 }
 
 fn bench_or(lhs: &BooleanArray, rhs: &BooleanArray) {
-    criterion::black_box(boolean_kernels::or(lhs, rhs).unwrap());
+    hint::black_box(boolean_kernels::or(lhs, rhs).unwrap());
 }
 
 fn bench_not(array: &BooleanArray) {
-    criterion::black_box(boolean_kernels::not(array).unwrap());
+    hint::black_box(boolean_kernels::not(array).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {

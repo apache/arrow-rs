@@ -19,6 +19,7 @@
 
 use arrow_buffer::Buffer;
 use arrow_schema::*;
+use core::panic;
 use flatbuffers::{
     FlatBufferBuilder, ForwardsUOffset, UnionWIPOffset, Vector, Verifiable, Verifier,
     VerifierOptions, WIPOffset,
@@ -28,7 +29,7 @@ use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use crate::writer::DictionaryTracker;
-use crate::{size_prefixed_root_as_message, KeyValue, Message, CONTINUATION_MARKER};
+use crate::{CONTINUATION_MARKER, KeyValue, Message};
 use DataType::*;
 
 /// Low level Arrow [Schema] to IPC bytes converter
@@ -127,20 +128,17 @@ impl<'a> IpcSchemaEncoder<'a> {
     }
 }
 
-/// Serialize a schema in IPC format
-#[deprecated(since = "54.0.0", note = "Use `IpcSchemaConverter`.")]
-pub fn schema_to_fb(schema: &Schema) -> FlatBufferBuilder<'_> {
-    IpcSchemaEncoder::new().schema_to_fb(schema)
-}
-
 /// Push a key-value metadata into a FlatBufferBuilder and return [WIPOffset]
 pub fn metadata_to_fb<'a>(
     fbb: &mut FlatBufferBuilder<'a>,
     metadata: &HashMap<String, String>,
 ) -> WIPOffset<Vector<'a, ForwardsUOffset<KeyValue<'a>>>> {
-    let custom_metadata = metadata
-        .iter()
-        .map(|(k, v)| {
+    let mut ordered_keys = metadata.keys().collect::<Vec<_>>();
+    ordered_keys.sort();
+    let custom_metadata = ordered_keys
+        .into_iter()
+        .map(|k| {
+            let v = metadata.get(k).unwrap();
             let fb_key_name = fbb.create_string(k);
             let fb_val_name = fbb.create_string(v);
 
@@ -165,8 +163,9 @@ pub fn schema_to_fb_offset<'a>(
 impl From<crate::Field<'_>> for Field {
     fn from(field: crate::Field) -> Field {
         let arrow_field = if let Some(dictionary) = field.dictionary() {
+            #[allow(deprecated)]
             Field::new_dict(
-                field.name().unwrap(),
+                field.name().unwrap_or_default(),
                 get_data_type(field, true),
                 field.nullable(),
                 dictionary.id(),
@@ -174,7 +173,7 @@ impl From<crate::Field<'_>> for Field {
             )
         } else {
             Field::new(
-                field.name().unwrap(),
+                field.name().unwrap_or_default(),
                 get_data_type(field, true),
                 field.nullable(),
             )
@@ -254,32 +253,43 @@ pub fn try_schema_from_ipc_buffer(buffer: &[u8]) -> Result<Schema, ArrowError> {
     //   4 bytes - an optional IPC_CONTINUATION_TOKEN prefix
     //   4 bytes - the byte length of the payload
     //   a flatbuffer Message whose header is the Schema
-    if buffer.len() >= 4 {
-        // check continuation marker
-        let continuation_marker = &buffer[0..4];
-        let begin_offset: usize = if continuation_marker.eq(&CONTINUATION_MARKER) {
-            // 4 bytes: CONTINUATION_MARKER
-            // 4 bytes: length
-            // buffer
-            4
-        } else {
-            // backward compatibility for buffer without the continuation marker
-            // 4 bytes: length
-            // buffer
-            0
-        };
-        let msg = size_prefixed_root_as_message(&buffer[begin_offset..]).map_err(|err| {
-            ArrowError::ParseError(format!("Unable to convert flight info to a message: {err}"))
-        })?;
-        let ipc_schema = msg.header_as_schema().ok_or_else(|| {
-            ArrowError::ParseError("Unable to convert flight info to a schema".to_string())
-        })?;
-        Ok(fb_to_schema(ipc_schema))
-    } else {
-        Err(ArrowError::ParseError(
+    if buffer.len() < 4 {
+        return Err(ArrowError::ParseError(
             "The buffer length is less than 4 and missing the continuation marker or length of buffer".to_string()
-        ))
+        ));
     }
+
+    let (len, buffer) = if buffer[..4] == CONTINUATION_MARKER {
+        if buffer.len() < 8 {
+            return Err(ArrowError::ParseError(
+                "The buffer length is less than 8 and missing the length of buffer".to_string(),
+            ));
+        }
+        buffer[4..].split_at(4)
+    } else {
+        buffer.split_at(4)
+    };
+
+    let len = <i32>::from_le_bytes(len.try_into().unwrap());
+    if len < 0 {
+        return Err(ArrowError::ParseError(format!(
+            "The encapsulated message's reported length is negative ({len})"
+        )));
+    }
+
+    if buffer.len() < len as usize {
+        let actual_len = buffer.len();
+        return Err(ArrowError::ParseError(format!(
+            "The buffer length ({actual_len}) is less than the encapsulated message's reported length ({len})"
+        )));
+    }
+
+    let msg = crate::root_as_message(buffer)
+        .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
+    let ipc_schema = msg.header_as_schema().ok_or_else(|| {
+        ArrowError::ParseError("Unable to convert flight info to a schema".to_string())
+    })?;
+    Ok(fb_to_schema(ipc_schema))
 }
 
 /// Get the Arrow data type from the flatbuffer Field table
@@ -453,18 +463,14 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
         crate::Type::Decimal => {
             let fsb = field.type_as_decimal().unwrap();
             let bit_width = fsb.bitWidth();
-            if bit_width == 128 {
-                DataType::Decimal128(
-                    fsb.precision().try_into().unwrap(),
-                    fsb.scale().try_into().unwrap(),
-                )
-            } else if bit_width == 256 {
-                DataType::Decimal256(
-                    fsb.precision().try_into().unwrap(),
-                    fsb.scale().try_into().unwrap(),
-                )
-            } else {
-                panic!("Unexpected decimal bit width {bit_width}")
+            let precision: u8 = fsb.precision().try_into().unwrap();
+            let scale: i8 = fsb.scale().try_into().unwrap();
+            match bit_width {
+                32 => DataType::Decimal32(precision, scale),
+                64 => DataType::Decimal64(precision, scale),
+                128 => DataType::Decimal128(precision, scale),
+                256 => DataType::Decimal256(precision, scale),
+                _ => panic!("Unexpected decimal bit width {bit_width}"),
             }
         }
         crate::Type::Union => {
@@ -519,22 +525,13 @@ pub(crate) fn build_field<'a>(
         match dictionary_tracker {
             Some(tracker) => Some(get_fb_dictionary(
                 index_type,
-                tracker.set_dict_id(field),
+                tracker.next_dict_id(),
                 field
                     .dict_is_ordered()
                     .expect("All Dictionary types have `dict_is_ordered`"),
                 fbb,
             )),
-            None => Some(get_fb_dictionary(
-                index_type,
-                field
-                    .dict_id()
-                    .expect("Dictionary type must have a dictionary id"),
-                field
-                    .dict_is_ordered()
-                    .expect("All Dictionary types have `dict_is_ordered`"),
-                fbb,
-            )),
+            None => panic!("IPC must no longer be used without dictionary tracker"),
         }
     } else {
         None
@@ -763,7 +760,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&empty_fields[..])),
             }
         }
-        List(ref list_type) => {
+        List(list_type) => {
             let child = build_field(fbb, dictionary_tracker, list_type);
             FBFieldType {
                 type_type: crate::Type::List,
@@ -772,7 +769,7 @@ pub(crate) fn get_fb_field_type<'a>(
             }
         }
         ListView(_) | LargeListView(_) => unimplemented!("ListView/LargeListView not implemented"),
-        LargeList(ref list_type) => {
+        LargeList(list_type) => {
             let child = build_field(fbb, dictionary_tracker, list_type);
             FBFieldType {
                 type_type: crate::Type::LargeList,
@@ -780,7 +777,7 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&[child])),
             }
         }
-        FixedSizeList(ref list_type, len) => {
+        FixedSizeList(list_type, len) => {
             let child = build_field(fbb, dictionary_tracker, list_type);
             let mut builder = crate::FixedSizeListBuilder::new(fbb);
             builder.add_listSize(*len);
@@ -829,6 +826,28 @@ pub(crate) fn get_fb_field_type<'a>(
             // pass through to the value type, as we've already captured the index
             // type in the DictionaryEncoding metadata in the parent field
             get_fb_field_type(value_type, dictionary_tracker, fbb)
+        }
+        Decimal32(precision, scale) => {
+            let mut builder = crate::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(32);
+            FBFieldType {
+                type_type: crate::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
+        }
+        Decimal64(precision, scale) => {
+            let mut builder = crate::DecimalBuilder::new(fbb);
+            builder.add_precision(*precision as i32);
+            builder.add_scale(*scale as i32);
+            builder.add_bitWidth(64);
+            FBFieldType {
+                type_type: crate::Type::Decimal,
+                type_: builder.finish().as_union_value(),
+                children: Some(fbb.create_vector(&empty_fields[..])),
+            }
         }
         Decimal128(precision, scale) => {
             let mut builder = crate::DecimalBuilder::new(fbb);
@@ -1026,10 +1045,14 @@ mod tests {
                 Field::new("utf8_view", DataType::Utf8View, false),
                 Field::new("binary", DataType::Binary, false),
                 Field::new("binary_view", DataType::BinaryView, false),
-                Field::new_list("list[u8]", Field::new("item", DataType::UInt8, false), true),
+                Field::new_list(
+                    "list[u8]",
+                    Field::new_list_field(DataType::UInt8, false),
+                    true,
+                ),
                 Field::new_fixed_size_list(
                     "fixed_size_list[u8]",
-                    Field::new("item", DataType::UInt8, false),
+                    Field::new_list_field(DataType::UInt8, false),
                     2,
                     true,
                 ),
@@ -1139,6 +1162,7 @@ mod tests {
                     ),
                     true,
                 ),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<int32, utf8>",
                     DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
@@ -1146,6 +1170,7 @@ mod tests {
                     123,
                     true,
                 ),
+                #[allow(deprecated)]
                 Field::new_dict(
                     "dictionary<uint8, uint32>",
                     DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::UInt32)),

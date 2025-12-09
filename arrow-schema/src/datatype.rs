@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -40,7 +39,7 @@ use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 /// # use arrow_schema::{DataType, Field};
 /// # use std::sync::Arc;
 /// // create a new list of 32-bit signed integers directly
-/// let list_data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+/// let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
 /// // Create the same list type with constructor
 /// let list_data_type2 = DataType::new_list(DataType::Int32, true);
 /// assert_eq!(list_data_type, list_data_type2);
@@ -92,7 +91,7 @@ use crate::{ArrowError, Field, FieldRef, Fields, UnionFields};
 ///
 /// [`Schema.fbs`]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
 /// [the physical memory layout of Apache Arrow]: https://arrow.apache.org/docs/format/Columnar.html#physical-memory-layout
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DataType {
     /// Null type
@@ -196,6 +195,25 @@ pub enum DataType {
     /// DataType::Timestamp(TimeUnit::Second, Some("literal".into()));
     /// DataType::Timestamp(TimeUnit::Second, Some("string".to_string().into()));
     /// ```
+    ///
+    /// # Timezone representation
+    /// ----------------------------
+    /// It is possible to use either the timezone string representation, such as "UTC", or the absolute time zone offset "+00:00".
+    /// For timezones with fixed offsets, such as "UTC" or "JST", the offset representation is recommended, as it is more explicit and less ambiguous.
+    ///
+    /// Most arrow-rs functionalities use the absolute offset representation,
+    /// such as [`PrimitiveArray::with_timezone_utc`] that applies a
+    /// UTC timezone to timestamp arrays.
+    ///
+    /// [`PrimitiveArray::with_timezone_utc`]: https://docs.rs/arrow/latest/arrow/array/struct.PrimitiveArray.html#method.with_timezone_utc
+    ///
+    /// Timezone string parsing
+    /// -----------------------
+    /// When feature `chrono-tz` is not enabled, allowed timezone strings are fixed offsets of the form "+09:00", "-09" or "+0930".
+    ///
+    /// When feature `chrono-tz` is enabled, additional strings supported by [chrono_tz](https://docs.rs/chrono-tz/latest/chrono_tz/)
+    /// are also allowed, which include [IANA database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+    /// timezones.
     Timestamp(TimeUnit, Option<Arc<str>>),
     /// A signed 32-bit date representing the elapsed time since UNIX epoch (1970-01-01)
     /// in days.
@@ -226,7 +244,7 @@ pub enum DataType {
     ///
     /// # Recommendation
     ///
-    /// Users should prefer [`DataType::Date32`] to cleanly represent the number
+    /// Users should prefer [`Date32`] to cleanly represent the number
     /// of days, or one of the Timestamp variants to include time as part of the
     /// representation, depending on their use case.
     ///
@@ -234,6 +252,7 @@ pub enum DataType {
     ///
     /// For more details, see [#5288](https://github.com/apache/arrow-rs/issues/5288).
     ///
+    /// [`Date32`]: Self::Date32
     /// [Schema.fbs]: https://github.com/apache/arrow/blob/main/format/Schema.fbs
     Date64,
     /// A signed 32-bit time representing the elapsed time since midnight in the unit of `TimeUnit`.
@@ -263,10 +282,12 @@ pub enum DataType {
     LargeBinary,
     /// Opaque binary data of variable length.
     ///
-    /// Logically the same as [`Self::Binary`], but the internal representation uses a view
+    /// Logically the same as [`Binary`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
     /// inline (for small strings) or an inlined prefix, an index of another buffer,
     /// and an offset pointing to a slice in that buffer (for non-small strings).
+    ///
+    /// [`Binary`]: Self::Binary
     BinaryView,
     /// A variable-length string in Unicode with UTF-8 encoding.
     ///
@@ -280,10 +301,12 @@ pub enum DataType {
     LargeUtf8,
     /// A variable-length string in Unicode with UTF-8 encoding
     ///
-    /// Logically the same as [`Self::Utf8`], but the internal representation uses a view
+    /// Logically the same as [`Utf8`], but the internal representation uses a view
     /// struct that contains the string length and either the string's entire data
     /// inline (for small strings) or an inlined prefix, an index of another buffer,
     /// and an offset pointing to a slice in that buffer (for non-small strings).
+    ///
+    /// [`Utf8`]: Self::Utf8
     Utf8View,
     /// A list of some logical data type with variable length.
     ///
@@ -292,11 +315,12 @@ pub enum DataType {
 
     /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length.
     ///
+    /// Logically the same as [`List`], but the internal representation differs in how child
+    /// data is referenced, allowing flexibility in how data is layed out.
+    ///
     /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
-    /// The ListView layout is defined by three buffers:
-    /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
-    /// Sizes and offsets are both 32 bits for this type
+    /// [`List`]: Self::List
     ListView(FieldRef),
     /// A list of some logical data type with fixed length.
     FixedSizeList(FieldRef, i32),
@@ -307,11 +331,12 @@ pub enum DataType {
 
     /// (NOT YET FULLY SUPPORTED)  A list of some logical data type with variable length and 64-bit offsets.
     ///
+    /// Logically the same as [`LargeList`], but the internal representation differs in how child
+    /// data is referenced, allowing flexibility in how data is layed out.
+    ///
     /// Note this data type is not yet fully supported. Using it with arrow APIs may result in `panic`s.
     ///
-    /// The LargeListView layout is defined by three buffers:
-    /// a validity bitmap, an offsets buffer, and an additional sizes buffer.
-    /// Sizes and offsets are both 64 bits for this type
+    /// [`LargeList`]: Self::LargeList
     LargeListView(FieldRef),
     /// A nested datatype that contains a number of sub-fields.
     Struct(Fields),
@@ -331,6 +356,34 @@ pub enum DataType {
     /// This type mostly used to represent low cardinality string
     /// arrays or a limited set of primitive types as integers.
     Dictionary(Box<DataType>, Box<DataType>),
+    /// Exact 32-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
+    Decimal32(u8, i8),
+    /// Exact 64-bit width decimal value with precision and scale
+    ///
+    /// * precision is the total number of digits
+    /// * scale is the number of digits past the decimal
+    ///
+    /// For example the number 123.45 has precision 5 and scale 2.
+    ///
+    /// In certain situations, scale could be negative number. For
+    /// negative scale, it is the number of padding 0 to the right
+    /// of the digits.
+    ///
+    /// For example the number 12300 could be treated as a decimal
+    /// has precision 3 and scale -2.
+    Decimal64(u8, i8),
     /// Exact 128-bit width decimal value with precision and scale
     ///
     /// * precision is the total number of digits
@@ -401,6 +454,17 @@ pub enum TimeUnit {
     Nanosecond,
 }
 
+impl std::fmt::Display for TimeUnit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TimeUnit::Second => write!(f, "s"),
+            TimeUnit::Millisecond => write!(f, "ms"),
+            TimeUnit::Microsecond => write!(f, "µs"),
+            TimeUnit::Nanosecond => write!(f, "ns"),
+        }
+    }
+}
+
 /// YEAR_MONTH, DAY_TIME, MONTH_DAY_NANO interval in SQL style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -428,12 +492,6 @@ pub enum UnionMode {
     Sparse,
     /// Dense union layout
     Dense,
-}
-
-impl fmt::Display for DataType {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{self:?}")
-    }
 }
 
 /// Parses `str` into a `DataType`.
@@ -489,6 +547,8 @@ impl DataType {
                 | Float16
                 | Float32
                 | Float64
+                | Decimal32(_, _)
+                | Decimal64(_, _)
                 | Decimal128(_, _)
                 | Decimal256(_, _)
         )
@@ -544,16 +604,22 @@ impl DataType {
         matches!(self, Int16 | Int32 | Int64)
     }
 
-    /// Returns true if this type is nested (List, FixedSizeList, LargeList, Struct, Union,
+    /// Returns true if this type is nested (List, FixedSizeList, LargeList, ListView. LargeListView, Struct, Union,
     /// or Map), or a dictionary of a nested type
     #[inline]
     pub fn is_nested(&self) -> bool {
         use DataType::*;
         match self {
             Dictionary(_, v) => DataType::is_nested(v.as_ref()),
-            List(_) | FixedSizeList(_, _) | LargeList(_) | Struct(_) | Union(_, _) | Map(_, _) => {
-                true
-            }
+            RunEndEncoded(_, v) => DataType::is_nested(v.data_type()),
+            List(_)
+            | FixedSizeList(_, _)
+            | LargeList(_)
+            | ListView(_)
+            | LargeListView(_)
+            | Struct(_)
+            | Union(_, _)
+            | Map(_, _) => true,
             _ => false,
         }
     }
@@ -570,7 +636,9 @@ impl DataType {
     pub fn equals_datatype(&self, other: &DataType) -> bool {
         match (&self, other) {
             (DataType::List(a), DataType::List(b))
-            | (DataType::LargeList(a), DataType::LargeList(b)) => {
+            | (DataType::LargeList(a), DataType::LargeList(b))
+            | (DataType::ListView(a), DataType::ListView(b))
+            | (DataType::LargeListView(a), DataType::LargeListView(b)) => {
                 a.is_nullable() == b.is_nullable() && a.data_type().equals_datatype(b.data_type())
             }
             (DataType::FixedSizeList(a, a_size), DataType::FixedSizeList(b, b_size)) => {
@@ -641,6 +709,8 @@ impl DataType {
             DataType::Interval(IntervalUnit::YearMonth) => Some(4),
             DataType::Interval(IntervalUnit::DayTime) => Some(8),
             DataType::Interval(IntervalUnit::MonthDayNano) => Some(16),
+            DataType::Decimal32(_, _) => Some(4),
+            DataType::Decimal64(_, _) => Some(8),
             DataType::Decimal128(_, _) => Some(16),
             DataType::Decimal256(_, _) => Some(32),
             DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View => None,
@@ -691,6 +761,8 @@ impl DataType {
                 | DataType::Utf8
                 | DataType::LargeUtf8
                 | DataType::Utf8View
+                | DataType::Decimal32(_, _)
+                | DataType::Decimal64(_, _)
                 | DataType::Decimal128(_, _)
                 | DataType::Decimal256(_, _) => 0,
                 DataType::Timestamp(_, s) => s.as_ref().map(|s| s.len()).unwrap_or_default(),
@@ -717,7 +789,9 @@ impl DataType {
     pub fn contains(&self, other: &DataType) -> bool {
         match (self, other) {
             (DataType::List(f1), DataType::List(f2))
-            | (DataType::LargeList(f1), DataType::LargeList(f2)) => f1.contains(f2),
+            | (DataType::LargeList(f1), DataType::LargeList(f2))
+            | (DataType::ListView(f1), DataType::ListView(f2))
+            | (DataType::LargeListView(f1), DataType::LargeListView(f2)) => f1.contains(f2),
             (DataType::FixedSizeList(f1, s1), DataType::FixedSizeList(f2, s2)) => {
                 s1 == s2 && f1.contains(f2)
             }
@@ -764,6 +838,18 @@ impl DataType {
     }
 }
 
+/// The maximum precision for [DataType::Decimal32] values
+pub const DECIMAL32_MAX_PRECISION: u8 = 9;
+
+/// The maximum scale for [DataType::Decimal32] values
+pub const DECIMAL32_MAX_SCALE: i8 = 9;
+
+/// The maximum precision for [DataType::Decimal64] values
+pub const DECIMAL64_MAX_PRECISION: u8 = 18;
+
+/// The maximum scale for [DataType::Decimal64] values
+pub const DECIMAL64_MAX_SCALE: i8 = 18;
+
 /// The maximum precision for [DataType::Decimal128] values
 pub const DECIMAL128_MAX_PRECISION: u8 = 38;
 
@@ -775,6 +861,12 @@ pub const DECIMAL256_MAX_PRECISION: u8 = 76;
 
 /// The maximum scale for [DataType::Decimal256] values
 pub const DECIMAL256_MAX_SCALE: i8 = 76;
+
+/// The default scale for [DataType::Decimal32] values
+pub const DECIMAL32_DEFAULT_SCALE: i8 = 2;
+
+/// The default scale for [DataType::Decimal64] values
+pub const DECIMAL64_DEFAULT_SCALE: i8 = 6;
 
 /// The default scale for [DataType::Decimal128] and [DataType::Decimal256]
 /// values
@@ -837,21 +929,21 @@ mod tests {
     #[test]
     fn test_list_datatype_equality() {
         // tests that list type equality is checked while ignoring list names
-        let list_a = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let list_a = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let list_b = DataType::List(Arc::new(Field::new("array", DataType::Int32, true)));
-        let list_c = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
-        let list_d = DataType::List(Arc::new(Field::new("item", DataType::UInt32, true)));
+        let list_c = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
+        let list_d = DataType::List(Arc::new(Field::new_list_field(DataType::UInt32, true)));
         assert!(list_a.equals_datatype(&list_b));
         assert!(!list_a.equals_datatype(&list_c));
         assert!(!list_b.equals_datatype(&list_c));
         assert!(!list_a.equals_datatype(&list_d));
 
         let list_e =
-            DataType::FixedSizeList(Arc::new(Field::new("item", list_a.clone(), false)), 3);
+            DataType::FixedSizeList(Arc::new(Field::new_list_field(list_a.clone(), false)), 3);
         let list_f =
             DataType::FixedSizeList(Arc::new(Field::new("array", list_b.clone(), false)), 3);
         let list_g = DataType::FixedSizeList(
-            Arc::new(Field::new("item", DataType::FixedSizeBinary(3), true)),
+            Arc::new(Field::new_list_field(DataType::FixedSizeBinary(3), true)),
             3,
         );
         assert!(list_e.equals_datatype(&list_f));
@@ -998,11 +1090,16 @@ mod tests {
     #[test]
     fn test_nested() {
         let list = DataType::List(Arc::new(Field::new("foo", DataType::Utf8, true)));
+        let list_view = DataType::ListView(Arc::new(Field::new("foo", DataType::Utf8, true)));
+        let large_list_view =
+            DataType::LargeListView(Arc::new(Field::new("foo", DataType::Utf8, true)));
 
         assert!(!DataType::is_nested(&DataType::Boolean));
         assert!(!DataType::is_nested(&DataType::Int32));
         assert!(!DataType::is_nested(&DataType::Utf8));
         assert!(DataType::is_nested(&list));
+        assert!(DataType::is_nested(&list_view));
+        assert!(DataType::is_nested(&large_list_view));
 
         assert!(!DataType::is_nested(&DataType::Dictionary(
             Box::new(DataType::Int32),
@@ -1088,5 +1185,18 @@ mod tests {
     fn test_from_str() {
         let data_type: DataType = "UInt64".parse().unwrap();
         assert_eq!(data_type, DataType::UInt64);
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)] // Can't handle the inlined strings of the assert_debug_snapshot macro
+    fn test_debug_format_field() {
+        // Make sure the `Debug` formatting of `DataType` is readable and not too long
+        insta::assert_debug_snapshot!(DataType::new_list(DataType::Int8, false), @r"
+        List(
+            Field {
+                data_type: Int8,
+            },
+        )
+        ");
     }
 }

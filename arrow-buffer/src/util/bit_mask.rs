@@ -132,10 +132,8 @@ unsafe fn set_upto_64bits(
 unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
     debug_assert!(count <= 8);
     let mut tmp: u64 = 0;
-    let src = data.as_ptr().add(offset);
-    unsafe {
-        std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count);
-    }
+    let src = unsafe { data.as_ptr().add(offset) };
+    unsafe { std::ptr::copy_nonoverlapping(src, &mut tmp as *mut _ as *mut u8, count) };
     tmp
 }
 
@@ -143,8 +141,8 @@ unsafe fn read_bytes_to_u64(data: &[u8], offset: usize, count: usize) -> u64 {
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
 unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
-    let ptr = data.as_mut_ptr().add(offset) as *mut u64;
-    ptr.write_unaligned(chunk);
+    let ptr = unsafe { data.as_mut_ptr().add(offset) } as *mut u64;
+    unsafe { ptr.write_unaligned(chunk) };
 }
 
 /// Similar to `write_u64_bytes`, but this method ORs the offset addressed `data` and `chunk`
@@ -154,9 +152,9 @@ unsafe fn write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
 /// The caller must ensure `data` has `offset..(offset + 8)` range
 #[inline]
 unsafe fn or_write_u64_bytes(data: &mut [u8], offset: usize, chunk: u64) {
-    let ptr = data.as_mut_ptr().add(offset);
-    let chunk = chunk | (*ptr) as u64;
-    (ptr as *mut u64).write_unaligned(chunk);
+    let ptr = unsafe { data.as_mut_ptr().add(offset) };
+    let chunk = chunk | (unsafe { *ptr }) as u64;
+    unsafe { (ptr as *mut u64).write_unaligned(chunk) };
 }
 
 #[cfg(test)]
@@ -164,7 +162,7 @@ mod tests {
     use super::*;
     use crate::bit_util::{get_bit, set_bit, unset_bit};
     use rand::prelude::StdRng;
-    use rand::{Fill, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, TryRngCore};
     use std::fmt::Display;
 
     #[test]
@@ -278,7 +276,7 @@ mod tests {
     impl Display for BinaryFormatter<'_> {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             for byte in self.0 {
-                write!(f, "{:08b} ", byte)?;
+                write!(f, "{byte:08b} ")?;
             }
             write!(f, " ")?;
             Ok(())
@@ -322,20 +320,20 @@ mod tests {
             // -------------------+-----------------+-------
 
             // length of data to copy
-            let len = rng.gen_range(0..=200);
+            let len = rng.random_range(0..=200);
 
             // randomly pick where we will write to
-            let offset_write_bits = rng.gen_range(0..=200);
+            let offset_write_bits = rng.random_range(0..=200);
             let offset_write_bytes = if offset_write_bits % 8 == 0 {
                 offset_write_bits / 8
             } else {
                 (offset_write_bits / 8) + 1
             };
-            let extra_write_data_bytes = rng.gen_range(0..=5); // ensure 0 shows up often
+            let extra_write_data_bytes = rng.random_range(0..=5); // ensure 0 shows up often
 
             // randomly decide where we will read from
-            let extra_read_data_bytes = rng.gen_range(0..=5); // make sure 0 shows up often
-            let offset_read_bits = rng.gen_range(0..=200);
+            let extra_read_data_bytes = rng.random_range(0..=5); // make sure 0 shows up often
+            let offset_read_bits = rng.random_range(0..=200);
             let offset_read_bytes = if offset_read_bits % 8 != 0 {
                 (offset_read_bits / 8) + 1
             } else {
@@ -356,7 +354,7 @@ mod tests {
             self.data
                 .resize(offset_read_bytes + len + extra_read_data_bytes, 0);
             // fill source data with random bytes
-            self.data.try_fill(rng).unwrap();
+            rng.try_fill_bytes(self.data.as_mut_slice()).unwrap();
             self.offset_read = offset_read_bits;
 
             self.len = len;
@@ -389,8 +387,8 @@ mod tests {
                 self.len,
             );
 
-            assert_eq!(actual, self.expected_data, "self: {}", self);
-            assert_eq!(null_count, self.expected_null_count, "self: {}", self);
+            assert_eq!(actual, self.expected_data, "self: {self}");
+            assert_eq!(null_count, self.expected_null_count, "self: {self}");
         }
     }
 

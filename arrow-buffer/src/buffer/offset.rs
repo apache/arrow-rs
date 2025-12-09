@@ -55,7 +55,7 @@ use std::ops::Deref;
 ///  (offsets[i],
 ///   offsets[i+1])
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OffsetBuffer<O: ArrowNativeType>(ScalarBuffer<O>);
 
 impl<O: ArrowNativeType> OffsetBuffer<O> {
@@ -112,6 +112,9 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
     /// assert_eq!(offsets.as_ref(), &[0, 1, 4, 9]);
     /// ```
     ///
+    /// If you want to create an [`OffsetBuffer`] where all lengths are the same,
+    /// consider using the faster [`OffsetBuffer::from_repeated_length`] instead.
+    ///
     /// # Panics
     ///
     /// Panics on overflow
@@ -131,6 +134,80 @@ impl<O: ArrowNativeType> OffsetBuffer<O> {
         // Check for overflow
         O::from_usize(acc).expect("offset overflow");
         Self(out.into())
+    }
+
+    /// Create a new [`OffsetBuffer`] where each slice has the same length
+    /// `length`, repeated `n` times.
+    ///
+    ///
+    /// Example
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::from_repeated_length(4, 3);
+    /// assert_eq!(offsets.as_ref(), &[0, 4, 8, 12]);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics on overflow
+    pub fn from_repeated_length(length: usize, n: usize) -> Self {
+        if n == 0 {
+            return Self::new_empty();
+        }
+
+        if length == 0 {
+            return Self::new_zeroed(n);
+        }
+
+        // Check for overflow
+        // Making sure we don't overflow usize or O when calculating the total length
+        length.checked_mul(n).expect("usize overflow");
+
+        // Check for overflow
+        O::from_usize(length * n).expect("offset overflow");
+
+        let offsets = (0..=n)
+            .map(|index| O::usize_as(index * length))
+            .collect::<Vec<O>>();
+
+        Self(ScalarBuffer::from(offsets))
+    }
+
+    /// Get an Iterator over the lengths of this [`OffsetBuffer`]
+    ///
+    /// ```
+    /// # use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    /// let offsets = OffsetBuffer::<_>::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]));
+    /// assert_eq!(offsets.lengths().collect::<Vec<usize>>(), vec![1, 3, 5]);
+    /// ```
+    ///
+    /// Empty [`OffsetBuffer`] will return an empty iterator
+    /// ```
+    /// # use arrow_buffer::OffsetBuffer;
+    /// let offsets = OffsetBuffer::<i32>::new_empty();
+    /// assert_eq!(offsets.lengths().count(), 0);
+    /// ```
+    ///
+    /// This can be used to merge multiple [`OffsetBuffer`]s to one
+    /// ```
+    /// # use arrow_buffer::{OffsetBuffer, ScalarBuffer};
+    ///
+    /// let buffer1 = OffsetBuffer::<i32>::from_lengths([2, 6, 3, 7, 2]);
+    /// let buffer2 = OffsetBuffer::<i32>::from_lengths([1, 3, 5, 7, 9]);
+    ///
+    /// let merged = OffsetBuffer::<i32>::from_lengths(
+    ///     vec![buffer1, buffer2].iter().flat_map(|x| x.lengths())
+    /// );
+    ///
+    /// assert_eq!(merged.lengths().collect::<Vec<_>>(), &[2, 6, 3, 7, 2, 1, 3, 5, 7, 9]);
+    /// ```
+    pub fn lengths(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
+        self.0.windows(2).map(|x| x[1].as_usize() - x[0].as_usize())
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        self.0.shrink_to_fit();
     }
 
     /// Returns the inner [`ScalarBuffer`]
@@ -176,6 +253,12 @@ impl<T: ArrowNativeType> AsRef<[T]> for OffsetBuffer<T> {
 impl<O: ArrowNativeType> From<OffsetBufferBuilder<O>> for OffsetBuffer<O> {
     fn from(value: OffsetBufferBuilder<O>) -> Self {
         value.finish()
+    }
+}
+
+impl<O: ArrowNativeType> Default for OffsetBuffer<O> {
+    fn default() -> Self {
+        Self::new_empty()
     }
 }
 
@@ -238,5 +321,148 @@ mod tests {
     #[should_panic(expected = "usize overflow")]
     fn from_lengths_usize_overflow() {
         OffsetBuffer::<i32>::from_lengths([usize::MAX, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_repeated_lengths_offset_length_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(i32::MAX as usize / 4, 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_repeated_lengths_offset_repeat_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(1, i32::MAX as usize + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_repeated_lengths_usize_length_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(usize::MAX, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn from_repeated_lengths_usize_length_usize_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(usize::MAX, 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn from_repeated_lengths_usize_repeat_overflow() {
+        OffsetBuffer::<i32>::from_repeated_length(1, usize::MAX);
+    }
+
+    #[test]
+    fn get_lengths() {
+        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]));
+        assert_eq!(offsets.lengths().collect::<Vec<usize>>(), vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn get_lengths_should_be_with_fixed_size() {
+        let offsets = OffsetBuffer::<i32>::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]));
+        let iter = offsets.lengths();
+        assert_eq!(iter.size_hint(), (3, Some(3)));
+        assert_eq!(iter.len(), 3);
+    }
+
+    #[test]
+    fn get_lengths_from_empty_offset_buffer_should_be_empty_iterator() {
+        let offsets = OffsetBuffer::<i32>::new_empty();
+        assert_eq!(offsets.lengths().collect::<Vec<usize>>(), vec![]);
+    }
+
+    #[test]
+    fn impl_eq() {
+        fn are_equal<T: Eq>(a: &T, b: &T) -> bool {
+            a.eq(b)
+        }
+
+        assert!(
+            are_equal(
+                &OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9])),
+                &OffsetBuffer::new(ScalarBuffer::<i32>::from(vec![0, 1, 4, 9]))
+            ),
+            "OffsetBuffer should implement Eq."
+        );
+    }
+
+    #[test]
+    fn impl_default() {
+        let default = OffsetBuffer::<i32>::default();
+        assert_eq!(default.as_ref(), &[0]);
+    }
+
+    #[test]
+    fn from_repeated_length_basic() {
+        // Basic case with length 4, repeated 3 times
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(4, 3);
+        assert_eq!(buffer.as_ref(), &[0, 4, 8, 12]);
+
+        // Verify the lengths are correct
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![4, 4, 4]);
+    }
+
+    #[test]
+    fn from_repeated_length_single_repeat() {
+        // Length 5, repeated once
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(5, 1);
+        assert_eq!(buffer.as_ref(), &[0, 5]);
+
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![5]);
+    }
+
+    #[test]
+    fn from_repeated_length_zero_repeats() {
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(10, 0);
+        assert_eq!(buffer, OffsetBuffer::<i32>::new_empty());
+    }
+
+    #[test]
+    fn from_repeated_length_zero_length() {
+        // Zero length, repeated 5 times (all zeros)
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(0, 5);
+        assert_eq!(buffer.as_ref(), &[0, 0, 0, 0, 0, 0]);
+
+        // All lengths should be 0
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![0, 0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn from_repeated_length_large_values() {
+        // Test with larger values that don't overflow
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(1000, 100);
+        assert_eq!(buffer[0], 0);
+
+        // Verify all lengths are 1000
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths.len(), 100);
+        assert!(lengths.iter().all(|&len| len == 1000));
+    }
+
+    #[test]
+    fn from_repeated_length_unit_length() {
+        // Length 1, repeated multiple times
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(1, 10);
+        assert_eq!(buffer.as_ref(), &[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+        let lengths: Vec<usize> = buffer.lengths().collect();
+        assert_eq!(lengths, vec![1; 10]);
+    }
+
+    #[test]
+    fn from_repeated_length_max_safe_values() {
+        // Test with maximum safe values for i32
+        // i32::MAX / 3 ensures we don't overflow when repeated twice
+        let third_max = (i32::MAX / 3) as usize;
+        let buffer = OffsetBuffer::<i32>::from_repeated_length(third_max, 2);
+        assert_eq!(
+            buffer.as_ref(),
+            &[0, third_max as i32, (third_max * 2) as i32]
+        );
     }
 }

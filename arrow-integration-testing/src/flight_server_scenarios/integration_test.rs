@@ -31,14 +31,14 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_flight::{
-    flight_descriptor::DescriptorType, flight_service_server::FlightService,
-    flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty, FlightData,
-    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, IpcMessage,
-    PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
+    HandshakeRequest, HandshakeResponse, IpcMessage, PollInfo, PutResult, SchemaAsIpc,
+    SchemaResult, Ticket, flight_descriptor::DescriptorType, flight_service_server::FlightService,
+    flight_service_server::FlightServiceServer,
 };
-use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
+use futures::{Stream, StreamExt, channel::mpsc, sink::SinkExt};
 use tokio::sync::Mutex;
-use tonic::{transport::Server, Request, Response, Status, Streaming};
+use tonic::{Request, Response, Status, Streaming, transport::Server};
 
 type TonicStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync + 'static>>;
 
@@ -119,20 +119,37 @@ impl FlightService for FlightServiceImpl {
             .ok_or_else(|| Status::not_found(format!("Could not find flight. {key}")))?;
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
+        let mut dictionary_tracker = writer::DictionaryTracker::new(false);
+        let data_gen = writer::IpcDataGenerator::default();
+        let data = IpcMessage(
+            data_gen
+                .schema_to_bytes_with_dictionary_tracker(
+                    &flight.schema,
+                    &mut dictionary_tracker,
+                    &options,
+                )
+                .ipc_message
+                .into(),
+        );
+        let schema_flight_data = FlightData {
+            data_header: data.0,
+            ..Default::default()
+        };
 
-        let schema = std::iter::once(Ok(SchemaAsIpc::new(&flight.schema, &options).into()));
+        let schema = std::iter::once(Ok(schema_flight_data));
 
         let batches = flight
             .chunks
             .iter()
             .enumerate()
             .flat_map(|(counter, batch)| {
-                let data_gen = writer::IpcDataGenerator::default();
-                let mut dictionary_tracker =
-                    writer::DictionaryTracker::new_with_preserve_dict_id(false, true);
-
                 let (encoded_dictionaries, encoded_batch) = data_gen
-                    .encoded_batch(batch, &mut dictionary_tracker, &options)
+                    .encode(
+                        batch,
+                        &mut dictionary_tracker,
+                        &options,
+                        &mut Default::default(),
+                    )
                     .expect("DictionaryTracker configured above to not error on replacement");
 
                 let dictionary_flight_data = encoded_dictionaries.into_iter().map(Into::into);
@@ -366,7 +383,7 @@ async fn save_uploaded_chunks(
             ipc::MessageHeader::Schema => {
                 return Err(Status::internal(
                     "Not expecting a schema when messages are read",
-                ))
+                ));
             }
             ipc::MessageHeader::RecordBatch => {
                 send_app_metadata(&mut response_tx, &data.app_metadata).await?;

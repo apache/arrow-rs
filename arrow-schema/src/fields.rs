@@ -18,7 +18,7 @@
 use std::ops::Deref;
 use std::sync::Arc;
 
-use crate::{ArrowError, DataType, Field, FieldRef, SchemaBuilder};
+use crate::{ArrowError, DataType, Field, FieldRef};
 
 /// A cheaply cloneable, owned slice of [`FieldRef`]
 ///
@@ -256,33 +256,6 @@ impl Fields {
             .collect();
         Ok(filtered)
     }
-
-    /// Remove a field by index and return it.
-    ///
-    /// # Panic
-    ///
-    /// Panics if `index` is out of bounds.
-    ///
-    /// # Example
-    /// ```
-    /// use arrow_schema::{DataType, Field, Fields};
-    /// let mut fields = Fields::from(vec![
-    ///   Field::new("a", DataType::Boolean, false),
-    ///   Field::new("b", DataType::Int8, false),
-    ///   Field::new("c", DataType::Utf8, false),
-    /// ]);
-    /// assert_eq!(fields.len(), 3);
-    /// assert_eq!(fields.remove(1), Field::new("b", DataType::Int8, false).into());
-    /// assert_eq!(fields.len(), 2);
-    /// ```
-    #[deprecated(note = "Use SchemaBuilder::remove")]
-    #[doc(hidden)]
-    pub fn remove(&mut self, index: usize) -> FieldRef {
-        let mut builder = SchemaBuilder::from(Fields::from(&*self.0));
-        let field = builder.remove(index);
-        *self = builder.finish().fields;
-        field
-    }
 }
 
 impl Default for Fields {
@@ -392,7 +365,7 @@ impl UnionFields {
             .inspect(|&idx| {
                 let mask = 1_u128 << idx;
                 if (set & mask) != 0 {
-                    panic!("duplicate type id: {}", idx);
+                    panic!("duplicate type id: {idx}");
                 } else {
                     set |= mask;
                 }
@@ -423,6 +396,18 @@ impl UnionFields {
         self.0.iter().map(|(id, f)| (*id, f))
     }
 
+    /// Searches for a field by its type id, returning the type id and field reference if found.
+    /// Returns `None` if no field with the given type id exists.
+    pub fn find_by_type_id(&self, type_id: i8) -> Option<(i8, &FieldRef)> {
+        self.iter().find(|&(i, _)| i == type_id)
+    }
+
+    /// Searches for a field by value equality, returning its type id and reference if found.
+    /// Returns `None` if no matching field exists in this [`UnionFields`].
+    pub fn find_by_field(&self, field: &Field) -> Option<(i8, &FieldRef)> {
+        self.iter().find(|&(_, f)| f.as_ref() == field)
+    }
+
     /// Merge this field into self if it is compatible.
     ///
     /// See [`Field::try_merge`]
@@ -436,10 +421,12 @@ impl UnionFields {
                     // If the nested fields in two unions are the same, they must have same
                     // type id.
                     if *self_type_id != field_type_id {
-                        return Err(ArrowError::SchemaError(
-                            format!("Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
-                                    self_field.name(), self_type_id, field_type_id)
-                        ));
+                        return Err(ArrowError::SchemaError(format!(
+                            "Fail to merge schema field '{}' because the self_type_id = {} does not equal field_type_id = {}",
+                            self_field.name(),
+                            self_type_id,
+                            field_type_id
+                        )));
                     }
 
                     is_new_field = false;
@@ -496,7 +483,12 @@ mod tests {
                 Field::new("floats", DataType::Struct(floats.clone()), true),
                 true,
             ),
-            Field::new_fixed_size_list("f", Field::new("item", DataType::Int32, false), 3, false),
+            Field::new_fixed_size_list(
+                "f",
+                Field::new_list_field(DataType::Int32, false),
+                3,
+                false,
+            ),
             Field::new_map(
                 "g",
                 "entries",

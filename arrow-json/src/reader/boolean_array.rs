@@ -15,13 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::BooleanBuilder;
 use arrow_array::Array;
+use arrow_array::builder::BooleanBuilder;
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 #[derive(Default)]
 pub struct BooleanArrayDecoder {}

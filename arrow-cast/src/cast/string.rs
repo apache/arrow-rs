@@ -38,6 +38,30 @@ pub(crate) fn value_to_string<O: OffsetSizeTrait>(
     Ok(Arc::new(builder.finish()))
 }
 
+pub(crate) fn value_to_string_view(
+    array: &dyn Array,
+    options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let mut builder = StringViewBuilder::with_capacity(array.len());
+    let formatter = ArrayFormatter::try_new(array, &options.format_options)?;
+    let nulls = array.nulls();
+    // buffer to avoid reallocating on each value
+    // TODO: replace with write to builder after https://github.com/apache/arrow-rs/issues/6373
+    let mut buffer = String::new();
+    for i in 0..array.len() {
+        match nulls.map(|x| x.is_null(i)).unwrap_or_default() {
+            true => builder.append_null(),
+            false => {
+                // write to buffer first and then copy into target array
+                buffer.clear();
+                formatter.value(i).write(&mut buffer)?;
+                builder.append_value(&buffer)
+            }
+        }
+    }
+    Ok(Arc::new(builder.finish()))
+}
+
 /// Parse UTF-8
 pub(crate) fn parse_string<P: Parser, O: OffsetSizeTrait>(
     array: &dyn Array,
@@ -83,15 +107,14 @@ fn parse_string_iter<
             .map(|x| match x {
                 Some(v) => P::parse(v).ok_or_else(|| {
                     ArrowError::CastError(format!(
-                        "Cannot cast string '{}' to value of {:?} type",
-                        v,
+                        "Cannot cast string '{v}' to value of {} type",
                         P::DATA_TYPE
                     ))
                 }),
                 None => Ok(P::Native::default()),
             })
             .collect::<Result<Vec<_>, ArrowError>>()?;
-        PrimitiveArray::new(v.into(), nulls())
+        PrimitiveArray::try_new(v.into(), nulls())?
     };
 
     Ok(Arc::new(array) as ArrayRef)
@@ -315,6 +338,14 @@ where
 
 /// A specified helper to cast from `GenericBinaryArray` to `GenericStringArray` when they have same
 /// offset size so re-encoding offset is unnecessary.
+fn extend_valid_utf8<'a, B, I>(builder: &mut B, iter: I)
+where
+    B: Extend<Option<&'a str>>,
+    I: Iterator<Item = Option<&'a [u8]>>,
+{
+    builder.extend(iter.map(|value| value.and_then(|bytes| std::str::from_utf8(bytes).ok())));
+}
+
 pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
     array: &dyn Array,
     cast_options: &CastOptions,
@@ -332,11 +363,7 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
                 let mut builder =
                     GenericStringBuilder::<O>::with_capacity(array.len(), array.value_data().len());
 
-                let iter = array
-                    .iter()
-                    .map(|v| v.and_then(|v| std::str::from_utf8(v).ok()));
-
-                builder.extend(iter);
+                extend_valid_utf8(&mut builder, array.iter());
                 Ok(Arc::new(builder.finish()))
             }
             false => Err(e),
@@ -344,19 +371,33 @@ pub(crate) fn cast_binary_to_string<O: OffsetSizeTrait>(
     }
 }
 
-/// Casts Utf8 to Boolean
-pub(crate) fn cast_utf8_to_boolean<OffsetSize>(
-    from: &dyn Array,
+pub(crate) fn cast_binary_view_to_string_view(
+    array: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = array.as_binary_view();
+
+    match array.clone().to_string_view() {
+        Ok(result) => Ok(Arc::new(result)),
+        Err(error) => match cast_options.safe {
+            true => {
+                let mut builder = StringViewBuilder::with_capacity(array.len());
+                extend_valid_utf8(&mut builder, array.iter());
+                Ok(Arc::new(builder.finish()))
+            }
+            false => Err(error),
+        },
+    }
+}
+
+/// Casts string to boolean
+fn cast_string_to_boolean<'a, StrArray>(
+    array: &StrArray,
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError>
 where
-    OffsetSize: OffsetSizeTrait,
+    StrArray: StringArrayType<'a>,
 {
-    let array = from
-        .as_any()
-        .downcast_ref::<GenericStringArray<OffsetSize>>()
-        .unwrap();
-
     let output_array = array
         .iter()
         .map(|value| match value {
@@ -377,4 +418,28 @@ where
         .collect::<Result<BooleanArray, _>>()?;
 
     Ok(Arc::new(output_array))
+}
+
+pub(crate) fn cast_utf8_to_boolean<OffsetSize>(
+    from: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError>
+where
+    OffsetSize: OffsetSizeTrait,
+{
+    let array = from
+        .as_any()
+        .downcast_ref::<GenericStringArray<OffsetSize>>()
+        .unwrap();
+
+    cast_string_to_boolean(&array, cast_options)
+}
+
+pub(crate) fn cast_utf8view_to_boolean(
+    from: &dyn Array,
+    cast_options: &CastOptions,
+) -> Result<ArrayRef, ArrowError> {
+    let array = from.as_any().downcast_ref::<StringViewArray>().unwrap();
+
+    cast_string_to_boolean(&array, cast_options)
 }

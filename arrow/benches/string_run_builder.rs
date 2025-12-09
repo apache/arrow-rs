@@ -18,7 +18,7 @@
 use arrow::array::StringRunBuilder;
 use arrow::datatypes::Int32Type;
 use arrow::util::bench_util::create_string_array_for_runs;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 
 fn criterion_benchmark(c: &mut Criterion) {
     let mut group = c.benchmark_group("string_run_builder");

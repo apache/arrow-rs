@@ -23,11 +23,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs that touch certain files and changes to master
+# trigger for all PRs that touch certain files and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     paths:
       - parquet/**
@@ -43,7 +43,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -57,7 +57,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy

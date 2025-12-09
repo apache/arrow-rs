@@ -16,15 +16,23 @@
 // under the License.
 
 use crate::bit_chunk_iterator::BitChunks;
-use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::{
-    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not,
-    BooleanBufferBuilder, Buffer, MutableBuffer,
+    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
+    buffer_bin_xor, buffer_unary_not,
 };
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
+///
+/// `BooleanBuffer`s can be creating using [`BooleanBufferBuilder`]
+///
+/// # See Also
+///
+/// * [`NullBuffer`] for representing null values in Arrow arrays
+///
+/// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug, Clone, Eq)]
 pub struct BooleanBuffer {
     buffer: Buffer,
@@ -52,8 +60,12 @@ impl BooleanBuffer {
     /// This method will panic if `buffer` is not large enough
     pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
         let total_len = offset.saturating_add(len);
-        let bit_len = buffer.len().saturating_mul(8);
-        assert!(total_len <= bit_len);
+        let buffer_len = buffer.len();
+        let bit_len = buffer_len.saturating_mul(8);
+        assert!(
+            total_len <= bit_len,
+            "buffer not large enough (offset: {offset}, len: {len}, buffer_len: {buffer_len})"
+        );
         Self {
             buffer,
             offset,
@@ -92,19 +104,8 @@ impl BooleanBuffer {
     /// Returns a `BitChunks` instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
     #[inline]
-    pub fn bit_chunks(&self) -> BitChunks {
+    pub fn bit_chunks(&self) -> BitChunks<'_> {
         BitChunks::new(self.values(), self.offset, self.len)
-    }
-
-    /// Returns `true` if the bit at index `i` is set
-    ///
-    /// # Panics
-    ///
-    /// Panics if `i >= self.len()`
-    #[inline]
-    #[deprecated(note = "use BooleanBuffer::value")]
-    pub fn is_set(&self, i: usize) -> bool {
-        self.value(i)
     }
 
     /// Returns the offset of this [`BooleanBuffer`] in bits
@@ -123,6 +124,12 @@ impl BooleanBuffer {
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Free up unused memory.
+    pub fn shrink_to_fit(&mut self) {
+        // TODO(emilk): we could shrink even more in the case where we are a small sub-slice of the full buffer
+        self.buffer.shrink_to_fit();
     }
 
     /// Returns the boolean value at index `i`.
@@ -199,6 +206,11 @@ impl BooleanBuffer {
     /// Returns an iterator over the set bit positions in this [`BooleanBuffer`]
     pub fn set_indices(&self) -> BitIndexIterator<'_> {
         BitIndexIterator::new(self.values(), self.offset, self.len)
+    }
+
+    /// Returns a `u32` iterator over set bit positions without any usize->u32 conversion
+    pub fn set_indices_u32(&self) -> BitIndexU32Iterator<'_> {
+        BitIndexU32Iterator::new(self.values(), self.offset, self.len)
     }
 
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits

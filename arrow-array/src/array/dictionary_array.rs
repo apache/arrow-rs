@@ -20,8 +20,8 @@ use crate::cast::AsArray;
 use crate::iterator::ArrayIter;
 use crate::types::*;
 use crate::{
-    make_array, Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, PrimitiveArray, Scalar,
-    StringArray,
+    Array, ArrayAccessor, ArrayRef, ArrowNativeTypeOp, PrimitiveArray, Scalar, StringArray,
+    make_array,
 };
 use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
@@ -249,7 +249,7 @@ pub struct DictionaryArray<K: ArrowDictionaryKeyType> {
     /// map to the real values.
     keys: PrimitiveArray<K>,
 
-    /// Array of dictionary values (can by any DataType).
+    /// Array of dictionary values (can be any DataType).
     values: ArrayRef,
 
     /// Values are ordered.
@@ -327,6 +327,10 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     ///
     /// Safe provided [`Self::try_new`] would not return an error
     pub unsafe fn new_unchecked(keys: PrimitiveArray<K>, values: ArrayRef) -> Self {
+        if cfg!(feature = "force_validate") {
+            return Self::new(keys, values);
+        }
+
         let data_type = DataType::Dictionary(
             Box::new(keys.data_type().clone()),
             Box::new(values.data_type().clone()),
@@ -481,6 +485,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 
     /// Returns `PrimitiveDictionaryBuilder` of this dictionary array for mutating
     /// its keys and values if the underlying data buffer is not shared by others.
+    #[allow(clippy::result_large_err)]
     pub fn into_primitive_dict_builder<V>(self) -> Result<PrimitiveDictionaryBuilder<K, V>, Self>
     where
         V: ArrowPrimitiveType,
@@ -537,6 +542,7 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     /// assert_eq!(typed.value(1), 11);
     /// assert_eq!(typed.value(2), 21);
     /// ```
+    #[allow(clippy::result_large_err)]
     pub fn unary_mut<F, V>(self, op: F) -> Result<DictionaryArray<K>, DictionaryArray<K>>
     where
         V: ArrowPrimitiveType,
@@ -720,6 +726,11 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
         self.keys.is_empty()
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.keys.shrink_to_fit();
+        self.values.shrink_to_fit();
+    }
+
     fn offset(&self) -> usize {
         self.keys.offset()
     }
@@ -746,6 +757,26 @@ impl<T: ArrowDictionaryKeyType> Array for DictionaryArray<T> {
                 }
                 Some(builder.finish().into())
             }
+        }
+    }
+
+    fn logical_null_count(&self) -> usize {
+        match (self.keys.nulls(), self.values.logical_nulls()) {
+            (None, None) => 0,
+            (Some(key_nulls), None) => key_nulls.null_count(),
+            (None, Some(value_nulls)) => self
+                .keys
+                .values()
+                .iter()
+                .filter(|k| value_nulls.is_null(k.as_usize()))
+                .count(),
+            (Some(key_nulls), Some(value_nulls)) => self
+                .keys
+                .values()
+                .iter()
+                .enumerate()
+                .filter(|(idx, k)| key_nulls.is_null(*idx) || value_nulls.is_null(k.as_usize()))
+                .count(),
         }
     }
 
@@ -916,13 +947,13 @@ where
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        let val = self.dictionary.keys.value_unchecked(index);
+        let val = unsafe { self.dictionary.keys.value_unchecked(index) };
         let value_idx = val.as_usize();
 
         // As dictionary keys are only verified for non-null indexes
         // we must check the value is within bounds
         match value_idx < self.values.len() {
-            true => self.values.value_unchecked(value_idx),
+            true => unsafe { self.values.value_unchecked(value_idx) },
             false => Default::default(),
         }
     }
@@ -1020,7 +1051,7 @@ impl<K: ArrowDictionaryKeyType> AnyDictionaryArray for DictionaryArray<K> {
 mod tests {
     use super::*;
     use crate::cast::as_dictionary_array;
-    use crate::{Int16Array, Int32Array, Int8Array, RunArray};
+    use crate::{Int8Array, Int16Array, Int32Array, RunArray};
     use arrow_buffer::{Buffer, ToByteSlice};
 
     #[test]

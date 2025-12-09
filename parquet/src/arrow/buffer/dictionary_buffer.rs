@@ -18,7 +18,7 @@
 use crate::arrow::buffer::offset_buffer::OffsetBuffer;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
-use arrow_array::{make_array, Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
@@ -153,6 +153,15 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
                         ));
                     }
                 }
+
+                let ArrowType::Dictionary(_, value_type) = data_type else {
+                    unreachable!()
+                };
+                let values = if let ArrowType::FixedSizeBinary(size) = **value_type {
+                    arrow_cast::cast(&values, &ArrowType::FixedSizeBinary(size)).unwrap()
+                } else {
+                    values
+                };
 
                 let builder = ArrayDataBuilder::new(data_type.clone())
                     .len(keys.len())

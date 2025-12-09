@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, ArrayDecoder};
-use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
+use crate::reader::{ArrayDecoder, make_decoder};
 use arrow_array::OffsetSizeTrait;
+use arrow_array::builder::{BooleanBufferBuilder, BufferBuilder};
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
@@ -37,6 +38,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
         coerce_primitive: bool,
         strict_mode: bool,
         is_nullable: bool,
+        struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
         let field = match &data_type {
             DataType::List(f) if !O::IS_LARGE => f,
@@ -48,6 +50,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             coerce_primitive,
             strict_mode,
             field.is_nullable(),
+            struct_mode,
         )?;
 
         Ok(Self {

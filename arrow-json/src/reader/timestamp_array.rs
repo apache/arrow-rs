@@ -18,15 +18,15 @@
 use chrono::TimeZone;
 use std::marker::PhantomData;
 
+use arrow_array::Array;
 use arrow_array::builder::PrimitiveBuilder;
 use arrow_array::types::ArrowTimestampType;
-use arrow_array::Array;
 use arrow_cast::parse::string_to_datetime;
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 /// A specialized [`ArrayDecoder`] for timestamps
 pub struct TimestampArrayDecoder<P: ArrowTimestampType, Tz: TimeZone> {
@@ -97,7 +97,7 @@ where
                 TapeElement::I32(v) => builder.append_value(v as i64),
                 TapeElement::I64(high) => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
-                        builder.append_value((high as i64) << 32 | (low as u32) as i64)
+                        builder.append_value(((high as i64) << 32) | (low as u32) as i64)
                     }
                     _ => unreachable!(),
                 },

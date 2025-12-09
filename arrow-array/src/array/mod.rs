@@ -167,6 +167,12 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// ```
     fn is_empty(&self) -> bool;
 
+    /// Shrinks the capacity of any exclusively owned buffer as much as possible
+    ///
+    /// Shared or externally allocated buffers will be ignored, and
+    /// any buffer offsets will be preserved.
+    fn shrink_to_fit(&mut self) {}
+
     /// Returns the offset into the underlying data used by this array(-slice).
     /// Note that the underlying data can be shared by many arrays.
     /// This defaults to `0`.
@@ -317,8 +323,7 @@ pub trait Array: std::fmt::Debug + Send + Sync {
     /// even if the nulls present in [`DictionaryArray::values`] are not referenced by any key,
     /// and therefore would not appear in [`Array::logical_nulls`].
     fn is_nullable(&self) -> bool {
-        // TODO this is not necessarily perfect default implementation, since null_count() and logical_null_count() are not always equivalent
-        self.null_count() != 0
+        self.logical_null_count() != 0
     }
 
     /// Returns the total number of bytes of memory pointed to by this array.
@@ -364,6 +369,15 @@ impl Array for ArrayRef {
 
     fn is_empty(&self) -> bool {
         self.as_ref().is_empty()
+    }
+
+    /// For shared buffers, this is a no-op.
+    fn shrink_to_fit(&mut self) {
+        if let Some(slf) = Arc::get_mut(self) {
+            slf.shrink_to_fit();
+        } else {
+            // We ignore shared buffers.
+        }
     }
 
     fn offset(&self) -> usize {
@@ -606,6 +620,29 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
     }
 }
 
+/// A trait for Arrow String Arrays, currently three types are supported:
+/// - `BinaryArray`
+/// - `LargeBinaryArray`
+/// - `BinaryViewArray`
+///
+/// This trait helps to abstract over the different types of binary arrays
+/// so that we don't need to duplicate the implementation for each type.
+pub trait BinaryArrayType<'a>: ArrayAccessor<Item = &'a [u8]> + Sized {
+    /// Constructs a new iterator
+    fn iter(&self) -> ArrayIter<Self>;
+}
+
+impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
+    fn iter(&self) -> ArrayIter<Self> {
+        GenericBinaryArray::<O>::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        BinaryViewArray::iter(self)
+    }
+}
+
 impl PartialEq for dyn Array + '_ {
     fn eq(&self, other: &Self) -> bool {
         self.to_data().eq(&other.to_data())
@@ -696,6 +733,12 @@ impl<T: ByteViewType + ?Sized> PartialEq for GenericByteViewArray<T> {
     }
 }
 
+impl<R: RunEndIndexType> PartialEq for RunArray<R> {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_data().eq(&other.to_data())
+    }
+}
+
 /// Constructs an array using the input `data`.
 /// Returns a reference-counted `Array` instance.
 pub fn make_array(data: ArrayData) -> ArrayRef {
@@ -772,7 +815,7 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
         DataType::Map(_, _) => Arc::new(MapArray::from(data)) as ArrayRef,
         DataType::Union(_, _) => Arc::new(UnionArray::from(data)) as ArrayRef,
         DataType::FixedSizeList(_, _) => Arc::new(FixedSizeListArray::from(data)) as ArrayRef,
-        DataType::Dictionary(ref key_type, _) => match key_type.as_ref() {
+        DataType::Dictionary(key_type, _) => match key_type.as_ref() {
             DataType::Int8 => Arc::new(DictionaryArray::<Int8Type>::from(data)) as ArrayRef,
             DataType::Int16 => Arc::new(DictionaryArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(DictionaryArray::<Int32Type>::from(data)) as ArrayRef,
@@ -781,18 +824,20 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt16 => Arc::new(DictionaryArray::<UInt16Type>::from(data)) as ArrayRef,
             DataType::UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)) as ArrayRef,
             DataType::UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected dictionary key type {dt:?}"),
+            dt => unimplemented!("Unexpected dictionary key type {dt}"),
         },
-        DataType::RunEndEncoded(ref run_ends_type, _) => match run_ends_type.data_type() {
+        DataType::RunEndEncoded(run_ends_type, _) => match run_ends_type.data_type() {
             DataType::Int16 => Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef,
             DataType::Int64 => Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected data type for run_ends array {dt:?}"),
+            dt => unimplemented!("Unexpected data type for run_ends array {dt}"),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
+        DataType::Decimal32(_, _) => Arc::new(Decimal32Array::from(data)) as ArrayRef,
+        DataType::Decimal64(_, _) => Arc::new(Decimal64Array::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
-        dt => panic!("Unexpected data type {dt:?}"),
+        dt => unimplemented!("Unexpected data type {dt}"),
     }
 }
 
@@ -912,7 +957,7 @@ mod tests {
 
     #[test]
     fn test_empty_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, false)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, false)));
         let array = new_empty_array(&data_type);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 0);
@@ -970,7 +1015,7 @@ mod tests {
 
     #[test]
     fn test_null_list_primitive() {
-        let data_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        let data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
         let array = new_null_array(&data_type, 9);
         let a = array.as_any().downcast_ref::<ListArray>().unwrap();
         assert_eq!(a.len(), 9);

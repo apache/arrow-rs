@@ -185,31 +185,6 @@ where
         }
     }
 
-    /// Reads a batch of values of at most `batch_size`, returning a tuple containing the
-    /// actual number of non-null values read, followed by the corresponding number of levels,
-    /// i.e, the total number of values including nulls, empty lists, etc...
-    ///
-    /// If the max definition level is 0, `def_levels` will be ignored, otherwise it will be
-    /// populated with the number of levels read, with an error returned if it is `None`.
-    ///
-    /// If the max repetition level is 0, `rep_levels` will be ignored, otherwise it will be
-    /// populated with the number of levels read, with an error returned if it is `None`.
-    ///
-    /// `values` will be contiguously populated with the non-null values. Note that if the column
-    /// is not required, this may be less than either `batch_size` or the number of levels read
-    #[deprecated(note = "Use read_records")]
-    pub fn read_batch(
-        &mut self,
-        batch_size: usize,
-        def_levels: Option<&mut D::Buffer>,
-        rep_levels: Option<&mut R::Buffer>,
-        values: &mut V::Buffer,
-    ) -> Result<(usize, usize)> {
-        let (_, values, levels) = self.read_records(batch_size, def_levels, rep_levels, values)?;
-
-        Ok((values, levels))
-    }
-
     /// Read up to `max_records` whole records, returning the number of complete
     /// records, non-null values and levels decoded. All levels for a given record
     /// will be read, i.e. the next repetition level, if any, will be 0
@@ -277,7 +252,9 @@ where
                     let (values_read, levels_read) = reader.read_def_levels(out, levels_to_read)?;
 
                     if levels_read != levels_to_read {
-                        return Err(general_err!("insufficient definition levels read from column - expected {rep_levels}, got {read}"));
+                        return Err(general_err!(
+                            "insufficient definition levels read from column - expected {levels_to_read}, got {levels_read}"
+                        ));
                     }
 
                     values_read
@@ -474,7 +451,7 @@ where
                                 self.rep_level_decoder
                                     .as_mut()
                                     .unwrap()
-                                    .set_data(rep_level_encoding, level_data);
+                                    .set_data(rep_level_encoding, level_data)?;
                             }
 
                             if max_def_level > 0 {
@@ -489,7 +466,7 @@ where
                                 self.def_level_decoder
                                     .as_mut()
                                     .unwrap()
-                                    .set_data(def_level_encoding, level_data);
+                                    .set_data(def_level_encoding, level_data)?;
                             }
 
                             self.values_decoder.set_data(
@@ -513,7 +490,11 @@ where
                             statistics: _,
                         } => {
                             if num_nulls > num_values {
-                                return Err(general_err!("more nulls than values in page, contained {} values and {} nulls", num_values, num_nulls));
+                                return Err(general_err!(
+                                    "more nulls than values in page, contained {} values and {} nulls",
+                                    num_values,
+                                    num_nulls
+                                ));
                             }
 
                             self.num_buffered_values = num_values as _;
@@ -531,7 +512,7 @@ where
                                 self.rep_level_decoder.as_mut().unwrap().set_data(
                                     Encoding::RLE,
                                     buf.slice(..rep_levels_byte_len as usize),
-                                );
+                                )?;
                             }
 
                             // DataPage v2 only supports RLE encoding for definition
@@ -543,7 +524,7 @@ where
                                         rep_levels_byte_len as usize
                                             ..(rep_levels_byte_len + def_levels_byte_len) as usize,
                                     ),
-                                );
+                                )?;
                             }
 
                             self.values_decoder.set_data(
@@ -588,11 +569,16 @@ fn parse_v1_level(
     match encoding {
         Encoding::RLE => {
             let i32_size = std::mem::size_of::<i32>();
-            let data_size = read_num_bytes::<i32>(i32_size, buf.as_ref()) as usize;
-            Ok((
-                i32_size + data_size,
-                buf.slice(i32_size..i32_size + data_size),
-            ))
+            if i32_size <= buf.len() {
+                let data_size = read_num_bytes::<i32>(i32_size, buf.as_ref()) as usize;
+                let end = i32_size
+                    .checked_add(data_size)
+                    .ok_or(general_err!("invalid level length"))?;
+                if end <= buf.len() {
+                    return Ok((end, buf.slice(i32_size..end)));
+                }
+            }
+            Err(general_err!("not enough data to read levels"))
         }
         #[allow(deprecated)]
         Encoding::BIT_PACKED => {
@@ -608,13 +594,32 @@ fn parse_v1_level(
 mod tests {
     use super::*;
 
-    use rand::distributions::uniform::SampleUniform;
+    use rand::distr::uniform::SampleUniform;
     use std::{collections::VecDeque, sync::Arc};
 
     use crate::basic::Type as PhysicalType;
     use crate::schema::types::{ColumnDescriptor, ColumnPath, Type as SchemaType};
     use crate::util::test_common::page_util::InMemoryPageReader;
     use crate::util::test_common::rand_gen::make_pages;
+
+    #[test]
+    fn test_parse_v1_level_invalid_length() {
+        // Say length is 10, but buffer is only 4
+        let buf = Bytes::from(vec![10, 0, 0, 0]);
+        let err = parse_v1_level(1, 100, Encoding::RLE, buf).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: not enough data to read levels"
+        );
+
+        // Say length is 4, but buffer is only 3
+        let buf = Bytes::from(vec![4, 0, 0]);
+        let err = parse_v1_level(1, 100, Encoding::RLE, buf).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Parquet error: not enough data to read levels"
+        );
+    }
 
     const NUM_LEVELS: usize = 128;
     const NUM_PAGES: usize = 2;

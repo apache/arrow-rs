@@ -17,7 +17,7 @@
 
 use crate::array::{get_offsets, print_long_array};
 use crate::iterator::MapArrayIter;
-use crate::{make_array, Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray};
+use crate::{Array, ArrayAccessor, ArrayRef, ListArray, StringArray, StructArray, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ToByteSlice};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef};
@@ -173,6 +173,15 @@ impl MapArray {
         &self.entries
     }
 
+    /// Returns a reference to the fields of the [`StructArray`] that backs this map.
+    pub fn entries_fields(&self) -> (&Field, &Field) {
+        let fields = self.entries.fields().iter().collect::<Vec<_>>();
+        let fields = TryInto::<[&FieldRef; 2]>::try_into(fields)
+            .expect("Every map has a key and value field");
+
+        (fields[0].as_ref(), fields[1].as_ref())
+    }
+
     /// Returns the data type of the map's keys.
     pub fn key_type(&self) -> &DataType {
         self.keys().data_type()
@@ -185,11 +194,14 @@ impl MapArray {
 
     /// Returns ith value of this map array.
     ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> StructArray {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
+        let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
+        let start = *unsafe { self.value_offsets().get_unchecked(i) };
         self.entries
             .slice(start.to_usize().unwrap(), (end - start).to_usize().unwrap())
     }
@@ -197,6 +209,12 @@ impl MapArray {
     /// Returns ith value of this map array.
     ///
     /// This is a [`StructArray`] containing two fields
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> StructArray {
         let end = self.value_offsets()[i + 1] as usize;
         let start = self.value_offsets()[i] as usize;
@@ -370,6 +388,14 @@ impl Array for MapArray {
 
     fn is_empty(&self) -> bool {
         self.value_offsets.len() <= 1
+    }
+
+    fn shrink_to_fit(&mut self) {
+        if let Some(nulls) = &mut self.nulls {
+            nulls.shrink_to_fit();
+        }
+        self.entries.shrink_to_fit();
+        self.value_offsets.shrink_to_fit();
     }
 
     fn offset(&self) -> usize {

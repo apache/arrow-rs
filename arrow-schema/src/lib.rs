@@ -15,16 +15,24 @@
 // specific language governing permissions and limitations
 // under the License.
 
-#![warn(missing_docs)]
 //! Arrow logical types
+
+#![doc(
+    html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
+    html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
+)]
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(missing_docs)]
 
 mod datatype;
 
 pub use datatype::*;
 use std::fmt::Display;
+mod datatype_display;
 mod datatype_parse;
 mod error;
 pub use error::*;
+pub mod extension;
 mod field;
 pub use field::*;
 mod fields;

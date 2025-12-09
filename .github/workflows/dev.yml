@@ -21,11 +21,11 @@ concurrency:
   group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
   cancel-in-progress: true
 
-# trigger for all PRs and changes to master
+# trigger for all PRs and changes to main
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
 
 env:
@@ -38,9 +38,9 @@ jobs:
     name: Release Audit Tool (RAT)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: 3.8
       - name: Audit licenses
@@ -50,8 +50,8 @@ jobs:
     name: Markdown format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "14"
       - name: Prettier check

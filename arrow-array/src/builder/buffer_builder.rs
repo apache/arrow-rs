@@ -16,6 +16,8 @@
 // under the License.
 
 pub use arrow_buffer::BufferBuilder;
+pub use arrow_buffer::OffsetBufferBuilder;
+
 use half::f16;
 
 use crate::types::*;
@@ -43,6 +45,10 @@ pub type Float32BufferBuilder = BufferBuilder<f32>;
 /// Buffer builder for 64-bit floating point type.
 pub type Float64BufferBuilder = BufferBuilder<f64>;
 
+/// Buffer builder for 32-bit decimal type.
+pub type Decimal32BufferBuilder = BufferBuilder<<Decimal32Type as ArrowPrimitiveType>::Native>;
+/// Buffer builder for 64-bit decimal type.
+pub type Decimal64BufferBuilder = BufferBuilder<<Decimal64Type as ArrowPrimitiveType>::Native>;
 /// Buffer builder for 128-bit decimal type.
 pub type Decimal128BufferBuilder = BufferBuilder<<Decimal128Type as ArrowPrimitiveType>::Native>;
 /// Buffer builder for 256-bit decimal type.
@@ -104,8 +110,8 @@ pub type DurationNanosecondBufferBuilder =
 
 #[cfg(test)]
 mod tests {
-    use crate::builder::{ArrayBuilder, Int32BufferBuilder, Int8Builder, UInt8BufferBuilder};
     use crate::Array;
+    use crate::builder::{ArrayBuilder, Int8Builder, Int32BufferBuilder, UInt8BufferBuilder};
 
     #[test]
     fn test_builder_i32_empty() {

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num::NumCast;
+use num_traits::NumCast;
 use std::marker::PhantomData;
 
 use arrow_array::builder::PrimitiveBuilder;
@@ -25,8 +25,8 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use half::f16;
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 /// A trait for JSON-specific primitive parsing logic
 ///
@@ -132,7 +132,7 @@ where
                 }
                 TapeElement::F64(high) => match tape.get(p + 1) {
                     TapeElement::F32(low) => {
-                        let v = f64::from_bits((high as u64) << 32 | low as u64);
+                        let v = f64::from_bits(((high as u64) << 32) | low as u64);
                         let value = NumCast::from(v).ok_or_else(|| {
                             ArrowError::JsonError(format!("failed to parse {v} as {d}",))
                         })?;
@@ -142,7 +142,7 @@ where
                 },
                 TapeElement::I64(high) => match tape.get(p + 1) {
                     TapeElement::I32(low) => {
-                        let v = (high as i64) << 32 | (low as u32) as i64;
+                        let v = ((high as i64) << 32) | (low as u32) as i64;
                         let value = NumCast::from(v).ok_or_else(|| {
                             ArrowError::JsonError(format!("failed to parse {v} as {d}",))
                         })?;
