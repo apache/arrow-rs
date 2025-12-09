@@ -92,6 +92,7 @@ pub struct ParquetMetaDataOptions {
     schema_descr: Option<SchemaDescPtr>,
     encoding_stats_as_mask: bool,
     encoding_stats_policy: ParquetStatisticsPolicy,
+    column_stats_policy: ParquetStatisticsPolicy,
 }
 
 impl ParquetMetaDataOptions {
@@ -178,6 +179,31 @@ impl ParquetMetaDataOptions {
     /// Call [`Self::set_encoding_stats_policy`] and return `Self` for chaining.
     pub fn with_encoding_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
         self.set_encoding_stats_policy(policy);
+        self
+    }
+
+    /// Returns whether to skip decoding the [`statistics`] in the Parquet `ColumnMetaData`
+    /// for the column indexed by `col_index`.
+    ///
+    /// [`statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L912
+    pub fn skip_column_stats(&self, col_index: usize) -> bool {
+        self.column_stats_policy.is_skip(col_index)
+    }
+
+    /// Sets the decoding policy for [`statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// The default policy is to decode all `statistics`.
+    ///
+    /// [`statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L912
+    pub fn set_column_stats_policy(&mut self, policy: ParquetStatisticsPolicy) {
+        self.column_stats_policy = policy;
+    }
+
+    /// Call [`Self::set_column_stats_policy`] and return `Self` for chaining.
+    pub fn with_column_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.set_column_stats_policy(policy);
         self
     }
 }

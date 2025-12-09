@@ -182,6 +182,15 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Sets the decoding policy for [`statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L912
+    pub fn with_column_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_column_stats_policy(policy);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
