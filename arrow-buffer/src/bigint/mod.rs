@@ -18,7 +18,10 @@
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
 use num_bigint::BigInt;
-use num_traits::{FromPrimitive, ToPrimitive, cast::AsPrimitive};
+use num_traits::{
+    cast::AsPrimitive, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
+    Num, One, Signed, ToPrimitive, Zero,
+};
 use std::cmp::Ordering;
 use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
@@ -860,6 +863,103 @@ impl ToPrimitive for i256 {
     }
 }
 
+// num_traits checked implementations
+
+impl CheckedNeg for i256 {
+    fn checked_neg(&self) -> Option<Self> {
+        (*self).checked_neg()
+    }
+}
+
+impl CheckedAdd for i256 {
+    fn checked_add(&self, v: &i256) -> Option<Self> {
+        (*self).checked_add(*v)
+    }
+}
+
+impl CheckedSub for i256 {
+    fn checked_sub(&self, v: &i256) -> Option<Self> {
+        (*self).checked_sub(*v)
+    }
+}
+
+impl CheckedDiv for i256 {
+    fn checked_div(&self, v: &i256) -> Option<Self> {
+        (*self).checked_sub(*v)
+    }
+}
+
+impl CheckedMul for i256 {
+    fn checked_mul(&self, v: &i256) -> Option<Self> {
+        (*self).checked_mul(*v)
+    }
+}
+
+impl CheckedRem for i256 {
+    fn checked_rem(&self, v: &i256) -> Option<Self> {
+        (*self).checked_rem(*v)
+    }
+}
+
+impl Zero for i256 {
+    fn zero() -> Self {
+        i256::ZERO
+    }
+
+    fn is_zero(&self) -> bool {
+        *self == i256::ZERO
+    }
+}
+
+impl One for i256 {
+    fn one() -> Self {
+        i256::ONE
+    }
+
+    fn is_one(&self) -> bool {
+        *self == i256::ONE
+    }
+}
+
+impl Num for i256 {
+    type FromStrRadixErr = ParseI256Error;
+
+    fn from_str_radix(str: &str, radix: u32) -> Result<Self, Self::FromStrRadixErr> {
+        if radix == 10 {
+            str.parse()
+        } else {
+            // Parsing from non-10 baseseeÎ is not supported
+            Err(ParseI256Error {})
+        }
+    }
+}
+
+impl Signed for i256 {
+    fn abs(&self) -> Self {
+        self.wrapping_abs()
+    }
+
+    fn abs_sub(&self, other: &Self) -> Self {
+        if self > other {
+            self.wrapping_sub(*other)
+        } else {
+            i256::ZERO
+        }
+    }
+
+    fn signum(&self) -> Self {
+        (*self).signum()
+    }
+
+    fn is_positive(&self) -> bool {
+        (*self).is_positive()
+    }
+
+    fn is_negative(&self) -> bool {
+        (*self).is_negative()
+    }
+}
+
 #[cfg(all(test, not(miri)))] // llvm.x86.subborrow.64 not supported by MIRI
 mod tests {
     use super::*;
@@ -1326,5 +1426,23 @@ mod tests {
         let big_neg = i256::from_f64(-(max_f * 2.0)).unwrap_or(i256::MIN);
         let out = big_neg.to_f64().unwrap();
         assert!(out.is_finite() && out.is_sign_negative());
+    }
+
+    #[test]
+    fn test_num_traits() {
+        let value = i256::from_i128(-5);
+        assert_eq!(
+            <i256 as CheckedNeg>::checked_neg(&value),
+            Some(i256::from_i128(5))
+        );
+
+        assert_eq!(
+            <i256 as CheckedAdd>::checked_add(&value, &value),
+            Some(i256::from_i128(-10))
+        );
+
+        assert_eq!(<i256 as Signed>::abs(&value), i256::from_i128(5));
+
+        assert_eq!(<i256 as One>::one(), i256::from_i128(1));
     }
 }
