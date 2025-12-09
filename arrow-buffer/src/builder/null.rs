@@ -193,17 +193,15 @@ impl NullBufferBuilder {
         }
     }
 
-    /// Extends this builder with validity values from a trusted length iterator.
+    /// Extends this builder with validity values.
     ///
-    /// This is more efficient than calling `append` in a loop as it processes
-    /// 64 bits at a time internally.
     ///
     /// # Example
     /// ```
     /// # use arrow_buffer::NullBufferBuilder;
     /// let mut builder = NullBufferBuilder::new(8);
     /// let validities = [true, false, true, true];
-    /// builder.extend_from_trusted_len_iter(validities.iter().copied());
+    /// builder.extend(validities.iter().copied());
     /// assert_eq!(builder.len(), 4);
     /// ```
     pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
