@@ -223,15 +223,50 @@ impl NullBufferBuilder {
 
         let slice = buf.as_slice_mut();
         let mut bit_idx = start_len;
+        let end_bit = start_len + len;
 
-        // Process bits - set bit if true (buffer initialized to 0, so false bits are already correct)
-        for valid in iter {
-            if valid {
-                let byte_idx = bit_idx / 8;
-                let bit_offset = bit_idx % 8;
-                slice[byte_idx] |= 1 << bit_offset;
+        // Process in chunks of 64 bits when byte-aligned for better performance
+        if start_len % 8 == 0 {
+            let start_byte = start_len / 8;
+            let mut iter = iter.peekable();
+
+            // Process full u64 chunks (64 bits at a time)
+            while bit_idx + 64 <= end_bit && iter.peek().is_some() {
+                let mut chunk: u64 = 0;
+                for i in 0..64 {
+                    if let Some(valid) = iter.next() {
+                        if valid {
+                            chunk |= 1u64 << i;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                let byte_idx = (bit_idx - start_len) / 8 + start_byte;
+                // Write the u64 chunk as 8 bytes
+                slice[byte_idx..byte_idx + 8].copy_from_slice(&chunk.to_le_bytes());
+                bit_idx += 64;
             }
-            bit_idx += 1;
+
+            // Process remaining bits
+            for valid in iter {
+                if valid {
+                    let byte_idx = bit_idx / 8;
+                    let bit_offset = bit_idx % 8;
+                    slice[byte_idx] |= 1 << bit_offset;
+                }
+                bit_idx += 1;
+            }
+        } else {
+            // Non-aligned case: process bit by bit
+            for valid in iter {
+                if valid {
+                    let byte_idx = bit_idx / 8;
+                    let bit_offset = bit_idx % 8;
+                    slice[byte_idx] |= 1 << bit_offset;
+                }
+                bit_idx += 1;
+            }
         }
 
         debug_assert_eq!(bit_idx, start_len + len);
@@ -445,5 +480,43 @@ mod tests {
         builder.append_buffer(&buffer);
 
         assert_eq!(builder.finish(), None);
+    }
+
+    #[test]
+    fn test_extend() {
+        // Test small extend (less than 64 bits)
+        let mut builder = NullBufferBuilder::new(0);
+        builder.extend([true, false, true, true].iter().copied());
+        assert_eq!(builder.as_slice().unwrap(), &[0b1011_u8]);
+
+        // Test extend with exactly 64 bits
+        let mut builder = NullBufferBuilder::new(0);
+        let pattern: Vec<bool> = (0..64).map(|i| i % 2 == 0).collect();
+        builder.extend(pattern.iter().copied());
+        // Even positions are true: 0, 2, 4, ... -> bits 0, 2, 4, ...
+        // In little-endian: 0b01010101 repeated
+        assert_eq!(
+            builder.as_slice().unwrap(),
+            &[0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55]
+        );
+
+        // Test extend with more than 64 bits (tests chunking)
+        let mut builder = NullBufferBuilder::new(0);
+        let pattern: Vec<bool> = (0..100).map(|i| i % 3 == 0).collect();
+        builder.extend(pattern.iter().copied());
+        assert_eq!(builder.len(), 100);
+        // Verify a few specific bits
+        let buf = builder.finish().unwrap();
+        assert!(buf.is_valid(0)); // 0 % 3 == 0
+        assert!(!buf.is_valid(1)); // 1 % 3 != 0
+        assert!(!buf.is_valid(2)); // 2 % 3 != 0
+        assert!(buf.is_valid(3)); // 3 % 3 == 0
+        assert!(buf.is_valid(99)); // 99 % 3 == 0
+
+        // Test extend with non-aligned start (tests bit-by-bit path)
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_non_null(); // Start at bit 1 (non-aligned)
+        builder.extend([false, true, false, true].iter().copied());
+        assert_eq!(builder.as_slice().unwrap(), &[0b10101_u8]);
     }
 }
