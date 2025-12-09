@@ -22,9 +22,17 @@ use arrow_schema::{ArrowError, DataType};
 
 use crate::{
     ArrayData,
-    transform::{_MutableArrayData, Extend, MutableArrayData, utils::iter_in_bytes},
+    transform::{_MutableArrayData, Extend, MutableArrayData, utils::to_bytes_vec},
 };
 
+
+/// Fallback merge strategy used when optimized dictionary-merge paths cannot guarantee
+/// correctness. I.e some fast-path algorithms may emit duplicate keys, which can overflow
+/// the index type even if the logical keyspace is large enough.
+///
+/// This implementation prioritizes correctness over speed: it performs a full scan of
+/// every input dictionary’s values, ensuring a de-duplicated, exhaustively validated
+/// keyspace before constructing the merged dictionary.
 pub(crate) fn merge_dictionaries<'a>(
     key_data_type: &DataType,
     value_data_type: &DataType,
@@ -58,7 +66,7 @@ fn merge_dictionaries_casted<'a, K: ArrowNativeType>(
             let old_keys = dict.buffer::<K>(0);
             data_refs.push(value_data);
             let mut new_keys = vec![K::usize_as(0); old_keys.len()];
-            let values = iter_in_bytes(data_type, value_data);
+            let values = to_bytes_vec(data_type, value_data);
             for (key_index, old_key) in old_keys.iter().enumerate() {
                 if dict.is_valid(key_index) {
                     let value = values[old_key.as_usize()];

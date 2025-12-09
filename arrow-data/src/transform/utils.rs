@@ -61,7 +61,7 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
     *unsafe { offsets.get_unchecked(offsets.len() - 1) }
 }
 
-fn iter_in_bytes_variable_sized<T: ArrowNativeType + Integer>(data: &ArrayData) -> Vec<&[u8]> {
+fn to_bytes_vec_variable_sized<T: ArrowNativeType + Integer>(data: &ArrayData) -> Vec<&[u8]> {
     let offsets = data.buffer::<T>(0);
 
     // the offsets of the `ArrayData` are ignored as they are only applied to the offset buffer.
@@ -75,20 +75,20 @@ fn iter_in_bytes_variable_sized<T: ArrowNativeType + Integer>(data: &ArrayData) 
         .collect::<Vec<_>>()
 }
 
-fn iter_in_bytes_fixed_sized(data: &ArrayData, size: usize) -> Vec<&[u8]> {
+fn to_bytes_vec_fixed_sized(data: &ArrayData, size: usize) -> Vec<&[u8]> {
     let values = &data.buffers()[0].as_slice()[data.offset() * size..];
     values.chunks(size).collect::<Vec<_>>()
 }
 
 /// iterate values in raw bytes regardless nullability
-pub(crate) fn iter_in_bytes<'a>(data_type: &DataType, data: &'a ArrayData) -> Vec<&'a [u8]> {
+pub(crate) fn to_bytes_vec<'a>(data_type: &DataType, data: &'a ArrayData) -> Vec<&'a [u8]> {
     if data_type.is_primitive() {
-        return iter_in_bytes_fixed_sized(data, data_type.primitive_width().unwrap());
+        return to_bytes_vec_fixed_sized(data, data_type.primitive_width().unwrap());
     }
     match data_type {
-        DataType::Utf8 | DataType::Binary => iter_in_bytes_variable_sized::<i32>(data),
-        DataType::LargeUtf8 | DataType::LargeBinary => iter_in_bytes_variable_sized::<i64>(data),
-        _ => unimplemented!("iter in bytes is not supported for {data_type}"),
+        DataType::Utf8 | DataType::Binary => to_bytes_vec_variable_sized::<i32>(data),
+        DataType::LargeUtf8 | DataType::LargeBinary => to_bytes_vec_variable_sized::<i64>(data),
+        _ => unimplemented!("to_bytes_vec is not supported for {data_type}"),
     }
 }
 
