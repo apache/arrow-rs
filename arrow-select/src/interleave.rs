@@ -1189,14 +1189,14 @@ mod tests {
         assert_eq!(v.data_type(), &DataType::Struct(fields));
     }
 
-    fn create_dict_arr<K: ArrowDictionaryKeyType>(
+    fn create_dict_arr<K: ArrowDictionaryKeyType, V: ArrowDictionaryKeyType>(
         keys: Vec<K::Native>,
         null_keys: Option<Vec<bool>>,
-        values: Vec<u16>,
+        values: Vec<V::Native>,
     ) -> ArrayRef {
         let input_keys =
             PrimitiveArray::<K>::from_iter_values_with_nulls(keys, null_keys.map(NullBuffer::from));
-        let input_values = UInt16Array::from_iter_values(values);
+        let input_values = PrimitiveArray::<V>::from_iter_values(values);
         let input = DictionaryArray::new(input_keys, Arc::new(input_values));
         Arc::new(input) as ArrayRef
     }
@@ -1235,25 +1235,41 @@ mod tests {
         // Even though the combined cardinality in the input arrays exceed the key size,
         // The result after calling `interleave` still satisfies this limit, and thus
         // should cause no error
-        let arr1 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (0..=255).collect());
-        let arr2 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (256..=511).collect());
+        let arr1 = create_dict_arr::<UInt16Type, UInt32Type>(
+            (0..=65535).collect(),
+            None,
+            (0..=65535).collect(),
+        );
+        let arr2 = create_dict_arr::<UInt16Type, UInt32Type>(
+            (0..=65535).collect(),
+            None,
+            (65536..=131071).collect(),
+        );
         let result =
             interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
 
-        let dict_arr = result.as_dictionary::<UInt8Type>();
+        let dict_arr = result.as_dictionary::<UInt16Type>();
         let keys = dict_arr.keys();
-        let vals = dict_arr.values().as_primitive::<UInt16Type>();
+        let vals = dict_arr.values().as_primitive::<UInt32Type>();
         assert_eq!(
             vals,
-            &UInt16Array::from_iter_values(vec![1, 2, 256, 257, 258])
+            &UInt32Array::from_iter_values(vec![1, 2, 65536, 65537, 65538])
         );
-        assert_eq!(keys, &UInt8Array::from_iter_values(vec![1, 0, 2, 4, 3]));
+        assert_eq!(keys, &UInt16Array::from_iter_values(vec![1, 0, 2, 4, 3]));
     }
 
     #[test]
     fn test_total_distinct_keys_in_input_arrays_and_after_interleave_are_greater_than_key_size() {
-        let arr1 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (0..=255).collect());
-        let arr2 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (256..=511).collect());
+        let arr1 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (0..=255).collect(),
+        );
+        let arr2 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (256..=511).collect(),
+        );
         // take all 256 items of each array
         let indices = (0usize..=255)
             .map(|i| (0usize, i))
@@ -1299,15 +1315,21 @@ mod tests {
             Arc::new(list_arr) as ArrayRef
         };
 
-        let f1_dict_arr1 =
-            create_dict_arr::<UInt8Type>((0..=255).collect(), None, (0..=255).collect());
-        let f2_dict_arr1 = create_dict_arr::<UInt8Type>(
+        let f1_dict_arr1 = create_dict_arr::<UInt8Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (0..=255).collect(),
+        );
+        let f2_dict_arr1 = create_dict_arr::<UInt8Type, UInt16Type>(
             (0..=255).collect(),
             Some(vec![false; 256]),
             (0..=255).collect(),
         );
-        let f3_dict_arr1 =
-            create_dict_arr::<UInt16Type>((0..=255).collect(), None, (0..=255).collect());
+        let f3_dict_arr1 = create_dict_arr::<UInt16Type, UInt16Type>(
+            (0..=255).collect(),
+            None,
+            (0..=255).collect(),
+        );
         let arr1 = make_struct_list(
             vec![
                 f1_dict_arr1,
@@ -1330,18 +1352,18 @@ mod tests {
         null_list.extend(vec![true; 125]);
 
         // This force the dictionaries to be merged
-        let f1_dict_arr2 = create_dict_arr::<UInt8Type>(
+        let f1_dict_arr2 = create_dict_arr::<UInt8Type, UInt16Type>(
             (0..=255).rev().collect(),
             Some(null_keys.clone()),
             (0..=255).collect(),
         );
-        let f2_dict_arr2 = create_dict_arr::<UInt8Type>(
+        let f2_dict_arr2 = create_dict_arr::<UInt8Type, UInt16Type>(
             (0..=255).rev().collect(),
             Some(null_keys.iter().map(|b| !*b).collect()),
             (0..=255).collect(),
         );
         // u16 key size is still sufficient, so no merge expected
-        let f3_dict_arr2 = create_dict_arr::<UInt16Type>(
+        let f3_dict_arr2 = create_dict_arr::<UInt16Type, UInt16Type>(
             (0..=255).rev().collect(),
             Some(null_keys.clone()),
             (0..=255).collect(),
