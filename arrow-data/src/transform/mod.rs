@@ -197,7 +197,7 @@ fn build_extend_dictionary(
     array: &ArrayData,
     offset: usize,
     max: usize,
-) -> Result<(Extend<'_>, ArrowError)> {
+) -> Result<Extend<'_>, ArrowError> {
     macro_rules! validate_and_build {
         ($dt: ty) => {{
             let _: $dt = max
