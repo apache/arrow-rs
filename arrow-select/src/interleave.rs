@@ -1188,6 +1188,7 @@ mod tests {
         assert_eq!(v.len(), 1);
         assert_eq!(v.data_type(), &DataType::Struct(fields));
     }
+
     fn create_dict_arr<K: ArrowDictionaryKeyType>(
         keys: Vec<K::Native>,
         null_keys: Option<Vec<bool>>,
@@ -1227,6 +1228,26 @@ mod tests {
             list_nulls.map(NullBuffer::from_iter),
         );
         Arc::new(list_arr) as ArrayRef
+    }
+
+    #[test]
+    fn test_total_distinct_keys_in_input_arrays_greater_than_key_size() {
+        // Even though the combined cardinality in the input arrays exceed the key size,
+        // The result after calling `interleave` still satisfies this limit, and thus
+        // should cause no error
+        let arr1 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (0..=255).collect());
+        let arr2 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (256..=511).collect());
+        let result =
+            interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
+
+        let dict_arr = result.as_dictionary::<UInt8Type>();
+        let keys = dict_arr.keys();
+        let vals = dict_arr.values().as_primitive::<UInt16Type>();
+        assert_eq!(
+            vals,
+            &UInt16Array::from_iter_values(vec![1, 2, 256, 257, 258])
+        );
+        assert_eq!(keys, &UInt8Array::from_iter_values(vec![1, 0, 2, 4, 3]));
     }
 
     #[test]
