@@ -487,7 +487,8 @@ mod tests {
         // Test small extend (less than 64 bits)
         let mut builder = NullBufferBuilder::new(0);
         builder.extend([true, false, true, true].iter().copied());
-        assert_eq!(builder.as_slice().unwrap(), &[0b1011_u8]);
+        // bits: 0=true, 1=false, 2=true, 3=true -> 0b1101 = 13
+        assert_eq!(builder.as_slice().unwrap(), &[0b1101_u8]);
 
         // Test extend with exactly 64 bits
         let mut builder = NullBufferBuilder::new(0);
