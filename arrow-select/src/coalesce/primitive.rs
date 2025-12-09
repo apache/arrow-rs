@@ -163,7 +163,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                     // Efficiently extend null buffer
                     // SAFETY: indices iterator reports correct length
                     unsafe {
-                        self.nulls.extend_from_trusted_len_iter(
+                        self.nulls.extend(
                             indices.map(|idx| bit_util::get_bit_raw(null_ptr, idx + null_offset)),
                         );
                     }
@@ -191,7 +191,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                     // Efficiently extend null buffer
                     // SAFETY: indices iterator reports correct length
                     unsafe {
-                        self.nulls.extend_from_trusted_len_iter(
+                        self.nulls.extend(
                             indices
                                 .iter()
                                 .map(|&idx| bit_util::get_bit_raw(null_ptr, idx + null_offset)),

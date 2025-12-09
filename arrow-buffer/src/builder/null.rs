@@ -198,23 +198,18 @@ impl NullBufferBuilder {
     /// This is more efficient than calling `append` in a loop as it processes
     /// 64 bits at a time internally.
     ///
-    /// # Safety
-    ///
-    /// The iterator must report its length correctly via `size_hint()`.
-    /// Using an iterator that reports an incorrect length is undefined behavior.
-    ///
     /// # Example
     /// ```
     /// # use arrow_buffer::NullBufferBuilder;
     /// let mut builder = NullBufferBuilder::new(8);
     /// let validities = [true, false, true, true];
-    /// // SAFETY: slice iterator reports correct length
-    /// unsafe { builder.extend_from_trusted_len_iter(validities.iter().copied()) };
+    /// builder.extend_from_trusted_len_iter(validities.iter().copied());
     /// assert_eq!(builder.len(), 4);
     /// ```
-    pub unsafe fn extend_from_trusted_len_iter<I: Iterator<Item = bool>>(&mut self, iter: I) {
-        let (_, upper) = iter.size_hint();
-        let len = upper.expect("extend_from_trusted_len_iter requires an upper limit");
+    pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
+        let (lower, upper) = iter.size_hint();
+        let len = upper.expect("Iterator must have exact size_hint");
+        debug_assert_eq!(lower, len, "Iterator must have exact size_hint");
 
         if len == 0 {
             return;
