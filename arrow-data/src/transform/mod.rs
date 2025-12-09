@@ -867,9 +867,6 @@ mod test {
     use std::sync::Arc;
 
     #[test]
-    fn test_dictionary_overflow() {}
-
-    #[test]
     fn test_list_append_with_capacities() {
         let array = ArrayData::new_empty(&DataType::List(Arc::new(Field::new(
             "element",

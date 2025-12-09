@@ -1251,6 +1251,21 @@ mod tests {
     }
 
     #[test]
+    fn test_total_distinct_keys_in_input_arrays_and_after_interleave_are_greater_than_key_size() {
+        let arr1 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (0..=255).collect());
+        let arr2 = create_dict_arr::<UInt8Type>((0..=255).collect(), None, (256..=511).collect());
+        // take all 256 items of each array
+        let indices = (0usize..=255)
+            .map(|i| (0usize, i))
+            .chain((0..=255).map(|i| (1, i)))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            interleave(&[&arr1, &arr2], &indices),
+            Err(ArrowError::DictionaryKeyOverflowError)
+        ));
+    }
+
+    #[test]
     fn test_struct_list_with_multiple_overflowing_dictionary_fields() {
         // create a list of structs with f1 -> f4
         // f1 as dictionary (u8 based key) of u16s
