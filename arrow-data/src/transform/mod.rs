@@ -620,7 +620,6 @@ impl<'a> MutableArrayData<'a> {
                 let dict_concat = !arrays
                     .windows(2)
                     .all(|a| a[0].child_data()[0].ptr_eq(&a[1].child_data()[0]));
-
                 match dict_concat {
                     false => (Some(arrays[0].child_data()[0].clone()), false),
                     true => {

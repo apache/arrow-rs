@@ -25,7 +25,6 @@ use crate::{
     transform::{_MutableArrayData, Extend, MutableArrayData, utils::to_bytes_vec},
 };
 
-
 /// Fallback merge strategy used when optimized dictionary-merge paths cannot guarantee
 /// correctness. I.e some fast-path algorithms may emit duplicate keys, which can overflow
 /// the index type even if the logical keyspace is large enough.
@@ -145,4 +144,119 @@ fn interleave(mut array_data: MutableArrayData, indices: Vec<(usize, usize)>) ->
     // emit final batch of rows
     array_data.extend(cur_array, start_row_idx, end_row_idx);
     array_data.freeze()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::iter::once;
+
+    use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
+    use arrow_schema::{ArrowError, DataType};
+
+    use crate::{ArrayData, transform::dictionary::merge_dictionaries};
+
+    fn create_dictionary_from_value_data<K: ArrowNativeType>(
+        keys: Vec<K>,
+        value: ArrayData,
+        key_type: DataType,
+    ) -> ArrayData {
+        let keys_buffer = Buffer::from(keys.to_byte_slice());
+
+        let dict_data_type =
+            DataType::Dictionary(Box::new(key_type), Box::new(value.data_type().clone()));
+        ArrayData::builder(dict_data_type.clone())
+            .len(3)
+            .add_buffer(keys_buffer)
+            .add_child_data(value)
+            .build()
+            .unwrap()
+    }
+    fn create_dictionary<K: ArrowNativeType, V: ArrowNativeType>(
+        keys: Vec<K>,
+        value: Vec<V>,
+        key_type: DataType,
+        value_type: DataType,
+    ) -> ArrayData {
+        let keys_buffer = Buffer::from(keys.to_byte_slice());
+
+        let value_data = ArrayData::builder(value_type.clone())
+            .len(8)
+            .add_buffer(Buffer::from(value.to_byte_slice()))
+            .build()
+            .unwrap();
+
+        let dict_data_type = DataType::Dictionary(Box::new(key_type), Box::new(value_type));
+        ArrayData::builder(dict_data_type.clone())
+            .len(3)
+            .add_buffer(keys_buffer)
+            .add_child_data(value_data.clone())
+            .build()
+            .unwrap()
+    }
+
+    // arrays containing concanated numeric character from 0 to 255
+    // like ["0","1",..,"255"]
+    fn make_numeric_string_array(numbers: Vec<u32>) -> ArrayData {
+        let values = numbers.iter().map(|i| i.to_string()).collect::<String>();
+        let mut acc = 0;
+
+        let offset_iter = numbers
+            .iter()
+            .map(|i| if *i == 0 { 1 } else { i.ilog10() + 1 })
+            .map(|length| {
+                acc += length;
+                acc
+            });
+
+        let offsets = once(0).chain(offset_iter).collect::<Vec<_>>();
+        ArrayData::builder(DataType::Utf8)
+            .len(numbers.len())
+            .add_buffer(Buffer::from_slice_ref(offsets))
+            .add_buffer(Buffer::from_slice_ref(values.as_bytes()))
+            .build()
+            .unwrap()
+    }
+
+    #[test]
+    fn merge_string_value_dictionary() {
+        let arr1 = create_dictionary_from_value_data(
+            (0u8..=127).collect(),
+            make_numeric_string_array((0..=127).collect()),
+            DataType::UInt8,
+        );
+        let arr2 = create_dictionary_from_value_data(
+            (0u8..=127).collect(),
+            make_numeric_string_array((128..=255).collect()),
+            DataType::UInt8,
+        );
+        // all possible values from arr1 and arr2 require keysize > 131072
+        // which overflows for uint16
+
+        let (extends, merged_value_arr) =
+            merge_dictionaries(&DataType::UInt8, &DataType::Utf8, &[&arr1, &arr2]).unwrap();
+        let expected_new_value = make_numeric_string_array((0..=255).collect());
+        assert!(expected_new_value.eq(&merged_value_arr));
+    }
+
+    #[test]
+    fn total_distinct_keys_in_input_arrays_greater_than_key_size() {
+        // all possible values from arr1 and arr2 require keysize > 131072
+        // which overflows for uint16
+        let arr1 = create_dictionary(
+            (0u16..=65535).collect(),
+            (0u32..=65535).collect(),
+            DataType::UInt16,
+            DataType::UInt32,
+        );
+        let arr2 = create_dictionary(
+            (0u16..=65535).collect(),
+            (65536u32..=131071).collect(),
+            DataType::UInt16,
+            DataType::UInt32,
+        );
+        assert!(matches!(
+            merge_dictionaries(&DataType::UInt16, &DataType::UInt32, &[&arr1, &arr2]),
+            Err(ArrowError::DictionaryKeyOverflowError),
+        ),);
+    }
 }
