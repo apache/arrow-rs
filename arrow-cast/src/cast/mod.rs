@@ -12101,32 +12101,24 @@ mod tests {
         assert_eq!(run_array.run_ends().values(), &[3i64, 6i64, 9i64]);
     }
 
+    fn int32_list_values() -> Vec<Option<Vec<Option<i32>>>> {
+        vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+            None,
+            Some(vec![Some(7), Some(8), Some(9)]),
+            Some(vec![None, Some(10)]),
+        ]
+    }
+
     #[test]
     fn test_cast_list_view_to_list() {
-        let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-        let cast_result = cast(
-            &list_view,
-            &DataType::List(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(&list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
-
-        let mut offsets = OffsetBufferBuilder::new(0);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        let expected_list = ListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets.finish(),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list, &expected_list);
     }
 
