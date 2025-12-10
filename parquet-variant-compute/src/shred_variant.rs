@@ -413,6 +413,8 @@ impl IntoShreddingField for (DataType, bool) {
 /// should be shredded and with what types. Fields are nullable by default; pass
 /// a `(data_type, nullable)` pair or a `FieldRef` to control nullability.
 ///
+/// Note: this builder currently only supports struct fields. List support
+/// will be added in the future.
 ///
 /// # Example
 ///
