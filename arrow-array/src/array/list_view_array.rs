@@ -502,28 +502,21 @@ impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
     for GenericListViewArray<OffsetSize>
 {
     fn from(value: GenericListArray<OffsetSize>) -> Self {
-        let field = match value.data_type() {
-            DataType::List(f) | DataType::LargeList(f) => f.clone(),
-            _ => panic!(
-                "Expected infallible creation of GenericListViewArray from GenericList failed"
-            ),
-        };
-
-        let offsets = value.value_offsets();
+        let (field, offsets, values, nulls) = value.into_parts();
         let len = offsets.len() - 1;
         let mut sizes = Vec::with_capacity(len);
         let mut view_offsets = Vec::with_capacity(len);
         for (i, offset) in offsets.iter().enumerate().take(len) {
             view_offsets.push(*offset);
-            sizes.push(value.value_length(i));
+            sizes.push(offsets[i + 1] - offsets[i]);
         }
 
         Self::new(
             field,
             ScalarBuffer::from(view_offsets),
             ScalarBuffer::from(sizes),
-            value.values().clone(),
-            value.nulls().cloned(),
+            values,
+            nulls,
         )
     }
 }
