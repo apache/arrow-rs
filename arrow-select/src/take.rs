@@ -689,6 +689,11 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType>(
     Ok(FixedSizeListArray::from(list_data))
 }
 
+/// The take kernel implementation for `FixedSizeBinaryArray`.
+///
+/// The computation is done in two steps:
+/// - Compute the values buffer
+/// - Compute the null buffer
 fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
