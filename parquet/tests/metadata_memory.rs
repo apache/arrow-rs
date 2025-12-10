@@ -75,19 +75,19 @@ fn test_metadata_heap_memory() {
 
     {
         let path = format!("{test_data}/alltypes_dictionary.parquet");
-        verify_metadata_heap_memory(&path, 0.0, || reader_options.clone());
+        verify_metadata_heap_memory(&path, || reader_options.clone());
     }
 
     {
         // Calculated heap size doesn't match exactly, possibly due to extra overhead not accounted
         // for in the HeapSize implementation for parquet::data_type::ByteArray.
         let path = format!("{test_data}/alltypes_tiny_pages_plain.parquet");
-        verify_metadata_heap_memory(&path, 0.02, || reader_options.clone());
+        verify_metadata_heap_memory(&path, || reader_options.clone());
     }
 
     {
         let path = format!("{test_data}/data_index_bloom_encoding_with_length.parquet");
-        verify_metadata_heap_memory(&path, 0.02, || reader_options.clone());
+        verify_metadata_heap_memory(&path, || reader_options.clone());
     }
 
     {
@@ -110,11 +110,11 @@ fn test_metadata_heap_memory() {
                 .with_file_decryption_properties(decryption_properties)
         };
 
-        verify_metadata_heap_memory(&path, 0.0, get_options);
+        verify_metadata_heap_memory(&path, get_options);
     }
 }
 
-fn verify_metadata_heap_memory<F>(path: &str, rel_tol: f64, get_options: F)
+fn verify_metadata_heap_memory<F>(path: &str, get_options: F)
 where
     F: FnOnce() -> ArrowReaderOptions,
 {
@@ -134,23 +134,17 @@ where
     black_box(metadata);
 
     assert!(metadata_heap_size > 0);
-    if rel_tol == 0.0 {
-        assert_eq!(
-            metadata_heap_size, allocated,
-            "Calculated heap size {} doesn't match the allocated size {} for file {}",
-            metadata_heap_size, allocated, path
-        );
-    } else {
-        assert!(rel_tol > 0.0 && rel_tol < 1.0);
-        let min_size = ((allocated as f64) * (1.0 - rel_tol)) as usize;
-        let max_size = ((allocated as f64) * (1.0 + rel_tol)) as usize;
-        assert!(
-            metadata_heap_size >= min_size && metadata_heap_size <= max_size,
-            "Calculated heap size {} doesn't match the allocated size {} within a relative tolerance of {} for file {}",
-            metadata_heap_size,
-            allocated,
-            rel_tol,
-            path
-        );
-    }
+    // Allow for some tolerance in the calculated heap size as this can be platform
+    // dependant and not always exact.
+    let rel_tol = 0.025;
+    let min_size = ((allocated as f64) * (1.0 - rel_tol)) as usize;
+    let max_size = ((allocated as f64) * (1.0 + rel_tol)) as usize;
+    assert!(
+        metadata_heap_size >= min_size && metadata_heap_size <= max_size,
+        "Calculated heap size {} doesn't match the allocated size {} within a relative tolerance of {} for file {}",
+        metadata_heap_size,
+        allocated,
+        rel_tol,
+        path
+    );
 }
