@@ -1801,8 +1801,6 @@ fn write_array_data(
             write_options.alignment,
         )?;
 
-        // Data buffers (buffers 1+) are written as-is since we can't easily prune
-        // them without checking which views reference them.
         for buffer in array_data.buffers().iter().skip(1) {
             offset = write_buffer(
                 buffer.as_slice(),
