@@ -705,15 +705,33 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
 
     let values_buffer = values.values().as_slice();
     let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
-    let array_iter = indices.values().iter().map(|idx| {
-        let offset = idx.as_usize() * size_usize;
-        &values_buffer[offset..offset + size_usize]
-    });
-    for slice in array_iter {
-        values_buffer_builder.append_slice(slice);
-    }
-    let values_buffer = values_buffer_builder.finish();
 
+    if indices.null_count() == 0 {
+        let array_iter = indices.values().iter().map(|idx| {
+            let offset = idx.as_usize() * size_usize;
+            &values_buffer[offset..offset + size_usize]
+        });
+        for slice in array_iter {
+            values_buffer_builder.append_slice(slice);
+        }
+    } else {
+        // The indices nullability cannot be ignored here because the values buffer may contain
+        // nulls which should not cause a panic.
+        let array_iter = indices.iter().map(|idx| {
+            idx.map(|idx| {
+                let offset = idx.as_usize() * size_usize;
+                &values_buffer[offset..offset + size_usize]
+            })
+        });
+        for slice in array_iter {
+            match slice {
+                None => values_buffer_builder.append_n(size_usize, 0),
+                Some(slice) => values_buffer_builder.append_slice(slice),
+            }
+        }
+    }
+
+    let values_buffer = values_buffer_builder.finish();
     let value_nulls = take_nulls(values.nulls(), indices);
     let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
 
