@@ -615,6 +615,16 @@ impl ArrayData {
                     vec![ArrayData::new_empty(f.data_type())],
                     true,
                 ),
+                DataType::ListView(f) => (
+                    vec![zeroed(len * 4), zeroed(len * 4)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
+                DataType::LargeListView(f) => (
+                    vec![zeroed(len * 8), zeroed(len * 8)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
                 DataType::FixedSizeList(f, list_len) => (
                     vec![],
                     vec![ArrayData::new_null(f.data_type(), *list_len as usize * len)],
@@ -1783,7 +1793,7 @@ impl DataTypeLayout {
                 },
             ],
             can_contain_null_mask: true,
-            variadic: true,
+            variadic: false,
         }
     }
 }
@@ -2468,6 +2478,24 @@ mod tests {
         }
 
         let array = ArrayData::new_null(&DataType::Utf8View, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
         assert_eq!(array.len(), array_len);
         for i in 0..array.len() {
             assert!(array.is_null(i));

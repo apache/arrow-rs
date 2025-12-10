@@ -25,7 +25,7 @@ use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
 use arrow::buffer::NullBuffer;
 use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, Fields};
+use arrow::datatypes::{DataType, Fields, TimeUnit};
 use arrow::error::{ArrowError, Result};
 use parquet_variant::{Variant, VariantBuilderExt};
 
@@ -123,12 +123,38 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
                 "Shredding variant array values as arrow lists".to_string(),
             ));
         }
-        _ => {
+        // Supported shredded primitive types, see Variant shredding spec:
+        // https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types
+        DataType::Boolean
+        | DataType::Int8
+        | DataType::Int16
+        | DataType::Int32
+        | DataType::Int64
+        | DataType::Float32
+        | DataType::Float64
+        | DataType::Decimal32(..)
+        | DataType::Decimal64(..)
+        | DataType::Decimal128(..)
+        | DataType::Date32
+        | DataType::Time64(TimeUnit::Microsecond)
+        | DataType::Timestamp(TimeUnit::Microsecond | TimeUnit::Nanosecond, _)
+        | DataType::Binary
+        | DataType::BinaryView
+        | DataType::Utf8
+        | DataType::Utf8View
+        | DataType::FixedSizeBinary(16) // UUID
+        => {
             let builder =
                 make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
             let typed_value_builder =
                 VariantToShreddedPrimitiveVariantRowBuilder::new(builder, capacity, top_level);
             VariantToShreddedVariantRowBuilder::Primitive(typed_value_builder)
+        }
+        DataType::FixedSizeBinary(_) => {
+            return Err(ArrowError::InvalidArgumentError(format!("{data_type} is not a valid variant shredding type. Only FixedSizeBinary(16) for UUID is supported.")))
+        }
+        _ => {
+            return Err(ArrowError::InvalidArgumentError(format!("{data_type} is not a valid variant shredding type")))
         }
     };
     Ok(builder)
@@ -326,10 +352,11 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use arrow::array::{Array, Float64Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Fields};
+    use arrow::array::{Array, FixedSizeBinaryArray, Float64Array, Int64Array};
+    use arrow::datatypes::{DataType, Field, Fields, TimeUnit, UnionFields, UnionMode};
     use parquet_variant::{ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder};
     use std::sync::Arc;
+    use uuid::Uuid;
 
     #[test]
     fn test_already_shredded_input_error() {
@@ -367,6 +394,73 @@ mod tests {
         let input = VariantArray::from_iter([Variant::from(42)]);
         let list_schema = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
         shred_variant(&input, &list_schema).expect_err("unsupported");
+    }
+
+    #[test]
+    fn test_invalid_fixed_size_binary_shredding() {
+        let mock_uuid_1 = Uuid::new_v4();
+
+        let input = VariantArray::from_iter([Some(Variant::from(mock_uuid_1)), None]);
+
+        // shred_variant only supports FixedSizeBinary(16). Any other length will err.
+        let err = shred_variant(&input, &DataType::FixedSizeBinary(17)).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: FixedSizeBinary(17) is not a valid variant shredding type. Only FixedSizeBinary(16) for UUID is supported."
+        );
+    }
+
+    #[test]
+    fn test_uuid_shredding() {
+        let mock_uuid_1 = Uuid::new_v4();
+        let mock_uuid_2 = Uuid::new_v4();
+
+        let input = VariantArray::from_iter([
+            Some(Variant::from(mock_uuid_1)),
+            None,
+            Some(Variant::from(false)),
+            Some(Variant::from(mock_uuid_2)),
+        ]);
+
+        let variant_array = shred_variant(&input, &DataType::FixedSizeBinary(16)).unwrap();
+
+        // // inspect the typed_value Field and make sure it contains the canonical Uuid extension type
+        // let typed_value_field = variant_array
+        //     .inner()
+        //     .fields()
+        //     .into_iter()
+        //     .find(|f| f.name() == "typed_value")
+        //     .unwrap();
+
+        // assert!(
+        //     typed_value_field
+        //         .try_extension_type::<extension::Uuid>()
+        //         .is_ok()
+        // );
+
+        // probe the downcasted typed_value array to make sure uuids are shredded correctly
+        let uuids = variant_array
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        assert_eq!(uuids.len(), 4);
+
+        assert!(!uuids.is_null(0));
+
+        let got_uuid_1: &[u8] = uuids.value(0);
+        assert_eq!(got_uuid_1, mock_uuid_1.as_bytes());
+
+        assert!(uuids.is_null(1));
+        assert!(uuids.is_null(2));
+
+        assert!(!uuids.is_null(3));
+
+        let got_uuid_2: &[u8] = uuids.value(3);
+        assert_eq!(got_uuid_2, mock_uuid_2.as_bytes());
     }
 
     #[test]
@@ -466,6 +560,60 @@ mod tests {
         assert_eq!(typed_value_float64.value(0), 42.0); // int converts to float
         assert_eq!(typed_value_float64.value(1), 3.15);
         assert!(typed_value_float64.is_null(2)); // string doesn't convert
+    }
+
+    #[test]
+    fn test_invalid_shredded_types_rejected() {
+        let input = VariantArray::from_iter([Variant::from(42)]);
+
+        let invalid_types = vec![
+            DataType::UInt8,
+            DataType::Float16,
+            DataType::Decimal256(38, 10),
+            DataType::Date64,
+            DataType::Time32(TimeUnit::Second),
+            DataType::Time64(TimeUnit::Nanosecond),
+            DataType::Timestamp(TimeUnit::Millisecond, None),
+            DataType::LargeBinary,
+            DataType::LargeUtf8,
+            DataType::FixedSizeBinary(17),
+            DataType::Union(
+                UnionFields::new(
+                    vec![0_i8, 1_i8],
+                    vec![
+                        Field::new("int_field", DataType::Int32, false),
+                        Field::new("str_field", DataType::Utf8, true),
+                    ],
+                ),
+                UnionMode::Dense,
+            ),
+            DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    DataType::Struct(Fields::from(vec![
+                        Field::new("key", DataType::Utf8, false),
+                        Field::new("value", DataType::Int32, true),
+                    ])),
+                    false,
+                )),
+                false,
+            ),
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+            DataType::RunEndEncoded(
+                Arc::new(Field::new("run_ends", DataType::Int32, false)),
+                Arc::new(Field::new("values", DataType::Utf8, true)),
+            ),
+        ];
+
+        for data_type in invalid_types {
+            let err = shred_variant(&input, &data_type).unwrap_err();
+            assert!(
+                matches!(err, ArrowError::InvalidArgumentError(_)),
+                "expected InvalidArgumentError for {:?}, got {:?}",
+                data_type,
+                err
+            );
+        }
     }
 
     #[test]
@@ -867,6 +1015,187 @@ mod tests {
         let result3 = shred_variant(&input, &schema3).unwrap();
         let value_field3 = result3.value_field().unwrap();
         assert!(value_field3.is_null(0)); // fully shredded, no remaining fields
+    }
+
+    #[test]
+    fn test_uuid_shredding_in_objects() {
+        let mock_uuid_1 = Uuid::new_v4();
+        let mock_uuid_2 = Uuid::new_v4();
+        let mock_uuid_3 = Uuid::new_v4();
+
+        let mut builder = VariantArrayBuilder::new(6);
+
+        // Row 0: Fully shredded object with both UUID fields
+        builder
+            .new_object()
+            .with_field("id", mock_uuid_1)
+            .with_field("session_id", mock_uuid_2)
+            .finish();
+
+        // Row 1: Partially shredded object - UUID fields plus extra field
+        builder
+            .new_object()
+            .with_field("id", mock_uuid_2)
+            .with_field("session_id", mock_uuid_3)
+            .with_field("name", "test_user")
+            .finish();
+
+        // Row 2: Missing UUID field (no session_id)
+        builder.new_object().with_field("id", mock_uuid_1).finish();
+
+        // Row 3: Type mismatch - id is UUID but session_id is a string
+        builder
+            .new_object()
+            .with_field("id", mock_uuid_3)
+            .with_field("session_id", "not-a-uuid")
+            .finish();
+
+        // Row 4: Object with non-UUID value in id field
+        builder
+            .new_object()
+            .with_field("id", 12345i64)
+            .with_field("session_id", mock_uuid_1)
+            .finish();
+
+        // Row 5: Null
+        builder.append_null();
+
+        let input = builder.build();
+
+        let fields = Fields::from(vec![
+            Field::new("id", DataType::FixedSizeBinary(16), true),
+            Field::new("session_id", DataType::FixedSizeBinary(16), true),
+        ]);
+        let target_schema = DataType::Struct(fields);
+
+        let result = shred_variant(&input, &target_schema).unwrap();
+
+        assert!(result.value_field().is_some());
+        assert!(result.typed_value_field().is_some());
+        assert_eq!(result.len(), 6);
+
+        let metadata = result.metadata_field();
+        let value = result.value_field().unwrap();
+        let typed_value = result
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<arrow::array::StructArray>()
+            .unwrap();
+
+        // Extract id and session_id fields from typed_value struct
+        let id_field =
+            ShreddedVariantFieldArray::try_new(typed_value.column_by_name("id").unwrap()).unwrap();
+        let session_id_field =
+            ShreddedVariantFieldArray::try_new(typed_value.column_by_name("session_id").unwrap())
+                .unwrap();
+
+        let id_value = id_field
+            .value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        let id_typed_value = id_field
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+        let session_id_value = session_id_field
+            .value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<BinaryViewArray>()
+            .unwrap();
+        let session_id_typed_value = session_id_field
+            .typed_value_field()
+            .unwrap()
+            .as_any()
+            .downcast_ref::<FixedSizeBinaryArray>()
+            .unwrap();
+
+        // Row 0: Fully shredded - both UUID fields shred successfully
+        assert!(result.is_valid(0));
+
+        assert!(value.is_null(0)); // fully shredded, no remaining fields
+        assert!(id_value.is_null(0));
+        assert!(session_id_value.is_null(0));
+
+        assert!(typed_value.is_valid(0));
+        assert!(id_typed_value.is_valid(0));
+        assert!(session_id_typed_value.is_valid(0));
+
+        assert_eq!(id_typed_value.value(0), mock_uuid_1.as_bytes());
+        assert_eq!(session_id_typed_value.value(0), mock_uuid_2.as_bytes());
+
+        // Row 1: Partially shredded - value contains extra name field
+        assert!(result.is_valid(1));
+
+        assert!(value.is_valid(1)); // contains unshredded "name" field
+        assert!(typed_value.is_valid(1));
+
+        assert!(id_value.is_null(1));
+        assert!(id_typed_value.is_valid(1));
+        assert_eq!(id_typed_value.value(1), mock_uuid_2.as_bytes());
+
+        assert!(session_id_value.is_null(1));
+        assert!(session_id_typed_value.is_valid(1));
+        assert_eq!(session_id_typed_value.value(1), mock_uuid_3.as_bytes());
+
+        // Verify the value field contains the name field
+        let row_1_variant = Variant::new(metadata.value(1), value.value(1));
+        let Variant::Object(obj) = row_1_variant else {
+            panic!("Expected object");
+        };
+
+        assert_eq!(obj.get("name"), Some(Variant::from("test_user")));
+
+        // Row 2: Missing session_id field
+        assert!(result.is_valid(2));
+
+        assert!(value.is_null(2)); // fully shredded, no extra fields
+        assert!(typed_value.is_valid(2));
+
+        assert!(id_value.is_null(2));
+        assert!(id_typed_value.is_valid(2));
+        assert_eq!(id_typed_value.value(2), mock_uuid_1.as_bytes());
+
+        assert!(session_id_value.is_null(2));
+        assert!(session_id_typed_value.is_null(2)); // missing field
+
+        // Row 3: Type mismatch - session_id is a string, not UUID
+        assert!(result.is_valid(3));
+
+        assert!(value.is_null(3)); // no extra fields
+        assert!(typed_value.is_valid(3));
+
+        assert!(id_value.is_null(3));
+        assert!(id_typed_value.is_valid(3));
+        assert_eq!(id_typed_value.value(3), mock_uuid_3.as_bytes());
+
+        assert!(session_id_value.is_valid(3)); // type mismatch, stored in value
+        assert!(session_id_typed_value.is_null(3));
+        let session_id_variant = Variant::new(metadata.value(3), session_id_value.value(3));
+        assert_eq!(session_id_variant, Variant::from("not-a-uuid"));
+
+        // Row 4: Type mismatch - id is int64, not UUID
+        assert!(result.is_valid(4));
+
+        assert!(value.is_null(4)); // no extra fields
+        assert!(typed_value.is_valid(4));
+
+        assert!(id_value.is_valid(4)); // type mismatch, stored in value
+        assert!(id_typed_value.is_null(4));
+        let id_variant = Variant::new(metadata.value(4), id_value.value(4));
+        assert_eq!(id_variant, Variant::from(12345i64));
+
+        assert!(session_id_value.is_null(4));
+        assert!(session_id_typed_value.is_valid(4));
+        assert_eq!(session_id_typed_value.value(4), mock_uuid_1.as_bytes());
+
+        // Row 5: Null
+        assert!(result.is_null(5));
     }
 
     #[test]

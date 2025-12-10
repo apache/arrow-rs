@@ -61,7 +61,7 @@ impl From<ThriftProtocolError> for ParquetError {
                 general_err!("Unexpected struct field type {}", value)
             }
             ThriftProtocolError::InvalidElementType(value) => {
-                general_err!("Unexpected list/set element type{}", value)
+                general_err!("Unexpected list/set element type {}", value)
             }
             ThriftProtocolError::FieldDeltaOverflow {
                 field_delta,
@@ -276,8 +276,13 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
 
     /// Read a ULEB128 encoded unsigned varint from the input.
     fn read_vlq(&mut self) -> ThriftProtocolResult<u64> {
-        let mut in_progress = 0;
-        let mut shift = 0;
+        // try the happy path first
+        let byte = self.read_byte()?;
+        if byte & 0x80 == 0 {
+            return Ok(byte as u64);
+        }
+        let mut in_progress = (byte & 0x7f) as u64;
+        let mut shift = 7;
         loop {
             let byte = self.read_byte()?;
             in_progress |= ((byte & 0x7F) as u64).wrapping_shl(shift);
@@ -297,6 +302,14 @@ pub(crate) trait ThriftCompactInputProtocol<'a> {
     /// Read the [`ListIdentifier`] for a Thrift encoded list.
     fn read_list_begin(&mut self) -> ThriftProtocolResult<ListIdentifier> {
         let header = self.read_byte()?;
+        // some parquet writers will have an element_type of 0 for an empty list.
+        // account for that and return a bogus but valid element_type.
+        if header == 0 {
+            return Ok(ListIdentifier {
+                element_type: ElementType::Byte,
+                size: 0,
+            });
+        }
         let element_type = ElementType::try_from(header & 0x0f)?;
 
         let possible_element_count = (header & 0xF0) >> 4;
@@ -1083,5 +1096,14 @@ pub(crate) mod tests {
         test_roundtrip(TimeUnit::MILLIS);
         test_roundtrip(TimeUnit::MICROS);
         test_roundtrip(TimeUnit::NANOS);
+    }
+
+    #[test]
+    fn test_decode_empty_list() {
+        let data = vec![0u8; 1];
+        let mut prot = ThriftSliceInputProtocol::new(&data);
+        let header = prot.read_list_begin().expect("error reading list header");
+        assert_eq!(header.size, 0);
+        assert_eq!(header.element_type, ElementType::Byte);
     }
 }

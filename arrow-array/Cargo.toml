@@ -59,7 +59,7 @@ force_validate = []
 
 [dev-dependencies]
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-criterion = { version = "0.5", default-features = false }
+criterion = { workspace = true, default-features = false }
 
 [[bench]]
 name = "occupancy"

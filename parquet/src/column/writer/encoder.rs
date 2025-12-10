@@ -375,7 +375,7 @@ fn replace_zero<T: ParquetValueType>(val: &T, descr: &ColumnDescriptor, replace:
             T::try_from_le_slice(&f64::to_le_bytes(replace as f64)).unwrap()
         }
         Type::FIXED_LEN_BYTE_ARRAY
-            if descr.logical_type() == Some(LogicalType::Float16)
+            if descr.logical_type_ref() == Some(LogicalType::Float16).as_ref()
                 && f16::from_le_bytes(val.as_bytes().try_into().unwrap()) == f16::NEG_ZERO =>
         {
             T::try_from_le_slice(&f16::to_le_bytes(f16::from_f32(replace))).unwrap()

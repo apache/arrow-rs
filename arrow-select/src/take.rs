@@ -17,6 +17,7 @@
 
 //! Defines take kernel for [Array]
 
+use std::fmt::Display;
 use std::sync::Arc;
 
 use arrow_array::builder::{BufferBuilder, UInt32Builder};
@@ -164,31 +165,47 @@ pub fn take_arrays(
 fn check_bounds<T: ArrowPrimitiveType>(
     len: usize,
     indices: &PrimitiveArray<T>,
-) -> Result<(), ArrowError> {
+) -> Result<(), ArrowError>
+where
+    T::Native: Display,
+{
+    let len = match T::Native::from_usize(len) {
+        Some(len) => len,
+        None => {
+            if T::DATA_TYPE.is_integer() {
+                // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
+                return Ok(());
+            } else {
+                return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
+            }
+        }
+    };
+
     if indices.null_count() > 0 {
         indices.iter().flatten().try_for_each(|index| {
-            let ix = index
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            if ix >= len {
+            if index >= len {
                 return Err(ArrowError::ComputeError(format!(
-                    "Array index out of bounds, cannot get item at index {ix} from {len} entries"
+                    "Array index out of bounds, cannot get item at index {index} from {len} entries"
                 )));
             }
             Ok(())
         })
     } else {
-        indices.values().iter().try_for_each(|index| {
-            let ix = index
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            if ix >= len {
-                return Err(ArrowError::ComputeError(format!(
-                    "Array index out of bounds, cannot get item at index {ix} from {len} entries"
-                )));
+        let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
+            in_bounds & (i >= T::Native::ZERO) & (i < len)
+        });
+
+        if !in_bounds {
+            for &index in indices.values() {
+                if index < T::Native::ZERO || index >= len {
+                    return Err(ArrowError::ComputeError(format!(
+                        "Array index out of bounds, cannot get item at index {index} from {len} entries"
+                    )));
+                }
             }
-            Ok(())
-        })
+        }
+
+        Ok(())
     }
 }
 
@@ -422,9 +439,10 @@ fn take_native<T: ArrowNativeType, I: ArrowPrimitiveType>(
             .enumerate()
             .map(|(idx, index)| match values.get(index.as_usize()) {
                 Some(v) => *v,
-                None => match n.is_null(idx) {
-                    true => T::default(),
-                    false => panic!("Out-of-bounds index {index:?}"),
+                // SAFETY: idx<indices.len()
+                None => match unsafe { n.inner().value_unchecked(idx) } {
+                    false => T::default(),
+                    true => panic!("Out-of-bounds index {index:?}"),
                 },
             })
             .collect(),
@@ -448,8 +466,10 @@ fn take_bits<I: ArrowPrimitiveType>(
             let mut output_buffer = MutableBuffer::new_null(len);
             let output_slice = output_buffer.as_slice_mut();
             nulls.valid_indices().for_each(|idx| {
-                if values.value(indices.value(idx).as_usize()) {
-                    bit_util::set_bit(output_slice, idx);
+                // SAFETY: idx is a valid index in indices.nulls() --> idx<indices.len()
+                if values.value(unsafe { indices.value_unchecked(idx).as_usize() }) {
+                    // SAFETY: MutableBuffer was created with space for indices.len() bit, and idx < indices.len()
+                    unsafe { bit_util::set_bit_raw(output_slice.as_mut_ptr(), idx) };
                 }
             });
             BooleanBuffer::new(output_buffer.into(), 0, len)
