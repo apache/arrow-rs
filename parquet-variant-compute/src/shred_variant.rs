@@ -1291,8 +1291,8 @@ mod tests {
         let input = builder.build();
 
         let target_schema = ShreddedSchemaBuilder::default()
-            .with_path("id", &DataType::FixedSizeBinary(16))
-            .with_path("session_id", &DataType::FixedSizeBinary(16))
+            .with_path("id", DataType::FixedSizeBinary(16))
+            .with_path("session_id", DataType::FixedSizeBinary(16))
             .build();
 
         let result = shred_variant(&input, &target_schema).unwrap();
@@ -1664,6 +1664,16 @@ mod tests {
                 vec![Field::new("a", DataType::Float64, true),]
             ))
         );
+    }
+
+    #[test]
+    fn test_variant_schema_builder_root_path() {
+        let path = VariantPath::new(vec![]);
+        let shredding_type = ShreddedSchemaBuilder::default()
+            .with_path(path, &DataType::Int64)
+            .build();
+
+        assert_eq!(shredding_type, DataType::Int64);
     }
 
     #[test]
