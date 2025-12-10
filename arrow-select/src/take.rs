@@ -367,13 +367,6 @@ pub struct TakeOptions {
     pub check_bounds: bool,
 }
 
-#[inline(always)]
-fn maybe_usize<I: ArrowNativeType>(index: I) -> Result<usize, ArrowError> {
-    index
-        .to_usize()
-        .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))
-}
-
 /// `take` implementation for all primitive arrays
 ///
 /// This checks if an `indices` slot is populated, and gets the value from `values`
@@ -701,25 +694,32 @@ fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     indices: &PrimitiveArray<IndexType>,
     size: i32,
 ) -> Result<FixedSizeBinaryArray, ArrowError> {
-    let nulls = values.nulls();
-    let array_iter = indices
-        .iter()
-        .map(|idx| {
-            let Some(idx) = idx else {
-                return Ok(None);
-            };
+    let size_usize = usize::try_from(size).map_err(|_| {
+        ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
+    })?;
 
-            let idx = maybe_usize::<IndexType::Native>(idx)?;
-            if nulls.map(|n| n.is_valid(idx)).unwrap_or(true) {
-                Ok(Some(values.value(idx)))
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<Vec<_>, ArrowError>>()?
-        .into_iter();
+    let values_buffer = values.values().as_slice();
+    let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+    let array_iter = indices.values().iter().map(|idx| {
+        let offset = idx.as_usize() * size_usize;
+        &values_buffer[offset..offset + size_usize]
+    });
+    for slice in array_iter {
+        values_buffer_builder.append_slice(slice);
+    }
+    let values_buffer = values_buffer_builder.finish();
 
-    FixedSizeBinaryArray::try_from_sparse_iter_with_size(array_iter, size)
+    let value_nulls = take_nulls(values.nulls(), indices);
+    let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+
+    let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
+        .len(indices.len())
+        .nulls(final_nulls)
+        .offset(0)
+        .add_buffer(values_buffer)
+        .build()?;
+
+    Ok(FixedSizeBinaryArray::from(array_data))
 }
 
 /// `take` implementation for dictionary arrays
