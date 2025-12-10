@@ -312,7 +312,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // temporal casts
         (Int32, Date32 | Date64 | Time32(_)) => true,
         (Date32, Int32 | Int64) => true,
-        (Time32(_), Int32) => true,
+        (Time32(_), Int32 | Int64) => true,
         (Int64, Date64 | Date32 | Time64(_)) => true,
         (Date64, Int64 | Int32) => true,
         (Time64(_), Int64) => true,
@@ -12097,6 +12097,8 @@ mod tests {
         let to_type = DataType::Int64;
         let cast_options = CastOptions::default();
 
+        assert!(can_cast_types(array.data_type(), &to_type));
+
         let result = cast_with_options(&array, &to_type, &cast_options);
         assert!(
             result.is_ok(),
@@ -12118,6 +12120,8 @@ mod tests {
         let array = Arc::new(array) as Arc<dyn Array>;
         let to_type = DataType::Int64;
         let cast_options = CastOptions::default();
+
+        assert!(can_cast_types(array.data_type(), &to_type));
 
         let result = cast_with_options(&array, &to_type, &cast_options);
         assert!(
@@ -12148,6 +12152,8 @@ mod tests {
 
         // 2. Cast Time32(Second) to Int64
         let int64_type = DataType::Int64;
+        assert!(can_cast_types(time32_array.data_type(), &int64_type));
+
         let result = cast_with_options(&time32_array, &int64_type, &cast_options);
 
         assert!(
