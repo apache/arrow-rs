@@ -157,10 +157,13 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
         (List(_), _) => false,
-        (ListView(list_from), List(list_to)) => {
+        (ListView(list_from) | LargeListView(list_from), List(list_to) | LargeList(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
-        (LargeListView(list_from), LargeList(list_to)) => {
+        (ListView(list_from), LargeListView(list_to)) => {
+            can_cast_types(list_from.data_type(), list_to.data_type())
+        }
+        (LargeListView(list_from), ListView(list_to)) => {
             can_cast_types(list_from.data_type(), list_to.data_type())
         }
         (FixedSizeList(list_from, _), List(list_to))
@@ -4727,26 +4730,16 @@ mod tests {
 
     #[test]
     fn test_cast_list_i32_to_list_u16() {
-        let value_data = Int32Array::from(vec![0, 0, 0, -1, -2, -1, 2, 100000000]).into_data();
+        let values = vec![
+            Some(vec![Some(0), Some(0), Some(0)]),
+            Some(vec![Some(-1), Some(-2), Some(-1)]),
+            Some(vec![Some(2), Some(100000000)]),
+        ];
+        let list_array = ListArray::from_iter_primitive::<Int32Type, _, _>(values);
 
-        let value_offsets = Buffer::from_slice_ref([0, 3, 6, 8]);
-
-        // Construct a list array from the above two
-        // [[0,0,0], [-1, -2, -1], [2, 100000000]]
-        let list_data_type = DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
-        let list_data = ArrayData::builder(list_data_type)
-            .len(3)
-            .add_buffer(value_offsets)
-            .add_child_data(value_data)
-            .build()
-            .unwrap();
-        let list_array = ListArray::from(list_data);
-
-        let cast_array = cast(
-            &list_array,
-            &DataType::List(Arc::new(Field::new_list_field(DataType::UInt16, true))),
-        )
-        .unwrap();
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::UInt16, true)));
+        assert!(can_cast_types(list_array.data_type(), &target_type));
+        let cast_array = cast(&list_array, &target_type).unwrap();
 
         // For the ListArray itself, there are no null values (as there were no nulls when they went in)
         //
@@ -12115,7 +12108,7 @@ mod tests {
     fn test_cast_list_view_to_list() {
         let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
-        assert!(can_cast_types(&list_view.data_type(), &target_type));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
         let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
         let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
@@ -12124,234 +12117,143 @@ mod tests {
 
     #[test]
     fn test_cast_list_to_list_view() {
-        let mut offsets = OffsetBufferBuilder::new(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        let list = ListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets.finish(),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-
-        let expected_list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-        let cast_result = cast(
-            &list,
-            &DataType::ListView(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let list = ListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
 
         let got_list_view = cast_result
             .as_any()
             .downcast_ref::<ListViewArray>()
             .unwrap();
+        let expected_list_view =
+            ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list_view, &expected_list_view);
     }
 
     #[test]
     fn test_cast_large_list_view_to_large_list() {
-        let list_view = LargeListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-        let cast_result = cast(
-            &list_view,
-            &DataType::LargeList(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::LargeList(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result
             .as_any()
             .downcast_ref::<LargeListArray>()
             .unwrap();
 
-        let mut offsets = OffsetBufferBuilder::new(0);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        let expected_list = LargeListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets.finish(),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
+        let expected_list =
+            LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list, &expected_list);
     }
 
     #[test]
     fn test_cast_large_list_to_large_list_view() {
-        let mut offsets = OffsetBufferBuilder::new(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        let list = LargeListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets.finish(),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-
-        let expected_list_view = LargeListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-        let cast_result = cast(
-            &list,
-            &DataType::LargeListView(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let list = LargeListArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list.data_type(), &target_type));
+        let cast_result = cast(&list, &target_type).unwrap();
 
         let got_list_view = cast_result
             .as_any()
             .downcast_ref::<LargeListViewArray>()
             .unwrap();
+        let expected_list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got_list_view, &expected_list_view);
     }
 
     #[test]
     fn test_cast_list_view_to_list_out_of_order() {
         let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             ScalarBuffer::from(vec![0, 6, 3]),
             ScalarBuffer::from(vec![3, 3, 3]),
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
             None,
         );
-        let cast_result = cast(
-            &list_view,
-            &DataType::List(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
-        let mut offsets = OffsetBufferBuilder::new(0);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        let expected_list = ListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets.finish(),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 7, 8, 9, 4, 5, 6])),
-            None,
-        );
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            Some(vec![Some(7), Some(8), Some(9)]),
+            Some(vec![Some(4), Some(5), Some(6)]),
+        ]);
         assert_eq!(got_list, &expected_list);
     }
 
     #[test]
     fn test_cast_list_view_to_list_overlapping() {
         let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             ScalarBuffer::from(vec![0, 0]),
             ScalarBuffer::from(vec![1, 2]),
             Arc::new(Int32Array::from(vec![1, 2])),
             None,
         );
-        let cast_result = cast(
-            &list_view,
-            &DataType::List(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
-        let mut offsets = OffsetBufferBuilder::new(0);
-        offsets.push_length(1);
-        offsets.push_length(2);
-        let expected_list = ListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets.finish(),
-            Arc::new(Int32Array::from(vec![1, 1, 2])),
-            None,
-        );
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1)]),
+            Some(vec![Some(1), Some(2)]),
+        ]);
         assert_eq!(got_list, &expected_list);
     }
 
     #[test]
     fn test_cast_list_view_to_list_empty() {
-        let empty_array: Vec<i32> = vec![];
-        let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![]),
-            ScalarBuffer::from(vec![]),
-            Arc::new(Int32Array::from(empty_array.clone())),
-            None,
-        );
-        let cast_result = cast(
-            &list_view,
-            &DataType::List(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let values: Vec<Option<Vec<Option<i32>>>> = vec![];
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(values.clone());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
-        let offsets = OffsetBuffer::new_empty();
-        let expected_list = ListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets,
-            Arc::new(Int32Array::from(empty_array.clone())),
-            None,
-        );
+        let expected_list = ListArray::from_iter_primitive::<Int32Type, _, _>(values);
         assert_eq!(got_list, &expected_list);
     }
 
     #[test]
     fn test_cast_list_view_to_list_different_inner_type() {
-        let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-        let cast_result = cast(
-            &list_view,
-            &DataType::List(Arc::new(Field::new("a", DataType::Int64, false))),
-        )
-        .unwrap();
+        let values = int32_list_values();
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(values.clone());
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int64, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
 
-        let mut offsets = OffsetBufferBuilder::new(0);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        let expected_list = ListArray::new(
-            Arc::new(Field::new("a", DataType::Int64, false)),
-            offsets.finish(),
-            Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
+        let expected_list =
+            ListArray::from_iter_primitive::<Int64Type, _, _>(values.into_iter().map(|list| {
+                list.map(|list| {
+                    list.into_iter()
+                        .map(|v| v.map(|v| v as i64))
+                        .collect::<Vec<_>>()
+                })
+            }));
         assert_eq!(got_list, &expected_list);
     }
 
     #[test]
     fn test_cast_list_view_to_list_out_of_order_with_nulls() {
         let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
             ScalarBuffer::from(vec![0, 6, 3]),
             ScalarBuffer::from(vec![3, 3, 3]),
             Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
             Some(NullBuffer::from(vec![false, true, false])),
         );
-        let cast_result = cast(
-            &list_view,
-            &DataType::List(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let target_type = DataType::List(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got_list = cast_result.as_any().downcast_ref::<ListArray>().unwrap();
-        let mut offsets = OffsetBufferBuilder::new(0);
-        offsets.push_length(3);
-        offsets.push_length(3);
-        offsets.push_length(3);
         let expected_list = ListArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            offsets.finish(),
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            OffsetBuffer::from_lengths([3, 3, 3]),
             Arc::new(Int32Array::from(vec![1, 2, 3, 7, 8, 9, 4, 5, 6])),
             Some(NullBuffer::from(vec![false, true, false])),
         );
@@ -12360,59 +12262,35 @@ mod tests {
 
     #[test]
     fn test_cast_list_view_to_large_list_view() {
-        let list_view = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-        let cast_result = cast(
-            &list_view,
-            &DataType::LargeListView(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got = cast_result
             .as_any()
             .downcast_ref::<LargeListViewArray>()
             .unwrap();
 
-        let expected = LargeListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
+        let expected =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got, &expected);
     }
 
     #[test]
     fn test_cast_large_list_view_to_list_view() {
-        let list_view = LargeListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
-        let cast_result = cast(
-            &list_view,
-            &DataType::ListView(Arc::new(Field::new("a", DataType::Int32, false))),
-        )
-        .unwrap();
+        let list_view =
+            LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        assert!(can_cast_types(list_view.data_type(), &target_type));
+        let cast_result = cast(&list_view, &target_type).unwrap();
         let got = cast_result
             .as_any()
             .downcast_ref::<ListViewArray>()
             .unwrap();
 
-        let expected = ListViewArray::new(
-            Arc::new(Field::new("a", DataType::Int32, false)),
-            ScalarBuffer::from(vec![0, 3, 6]),
-            ScalarBuffer::from(vec![3, 3, 3]),
-            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9])),
-            None,
-        );
+        let expected = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
+        assert_eq!(got, &expected);
         assert_eq!(got, &expected);
     }
 }
