@@ -25,9 +25,7 @@ fn get_last_run_end<T: ArrowNativeType>(run_ends_data: &super::MutableArrayData)
     if run_ends_data.data.len == 0 {
         T::default()
     } else {
-        // Convert buffer to typed slice and get the last element
-        let buffer = Buffer::from(run_ends_data.data.buffer1.as_slice());
-        let typed_slice: &[T] = buffer.typed_data();
+        let typed_slice: &[T] = run_ends_data.data.buffer1.typed_data();
         if typed_slice.len() >= run_ends_data.data.len {
             typed_slice[run_ends_data.data.len - 1]
         } else {

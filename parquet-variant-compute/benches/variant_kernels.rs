@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, BinaryViewArray, StringArray, StructArray};
 use arrow::util::test_util::seedable_rng;
+use arrow_schema::{DataType, Field, FieldRef, Fields};
 use criterion::{Criterion, criterion_group, criterion_main};
-use parquet_variant::{Variant, VariantBuilder};
+use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder};
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
 };
@@ -98,9 +99,26 @@ pub fn variant_get_bench(c: &mut Criterion) {
     });
 }
 
+pub fn variant_get_shredded_utf8_bench(c: &mut Criterion) {
+    let variant_array = create_shredded_utf8_variant_array(8192);
+    let input = ArrayRef::from(variant_array);
+
+    let field: FieldRef = Arc::new(Field::new("typed_value", DataType::Utf8, true));
+    let options = GetOptions {
+        path: vec![].into(),
+        as_type: Some(field),
+        cast_options: Default::default(),
+    };
+
+    c.bench_function("variant_get_shredded_utf8", |b| {
+        b.iter(|| variant_get(&input.clone(), options.clone()))
+    });
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
+    variant_get_shredded_utf8_bench,
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
@@ -119,6 +137,35 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
     }
 
     variant_builder.build()
+}
+
+/// Creates a `VariantArray` where the values are already shredded as UTF8.
+fn create_shredded_utf8_variant_array(size: usize) -> VariantArray {
+    let metadata =
+        BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, size));
+    let typed_value = StringArray::from_iter_values((0..size).map(|i| format!("value_{i}")));
+
+    let metadata_ref: ArrayRef = Arc::new(metadata);
+    let typed_value_ref: ArrayRef = Arc::new(typed_value);
+
+    let fields = Fields::from(vec![
+        Arc::new(Field::new(
+            "metadata",
+            metadata_ref.data_type().clone(),
+            false,
+        )),
+        Arc::new(Field::new(
+            "typed_value",
+            typed_value_ref.data_type().clone(),
+            true,
+        )),
+    ]);
+
+    let struct_array = StructArray::new(fields, vec![metadata_ref, typed_value_ref], None);
+    let struct_array_ref: ArrayRef = Arc::new(struct_array);
+
+    VariantArray::try_new(struct_array_ref.as_ref())
+        .expect("created struct should be a valid shredded variant")
 }
 
 /// Return an iterator off JSON strings, each representing a person
