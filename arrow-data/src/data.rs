@@ -1793,7 +1793,7 @@ impl DataTypeLayout {
                 },
             ],
             can_contain_null_mask: true,
-            variadic: true,
+            variadic: false,
         }
     }
 }

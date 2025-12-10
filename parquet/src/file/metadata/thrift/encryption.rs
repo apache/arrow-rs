@@ -113,6 +113,7 @@ pub(crate) struct FileCryptoMetaData<'a> {
 fn row_group_from_encrypted_thrift(
     mut rg: RowGroupMetaData,
     decryptor: Option<&FileDecryptor>,
+    options: Option<&ParquetMetaDataOptions>,
 ) -> Result<RowGroupMetaData> {
     let schema_descr = rg.schema_descr;
 
@@ -176,7 +177,7 @@ fn row_group_from_encrypted_thrift(
 
             // parse decrypted buffer and then replace fields in 'c'
             let mut prot = ThriftSliceInputProtocol::new(&decrypted_cc_buf);
-            let mask = read_column_metadata(&mut prot, &mut c)?;
+            let mask = read_column_metadata(&mut prot, &mut c, i, options)?;
             validate_column_metadata(mask)?;
 
             columns.push(c);
@@ -297,7 +298,7 @@ pub(crate) fn parquet_metadata_with_encryption(
     // decrypt column chunk info
     let row_groups = row_groups
         .into_iter()
-        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref()))
+        .map(|rg| row_group_from_encrypted_thrift(rg, file_decryptor.as_ref(), options))
         .collect::<Result<Vec<_>>>()?;
 
     let metadata = ParquetMetaDataBuilder::new(file_metadata)
