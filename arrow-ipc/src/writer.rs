@@ -1711,7 +1711,7 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
 /// the array's offset and length. This helps reduce the encoded size of sliced
 /// arrays
 ///
-fn get_or_truncate_buffer(array_data: &ArrayData) -> Buffer {
+fn get_or_truncate_buffer(array_data: &ArrayData) -> &[u8] {
     let buffer = &array_data.buffers()[0];
     let layout = layout(array_data.data_type());
     let spec = &layout.buffers[0];
@@ -1721,9 +1721,9 @@ fn get_or_truncate_buffer(array_data: &ArrayData) -> Buffer {
     if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
         let byte_offset = array_data.offset() * byte_width;
         let buffer_length = min(min_length, buffer.len() - byte_offset);
-        buffer.slice_with_length(byte_offset, buffer_length)
+        &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)]
     } else {
-        buffer.clone()
+        buffer.as_slice()
     }
 }
 
@@ -1796,7 +1796,7 @@ fn write_array_data(
         // they should consider the gc API suggested in #5513
         let views = get_or_truncate_buffer(array_data);
         offset = write_buffer(
-            views.as_slice(),
+            views,
             buffers,
             arrow_data,
             offset,
@@ -1841,7 +1841,7 @@ fn write_array_data(
 
         let buffer = get_or_truncate_buffer(array_data);
         offset = write_buffer(
-            buffer.as_slice(),
+            buffer,
             buffers,
             arrow_data,
             offset,
