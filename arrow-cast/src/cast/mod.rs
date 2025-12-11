@@ -40,9 +40,11 @@
 mod decimal;
 mod dictionary;
 mod list;
+mod list_view;
 mod map;
 mod run_array;
 mod string;
+
 use crate::cast::decimal::*;
 use crate::cast::dictionary::*;
 use crate::cast::list::*;
@@ -69,6 +71,7 @@ use arrow_schema::*;
 use arrow_select::take::take;
 use num_traits::{NumCast, ToPrimitive, cast::AsPrimitive};
 
+use crate::cast::list_view::{cast_list_to_list_view, cast_list_view, cast_list_view_to_list};
 pub use decimal::{DecimalCast, rescale_decimal};
 
 /// CastOptions provides a way to override the default cast behaviors
