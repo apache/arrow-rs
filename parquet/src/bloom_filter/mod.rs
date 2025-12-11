@@ -467,12 +467,6 @@ impl Sbbf {
             ParquetError::General("Bloom filter length is invalid".to_string())
         })?;
 
-        let start = header_len as usize;
-        let end = (header_len + bitset_length) as usize;
-        let bitset = bytes
-            .get(start..end)
-            .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
-
         // Validate that bitset consumes all remaining bytes
         if header_len + bitset_length != bytes.len() as u64 {
             return Err(ParquetError::General(
@@ -480,6 +474,12 @@ impl Sbbf {
                         header_len + bitset_length, bytes.len())
             ));
         }
+
+        let start = header_len as usize;
+        let end = (header_len + bitset_length) as usize;
+        let bitset = bytes
+            .get(start..end)
+            .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
 
         Ok(Self::new(&bitset))
     }
