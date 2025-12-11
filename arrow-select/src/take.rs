@@ -384,13 +384,6 @@ pub struct TakeOptions {
     pub check_bounds: bool,
 }
 
-#[inline(always)]
-fn maybe_usize<I: ArrowNativeType>(index: I) -> Result<usize, ArrowError> {
-    index
-        .to_usize()
-        .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))
-}
-
 /// `take` implementation for all primitive arrays
 ///
 /// This checks if an `indices` slot is populated, and gets the value from `values`
@@ -713,27 +706,60 @@ fn take_fixed_size_list<IndexType: ArrowPrimitiveType>(
     Ok(FixedSizeListArray::from(list_data))
 }
 
+/// The take kernel implementation for `FixedSizeBinaryArray`.
+///
+/// The computation is done in two steps:
+/// - Compute the values buffer
+/// - Compute the null buffer
 fn take_fixed_size_binary<IndexType: ArrowPrimitiveType>(
     values: &FixedSizeBinaryArray,
     indices: &PrimitiveArray<IndexType>,
     size: i32,
 ) -> Result<FixedSizeBinaryArray, ArrowError> {
-    let nulls = values.nulls();
-    let array_iter = indices
-        .values()
-        .iter()
-        .map(|idx| {
-            let idx = maybe_usize::<IndexType::Native>(*idx)?;
-            if nulls.map(|n| n.is_valid(idx)).unwrap_or(true) {
-                Ok(Some(values.value(idx)))
-            } else {
-                Ok(None)
-            }
-        })
-        .collect::<Result<Vec<_>, ArrowError>>()?
-        .into_iter();
+    let size_usize = usize::try_from(size).map_err(|_| {
+        ArrowError::InvalidArgumentError(format!("Cannot convert size '{}' to usize", size))
+    })?;
 
-    FixedSizeBinaryArray::try_from_sparse_iter_with_size(array_iter, size)
+    let values_buffer = values.values().as_slice();
+    let mut values_buffer_builder = BufferBuilder::new(indices.len() * size_usize);
+
+    if indices.null_count() == 0 {
+        let array_iter = indices.values().iter().map(|idx| {
+            let offset = idx.as_usize() * size_usize;
+            &values_buffer[offset..offset + size_usize]
+        });
+        for slice in array_iter {
+            values_buffer_builder.append_slice(slice);
+        }
+    } else {
+        // The indices nullability cannot be ignored here because the values buffer may contain
+        // nulls which should not cause a panic.
+        let array_iter = indices.iter().map(|idx| {
+            idx.map(|idx| {
+                let offset = idx.as_usize() * size_usize;
+                &values_buffer[offset..offset + size_usize]
+            })
+        });
+        for slice in array_iter {
+            match slice {
+                None => values_buffer_builder.append_n(size_usize, 0),
+                Some(slice) => values_buffer_builder.append_slice(slice),
+            }
+        }
+    }
+
+    let values_buffer = values_buffer_builder.finish();
+    let value_nulls = take_nulls(values.nulls(), indices);
+    let final_nulls = NullBuffer::union(value_nulls.as_ref(), indices.nulls());
+
+    let array_data = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
+        .len(indices.len())
+        .nulls(final_nulls)
+        .offset(0)
+        .add_buffer(values_buffer)
+        .build()?;
+
+    Ok(FixedSizeBinaryArray::from(array_data))
 }
 
 /// `take` implementation for dictionary arrays
@@ -2093,6 +2119,32 @@ mod tests {
                 None,
                 Some(vec![Some(10), Some(11), Some(12)]),
             ],
+        );
+    }
+
+    #[test]
+    fn test_take_fixed_size_binary_with_nulls_indices() {
+        let fsb = FixedSizeBinaryArray::try_from_sparse_iter_with_size(
+            [
+                Some(vec![0x01, 0x01, 0x01, 0x01]),
+                Some(vec![0x02, 0x02, 0x02, 0x02]),
+                Some(vec![0x03, 0x03, 0x03, 0x03]),
+                Some(vec![0x04, 0x04, 0x04, 0x04]),
+            ]
+            .into_iter(),
+            4,
+        )
+        .unwrap();
+
+        // The two middle indices are null -> Should be null in the output.
+        let indices = UInt32Array::from(vec![Some(0), None, None, Some(3)]);
+
+        let result = take_fixed_size_binary(&fsb, &indices, 4).unwrap();
+        assert_eq!(result.len(), 4);
+        assert_eq!(result.null_count(), 2);
+        assert_eq!(
+            result.nulls().unwrap().iter().collect::<Vec<_>>(),
+            vec![true, false, false, true]
         );
     }
 
