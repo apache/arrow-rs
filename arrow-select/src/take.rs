@@ -17,6 +17,7 @@
 
 //! Defines take kernel for [Array]
 
+use std::fmt::Display;
 use std::sync::Arc;
 
 use arrow_array::builder::{BufferBuilder, UInt32Builder};
@@ -164,31 +165,47 @@ pub fn take_arrays(
 fn check_bounds<T: ArrowPrimitiveType>(
     len: usize,
     indices: &PrimitiveArray<T>,
-) -> Result<(), ArrowError> {
+) -> Result<(), ArrowError>
+where
+    T::Native: Display,
+{
+    let len = match T::Native::from_usize(len) {
+        Some(len) => len,
+        None => {
+            if T::DATA_TYPE.is_integer() {
+                // the biggest representable value for T::Native is lower than len, e.g: u8::MAX < 512, no need to check bounds
+                return Ok(());
+            } else {
+                return Err(ArrowError::ComputeError("Cast to usize failed".to_string()));
+            }
+        }
+    };
+
     if indices.null_count() > 0 {
         indices.iter().flatten().try_for_each(|index| {
-            let ix = index
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            if ix >= len {
+            if index >= len {
                 return Err(ArrowError::ComputeError(format!(
-                    "Array index out of bounds, cannot get item at index {ix} from {len} entries"
+                    "Array index out of bounds, cannot get item at index {index} from {len} entries"
                 )));
             }
             Ok(())
         })
     } else {
-        indices.values().iter().try_for_each(|index| {
-            let ix = index
-                .to_usize()
-                .ok_or_else(|| ArrowError::ComputeError("Cast to usize failed".to_string()))?;
-            if ix >= len {
-                return Err(ArrowError::ComputeError(format!(
-                    "Array index out of bounds, cannot get item at index {ix} from {len} entries"
-                )));
+        let in_bounds = indices.values().iter().fold(true, |in_bounds, &i| {
+            in_bounds & (i >= T::Native::ZERO) & (i < len)
+        });
+
+        if !in_bounds {
+            for &index in indices.values() {
+                if index < T::Native::ZERO || index >= len {
+                    return Err(ArrowError::ComputeError(format!(
+                        "Array index out of bounds, cannot get item at index {index} from {len} entries"
+                    )));
+                }
             }
-            Ok(())
-        })
+        }
+
+        Ok(())
     }
 }
 

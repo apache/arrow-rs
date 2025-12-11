@@ -618,15 +618,14 @@ impl<'a> FieldEncoder<'a> {
         let null_state = match nullability {
             None => NullState::NonNullable,
             Some(null_order) => {
-                if array.null_count() > 0
-                    && let Some(nulls) = array.nulls()
-                {
-                    NullState::Nullable { nulls, null_order }
-                } else {
-                    // Nullable site with no null buffer for this view
-                    NullState::NullableNoNulls {
-                        union_value_byte: union_value_branch_byte(null_order, false),
+                match array.nulls() {
+                    Some(nulls) if array.null_count() > 0 => {
+                        NullState::Nullable { nulls, null_order }
                     }
+                    _ => NullState::NullableNoNulls {
+                        // Nullable site with no null buffer for this view
+                        union_value_byte: union_value_branch_byte(null_order, false),
+                    },
                 }
             }
         };
