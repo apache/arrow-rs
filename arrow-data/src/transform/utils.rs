@@ -80,7 +80,8 @@ fn to_bytes_vec_fixed_sized(data: &ArrayData, size: usize) -> Vec<&[u8]> {
     values.chunks(size).collect::<Vec<_>>()
 }
 
-/// iterate values in raw bytes regardless nullability
+/// vector of bytes representation of logical values, useful for hashing on values of an
+/// `ArrayData`
 pub(crate) fn to_bytes_vec<'a>(data_type: &DataType, data: &'a ArrayData) -> Vec<&'a [u8]> {
     if data_type.is_primitive() {
         return to_bytes_vec_fixed_sized(data, data_type.primitive_width().unwrap());

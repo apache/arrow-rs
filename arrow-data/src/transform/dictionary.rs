@@ -33,8 +33,7 @@ use crate::{
 /// every input dictionary’s values, ensuring a de-duplicated, exhaustively validated
 /// keyspace before constructing the merged dictionary.
 /// The function returns 
-/// - a vector of closure representing
-/// the mutation over each input dictionaries, as well as 
+/// - a vector of closure representing the mutation over each input dictionaries
 /// - an `ArrayData` of the merged value array (not the dictionary)
 pub(crate) fn merge_dictionaries<'a>(
     key_data_type: &DataType,
