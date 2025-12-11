@@ -153,7 +153,10 @@ mod tests {
     use arrow_buffer::{ArrowNativeType, Buffer, ToByteSlice};
     use arrow_schema::{ArrowError, DataType};
 
-    use crate::{ArrayData, transform::dictionary::merge_dictionaries};
+    use crate::{
+        ArrayData, new_buffers,
+        transform::{_MutableArrayData, dictionary::merge_dictionaries},
+    };
 
     fn create_dictionary_from_value_data<K: ArrowNativeType>(
         keys: Vec<K>,
@@ -234,8 +237,27 @@ mod tests {
 
         let (extends, merged_value_arr) =
             merge_dictionaries(&DataType::UInt8, &DataType::Utf8, &[&arr1, &arr2]).unwrap();
+
+        // this array is used as value array for the new dictionary
         let expected_new_value = make_numeric_string_array((0..=255).collect());
         assert!(expected_new_value.eq(&merged_value_arr));
+
+        let [buffer1, buffer2] = new_buffers(arr1.data_type(), 256);
+        let mut data = _MutableArrayData {
+            data_type: arr1.data_type().clone(),
+            len: 0,
+            null_count: 0,
+            null_buffer: None,
+            buffer1,
+            buffer2,
+            child_data: vec![],
+        };
+        for (index, extend) in extends.iter().enumerate() {
+            extend(&mut data, index, 0, 128)
+        }
+        // key buffer after calling extends closure is also correct
+        let expected_key_raw_buffer = (0u8..=255).collect::<Vec<_>>();
+        assert_eq!(data.buffer1.as_slice(), &expected_key_raw_buffer);
     }
 
     #[test]
