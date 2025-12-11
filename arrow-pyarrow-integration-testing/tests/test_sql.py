@@ -527,7 +527,7 @@ def test_empty_recordbatch_with_row_count():
     """
 
     # Create an empty schema with no fields
-    batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3, 4]}).select([])
+    batch = pa.RecordBatch.from_pydict({"a": [1, 2, 3, 4]}, metadata={b'key1': b'value1'}).select([])
     num_rows = 4
     assert batch.num_rows == num_rows
     assert batch.num_columns == 0
@@ -545,7 +545,7 @@ def test_record_batch_reader():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -571,7 +571,7 @@ def test_record_batch_reader_pycapsule():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -621,7 +621,7 @@ def test_record_batch_pycapsule():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batch = pa.record_batch([[[1], [2, 42]]], schema)
     wrapped = StreamWrapper(batch)
     b = rust.round_trip_record_batch_reader(wrapped)
@@ -640,7 +640,7 @@ def test_table_pycapsule():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -650,8 +650,9 @@ def test_table_pycapsule():
     b = rust.round_trip_record_batch_reader(wrapped)
     new_table = b.read_all()
 
-    assert table.schema == new_table.schema
     assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
     assert len(table.to_batches()) == len(new_table.to_batches())
 
 
@@ -659,12 +660,13 @@ def test_table_empty():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     table = pa.Table.from_batches([], schema=schema)
     new_table = rust.build_table([], schema=schema)
 
-    assert table.schema == new_table.schema
     assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
     assert len(table.to_batches()) == len(new_table.to_batches())
 
 
@@ -672,7 +674,7 @@ def test_table_roundtrip():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))])
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -680,8 +682,9 @@ def test_table_roundtrip():
     table = pa.Table.from_batches(batches, schema=schema)
     new_table = rust.round_trip_table(table)
 
-    assert table.schema == new_table.schema
     assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
     assert len(table.to_batches()) == len(new_table.to_batches())
 
 
@@ -689,7 +692,7 @@ def test_table_from_batches():
     """
     Python -> Rust -> Python
     """
-    schema = pa.schema([('ints', pa.list_(pa.int32()))], metadata={b'key1': b'value1'})
+    schema = pa.schema([pa.field(name='ints', type=pa.list_(pa.int32()), metadata={b'key1': b'value1'})], metadata={b'key1': b'value1'})
     batches = [
         pa.record_batch([[[1], [2, 42]]], schema),
         pa.record_batch([[None, [], [5, 6]]], schema),
@@ -697,8 +700,9 @@ def test_table_from_batches():
     table = pa.Table.from_batches(batches)
     new_table = rust.build_table(batches, schema)
 
-    assert table.schema == new_table.schema
     assert table == new_table
+    assert table.schema == new_table.schema
+    assert table.schema.metadata == new_table.schema.metadata
     assert len(table.to_batches()) == len(new_table.to_batches())
 
 
