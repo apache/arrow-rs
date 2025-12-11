@@ -205,13 +205,13 @@ fn write_optional_index<W: Write + ?Sized>(
 }
 
 #[derive(Debug, Clone)]
-enum NullState {
+enum NullState<'a> {
     NonNullable,
     NullableNoNulls {
         union_value_byte: u8,
     },
     Nullable {
-        nulls: NullBuffer,
+        nulls: &'a NullBuffer,
         null_order: Nullability,
     },
 }
@@ -221,7 +221,7 @@ enum NullState {
 /// - Carries the per-site nullability **state** as a single enum that enforces invariants
 pub(crate) struct FieldEncoder<'a> {
     encoder: Encoder<'a>,
-    null_state: NullState,
+    null_state: NullState<'a>,
 }
 
 impl<'a> FieldEncoder<'a> {
@@ -617,16 +617,15 @@ impl<'a> FieldEncoder<'a> {
         // Compute the effective null state from writer-declared nullability and data nulls.
         let null_state = match nullability {
             None => NullState::NonNullable,
-            Some(order) => {
-                if let Some(nulls) = array.nulls().cloned() {
-                    NullState::Nullable {
-                        nulls,
-                        null_order: order,
-                    }
+            Some(null_order) => {
+                if array.null_count() > 0
+                    && let Some(nulls) = array.nulls()
+                {
+                    NullState::Nullable { nulls, null_order }
                 } else {
                     // Nullable site with no null buffer for this view
                     NullState::NullableNoNulls {
-                        union_value_byte: union_value_branch_byte(order, false),
+                        union_value_byte: union_value_branch_byte(null_order, false),
                     }
                 }
             }
@@ -3024,5 +3023,24 @@ mod tests {
         expected.extend(avro_long_bytes(1));
         expected.extend(avro_long_bytes(30));
         assert_bytes_eq(&got, &expected);
+    }
+
+    #[test]
+    fn nullable_state_with_null_buffer_and_zero_nulls() {
+        let values = vec![1i32, 2, 3];
+        let arr = Int32Array::from_iter_values_with_nulls(values, Some(NullBuffer::new_valid(3)));
+        assert_eq!(arr.null_count(), 0);
+        assert!(arr.nulls().is_some());
+        let plan = FieldPlan::Scalar;
+        let enc = FieldEncoder::make_encoder(&arr, &plan, Some(Nullability::NullFirst)).unwrap();
+        match enc.null_state {
+            NullState::NullableNoNulls { union_value_byte } => {
+                assert_eq!(
+                    union_value_byte,
+                    union_value_branch_byte(Nullability::NullFirst, false)
+                );
+            }
+            other => panic!("expected NullableNoNulls, got {other:?}"),
+        }
     }
 }
