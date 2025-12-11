@@ -136,7 +136,7 @@ variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "par
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
 # Enable FlatBuffers metadata support (experimental)
-flatbuffers_metadata = ["dep:flatbuffers"]
+flatbuffers_metadata = ["dep:flatbuffers", "dep:crc32fast"]
 
 
 [[example]]
