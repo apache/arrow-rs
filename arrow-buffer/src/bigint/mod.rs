@@ -19,9 +19,9 @@ use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
 use num_bigint::BigInt;
 use num_traits::{
-    cast::AsPrimitive, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
-    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub,
-    Zero,
+    Bounded, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
+    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub, Zero,
+    cast::AsPrimitive,
 };
 use std::cmp::Ordering;
 use std::num::ParseIntError;
@@ -994,11 +994,21 @@ impl Signed for i256 {
     }
 }
 
+impl Bounded for i256 {
+    fn min_value() -> Self {
+        i256::MIN
+    }
+
+    fn max_value() -> Self {
+        i256::MAX
+    }
+}
+
 #[cfg(all(test, not(miri)))] // llvm.x86.subborrow.64 not supported by MIRI
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1520,6 +1530,9 @@ mod tests {
 
         assert_eq!(<i256 as One>::one(), i256::from(1));
         assert_eq!(<i256 as Zero>::zero(), i256::from(0));
+
+        assert_eq!(<i256 as Bounded>::min_value(), i256::MIN);
+        assert_eq!(<i256 as Bounded>::max_value(), i256::MAX);
     }
 
     #[test]
