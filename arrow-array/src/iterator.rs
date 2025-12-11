@@ -249,7 +249,6 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         self.next()
     }
 
-
     #[inline]
     fn count(self) -> usize
     where
