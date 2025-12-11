@@ -894,7 +894,7 @@ impl CheckedSub for i256 {
 
 impl CheckedDiv for i256 {
     fn checked_div(&self, v: &i256) -> Option<Self> {
-        (*self).checked_sub(*v)
+        (*self).checked_div(*v)
     }
 }
 
@@ -1442,17 +1442,52 @@ mod tests {
         let value = i256::from_i128(-5);
         assert_eq!(
             <i256 as CheckedNeg>::checked_neg(&value),
-            Some(i256::from_i128(5))
+            Some(i256::from(5))
         );
 
         assert_eq!(
             <i256 as CheckedAdd>::checked_add(&value, &value),
-            Some(i256::from_i128(-10))
+            Some(i256::from(-10))
         );
 
-        assert_eq!(<i256 as Signed>::abs(&value), i256::from_i128(5));
+        assert_eq!(
+            <i256 as CheckedSub>::checked_sub(&value, &value),
+            Some(i256::from(0))
+        );
 
-        assert_eq!(<i256 as One>::one(), i256::from_i128(1));
+        assert_eq!(
+            <i256 as CheckedMul>::checked_mul(&value, &value),
+            Some(i256::from(25))
+        );
+
+        assert_eq!(
+            <i256 as CheckedDiv>::checked_div(&value, &value),
+            Some(i256::from(1))
+        );
+
+        assert_eq!(
+            <i256 as CheckedRem>::checked_rem(&value, &value),
+            Some(i256::from(0))
+        );
+
+        assert_eq!(<i256 as Signed>::abs(&value), i256::from(5));
+
+        assert_eq!(<i256 as One>::one(), i256::from(1));
+        assert_eq!(<i256 as Zero>::zero(), i256::from(0));
+    }
+
+    #[test]
+    fn test_numtraits_from_str_radix() {
+        assert_eq!(
+            i256::from_str_radix("123456789", 10).expect("parsed"),
+            i256::from(123456789)
+        );
+        assert_eq!(
+            i256::from_str_radix("0", 10).expect("parsed"),
+            i256::from(0)
+        );
+        assert!(i256::from_str_radix("abc", 10).is_err());
+        assert!(i256::from_str_radix("0", 16).is_err());
     }
 
     #[test]
