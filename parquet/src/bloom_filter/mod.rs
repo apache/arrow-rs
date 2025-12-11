@@ -463,7 +463,7 @@ impl Sbbf {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
         let (header, header_len) = read_bloom_filter_header_and_length_from_bytes(bytes)?;
         
-        let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+        let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
             ParquetError::General("Bloom filter length is invalid".to_string())
         })?;
 
