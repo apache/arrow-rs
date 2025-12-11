@@ -19,8 +19,9 @@ use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
 use num_bigint::BigInt;
 use num_traits::{
-    CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive, Num,
-    One, Signed, ToPrimitive, Zero, cast::AsPrimitive,
+    cast::AsPrimitive, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
+    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub,
+    Zero,
 };
 use std::cmp::Ordering;
 use std::num::ParseIntError;
@@ -910,6 +911,30 @@ impl CheckedRem for i256 {
     }
 }
 
+impl WrappingAdd for i256 {
+    fn wrapping_add(&self, v: &Self) -> Self {
+        (*self).wrapping_add(*v)
+    }
+}
+
+impl WrappingSub for i256 {
+    fn wrapping_sub(&self, v: &Self) -> Self {
+        (*self).wrapping_sub(*v)
+    }
+}
+
+impl WrappingMul for i256 {
+    fn wrapping_mul(&self, v: &Self) -> Self {
+        (*self).wrapping_mul(*v)
+    }
+}
+
+impl WrappingNeg for i256 {
+    fn wrapping_neg(&self) -> Self {
+        (*self).wrapping_neg()
+    }
+}
+
 impl Zero for i256 {
     fn zero() -> Self {
         i256::ZERO
@@ -950,7 +975,7 @@ impl Signed for i256 {
 
     fn abs_sub(&self, other: &Self) -> Self {
         if self > other {
-            self.wrapping_sub(*other)
+            self.wrapping_sub(other)
         } else {
             i256::ZERO
         }
@@ -973,7 +998,7 @@ impl Signed for i256 {
 mod tests {
     use super::*;
     use num_traits::Signed;
-    use rand::{Rng, rng};
+    use rand::{rng, Rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1469,6 +1494,27 @@ mod tests {
             <i256 as CheckedRem>::checked_rem(&value, &value),
             Some(i256::from(0))
         );
+
+        assert_eq!(
+            <i256 as WrappingAdd>::wrapping_add(&value, &value),
+            i256::from(-10)
+        );
+
+        assert_eq!(
+            <i256 as WrappingSub>::wrapping_sub(&value, &value),
+            i256::from(0)
+        );
+
+        assert_eq!(
+            <i256 as WrappingMul>::wrapping_mul(&value, &value),
+            i256::from(25)
+        );
+
+        assert_eq!(<i256 as WrappingNeg>::wrapping_neg(&value), i256::from(5));
+
+        // A single check for wrapping behavior, rely on trait implementation for others
+        let result = <i256 as WrappingAdd>::wrapping_add(&i256::MAX, &i256::ONE);
+        assert_eq!(result, i256::MIN);
 
         assert_eq!(<i256 as Signed>::abs(&value), i256::from(5));
 
