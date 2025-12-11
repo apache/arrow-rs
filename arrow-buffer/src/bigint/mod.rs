@@ -583,10 +583,19 @@ impl i256 {
         self.high.is_positive() || self.high == 0 && self.low != 0
     }
 
-    fn leading_zeros(&self) -> u32 {
+    /// Returns the number of leading zeros in the binary representation of this [`i256`].
+    pub const fn leading_zeros(&self) -> u32 {
         match self.high {
             0 => u128::BITS + self.low.leading_zeros(),
             _ => self.high.leading_zeros(),
+        }
+    }
+
+    /// Returns the number of trailing zeros in the binary representation of this [`i256`].
+    pub const fn trailing_zeros(&self) -> u32 {
+        match self.low {
+            0 => u128::BITS + self.high.trailing_zeros(),
+            _ => self.low.trailing_zeros(),
         }
     }
 
@@ -1326,5 +1335,37 @@ mod tests {
         let big_neg = i256::from_f64(-(max_f * 2.0)).unwrap_or(i256::MIN);
         let out = big_neg.to_f64().unwrap();
         assert!(out.is_finite() && out.is_sign_negative());
+    }
+
+    #[test]
+    fn test_leading_zeros() {
+        // Without high part
+        assert_eq!(i256::from(0).leading_zeros(), 256);
+        assert_eq!(i256::from(1).leading_zeros(), 256 - 1);
+        assert_eq!(i256::from(16).leading_zeros(), 256 - 5);
+        assert_eq!(i256::from(17).leading_zeros(), 256 - 5);
+
+        // With high part
+        assert_eq!(i256::from_parts(2, 16).leading_zeros(), 128 - 5);
+        assert_eq!(i256::from_parts(2, i128::MAX).leading_zeros(), 1);
+
+        assert_eq!(i256::MAX.leading_zeros(), 1);
+        assert_eq!(i256::from(-1).leading_zeros(), 0);
+    }
+
+    #[test]
+    fn test_trailing_zeros() {
+        // Without high part
+        assert_eq!(i256::from(0).trailing_zeros(), 256);
+        assert_eq!(i256::from(2).trailing_zeros(), 1);
+        assert_eq!(i256::from(16).trailing_zeros(), 4);
+        assert_eq!(i256::from(17).trailing_zeros(), 0);
+        // With high part
+        assert_eq!(i256::from_parts(0, i128::MAX).trailing_zeros(), 128);
+        assert_eq!(i256::from_parts(0, 16).trailing_zeros(), 128 + 4);
+        assert_eq!(i256::from_parts(2, i128::MAX).trailing_zeros(), 1);
+
+        assert_eq!(i256::MAX.trailing_zeros(), 0);
+        assert_eq!(i256::from(-1).trailing_zeros(), 0);
     }
 }

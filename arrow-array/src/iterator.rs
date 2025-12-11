@@ -249,6 +249,8 @@ impl<T: ArrayAccessor> Iterator for ArrayIter<T> {
         self.next()
     }
 
+
+    #[inline]
     fn count(self) -> usize
     where
         Self: Sized,
@@ -389,6 +391,7 @@ impl<T: ArrayAccessor> DoubleEndedIterator for ArrayIter<T> {
         }
     }
 
+    #[inline]
     fn nth_back(&mut self, n: usize) -> Option<Self::Item> {
         // Check if we advance to the one before the desired offset
         match self.current_end.checked_sub(n) {

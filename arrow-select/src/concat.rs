@@ -107,7 +107,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         .inspect(|d| output_len += d.len())
         .collect();
 
-    if !should_merge_dictionary_values::<K>(&dictionaries, output_len) {
+    if !should_merge_dictionary_values::<K>(&dictionaries, output_len).0 {
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
@@ -1576,7 +1576,7 @@ mod tests {
 
     #[test]
     fn concat_dictionary_list_array_simple() {
-        let scalars = vec![
+        let scalars = [
             create_single_row_list_of_dict(vec![Some("a")]),
             create_single_row_list_of_dict(vec![Some("a")]),
             create_single_row_list_of_dict(vec![Some("b")]),

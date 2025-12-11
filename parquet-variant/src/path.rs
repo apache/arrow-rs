@@ -53,6 +53,15 @@ use std::{borrow::Cow, ops::Deref};
 /// assert_eq!(path, path3);
 /// ```
 ///
+/// # Example: From Dot notation strings
+/// ```
+/// # use parquet_variant::{VariantPath, VariantPathElement};
+/// /// You can also convert strings directly into paths using dot notation
+/// let path = VariantPath::from("foo.bar.baz");
+/// let expected = VariantPath::from("foo").join("bar").join("baz");
+/// assert_eq!(path, expected);
+/// ```
+///
 /// # Example: Accessing Compound paths
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
@@ -87,6 +96,11 @@ impl<'a> VariantPath<'a> {
     pub fn push(&mut self, element: impl Into<VariantPathElement<'a>>) {
         self.0.push(element.into());
     }
+
+    /// Returns whether [`VariantPath`] has no path elements
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
@@ -98,7 +112,11 @@ impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
 /// Create from &str with support for dot notation
 impl<'a> From<&'a str> for VariantPath<'a> {
     fn from(path: &'a str) -> Self {
-        VariantPath::new(path.split('.').map(Into::into).collect())
+        if path.is_empty() {
+            VariantPath::new(vec![])
+        } else {
+            VariantPath::new(path.split('.').map(Into::into).collect())
+        }
     }
 }
 
@@ -180,5 +198,29 @@ impl<'a> From<&'a String> for VariantPathElement<'a> {
 impl<'a> From<usize> for VariantPathElement<'a> {
     fn from(index: usize) -> Self {
         VariantPathElement::index(index)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_variant_path_empty() {
+        let path = VariantPath::from_iter([]);
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_variant_path_empty_str() {
+        let path = VariantPath::from("");
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_variant_path_non_empty() {
+        let p = VariantPathElement::from("a");
+        let path = VariantPath::from_iter([p]);
+        assert!(!path.is_empty());
     }
 }

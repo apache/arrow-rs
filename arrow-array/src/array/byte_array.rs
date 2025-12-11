@@ -190,6 +190,29 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         Scalar::new(Self::from_iter_values(std::iter::once(value)))
     }
 
+    /// Create a new [`GenericByteArray`] where `value` is repeated `repeat_count` times.
+    ///
+    /// # Panics
+    /// This will panic if value's length multiplied by `repeat_count` overflows usize.
+    ///
+    pub fn new_repeated(value: impl AsRef<T::Native>, repeat_count: usize) -> Self {
+        let s: &[u8] = value.as_ref().as_ref();
+        let value_offsets = OffsetBuffer::from_repeated_length(s.len(), repeat_count);
+        let bytes: Buffer = {
+            let mut mutable_buffer = MutableBuffer::with_capacity(0);
+            mutable_buffer.repeat_slice_n_times(s, repeat_count);
+
+            mutable_buffer.into()
+        };
+
+        Self {
+            data_type: T::DATA_TYPE,
+            value_data: bytes,
+            value_offsets,
+            nulls: None,
+        }
+    }
+
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
@@ -593,7 +616,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{BinaryArray, StringArray};
+    use crate::{Array, BinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
 
     #[test]
@@ -650,5 +673,43 @@ mod tests {
         );
 
         BinaryArray::new(offsets, non_ascii_data, None);
+    }
+
+    #[test]
+    fn create_repeated() {
+        let arr = BinaryArray::new_repeated(b"hello", 3);
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.value(0), b"hello");
+        assert_eq!(arr.value(1), b"hello");
+        assert_eq!(arr.value(2), b"hello");
+
+        let arr = StringArray::new_repeated("world", 2);
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr.value(0), "world");
+        assert_eq!(arr.value(1), "world");
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", (usize::MAX / "hello".len()) + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX / "hello".len());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", ((i32::MAX as usize) / "hello".len()) + 1);
     }
 }
