@@ -1224,7 +1224,7 @@ mod test {
 
     perfectly_shredded_variant_array_fn!(perfectly_shredded_time_variant_array_for_time32, || {
         Time64MicrosecondArray::from(vec![
-            Some(1234),        // This can't be cast to Time32
+            Some(1234),        // This can't be cast to Time32 losslessly
             Some(7654000),     // This can be cast to Time32(Millisecond), but not Time32(Second)
             Some(35792000000), // This can be cast to Time32(Second) & Time32(Millisecond)
         ])
