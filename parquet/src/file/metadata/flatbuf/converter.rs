@@ -1116,6 +1116,311 @@ pub fn flatbuf_to_parquet_metadata(
     FlatBufferConverter::convert(buf, schema_descr)
 }
 
+ // ============================================================================
+// Thrift Extension Embedding
+// ============================================================================
+//
+// The FlatBuffer metadata can be embedded into the Thrift footer as a binary
+// extension field (ID 32767) following the Parquet Binary Protocol Extensions:
+// https://github.com/apache/parquet-format/blob/master/BinaryProtocolExtensions.md
+//
+// Extension format:
+// +-------------------+------------+--------------------------------------+----------------+---------+--------------------------------+------+
+// | compress(flatbuf) | compressor | crc(compress(flatbuf) .. compressor) | compressed_len | raw_len | crc(compressed_len .. raw_len) | UUID |
+// +-------------------+------------+--------------------------------------+----------------+---------+--------------------------------+------+
+
+/// UUID marker for the FlatBuffer extension
+const EXT_UUID: [u8; 16] = [
+    0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe,
+    0xef,
+];
+
+/// Minimum compression ratio to use compression (1.2x)
+const MIN_COMPRESSION_RATIO: f64 = 1.2;
+
+/// Compression codec for the extension
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ExtCompressionCodec {
+    Uncompressed = 0,
+    Lz4Raw = 7,
+}
+
+/// Pack a FlatBuffer with optional LZ4 compression and checksums.
+///
+/// Returns the packed data in the extension format.
+fn pack_flatbuffer(flatbuf: &[u8]) -> Vec<u8> {
+    // Try LZ4 compression
+    #[cfg(feature = "lz4")]
+    let (compressed, ext_codec) = {
+        use crate::compression::create_codec;
+
+        let codec_impl = create_codec(Compression::LZ4_RAW, &Default::default());
+        match codec_impl {
+            Ok(Some(mut codec)) => {
+                let mut compressed = Vec::new();
+                match codec.compress(flatbuf, &mut compressed) {
+                    Ok(()) => {
+                        let ratio = flatbuf.len() as f64 / compressed.len() as f64;
+                        if ratio >= MIN_COMPRESSION_RATIO {
+                            (compressed, ExtCompressionCodec::Lz4Raw)
+                        } else {
+                            (flatbuf.to_vec(), ExtCompressionCodec::Uncompressed)
+                        }
+                    }
+                    Err(_) => (flatbuf.to_vec(), ExtCompressionCodec::Uncompressed),
+                }
+            }
+            _ => (flatbuf.to_vec(), ExtCompressionCodec::Uncompressed),
+        }
+    };
+
+    #[cfg(not(feature = "lz4"))]
+    let (compressed, ext_codec) = (flatbuf.to_vec(), ExtCompressionCodec::Uncompressed);
+
+    let compressed_len = compressed.len();
+    let raw_len = flatbuf.len();
+
+    // Build the extension: compressed_data + compressor + crc32 + compressed_len + raw_len + len_crc32 + UUID
+    let mut out = Vec::with_capacity(compressed_len + 33);
+    out.extend_from_slice(&compressed);
+    out.push(ext_codec as u8);
+
+    // CRC32 of (compressed_data .. compressor)
+    let data_crc = crc32fast::hash(&out);
+    out.extend_from_slice(&data_crc.to_le_bytes());
+
+    // compressed_len (4 bytes LE)
+    out.extend_from_slice(&(compressed_len as u32).to_le_bytes());
+
+    // raw_len (4 bytes LE)
+    out.extend_from_slice(&(raw_len as u32).to_le_bytes());
+
+    // CRC32 of (compressed_len .. raw_len)
+    let len_crc = crc32fast::hash(&out[out.len() - 8..]);
+    out.extend_from_slice(&len_crc.to_le_bytes());
+
+    // UUID marker
+    out.extend_from_slice(&EXT_UUID);
+
+    out
+}
+
+/// Write a ULEB128-encoded 64-bit value
+fn write_uleb64(mut v: u64, out: &mut Vec<u8>) {
+    loop {
+        let byte = (v & 0x7F) as u8;
+        v >>= 7;
+        if v == 0 {
+            out.push(byte);
+            return;
+        }
+        out.push(byte | 0x80);
+    }
+}
+
+/// Calculate ULEB128 encoded length of a 32-bit value
+fn uleb32_len(v: u32) -> usize {
+    if v == 0 {
+        return 1;
+    }
+    let bits = 32 - v.leading_zeros();
+    ((bits + 6) / 7) as usize
+}
+
+/// Append a FlatBuffer as an extended field to Thrift-serialized metadata.
+///
+/// The FlatBuffer is compressed with LZ4, packed with checksums and metadata,
+/// then appended as a Thrift binary field (ID 32767) followed by a stop field.
+///
+/// # Arguments
+/// * `flatbuffer` - The FlatBuffer data to append
+/// * `thrift` - The Thrift-serialized metadata buffer to append to
+pub fn append_flatbuffer(flatbuffer: &[u8], thrift: &mut Vec<u8>) {
+    let packed = pack_flatbuffer(flatbuffer);
+
+    const FIELD_ID: u32 = 32767;
+    let header_size = 1 + uleb32_len(FIELD_ID) + uleb32_len(packed.len() as u32);
+
+    let old_size = thrift.len();
+    thrift.reserve(header_size + packed.len() + 1);
+
+    // Write binary type indicator (0x08 in Thrift compact protocol)
+    thrift.push(0x08);
+
+    // Write field ID as ULEB128
+    write_uleb64(FIELD_ID as u64, thrift);
+
+    // Write size as ULEB128
+    write_uleb64(packed.len() as u64, thrift);
+
+    // Copy the packed payload
+    thrift.extend_from_slice(&packed);
+
+    // Add stop field
+    thrift.push(0x00);
+
+    debug_assert_eq!(thrift.len(), old_size + header_size + packed.len() + 1);
+}
+
+/// Result of extracting a FlatBuffer from a Parquet footer
+#[derive(Debug)]
+pub enum ExtractResult {
+    /// FlatBuffer was found and extracted
+    Found {
+        /// The extracted FlatBuffer data
+        flatbuffer: Vec<u8>,
+        /// The size of the extension in the footer (for trimming)
+        extension_size: usize,
+    },
+    /// No FlatBuffer extension present
+    NotFound,
+    /// Buffer is too small, need at least this many bytes
+    NeedMoreBytes(usize),
+}
+
+/// Extract a FlatBuffer from a Parquet file footer buffer.
+///
+/// The buffer should contain the footer metadata ending with the Parquet magic bytes.
+///
+/// # Arguments
+/// * `buf` - Buffer containing the Parquet footer
+///
+/// # Returns
+/// * `ExtractResult::Found` if a FlatBuffer extension was found
+/// * `ExtractResult::NotFound` if no extension present
+/// * `ExtractResult::NeedMoreBytes` if the buffer is too small
+pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
+    if buf.len() < 8 {
+        return Ok(ExtractResult::NeedMoreBytes(8));
+    }
+
+    // Check magic bytes
+    let magic = &buf[buf.len() - 4..];
+    if magic != b"PAR1" {
+        if magic == b"PARE" {
+            return Err(ParquetError::NYI(
+                "FlatBuffer extraction doesn't support encrypted footer".to_string(),
+            ));
+        }
+        return Err(ParquetError::General("Invalid Parquet magic number".to_string()));
+    }
+
+    // Read metadata length
+    let md_len =
+        u32::from_le_bytes(buf[buf.len() - 8..buf.len() - 4].try_into().unwrap()) as usize;
+
+    if md_len < 34 {
+        return Ok(ExtractResult::NotFound);
+    }
+
+    // Need at least 42 bytes: 34 (metadata3 trailer) + 8 (len + PAR1)
+    if buf.len() < 42 {
+        return Ok(ExtractResult::NeedMoreBytes(42));
+    }
+
+    // Check for UUID marker at the expected position
+    let trailer_start = buf.len() - 42;
+    let uuid_pos = trailer_start + 17;
+    if &buf[uuid_pos..uuid_pos + 16] != EXT_UUID {
+        return Ok(ExtractResult::NotFound);
+    }
+
+    // Parse extension trailer
+    let p = trailer_start;
+    let compressor = buf[p];
+    let data_crc = u32::from_le_bytes(buf[p + 1..p + 5].try_into().unwrap());
+    let compressed_len = u32::from_le_bytes(buf[p + 5..p + 9].try_into().unwrap()) as usize;
+    let raw_len = u32::from_le_bytes(buf[p + 9..p + 13].try_into().unwrap()) as usize;
+    let len_crc = u32::from_le_bytes(buf[p + 13..p + 17].try_into().unwrap());
+
+    // Verify length CRC
+    let expected_len_crc = crc32fast::hash(&buf[p + 5..p + 13]);
+    if len_crc != expected_len_crc {
+        return Err(ParquetError::General(
+            "FlatBuffer extension length CRC mismatch".to_string(),
+        ));
+    }
+
+    // Check we have enough data for the compressed payload
+    if trailer_start < compressed_len || buf.len() < compressed_len + 42 {
+        return Ok(ExtractResult::NeedMoreBytes(compressed_len + 42));
+    }
+    let data_start = trailer_start - compressed_len;
+
+    // Verify data CRC (includes data + compressor byte)
+    let expected_data_crc = crc32fast::hash(&buf[data_start..p + 1]);
+    if data_crc != expected_data_crc {
+        return Err(ParquetError::General(
+            "FlatBuffer extension data CRC mismatch".to_string(),
+        ));
+    }
+
+    // Decompress if needed
+    let decompressed = match compressor {
+        0 => {
+            // Uncompressed
+            if compressed_len != raw_len {
+                return Err(ParquetError::General(
+                    "Uncompressed extension length mismatch".to_string(),
+                ));
+            }
+            buf[data_start..data_start + compressed_len].to_vec()
+        }
+        7 => {
+            // LZ4_RAW
+            #[cfg(feature = "lz4")]
+            {
+                use crate::compression::create_codec;
+
+                let mut decompressed = Vec::new();
+                let mut codec = create_codec(Compression::LZ4_RAW, &Default::default())?
+                    .ok_or_else(|| {
+                        ParquetError::General(
+                            "LZ4 codec not available".to_string(),
+                        )
+                    })?;
+                let actual_len = codec.decompress(
+                    &buf[data_start..data_start + compressed_len],
+                    &mut decompressed,
+                    Some(raw_len),
+                )?;
+                if actual_len != raw_len {
+                    return Err(ParquetError::General(format!(
+                        "LZ4 decompression size mismatch: expected {}, got {}",
+                        raw_len, actual_len
+                    )));
+                }
+                decompressed
+            }
+            #[cfg(not(feature = "lz4"))]
+            {
+                return Err(ParquetError::General(
+                    "LZ4 decompression not available (lz4 feature not enabled)".to_string(),
+                ));
+            }
+        }
+        _ => {
+            return Err(ParquetError::General(format!(
+                "Unsupported FlatBuffer compression codec: {}",
+                compressor
+            )));
+        }
+    };
+
+    // Verify FlatBuffer
+    if fb::root_as_file_meta_data(&decompressed).is_err() {
+        return Err(ParquetError::General(
+            "FlatBuffer verification failed".to_string(),
+        ));
+    }
+
+    Ok(ExtractResult::Found {
+        flatbuffer: decompressed,
+        extension_size: compressed_len + 42,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1285,5 +1590,112 @@ mod tests {
             assert_eq!(orig_cc.uncompressed_size(), conv_cc.uncompressed_size());
             assert_eq!(orig_cc.data_page_offset(), conv_cc.data_page_offset());
         }
+    }
+
+    #[test]
+    fn test_pack_unpack_extension() {
+        // Create test data
+        let test_data = vec![0u8; 1000]; // Simple test buffer
+
+        // Pack it
+        let packed = pack_flatbuffer(&test_data);
+
+        // Verify the structure
+        assert!(packed.len() > 33); // At least: data + compressor + crc + len + len + crc + uuid
+
+        // Check UUID is at the end
+        let uuid_start = packed.len() - 16;
+        assert_eq!(&packed[uuid_start..], &EXT_UUID);
+    }
+
+    #[test]
+    fn test_append_flatbuffer() {
+        // Create a simple FlatBuffer
+        let fb_bytes = parquet_metadata_to_flatbuf(&create_test_metadata());
+
+        // Append to mock Thrift buffer
+        let mut thrift = vec![0x00]; // Mock thrift start
+        append_flatbuffer(&fb_bytes, &mut thrift);
+
+        // Verify structure: original byte + header + packed + stop
+        assert!(thrift.len() > 1);
+        assert_eq!(thrift[thrift.len() - 1], 0x00); // Stop field
+    }
+
+    #[test]
+    fn test_extract_flatbuffer_not_found() {
+        // Create a minimal valid Parquet footer without extension
+        let mut buf = vec![0u8; 12];
+        buf[4..8].copy_from_slice(&4u32.to_le_bytes()); // md_len = 4
+        buf[8..12].copy_from_slice(b"PAR1");
+
+        let result = extract_flatbuffer(&buf).unwrap();
+        assert!(matches!(result, ExtractResult::NotFound));
+    }
+
+    #[test]
+    fn test_extract_flatbuffer_invalid_magic() {
+        let mut buf = vec![0u8; 12];
+        buf[8..12].copy_from_slice(b"XXXX");
+
+        let result = extract_flatbuffer(&buf);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_uleb_encoding() {
+        let mut out = Vec::new();
+
+        // Test small value
+        write_uleb64(127, &mut out);
+        assert_eq!(out, vec![127]);
+
+        // Test value requiring two bytes
+        out.clear();
+        write_uleb64(128, &mut out);
+        assert_eq!(out, vec![0x80, 0x01]);
+
+        // Test larger value
+        out.clear();
+        write_uleb64(16383, &mut out);
+        assert_eq!(out, vec![0xFF, 0x7F]);
+    }
+
+    fn create_test_metadata() -> ParquetMetaData {
+        use crate::file::metadata::{
+            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder, RowGroupMetaDataBuilder,
+        };
+
+        let schema_descr = test_schema();
+        let file_meta = FileMetaData::new(
+            2,
+            100,
+            Some("test".to_string()),
+            None,
+            schema_descr.clone(),
+            None,
+        );
+
+        let mut rg_builder = RowGroupMetaDataBuilder::new(schema_descr.clone())
+            .set_num_rows(100)
+            .set_total_byte_size(1000);
+
+        for i in 0..schema_descr.num_columns() {
+            let col_descr = schema_descr.column(i);
+            let cc = ColumnChunkMetaDataBuilder::new(col_descr)
+                .set_compression(Compression::UNCOMPRESSED)
+                .set_num_values(100)
+                .set_total_compressed_size(100)
+                .set_total_uncompressed_size(100)
+                .set_data_page_offset(100 + (i as i64 * 100))
+                .build()
+                .unwrap();
+            rg_builder = rg_builder.add_column_metadata(cc);
+        }
+        let row_group = rg_builder.build().unwrap();
+
+        ParquetMetaDataBuilder::new(file_meta)
+            .add_row_group(row_group)
+            .build()
     }
 }

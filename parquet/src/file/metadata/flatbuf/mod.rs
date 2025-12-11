@@ -41,7 +41,7 @@ mod converter;
 mod parquet3_generated;
 
 pub use converter::{
-    flatbuf_to_parquet_metadata, parquet_metadata_to_flatbuf, FlatBufferConverter,
-    ThriftToFlatBufferConverter,
+    append_flatbuffer, extract_flatbuffer, flatbuf_to_parquet_metadata,
+    parquet_metadata_to_flatbuf, ExtractResult, FlatBufferConverter, ThriftToFlatBufferConverter,
 };
 pub use parquet3_generated::parquet::format_3 as format3;
