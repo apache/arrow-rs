@@ -1711,16 +1711,20 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
 /// the array's offset and length. This helps reduce the encoded size of sliced
 /// arrays
 ///
-fn get_view_buffer(data: &ArrayData) -> Buffer {
-    const VIEW_SIZE: usize = 16;
+fn get_or_truncate_buffer(array_data: &ArrayData) -> Buffer {
+    let buffer = &array_data.buffers()[0];
+    let layout = layout(array_data.data_type());
+    let spec = &layout.buffers[0];
 
-    if data.is_empty() {
-        return MutableBuffer::new(0).into();
+    let byte_width = get_buffer_element_width(spec);
+    let min_length = array_data.len() * byte_width;
+    if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
+        let byte_offset = array_data.offset() * byte_width;
+        let buffer_length = min(min_length, buffer.len() - byte_offset);
+        buffer.slice_with_length(byte_offset, buffer_length)
+    } else {
+        buffer.clone()
     }
-
-    let views_start = data.offset() * VIEW_SIZE;
-    let views_len = data.len() * VIEW_SIZE;
-    data.buffers()[0].slice_with_length(views_start, views_len)
 }
 
 /// Write array data to a vector of bytes
@@ -1790,7 +1794,7 @@ fn write_array_data(
         // Current implementation just serialize the raw arrays as given and not try to optimize anything.
         // If users wants to "compact" the arrays prior to sending them over IPC,
         // they should consider the gc API suggested in #5513
-        let views = get_view_buffer(array_data);
+        let views = get_or_truncate_buffer(array_data);
         offset = write_buffer(
             views.as_slice(),
             buffers,
@@ -1835,21 +1839,9 @@ fn write_array_data(
         // Truncate values
         assert_eq!(array_data.buffers().len(), 1);
 
-        let buffer = &array_data.buffers()[0];
-        let layout = layout(data_type);
-        let spec = &layout.buffers[0];
-
-        let byte_width = get_buffer_element_width(spec);
-        let min_length = array_data.len() * byte_width;
-        let buffer_slice = if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
-            let byte_offset = array_data.offset() * byte_width;
-            let buffer_length = min(min_length, buffer.len() - byte_offset);
-            &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)]
-        } else {
-            buffer.as_slice()
-        };
+        let buffer = get_or_truncate_buffer(array_data);
         offset = write_buffer(
-            buffer_slice,
+            buffer.as_slice(),
             buffers,
             arrow_data,
             offset,
@@ -3146,11 +3138,7 @@ mod tests {
 
         let values = Arc::new(generate_list_data::<i64>());
 
-        let in_batch = RecordBatch::try_new(schema, vec![values])
-            .unwrap()
-            .slice(999, 1);
-        let out_batch = deserialize_file(serialize_file(&in_batch));
-        assert_eq!(in_batch, out_batch);
+        check_sliced_list_array(schema, values);
     }
 
     #[test]
@@ -3161,11 +3149,7 @@ mod tests {
 
         let values = Arc::new(generate_string_list_data::<i64>());
 
-        let in_batch = RecordBatch::try_new(schema, vec![values])
-            .unwrap()
-            .slice(999, 1);
-        let out_batch = deserialize_file(serialize_file(&in_batch));
-        assert_eq!(in_batch, out_batch);
+        check_sliced_list_array(schema, values);
     }
 
     #[test]
@@ -3176,12 +3160,17 @@ mod tests {
 
         let values = Arc::new(generate_utf8view_list_data::<i64>());
 
-        let in_batch = RecordBatch::try_new(schema, vec![values])
-            .unwrap()
-            .slice(999, 1);
-        dbg!(&in_batch);
-        let out_batch = deserialize_file(serialize_file(&in_batch));
-        assert_eq!(in_batch, out_batch);
+        check_sliced_list_array(schema, values);
+    }
+
+    fn check_sliced_list_array(schema: Arc<Schema>, values: Arc<GenericListArray<i64>>) {
+        for (offset, len) in [(999, 1), (0, 13), (47, 12), (values.len() - 13, 13)] {
+            let in_batch = RecordBatch::try_new(schema.clone(), vec![values.clone()])
+                .unwrap()
+                .slice(offset, len);
+            let out_batch = deserialize_file(serialize_file(&in_batch));
+            assert_eq!(in_batch, out_batch);
+        }
     }
 
     #[test]
