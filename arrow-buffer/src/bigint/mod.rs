@@ -1437,8 +1437,8 @@ mod tests {
         assert!(out.is_finite() && out.is_sign_negative());
     }
 
-   #[test]
-   fn test_num_traits() {
+    #[test]
+    fn test_num_traits() {
         let value = i256::from_i128(-5);
         assert_eq!(
             <i256 as CheckedNeg>::checked_neg(&value),
