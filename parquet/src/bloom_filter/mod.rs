@@ -216,12 +216,21 @@ pub(crate) fn chunk_read_bloom_filter_header_and_offset(
 pub(crate) fn read_bloom_filter_header_and_length(
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
+    read_bloom_filter_header_and_length_from_bytes(buffer.as_ref())
+}
+
+/// given a byte slice, try to read out a bloom filter header and return both the header and
+/// length of the header.
+#[inline]
+fn read_bloom_filter_header_and_length_from_bytes(
+    buffer: &[u8],
+) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
     let mut prot = ThriftSliceInputProtocol::new(buffer.as_ref());
     let header = BloomFilterHeader::read_thrift(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
-}
+} 
 
 pub(crate) const BITSET_MIN_LENGTH: usize = 32;
 pub(crate) const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
@@ -283,7 +292,7 @@ impl Sbbf {
     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
-    pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
         self.header().write_thrift(&mut protocol).map_err(|e| {
             ParquetError::General(format!("Could not write bloom filter header: {e}"))
@@ -416,6 +425,29 @@ impl Sbbf {
     /// Return the total in memory size of this bloom filter in bytes
     pub(crate) fn estimated_memory_size(&self) -> usize {
         self.0.capacity() * std::mem::size_of::<Block>()
+    }
+
+    /// reads a Sbff from thrift encoded bytes
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
+        let (header, header_len) = read_bloom_filter_header_and_length_from_bytes(bytes)?;
+        
+        let bitset_length: usize = header.num_bytes.try_into().map_err(|_| {
+            ParquetError::General("Bloom filter length is invalid".to_string())
+        })?;
+
+        let bitset = bytes
+            .get(header_len..header_len + bitset_length)
+            .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
+
+        // Validate that bitset consumes all remaining bytes
+        if header_len + bitset_length != bytes.len() {
+            return Err(ParquetError::General(
+                format!("Bloom filter data contains extra bytes: expected {} total bytes, got {}", 
+                        header_len + bitset_length, bytes.len())
+            ));
+        }
+
+        Ok(Self::new(&bitset))
     }
 }
 
