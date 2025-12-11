@@ -32,7 +32,7 @@ use crate::{
 /// This implementation prioritizes correctness over speed: it performs a full scan of
 /// every input dictionary’s values, ensuring a de-duplicated, exhaustively validated
 /// keyspace before constructing the merged dictionary.
-/// The function returns 
+/// The function returns
 /// - a vector of closure representing the mutation over each input dictionaries
 /// - an `ArrayData` of the merged value array (not the dictionary)
 pub(crate) fn merge_dictionaries<'a>(
@@ -230,6 +230,11 @@ mod tests {
             make_numeric_string_array((0..=127).collect()),
             DataType::UInt8,
         );
+        let arr1_clone = create_dictionary_from_value_data(
+            (0u8..=127).collect(),
+            make_numeric_string_array((0..=127).collect()),
+            DataType::UInt8,
+        );
         let arr2 = create_dictionary_from_value_data(
             (0u8..=127).collect(),
             make_numeric_string_array((128..=255).collect()),
@@ -238,8 +243,12 @@ mod tests {
         // all possible values from arr1 and arr2 require keysize > 131072
         // which overflows for uint16
 
-        let (extends, merged_value_arr) =
-            merge_dictionaries(&DataType::UInt8, &DataType::Utf8, &[&arr1, &arr2]).unwrap();
+        let (extends, merged_value_arr) = merge_dictionaries(
+            &DataType::UInt8,
+            &DataType::Utf8,
+            &[&arr1, &arr2, &arr1_clone],
+        )
+        .unwrap();
 
         // this array is used as value array for the new dictionary
         let expected_new_value = make_numeric_string_array((0..=255).collect());
@@ -255,11 +264,13 @@ mod tests {
             buffer2,
             child_data: vec![],
         };
+
+        // concat keys [0..127] [128..255] [0..128]
         for (index, extend) in extends.iter().enumerate() {
             extend(&mut data, index, 0, 128)
         }
         // key buffer after calling extends closure is also correct
-        let expected_key_raw_buffer = (0u8..=255).collect::<Vec<_>>();
+        let expected_key_raw_buffer = (0u8..=255).chain(0u8..=127).collect::<Vec<_>>();
         assert_eq!(data.buffer1.as_slice(), &expected_key_raw_buffer);
     }
 
