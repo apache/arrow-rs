@@ -329,6 +329,22 @@ impl std::fmt::Debug for UnionFields {
     }
 }
 
+/// Allows direct indexing into [`UnionFields`] to access fields by position.
+///
+/// # Panics
+///
+/// Panics if the index is out of bounds. Note that [`UnionFields`] supports
+/// a maximum of 128 fields, as type IDs are represented as `i8` values.
+///
+/// For a non-panicking alternative, use [`UnionFields::get`].
+impl std::ops::Index<usize> for UnionFields {
+    type Output = (i8, FieldRef);
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.0[index]
+    }
+}
+
 impl UnionFields {
     /// Create a new [`UnionFields`] with no fields
     pub fn empty() -> Self {
@@ -394,6 +410,31 @@ impl UnionFields {
     /// Returns an iterator over the fields and type ids in this [`UnionFields`]
     pub fn iter(&self) -> impl Iterator<Item = (i8, &FieldRef)> + '_ {
         self.0.iter().map(|(id, f)| (*id, f))
+    }
+
+    /// Returns a reference to the field at the given index, or `None` if out of bounds.
+    ///
+    /// This is a safe alternative to direct indexing via `[]`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_schema::{DataType, Field, UnionFields};
+    ///
+    /// let fields = UnionFields::new(
+    ///     vec![1, 3],
+    ///     vec![
+    ///         Field::new("field1", DataType::UInt8, false),
+    ///         Field::new("field3", DataType::Utf8, false),
+    ///     ],
+    /// );
+    ///
+    /// assert!(fields.get(0).is_some());
+    /// assert!(fields.get(1).is_some());
+    /// assert!(fields.get(2).is_none());
+    /// ```
+    pub fn get(&self, index: usize) -> Option<&(i8, FieldRef)> {
+        self.0.get(index)
     }
 
     /// Searches for a field by its type id, returning the type id and field reference if found.
