@@ -32,6 +32,10 @@ use crate::{
 /// This implementation prioritizes correctness over speed: it performs a full scan of
 /// every input dictionary’s values, ensuring a de-duplicated, exhaustively validated
 /// keyspace before constructing the merged dictionary.
+/// The function returns 
+/// - a vector of closure representing
+/// the mutation over each input dictionaries, as well as 
+/// - an `ArrayData` of the merged value array (not the dictionary)
 pub(crate) fn merge_dictionaries<'a>(
     key_data_type: &DataType,
     value_data_type: &DataType,
@@ -279,6 +283,6 @@ mod tests {
         assert!(matches!(
             merge_dictionaries(&DataType::UInt16, &DataType::UInt32, &[&arr1, &arr2]),
             Err(ArrowError::DictionaryKeyOverflowError),
-        ),);
+        ));
     }
 }
