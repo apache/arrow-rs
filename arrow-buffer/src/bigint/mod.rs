@@ -19,8 +19,8 @@ use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
 use num_bigint::BigInt;
 use num_traits::{
-    cast::AsPrimitive, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
-    Num, One, Signed, ToPrimitive, Zero,
+    CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive, Num,
+    One, Signed, ToPrimitive, Zero, cast::AsPrimitive,
 };
 use std::cmp::Ordering;
 use std::num::ParseIntError;
