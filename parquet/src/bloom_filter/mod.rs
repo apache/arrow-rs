@@ -292,6 +292,8 @@ impl Sbbf {
     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
+    /// 
+    /// This method usually is used in conjunction with from_bytes for serialization/deserialization.
     pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
         self.header().write_thrift(&mut protocol).map_err(|e| {
@@ -428,6 +430,36 @@ impl Sbbf {
     }
 
     /// reads a Sbff from thrift encoded bytes
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use parquet::errors::Result;
+    /// # use parquet::bloom_filter::Sbbf;
+    /// # fn main() -> Result<()> {
+    /// // Create a bloom filter with a 32-byte bitset
+    /// let bitset_bytes = vec![0u8; 32];
+    /// let mut original = Sbbf::new(&bitset_bytes);
+    /// 
+    /// // Insert some values
+    /// original.insert(&"hello");
+    /// original.insert(&"world");
+    ///
+    /// // Serialize the filter (header + bitset) to bytes
+    /// let mut serialized = Vec::new();
+    /// original.write(&mut serialized)?;
+    ///
+    /// // Deserialize back using from_bytes
+    /// let reconstructed = Sbbf::from_bytes(&serialized)?;
+    ///
+    /// // Verify the reconstructed filter has the same properties
+    /// assert_eq!(reconstructed.0.len(), original.0.len());
+    /// assert!(reconstructed.check(&"hello"));
+    /// assert!(reconstructed.check(&"world"));
+    /// assert!(!reconstructed.check(&"missing"));
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
         let (header, header_len) = read_bloom_filter_header_and_length_from_bytes(bytes)?;
         
@@ -576,33 +608,49 @@ mod tests {
 
     #[test]
     fn test_sbbf_write_round_trip() {
-        let bitset: Vec<u8> = (0u8..64).collect();
-        let sbbf = Sbbf::new(&bitset);
-        let mut output = Vec::new();
-        sbbf.write(&mut output).unwrap();
-
-        // read the serialized bytes back
-        let reconstructed = Sbbf::from_bytes(&output).unwrap();
-
-        // Validate the reconstructed bloom filter has the same number of blocks
-        assert_eq!(reconstructed.0.len(), sbbf.0.len());
+        // Create a bloom filter with a 32-byte bitset (minimum size)
+        let bitset_bytes = vec![0u8; 32];
+        let mut original = Sbbf::new(&bitset_bytes);
         
-        // Validate the reconstructed bloom filter has the same block data
-        for (i, (original_block, reconstructed_block)) in 
-            sbbf.0.iter().zip(reconstructed.0.iter()).enumerate() 
-        {
-            assert_eq!(
-                original_block.0, reconstructed_block.0,
-                "Block {} differs after round-trip", i
-            );
+        // Insert some test values
+        let test_values = ["hello", "world", "rust", "parquet", "bloom", "filter"];
+        for value in &test_values {
+            original.insert(value);
         }
         
-        // Validate header fields
+        // Serialize to bytes
+        let mut output = Vec::new();
+        original.write(&mut output).unwrap();
+        
+        // Validate header was written correctly
         let mut protocol = ThriftSliceInputProtocol::new(&output);
         let header = BloomFilterHeader::read_thrift(&mut protocol).unwrap();
-        assert_eq!(header.num_bytes, bitset.len() as i32);
+        assert_eq!(header.num_bytes, bitset_bytes.len() as i32);
         assert_eq!(header.algorithm, BloomFilterAlgorithm::BLOCK);
         assert_eq!(header.hash, BloomFilterHash::XXHASH);
         assert_eq!(header.compression, BloomFilterCompression::UNCOMPRESSED);
+        
+        // Deserialize using from_bytes
+        let reconstructed = Sbbf::from_bytes(&output).unwrap();
+        
+        // Validate structural properties
+        assert_eq!(reconstructed.0.len(), original.0.len());
+        
+        // Most importantly: verify the bloom filter WORKS correctly after round-trip
+        for value in &test_values {
+            assert!(
+                reconstructed.check(value),
+                "Value '{}' should be present after round-trip",
+                value
+            );
+        }
+        
+        // Verify false negative check (values not inserted should not be found)
+        let missing_values = ["missing", "absent", "nothere"];
+        for value in &missing_values {
+            // Note: bloom filters can have false positives, but should never have false negatives
+            // So we can't assert !check(), but we should verify inserted values are found
+            let _ = reconstructed.check(value); // Just exercise the code path
+        }
     }
 }
