@@ -53,6 +53,15 @@ use std::{borrow::Cow, ops::Deref};
 /// assert_eq!(path, path3);
 /// ```
 ///
+/// # Example: From Dot notation strings
+/// ```
+/// # use parquet_variant::{VariantPath, VariantPathElement};
+/// /// You can also convert strings directly into paths using dot notation
+/// let path = VariantPath::from("foo.bar.baz");
+/// let expected = VariantPath::from("foo").join("bar").join("baz");
+/// assert_eq!(path, expected);
+/// ```
+///
 /// # Example: Accessing Compound paths
 /// ```
 /// # use parquet_variant::{VariantPath, VariantPathElement};
@@ -103,7 +112,11 @@ impl<'a> From<Vec<VariantPathElement<'a>>> for VariantPath<'a> {
 /// Create from &str with support for dot notation
 impl<'a> From<&'a str> for VariantPath<'a> {
     fn from(path: &'a str) -> Self {
-        VariantPath::new(path.split('.').map(Into::into).collect())
+        if path.is_empty() {
+            VariantPath::new(vec![])
+        } else {
+            VariantPath::new(path.split('.').map(Into::into).collect())
+        }
     }
 }
 
@@ -195,6 +208,12 @@ mod tests {
     #[test]
     fn test_variant_path_empty() {
         let path = VariantPath::from_iter([]);
+        assert!(path.is_empty());
+    }
+
+    #[test]
+    fn test_variant_path_empty_str() {
+        let path = VariantPath::from("");
         assert!(path.is_empty());
     }
 
