@@ -573,4 +573,36 @@ mod tests {
             assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
         }
     }
+
+    #[test]
+    fn test_sbbf_write_round_trip() {
+        let bitset: Vec<u8> = (0u8..64).collect();
+        let sbbf = Sbbf::new(&bitset);
+        let mut output = Vec::new();
+        sbbf.write(&mut output).unwrap();
+
+        // read the serialized bytes back
+        let reconstructed = Sbbf::from_bytes(&output).unwrap();
+
+        // Validate the reconstructed bloom filter has the same number of blocks
+        assert_eq!(reconstructed.0.len(), sbbf.0.len());
+        
+        // Validate the reconstructed bloom filter has the same block data
+        for (i, (original_block, reconstructed_block)) in 
+            sbbf.0.iter().zip(reconstructed.0.iter()).enumerate() 
+        {
+            assert_eq!(
+                original_block.0, reconstructed_block.0,
+                "Block {} differs after round-trip", i
+            );
+        }
+        
+        // Validate header fields
+        let mut protocol = ThriftSliceInputProtocol::new(&output);
+        let header = BloomFilterHeader::read_thrift(&mut protocol).unwrap();
+        assert_eq!(header.num_bytes, bitset.len() as i32);
+        assert_eq!(header.algorithm, BloomFilterAlgorithm::BLOCK);
+        assert_eq!(header.hash, BloomFilterHash::XXHASH);
+        assert_eq!(header.compression, BloomFilterCompression::UNCOMPRESSED);
+    }
 }
