@@ -230,7 +230,7 @@ fn read_bloom_filter_header_and_length_from_bytes(
     let header = BloomFilterHeader::read_thrift(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
-} 
+}
 
 pub(crate) const BITSET_MIN_LENGTH: usize = 32;
 pub(crate) const BITSET_MAX_LENGTH: usize = 128 * 1024 * 1024;
@@ -292,7 +292,6 @@ impl Sbbf {
     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
-    /// 
     /// This method usually is used in conjunction with from_bytes for serialization/deserialization.
     pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
@@ -440,18 +439,14 @@ impl Sbbf {
     /// // Create a bloom filter with a 32-byte bitset
     /// let bitset_bytes = vec![0u8; 32];
     /// let mut original = Sbbf::new(&bitset_bytes);
-    /// 
     /// // Insert some values
     /// original.insert(&"hello");
     /// original.insert(&"world");
-    ///
     /// // Serialize the filter (header + bitset) to bytes
     /// let mut serialized = Vec::new();
     /// original.write(&mut serialized)?;
-    ///
     /// // Deserialize back using from_bytes
     /// let reconstructed = Sbbf::from_bytes(&serialized)?;
-    ///
     /// // Verify the reconstructed filter has the same properties
     /// assert_eq!(reconstructed.0.len(), original.0.len());
     /// assert!(reconstructed.check(&"hello"));
@@ -462,17 +457,19 @@ impl Sbbf {
     /// ```
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
         let (header, header_len) = read_bloom_filter_header_and_length_from_bytes(bytes)?;
-        
-        let bitset_length: u64 = header.num_bytes.try_into().map_err(|_| {
-            ParquetError::General("Bloom filter length is invalid".to_string())
-        })?;
+
+        let bitset_length: u64 = header
+            .num_bytes
+            .try_into()
+            .map_err(|_| ParquetError::General("Bloom filter length is invalid".to_string()))?;
 
         // Validate that bitset consumes all remaining bytes
         if header_len + bitset_length != bytes.len() as u64 {
-            return Err(ParquetError::General(
-                format!("Bloom filter data contains extra bytes: expected {} total bytes, got {}", 
-                        header_len + bitset_length, bytes.len())
-            ));
+            return Err(ParquetError::General(format!(
+                "Bloom filter data contains extra bytes: expected {} total bytes, got {}",
+                header_len + bitset_length,
+                bytes.len()
+            )));
         }
 
         let start = header_len as usize;
@@ -481,7 +478,7 @@ impl Sbbf {
             .get(start..end)
             .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
 
-        Ok(Self::new(&bitset))
+        Ok(Self::new(bitset))
     }
 }
 
@@ -613,17 +610,17 @@ mod tests {
         // Create a bloom filter with a 32-byte bitset (minimum size)
         let bitset_bytes = vec![0u8; 32];
         let mut original = Sbbf::new(&bitset_bytes);
-        
+
         // Insert some test values
         let test_values = ["hello", "world", "rust", "parquet", "bloom", "filter"];
         for value in &test_values {
             original.insert(value);
         }
-        
+
         // Serialize to bytes
         let mut output = Vec::new();
         original.write(&mut output).unwrap();
-        
+
         // Validate header was written correctly
         let mut protocol = ThriftSliceInputProtocol::new(&output);
         let header = BloomFilterHeader::read_thrift(&mut protocol).unwrap();
@@ -631,13 +628,10 @@ mod tests {
         assert_eq!(header.algorithm, BloomFilterAlgorithm::BLOCK);
         assert_eq!(header.hash, BloomFilterHash::XXHASH);
         assert_eq!(header.compression, BloomFilterCompression::UNCOMPRESSED);
-        
+
         // Deserialize using from_bytes
         let reconstructed = Sbbf::from_bytes(&output).unwrap();
-        
-        // Validate structural properties
-        assert_eq!(reconstructed.0.len(), original.0.len());
-        
+
         // Most importantly: verify the bloom filter WORKS correctly after round-trip
         for value in &test_values {
             assert!(
@@ -646,7 +640,7 @@ mod tests {
                 value
             );
         }
-        
+
         // Verify false negative check (values not inserted should not be found)
         let missing_values = ["missing", "absent", "nothere"];
         for value in &missing_values {
