@@ -1356,7 +1356,7 @@ mod tests {
         let arr2 = create_dict_arr::<UInt16Type, UInt32Type>(
             (0..=65535).collect(),
             None,
-            (0..=131071).collect(),
+            (65536..=131071).collect(),
         );
         let result =
             interleave(&[&arr1, &arr2], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
@@ -1364,8 +1364,11 @@ mod tests {
         let dict_arr = result.as_dictionary::<UInt16Type>();
         let keys = dict_arr.keys();
         let vals = dict_arr.values().as_primitive::<UInt32Type>();
-        assert_eq!(vals, &UInt32Array::from_iter_values(vec![1, 2, 0]));
-        assert_eq!(keys, &UInt16Array::from_iter_values(vec![1, 0, 2, 1, 0]));
+        assert_eq!(
+            vals,
+            &UInt32Array::from_iter_values(vec![1, 2, 65536, 65537, 65538])
+        );
+        assert_eq!(keys, &UInt16Array::from_iter_values(vec![1, 0, 2, 4, 3]));
     }
 
     #[test]
