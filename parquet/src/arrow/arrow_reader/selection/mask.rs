@@ -167,9 +167,10 @@ impl BitmaskSelection {
                 .iter()
                 .zip(page_locations[1..len].iter())
                 .filter_map(|(current_page, next_page)| {
-                    let start_row = current_page.first_row_index as usize;
-                    let num_rows = next_page.first_row_index as usize - 1 - start_row;
-                    if self.mask.slice(start_row, num_rows).count_set_bits() > 0 {
+                    let start_row: usize = current_page.first_row_index.try_into().unwrap();
+                    let next_start_row: usize = next_page.first_row_index.try_into().unwrap();
+                    let num_rows_in_page = next_start_row.checked_sub(start_row).unwrap();
+                    if self.contains_range(start_row, num_rows_in_page) {
                         Some(page_location_range(current_page))
                     } else {
                         None
@@ -179,12 +180,22 @@ impl BitmaskSelection {
 
         // check the  last page
         let last_page = &page_locations[len - 1];
-        let start_row = last_page.first_row_index as usize;
-        let num_rows = self.mask.len() - start_row;
-        if self.mask.slice(start_row, num_rows).count_set_bits() > 0 {
+        let start_row: usize = last_page.first_row_index.try_into().unwrap();
+        if self.contains_range(start_row, len) {
             ranges.push(page_location_range(&last_page));
         }
         ranges
+    }
+
+    /// returns true if this [`BitmaskSelection`] contains any rows in the given range
+    ///
+    /// Note the range may exceed the bounds of this selection
+    fn contains_range(&self, start: usize, len: usize) -> bool {
+        if start >= self.mask.len() {
+            return false;
+        }
+        let len = len.min(self.mask.len() - start);
+        self.mask.slice(start, len).count_set_bits() > 0
     }
 
     /// Expands the selection to align with batch boundaries.
