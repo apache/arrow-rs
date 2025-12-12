@@ -1682,14 +1682,15 @@ mod tests {
     #[test]
     fn test_custom_type_ids() {
         let data_type = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![8, 4, 9],
                 vec![
                     Field::new("strings", DataType::Utf8, false),
                     Field::new("integers", DataType::Int32, false),
                     Field::new("floats", DataType::Float64, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         );
 
@@ -1796,14 +1797,15 @@ mod tests {
     fn into_parts_custom_type_ids() {
         let set_field_type_ids: [i8; 3] = [8, 4, 9];
         let data_type = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 set_field_type_ids,
                 [
                     Field::new("strings", DataType::Utf8, false),
                     Field::new("integers", DataType::Int32, false),
                     Field::new("floats", DataType::Float64, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         );
         let string_array = StringArray::from(vec!["foo", "bar", "baz"]);
@@ -1836,13 +1838,14 @@ mod tests {
 
     #[test]
     fn test_invalid() {
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             [3, 2],
             [
                 Field::new("a", DataType::Utf8, false),
                 Field::new("b", DataType::Utf8, false),
             ],
-        );
+        )
+        .unwrap();
         let children = vec![
             Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
             Arc::new(StringArray::from_iter_values(["c", "d"])) as _,
@@ -1912,13 +1915,14 @@ mod tests {
 
         assert_eq!(array.logical_nulls(), None);
 
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             [1, 3],
             [
                 Field::new("a", DataType::Int8, false), // non nullable
                 Field::new("b", DataType::Int8, false), // non nullable
             ],
-        );
+        )
+        .unwrap();
         let array = UnionArray::try_new(
             fields,
             vec![1].into(),
@@ -1932,13 +1936,14 @@ mod tests {
 
         assert_eq!(array.logical_nulls(), None);
 
-        let nullable_fields = UnionFields::new(
+        let nullable_fields = UnionFields::try_new(
             [1, 3],
             [
                 Field::new("a", DataType::Int8, true), // nullable but without nulls
                 Field::new("b", DataType::Int8, true), // nullable but without nulls
             ],
-        );
+        )
+        .unwrap();
         let array = UnionArray::try_new(
             nullable_fields.clone(),
             vec![1, 1].into(),

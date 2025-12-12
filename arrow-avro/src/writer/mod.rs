@@ -683,13 +683,14 @@ mod tests {
         use arrow_array::UnionArray;
         use arrow_buffer::Buffer;
         use arrow_schema::UnionFields;
-        let union_fields = UnionFields::new(
+        let union_fields = UnionFields::try_new(
             vec![2, 5],
             vec![
                 Field::new("v_str", DataType::Utf8, true),
                 Field::new("v_int", DataType::Int32, true),
             ],
-        );
+        )
+        .unwrap();
         let strings = StringArray::from(vec!["hello", "world"]);
         let ints = Int32Array::from(vec![10, 20, 30]);
         let type_ids = Buffer::from_slice_ref([2_i8, 5, 5, 2, 5]);

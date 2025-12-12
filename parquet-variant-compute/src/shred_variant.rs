@@ -807,13 +807,10 @@ mod tests {
             DataType::LargeUtf8,
             DataType::FixedSizeBinary(17),
             DataType::Union(
-                UnionFields::new(
-                    vec![0_i8, 1_i8],
-                    vec![
-                        Field::new("int_field", DataType::Int32, false),
-                        Field::new("str_field", DataType::Utf8, true),
-                    ],
-                ),
+                UnionFields::from_fields(vec![
+                    Field::new("int_field", DataType::Int32, false),
+                    Field::new("str_field", DataType::Utf8, true),
+                ]),
                 UnionMode::Dense,
             ),
             DataType::Map(
