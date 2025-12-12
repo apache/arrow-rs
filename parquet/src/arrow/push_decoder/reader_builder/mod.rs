@@ -351,7 +351,7 @@ impl RowGroupReaderBuilder {
                 let RowGroupInfo {
                     row_group_idx,
                     row_count,
-                    plan_builder,
+                    mut plan_builder,
                 } = row_group_info;
 
                 // If nothing is selected, we are done with this row group
@@ -366,6 +366,14 @@ impl RowGroupReaderBuilder {
 
                 // Make a request for the data needed to evaluate the current predicate
                 let predicate = filter_info.current();
+
+                // TODO avoid overrides
+                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+                plan_builder = override_selector_strategy_if_needed(
+                    plan_builder,
+                    &self.projection,
+                    self.row_group_offset_index(row_group_idx),
+                );
 
                 // need to fetch pages the column needs for decoding, figure
                 // that out based on the current selection and projection
@@ -521,6 +529,14 @@ impl RowGroupReaderBuilder {
                     *limit -= rows_after;
                 }
 
+                // Force to selection strategy
+                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
+                plan_builder = override_selector_strategy_if_needed(
+                    plan_builder,
+                    &self.projection,
+                    self.row_group_offset_index(row_group_idx),
+                );
+
                 let data_request = DataRequestBuilder::new(
                     row_group_idx,
                     row_count,
@@ -533,14 +549,6 @@ impl RowGroupReaderBuilder {
                 // Final projection fetch shouldn't expand selection for cache
                 // so don't call with_cache_projection here
                 .build();
-
-                plan_builder = plan_builder.with_row_selection_policy(self.row_selection_policy);
-
-                plan_builder = override_selector_strategy_if_needed(
-                    plan_builder,
-                    &self.projection,
-                    self.row_group_offset_index(row_group_idx),
-                );
 
                 let row_group_info = RowGroupInfo {
                     row_group_idx,

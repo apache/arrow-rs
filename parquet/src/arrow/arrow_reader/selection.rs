@@ -215,6 +215,24 @@ impl RowSelection {
         ))
     }
 
+    /// Forces the materialisation of this [`RowSelection`] as selectors
+    pub fn to_selectors(self) -> Self {
+        let Self::Mask(mask) = self else {
+            return self;
+        };
+        let selectors = Vec::<RowSelector>::from(mask);
+        Self::Selectors(RowSelectorSelection::from(selectors))
+    }
+
+    /// Forces the materialisation of this [`RowSelection`] as a mask
+    pub fn to_mask(self) -> Self {
+        let Self::Selectors(selectors) = self else {
+            return self;
+        };
+        let selectors = Vec::<RowSelector>::from(selectors);
+        Self::Mask(BitmaskSelection::from(selectors))
+    }
+
     /// Given an offset index, return the byte ranges for all data pages selected by `self`
     ///
     /// This is useful for determining what byte ranges to fetch from underlying storage
@@ -2346,17 +2364,13 @@ mod tests {
     }
 
     fn force_selectors(selection: RowSelection) -> RowSelection {
-        let selectors: Vec<RowSelector> = selection.into();
-        let selector_selection = RowSelectorSelection::from(selectors);
-        let selection = RowSelection::from(selector_selection);
+        let selection = selection.to_selectors();
         assert!(matches!(selection, RowSelection::Selectors(_)));
         selection
     }
 
     fn force_mask(selection: RowSelection) -> RowSelection {
-        let mask: BooleanArray = selection.into();
-        let mask_selection = BitmaskSelection::from(mask);
-        let selection = RowSelection::from(mask_selection);
+        let selection = selection.to_mask();
         assert!(matches!(selection, RowSelection::Mask(_)));
         selection
     }

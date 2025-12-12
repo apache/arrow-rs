@@ -58,8 +58,19 @@ impl ReadPlanBuilder {
     /// Configure the policy to use when materialising the [`RowSelection`]
     ///
     /// Defaults to [`RowSelectionPolicy::Auto`]
+    ///
+    /// If a particular policy is specified, this guarantees that the resulting
+    /// `ReadPlan` will use the specified strategy
     pub fn with_row_selection_policy(mut self, policy: RowSelectionPolicy) -> Self {
         self.row_selection_policy = policy;
+        // force the selection to be in the correct format
+        self.selection = self
+            .selection
+            .take()
+            .map(|s| match self.resolve_selection_strategy() {
+                RowSelectionStrategy::Mask => s.to_mask(),
+                RowSelectionStrategy::Selectors => s.to_selectors(),
+            });
         self
     }
 
