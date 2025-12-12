@@ -162,7 +162,10 @@ impl BooleanBuffer {
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
             offset.saturating_add(len) <= self.len,
-            "the length + offset of the sliced BooleanBuffer cannot exceed the existing length"
+            "the length ({}) + offset ({}) of the sliced BooleanBuffer cannot exceed the existing length ({})",
+            len,
+            offset,
+            self.len
         );
         Self {
             buffer: self.buffer.clone(),

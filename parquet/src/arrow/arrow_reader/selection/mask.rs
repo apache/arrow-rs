@@ -195,14 +195,22 @@ impl BitmaskSelection {
             return self.clone();
         }
 
+        let mask_len = self.mask.len();
+        assert!(mask_len <= total_rows);
         let mut builder = BooleanBufferBuilder::new(total_rows);
         let mut current_index = 0;
-        while current_index < total_rows {
+        while current_index < mask_len {
             let batch_end = (current_index + batch_size).min(total_rows);
-            let batch_slice = self.mask.slice(current_index, batch_end - current_index);
+            // the mask might be shorter than total_rows, so slice only up to mask_len
+            let mask_end = batch_end.min(mask_len);
+            let batch_slice = self.mask.slice(current_index, mask_end - current_index);
             let select_batch = batch_slice.count_set_bits() > 0;
             builder.append_n(batch_end - current_index, select_batch);
             current_index = batch_end;
+        }
+        // fill remaining rows with false
+        if current_index < total_rows {
+            builder.append_n(total_rows - current_index, false);
         }
         BitmaskSelection {
             mask: builder.finish(),

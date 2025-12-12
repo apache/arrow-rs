@@ -2201,7 +2201,52 @@ mod tests {
 
                 assert_eq!(into_selectors(&expanded), expected);
             },
-        )
+        );
+
+        // test very sparse selection,
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    // select 1 row
+                    RowSelector::skip(4),
+                    RowSelector::select(1),
+                    RowSelector::skip(2),
+                ])
+            },
+            |selection| {
+                let expanded = selection.expand_to_batch_boundaries(8, 1000);
+                let expected = vec![RowSelector::select(8), RowSelector::skip(992)];
+
+                assert_eq!(into_selectors(&expanded), expected);
+            },
+        );
+
+        // test sliced selection
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    RowSelector::select(16),
+                    RowSelector::skip(15),
+                    RowSelector::select(100),
+                ])
+            },
+            |selection| {
+                // slice first
+                let expanded = selection
+                    .clone()
+                    .offset(11)
+                    .expand_to_batch_boundaries(8, 1000);
+                let expected = vec![
+                    RowSelector::skip(8),
+                    RowSelector::select(8),
+                    RowSelector::skip(8),
+                    RowSelector::select(112),
+                    RowSelector::skip(864),
+                ];
+
+                assert_eq!(into_selectors(&expanded), expected);
+            },
+        );
     }
 
     /// Runs `verify_fn(s1)` with both Mask and Selector backed cursors
