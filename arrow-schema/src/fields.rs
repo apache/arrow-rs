@@ -347,14 +347,7 @@ impl std::ops::Index<usize> for UnionFields {
 
 impl PartialEq for UnionFields {
     fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len()
-            && self.iter().all(|a| {
-                other.iter().any(|b| {
-                    a.0 == b.0
-                        && a.1.is_nullable() == b.1.is_nullable()
-                        && a.1.data_type().equals_datatype(b.1.data_type())
-                })
-            })
+        self.len() == other.len() && self.iter().all(|a| other.iter().any(|b| a == b))
     }
 }
 
