@@ -150,8 +150,6 @@ impl<W: Write> Writer<W> {
         let mut buffer = String::with_capacity(1024);
         let mut byte_record = ByteRecord::with_capacity(1024, converters.len());
 
-        let should_trim = self.ignore_leading_whitespace || self.ignore_trailing_whitespace;
-
         for row_idx in 0..batch.num_rows() {
             byte_record.clear();
             for (col_idx, converter) in converters.iter().enumerate() {
@@ -164,20 +162,7 @@ impl<W: Write> Writer<W> {
                     ))
                 })?;
 
-                // Apply whitespace trimming if options are enabled and the column is a string type
-                let field_bytes = if should_trim && batch.column(col_idx).data_type() == &DataType::Utf8 {
-                    let mut trimmed = buffer.as_str();
-                    if self.ignore_leading_whitespace {
-                        trimmed = trimmed.trim_start();
-                    }
-                    if self.ignore_trailing_whitespace {
-                        trimmed = trimmed.trim_end();
-                    }
-                    trimmed.as_bytes()
-                } else {
-                    buffer.as_bytes()
-                };
-
+                let field_bytes = self.get_trimmed_field_bytes(&buffer, batch.column(col_idx).data_type());
                 byte_record.push_field(field_bytes);
             }
 
@@ -189,6 +174,27 @@ impl<W: Write> Writer<W> {
 
         Ok(())
     }
+
+    /// Returns the bytes for a field, applying whitespace trimming if configured and applicable
+    fn get_trimmed_field_bytes<'a>(&self, buffer: &'a str, data_type: &DataType) -> &'a [u8] {
+        // Only trim string types when trimming is enabled
+        let should_trim = (self.ignore_leading_whitespace || self.ignore_trailing_whitespace)
+            && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View);
+
+        if !should_trim {
+            return buffer.as_bytes();
+        }
+
+        let mut trimmed = buffer;
+        if self.ignore_leading_whitespace {
+            trimmed = trimmed.trim_start();
+        }
+        if self.ignore_trailing_whitespace {
+            trimmed = trimmed.trim_end();
+        }
+        trimmed.as_bytes()
+    }
+
 
     /// Unwraps this `Writer<W>`, returning the underlying writer.
     pub fn into_inner(self) -> W {
@@ -1027,6 +1033,96 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         // Note: tabs are trimmed as they are whitespace characters
         assert_eq!(
             "c1\n\"quoted \"\"value\"\"\"\n\"new\nline\"\n\"comma,value\"\ntab\tvalue\n",
+            String::from_utf8(buf).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_whitespace_all_string_types() {
+        use arrow_array::{LargeStringArray, StringViewArray};
+
+        let schema = Schema::new(vec![
+            Field::new("utf8", DataType::Utf8, false),
+            Field::new("large_utf8", DataType::LargeUtf8, false),
+            Field::new("utf8_view", DataType::Utf8View, false),
+        ]);
+
+        let utf8 = StringArray::from(vec![
+            "  leading",
+            "trailing  ",
+            "  both  ",
+            "no_spaces",
+        ]);
+
+        let large_utf8 = LargeStringArray::from(vec![
+            "  leading",
+            "trailing  ",
+            "  both  ",
+            "no_spaces",
+        ]);
+
+        let utf8_view = StringViewArray::from(vec![
+            "  leading",
+            "trailing  ",
+            "  both  ",
+            "no_spaces",
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(utf8),
+                Arc::new(large_utf8),
+                Arc::new(utf8_view),
+            ],
+        )
+        .unwrap();
+
+        // Test with no whitespace handling (default)
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new();
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing  ,trailing  ,trailing  \n  both  ,  both  ,  both  \nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with both ignore leading and trailing whitespace
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing,trailing,trailing\nboth,both,both\nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with only leading whitespace trimming
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing  ,trailing  ,trailing  \nboth  ,both  ,both  \nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with only trailing whitespace trimming
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing,trailing,trailing\n  both,  both,  both\nno_spaces,no_spaces,no_spaces\n",
             String::from_utf8(buf).unwrap()
         );
     }
