@@ -254,6 +254,21 @@ impl BitmaskSelection {
             mask: BooleanBuffer::new_unset(self.mask.len()),
         }
     }
+
+    /// Trims the selection so it contains no trailing unselected rows
+    pub fn trim(self) -> Self {
+        let mut new_len = self.mask.len();
+        // SAFETY: new_len is > 0 and less than len
+        unsafe {
+            while new_len > 0 && !self.mask.value_unchecked(new_len - 1) {
+                new_len -= 1;
+            }
+        }
+
+        BitmaskSelection {
+            mask: self.mask.slice(0, new_len),
+        }
+    }
 }
 
 impl From<Vec<RowSelector>> for BitmaskSelection {

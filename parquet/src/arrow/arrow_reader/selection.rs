@@ -349,9 +349,7 @@ impl RowSelection {
     pub(crate) fn trim(self) -> Self {
         match self {
             Self::Selectors(selection) => Self::Selectors(selection.trim()),
-            Self::Mask(_mask) => {
-                todo!()
-            }
+            Self::Mask(mask) => Self::Mask(mask.trim()),
         }
     }
 
@@ -2112,31 +2110,43 @@ mod tests {
 
     #[test]
     fn test_trim() {
-        let selection = RowSelectorSelection::from(vec![
-            RowSelector::skip(34),
-            RowSelector::select(12),
-            RowSelector::skip(3),
-            RowSelector::select(35),
-        ]);
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    RowSelector::skip(34),
+                    RowSelector::select(12),
+                    RowSelector::skip(3),
+                    RowSelector::select(35),
+                ])
+            },
+            |selection| {
+                let expected = vec![
+                    RowSelector::skip(34),
+                    RowSelector::select(12),
+                    RowSelector::skip(3),
+                    RowSelector::select(35),
+                ];
 
-        let expected = vec![
-            RowSelector::skip(34),
-            RowSelector::select(12),
-            RowSelector::skip(3),
-            RowSelector::select(35),
-        ];
+                let trimmed = selection.clone().trim();
+                assert_eq!(into_selectors(&trimmed), expected);
+            },
+        );
 
-        assert_eq!(selection.trim().selectors, expected);
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    RowSelector::skip(34),
+                    RowSelector::select(12),
+                    RowSelector::skip(3),
+                ])
+            },
+            |selection| {
+                let trimmed = selection.clone().trim();
+                let expected = vec![RowSelector::skip(34), RowSelector::select(12)];
 
-        let selection = RowSelectorSelection::from(vec![
-            RowSelector::skip(34),
-            RowSelector::select(12),
-            RowSelector::skip(3),
-        ]);
-
-        let expected = vec![RowSelector::skip(34), RowSelector::select(12)];
-
-        assert_eq!(selection.trim().selectors, expected);
+                assert_eq!(into_selectors(&trimmed), expected);
+            },
+        );
     }
 
     /// Runs `verify_fn(s1)` with both Mask and Selector backed cursors
