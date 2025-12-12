@@ -30,3 +30,10 @@
 pub mod bounding;
 pub mod interval;
 pub mod testing;
+
+mod types;
+
+pub use types::Hint as WkbTypeHint;
+pub use types::Metadata as WkbMetadata;
+pub use types::WkbArray;
+pub use types::WkbType;
