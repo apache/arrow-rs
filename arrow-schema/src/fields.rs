@@ -359,7 +359,8 @@ impl UnionFields {
     ///
     /// This function returns an error if:
     /// - Any type_id appears more than once (duplicate type ids)
-    /// - The number of type_ids doesn't match the number of fields
+    /// - The type_ids are duplicated
+
     ///
     /// # Examples
     ///
