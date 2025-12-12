@@ -17,8 +17,8 @@
 
 use crate::type_conversion::CastOptions;
 use arrow::array::{
-    Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
-    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+    GenericListViewArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
@@ -556,14 +556,14 @@ impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
 /// Trait for list-like arrays that can provide element ranges
 pub(crate) trait ListLikeArray: Array {
     /// Get the values array
-    fn values(&self) -> &dyn Array;
+    fn values(&self) -> &ArrayRef;
 
     /// Get the start and end indices for a list element
     fn element_range(&self, index: usize) -> Range<usize>;
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -576,7 +576,7 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -590,7 +590,7 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
 }
 
 impl ListLikeArray for FixedSizeListArray {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
