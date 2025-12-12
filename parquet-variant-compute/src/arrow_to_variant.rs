@@ -553,40 +553,18 @@ impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
     }
 }
 
-/// Trait for list-like arrays that can provide common helpers
+/// Trait for list-like arrays that can provide element ranges
 pub(crate) trait ListLikeArray: Array {
-    type OffsetSize: OffsetSizeTrait;
-
     /// Get the values array
     fn values(&self) -> &ArrayRef;
-
-    /// Get the offsets backing the list values
-    #[cfg(test)]
-    fn value_offsets(&self) -> Option<&[Self::OffsetSize]>;
-
-    /// Size (number of values) for the element at `index`
-    #[cfg(test)]
-    fn value_size(&self, index: usize) -> Self::OffsetSize;
 
     /// Get the start and end indices for a list element
     fn element_range(&self, index: usize) -> Range<usize>;
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
-    type OffsetSize = O;
-
     fn values(&self) -> &ArrayRef {
         self.values()
-    }
-
-    #[cfg(test)]
-    fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
-        Some(GenericListArray::value_offsets(self))
-    }
-
-    #[cfg(test)]
-    fn value_size(&self, index: usize) -> Self::OffsetSize {
-        GenericListArray::value_length(self, index)
     }
 
     fn element_range(&self, index: usize) -> Range<usize> {
@@ -598,20 +576,8 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
-    type OffsetSize = O;
-
     fn values(&self) -> &ArrayRef {
         self.values()
-    }
-
-    #[cfg(test)]
-    fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
-        Some(GenericListViewArray::value_offsets(self))
-    }
-
-    #[cfg(test)]
-    fn value_size(&self, index: usize) -> Self::OffsetSize {
-        GenericListViewArray::value_size(self, index)
     }
 
     fn element_range(&self, index: usize) -> Range<usize> {
@@ -624,20 +590,8 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
 }
 
 impl ListLikeArray for FixedSizeListArray {
-    type OffsetSize = i32;
-
     fn values(&self) -> &ArrayRef {
         self.values()
-    }
-
-    #[cfg(test)]
-    fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
-        None
-    }
-
-    #[cfg(test)]
-    fn value_size(&self, _index: usize) -> Self::OffsetSize {
-        self.value_length()
     }
 
     fn element_range(&self, index: usize) -> Range<usize> {

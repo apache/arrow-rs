@@ -928,9 +928,39 @@ mod tests {
         builder.build()
     }
 
+    trait TestListLikeArray: ListLikeArray {
+        type OffsetSize: OffsetSizeTrait;
+        fn value_offsets(&self) -> Option<&[Self::OffsetSize]>;
+        fn value_size(&self, index: usize) -> Self::OffsetSize;
+    }
+
+    impl<O: OffsetSizeTrait> TestListLikeArray for GenericListArray<O> {
+        type OffsetSize = O;
+
+        fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
+            Some(GenericListArray::value_offsets(self))
+        }
+
+        fn value_size(&self, index: usize) -> Self::OffsetSize {
+            GenericListArray::value_length(self, index)
+        }
+    }
+
+    impl<O: OffsetSizeTrait> TestListLikeArray for GenericListViewArray<O> {
+        type OffsetSize = O;
+
+        fn value_offsets(&self) -> Option<&[Self::OffsetSize]> {
+            Some(GenericListViewArray::value_offsets(self))
+        }
+
+        fn value_size(&self, index: usize) -> Self::OffsetSize {
+            GenericListViewArray::value_size(self, index)
+        }
+    }
+
     fn downcast_list_like_array<O: OffsetSizeTrait>(
         array: &VariantArray,
-    ) -> &dyn ListLikeArray<OffsetSize = O> {
+    ) -> &dyn TestListLikeArray<OffsetSize = O> {
         let typed_value = array.typed_value_field().unwrap();
         if let Some(list) = typed_value.as_any().downcast_ref::<GenericListArray<O>>() {
             list
@@ -2456,21 +2486,18 @@ mod tests {
 
     #[test]
     fn test_variant_schema_builder_with_shred_variant() {
-        let mut builder = VariantArrayBuilder::new(3);
-        builder
-            .new_object()
-            .with_field("time", 1234567890i64)
-            .with_field("hostname", "server1")
-            .with_field("extra", 42)
-            .finish();
-        builder
-            .new_object()
-            .with_field("time", 9876543210i64)
-            .with_field("hostname", "server2")
-            .finish();
-        builder.append_null();
-
-        let input = builder.build();
+        let input = build_variant_array(vec![
+            VariantRow::Object(vec![
+                ("time", VariantValue::from(1234567890i64)),
+                ("hostname", VariantValue::from("server1")),
+                ("extra", VariantValue::from(42)),
+            ]),
+            VariantRow::Object(vec![
+                ("time", VariantValue::from(9876543210i64)),
+                ("hostname", VariantValue::from("server2")),
+            ]),
+            VariantRow::Null,
+        ]);
 
         let shredding_type = ShreddedSchemaBuilder::default()
             .with_path("time", &DataType::Int64)
