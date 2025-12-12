@@ -128,7 +128,7 @@ use crate::{
 };
 
 pub use footer_tail::FooterTail;
-pub use options::ParquetMetaDataOptions;
+pub use options::{ParquetMetaDataOptions, ParquetStatisticsPolicy};
 pub use push_decoder::ParquetMetaDataPushDecoder;
 pub use reader::{PageIndexPolicy, ParquetMetaDataReader};
 use std::io::Write;
@@ -469,6 +469,16 @@ pub struct PageEncodingStats {
   3: required i32 count;
 }
 );
+
+/// Internal representation of the page encoding stats in the [`ColumnChunkMetaData`].
+/// This is not publicly exposed, with different getters defined for each variant.
+#[derive(Debug, Clone, PartialEq)]
+enum ParquetPageEncodingStats {
+    /// The full array of stats as defined in the Parquet spec.
+    Full(Vec<PageEncodingStats>),
+    /// A condensed version of only page encodings seen.
+    Mask(EncodingMask),
+}
 
 /// Reference counted pointer for [`FileMetaData`].
 pub type FileMetaDataPtr = Arc<FileMetaData>;
@@ -812,7 +822,7 @@ pub struct ColumnChunkMetaData {
     dictionary_page_offset: Option<i64>,
     statistics: Option<Statistics>,
     geo_statistics: Option<Box<geo_statistics::GeospatialStatistics>>,
-    encoding_stats: Option<Vec<PageEncodingStats>>,
+    encoding_stats: Option<ParquetPageEncodingStats>,
     bloom_filter_offset: Option<i64>,
     bloom_filter_length: Option<i32>,
     offset_index_offset: Option<i64>,
@@ -1050,10 +1060,47 @@ impl ColumnChunkMetaData {
         self.geo_statistics.as_deref()
     }
 
-    /// Returns the offset for the page encoding stats,
-    /// or `None` if no page encoding stats are available.
+    /// Returns the page encoding statistics, or `None` if no page encoding statistics
+    /// are available (or they were converted to a mask).
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
-        self.encoding_stats.as_ref()
+        match self.encoding_stats.as_ref() {
+            Some(ParquetPageEncodingStats::Full(stats)) => Some(stats),
+            _ => None,
+        }
+    }
+
+    /// Returns the page encoding statistics reduced to a bitmask, or `None` if statistics are
+    /// not available (or they were left in their original form).
+    ///
+    /// The [`PageEncodingStats`] struct was added to the Parquet specification specifically to
+    /// enable fast determination of whether all pages in a column chunk are dictionary encoded
+    /// (see <https://github.com/apache/parquet-format/pull/16>).
+    /// Decoding the full page encoding statistics, however, can be very costly, and is not
+    /// necessary to support the aforementioned use case. As an alternative, this crate can
+    /// instead distill the list of `PageEncodingStats` down to a bitmask of just the encodings
+    /// used for data pages
+    /// (see [`ParquetMetaDataOptions::set_encoding_stats_as_mask`]).
+    /// To test for an all-dictionary-encoded chunk one could use this bitmask in the following way:
+    ///
+    /// ```rust
+    /// use parquet::basic::Encoding;
+    /// use parquet::file::metadata::ColumnChunkMetaData;
+    /// // test if all data pages in the column chunk are dictionary encoded
+    /// fn is_all_dictionary_encoded(col_meta: &ColumnChunkMetaData) -> bool {
+    ///     // check that dictionary encoding was used
+    ///     col_meta.dictionary_page_offset().is_some()
+    ///         && col_meta.page_encoding_stats_mask().is_some_and(|mask| {
+    ///             // mask should only have one bit set, either for PLAIN_DICTIONARY or
+    ///             // RLE_DICTIONARY
+    ///             mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY)
+    ///         })
+    /// }
+    /// ```
+    pub fn page_encoding_stats_mask(&self) -> Option<&EncodingMask> {
+        match self.encoding_stats.as_ref() {
+            Some(ParquetPageEncodingStats::Mask(stats)) => Some(stats),
+            _ => None,
+        }
     }
 
     /// Returns the offset for the bloom filter.
@@ -1273,8 +1320,18 @@ impl ColumnChunkMetaDataBuilder {
     }
 
     /// Sets page encoding stats for this column chunk.
+    ///
+    /// This will overwrite any existing stats, either `Vec` based or bitmask.
     pub fn set_page_encoding_stats(mut self, value: Vec<PageEncodingStats>) -> Self {
-        self.0.encoding_stats = Some(value);
+        self.0.encoding_stats = Some(ParquetPageEncodingStats::Full(value));
+        self
+    }
+
+    /// Sets page encoding stats mask for this column chunk.
+    ///
+    /// This will overwrite any existing stats, either `Vec` based or bitmask.
+    pub fn set_page_encoding_stats_mask(mut self, value: EncodingMask) -> Self {
+        self.0.encoding_stats = Some(ParquetPageEncodingStats::Mask(value));
         self
     }
 

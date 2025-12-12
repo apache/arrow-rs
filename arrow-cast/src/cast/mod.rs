@@ -312,7 +312,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // temporal casts
         (Int32, Date32 | Date64 | Time32(_)) => true,
         (Date32, Int32 | Int64) => true,
-        (Time32(_), Int32) => true,
+        (Time32(_), Int32 | Int64) => true,
         (Int64, Date64 | Date32 | Time64(_)) => true,
         (Date64, Int64 | Int32) => true,
         (Time64(_), Int64) => true,
@@ -1698,6 +1698,16 @@ pub fn cast_with_options(
         (Time32(TimeUnit::Millisecond), Int32) => {
             cast_reinterpret_arrays::<Time32MillisecondType, Int32Type>(array)
         }
+        (Time32(TimeUnit::Second), Int64) => cast_with_options(
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Int64,
+            cast_options,
+        ),
+        (Time32(TimeUnit::Millisecond), Int64) => cast_with_options(
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Int64,
+            cast_options,
+        ),
         (Int64, Date64) => cast_reinterpret_arrays::<Int64Type, Date64Type>(array),
         (Int64, Date32) => cast_with_options(
             &cast_with_options(array, &Int32, cast_options)?,
@@ -12078,5 +12088,139 @@ mod tests {
 
         // Verify the run-ends were cast correctly (run ends at 3, 6, 9)
         assert_eq!(run_array.run_ends().values(), &[3i64, 6i64, 9i64]);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_int64() {
+        let array = Time32SecondArray::from(vec![1000, 2000, 3000]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let to_type = DataType::Int64;
+        let cast_options = CastOptions::default();
+
+        assert!(can_cast_types(array.data_type(), &to_type));
+
+        let result = cast_with_options(&array, &to_type, &cast_options);
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Second) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        assert_eq!(cast_array.value(0), 1000);
+        assert_eq!(cast_array.value(1), 2000);
+        assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_int64() {
+        let array = Time32MillisecondArray::from(vec![1000, 2000, 3000]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let to_type = DataType::Int64;
+        let cast_options = CastOptions::default();
+
+        assert!(can_cast_types(array.data_type(), &to_type));
+
+        let result = cast_with_options(&array, &to_type, &cast_options);
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Millisecond) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        assert_eq!(cast_array.value(0), 1000);
+        assert_eq!(cast_array.value(1), 2000);
+        assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_string_to_time32_second_to_int64() {
+        // Mimic: select arrow_cast('03:12:44'::time, 'Time32(Second)')::bigint;
+        // raised in https://github.com/apache/datafusion/issues/19036
+        let array = StringArray::from(vec!["03:12:44"]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let cast_options = CastOptions::default();
+
+        // 1. Cast String to Time32(Second)
+        let time32_type = DataType::Time32(TimeUnit::Second);
+        let time32_array = cast_with_options(&array, &time32_type, &cast_options).unwrap();
+
+        // 2. Cast Time32(Second) to Int64
+        let int64_type = DataType::Int64;
+        assert!(can_cast_types(time32_array.data_type(), &int64_type));
+
+        let result = cast_with_options(&time32_array, &int64_type, &cast_options);
+
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Second) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // 03:12:44 = 3*3600 + 12*60 + 44 = 10800 + 720 + 44 = 11564
+        assert_eq!(cast_array.value(0), 11564);
+    }
+    #[test]
+    fn test_string_dicts_to_binary_view() {
+        let expected = BinaryViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(StringArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(StringViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeStringArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array =
+                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::BinaryView).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_binary_dicts_to_string_view() {
+        let expected = StringViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(BinaryArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(BinaryViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeBinaryArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array =
+                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::Utf8View).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
     }
 }
