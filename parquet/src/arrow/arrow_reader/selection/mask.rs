@@ -187,6 +187,28 @@ impl BitmaskSelection {
         ranges
     }
 
+    /// Expands the selection to align with batch boundaries.
+    /// This is needed when using cached array readers to ensure that
+    /// the cached data covers full batches.
+    pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
+        if batch_size == 0 {
+            return self.clone();
+        }
+
+        let mut builder = BooleanBufferBuilder::new(total_rows);
+        let mut current_index = 0;
+        while current_index < total_rows {
+            let batch_end = (current_index + batch_size).min(total_rows);
+            let batch_slice = self.mask.slice(current_index, batch_end - current_index);
+            let select_batch = batch_slice.count_set_bits() > 0;
+            builder.append_n(batch_end - current_index, select_batch);
+            current_index = batch_end;
+        }
+        BitmaskSelection {
+            mask: builder.finish(),
+        }
+    }
+
     /// Compute the union of two [`BitmaskSelection`]
     /// For example:
     /// self:      NNYYYYNNYYNYN
