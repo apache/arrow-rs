@@ -26,8 +26,8 @@ use crate::array::{make_array, print_long_array};
 use crate::builder::{GenericListViewBuilder, PrimitiveBuilder};
 use crate::iterator::GenericListViewArrayIter;
 use crate::{
-    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, OffsetSizeTrait,
-    new_empty_array,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray, GenericListArray,
+    OffsetSizeTrait, new_empty_array,
 };
 
 /// A [`GenericListViewArray`] of variable size lists, storing offsets as `i32`.
@@ -495,6 +495,29 @@ impl<OffsetSize: OffsetSizeTrait> std::fmt::Debug for GenericListViewArray<Offse
             std::fmt::Debug::fmt(&array.value(index), f)
         })?;
         write!(f, "]")
+    }
+}
+
+impl<OffsetSize: OffsetSizeTrait> From<GenericListArray<OffsetSize>>
+    for GenericListViewArray<OffsetSize>
+{
+    fn from(value: GenericListArray<OffsetSize>) -> Self {
+        let (field, offsets, values, nulls) = value.into_parts();
+        let len = offsets.len() - 1;
+        let mut sizes = Vec::with_capacity(len);
+        let mut view_offsets = Vec::with_capacity(len);
+        for (i, offset) in offsets.iter().enumerate().take(len) {
+            view_offsets.push(*offset);
+            sizes.push(offsets[i + 1] - offsets[i]);
+        }
+
+        Self::new(
+            field,
+            ScalarBuffer::from(view_offsets),
+            ScalarBuffer::from(sizes),
+            values,
+            nulls,
+        )
     }
 }
 
