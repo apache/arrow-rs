@@ -118,8 +118,8 @@ unsafe fn boolean_buffer_and_then_bmi2(
     left: &BooleanBuffer,
     right: &BooleanBuffer,
 ) -> BooleanBuffer {
-    use core::arch::x86_64::_pdep_u64;
     use arrow_buffer::MutableBuffer;
+    use core::arch::x86_64::_pdep_u64;
 
     debug_assert_eq!(left.count_set_bits(), right.len());
 
