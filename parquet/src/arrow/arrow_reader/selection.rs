@@ -237,14 +237,23 @@ impl RowSelection {
         projection: &ProjectionMask,
         offset_index: Option<&[OffsetIndexMetaData]>,
     ) -> bool {
-        match self {
-            Self::Selectors(selectors) => {
-                selectors.should_force_selectors(projection, offset_index)
+        let Some(offset_index) = offset_index else {
+            return false;
+        };
+
+        offset_index.iter().enumerate().any(|(leaf_idx, column)| {
+            if !projection.leaf_included(leaf_idx) {
+                return false;
             }
-            Self::Mask(_) => {
-                todo!()
+
+            let locations = column.page_locations();
+            if locations.is_empty() {
+                return false;
             }
-        }
+
+            let ranges = self.scan_ranges(locations);
+            !ranges.is_empty() && ranges.len() < locations.len()
+        })
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
@@ -595,39 +604,6 @@ impl RowSelectorSelection {
         }
 
         ranges
-    }
-
-    /// Returns true if this selection would skip any data pages within the provided columns
-    fn selection_skips_any_page(
-        &self,
-        projection: &ProjectionMask,
-        columns: &[OffsetIndexMetaData],
-    ) -> bool {
-        columns.iter().enumerate().any(|(leaf_idx, column)| {
-            if !projection.leaf_included(leaf_idx) {
-                return false;
-            }
-
-            let locations = column.page_locations();
-            if locations.is_empty() {
-                return false;
-            }
-
-            let ranges = self.scan_ranges(locations);
-            !ranges.is_empty() && ranges.len() < locations.len()
-        })
-    }
-
-    /// Returns true if selectors should be forced, preventing mask materialisation
-    pub(crate) fn should_force_selectors(
-        &self,
-        projection: &ProjectionMask,
-        offset_index: Option<&[OffsetIndexMetaData]>,
-    ) -> bool {
-        match offset_index {
-            Some(columns) => self.selection_skips_any_page(projection, columns),
-            None => false,
-        }
     }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
@@ -1877,97 +1853,116 @@ mod tests {
             },
         ];
 
-        let selection = RowSelectorSelection::from(vec![
-            // Skip first page
-            RowSelector::skip(10),
-            // Multiple selects in same page
-            RowSelector::select(3),
-            RowSelector::skip(3),
-            RowSelector::select(4),
-            // Select to page boundary
-            RowSelector::skip(5),
-            RowSelector::select(5),
-            // Skip full page past page boundary
-            RowSelector::skip(12),
-            // Select across page boundaries
-            RowSelector::select(12),
-            // Skip final page
-            RowSelector::skip(12),
-        ]);
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    // Skip first page
+                    RowSelector::skip(10),
+                    // Multiple selects in same page
+                    RowSelector::select(3),
+                    RowSelector::skip(3),
+                    RowSelector::select(4),
+                    // Select to page boundary
+                    RowSelector::skip(5),
+                    RowSelector::select(5),
+                    // Skip full page past page boundary
+                    RowSelector::skip(12),
+                    // Select across page boundaries
+                    RowSelector::select(12),
+                    // Skip final page
+                    RowSelector::skip(12),
+                ])
+            },
+            |selection| {
+                let ranges = selection.scan_ranges(&index);
 
-        let ranges = selection.scan_ranges(&index);
+                // assert_eq!(mask, vec![false, true, true, false, true, true, false]);
+                assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60]);
+            },
+        );
 
-        // assert_eq!(mask, vec![false, true, true, false, true, true, false]);
-        assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60]);
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    // Skip first page
+                    RowSelector::skip(10),
+                    // Multiple selects in same page
+                    RowSelector::select(3),
+                    RowSelector::skip(3),
+                    RowSelector::select(4),
+                    // Select to page boundary
+                    RowSelector::skip(5),
+                    RowSelector::select(5),
+                    // Skip full page past page boundary
+                    RowSelector::skip(12),
+                    // Select across page boundaries
+                    RowSelector::select(12),
+                    RowSelector::skip(1),
+                    // Select across page boundaries including final page
+                    RowSelector::select(8),
+                ])
+            },
+            |selection| {
+                let ranges = selection.scan_ranges(&index);
 
-        let selection = RowSelectorSelection::from(vec![
-            // Skip first page
-            RowSelector::skip(10),
-            // Multiple selects in same page
-            RowSelector::select(3),
-            RowSelector::skip(3),
-            RowSelector::select(4),
-            // Select to page boundary
-            RowSelector::skip(5),
-            RowSelector::select(5),
-            // Skip full page past page boundary
-            RowSelector::skip(12),
-            // Select across page boundaries
-            RowSelector::select(12),
-            RowSelector::skip(1),
-            // Select across page boundaries including final page
-            RowSelector::select(8),
-        ]);
+                // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
+                assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
+            },
+        );
 
-        let ranges = selection.scan_ranges(&index);
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    // Skip first page
+                    RowSelector::skip(10),
+                    // Multiple selects in same page
+                    RowSelector::select(3),
+                    RowSelector::skip(3),
+                    RowSelector::select(4),
+                    // Select to page boundary
+                    RowSelector::skip(5),
+                    RowSelector::select(5),
+                    // Skip full page past page boundary
+                    RowSelector::skip(12),
+                    // Select to final page boundary
+                    RowSelector::select(12),
+                    RowSelector::skip(1),
+                    // Skip across final page boundary
+                    RowSelector::skip(8),
+                    // Select from final page
+                    RowSelector::select(4),
+                ])
+            },
+            |selection| {
+                let ranges = selection.scan_ranges(&index);
 
-        // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
-        assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
+                // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
+                assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
+            },
+        );
 
-        let selection = RowSelectorSelection::from(vec![
-            // Skip first page
-            RowSelector::skip(10),
-            // Multiple selects in same page
-            RowSelector::select(3),
-            RowSelector::skip(3),
-            RowSelector::select(4),
-            // Select to page boundary
-            RowSelector::skip(5),
-            RowSelector::select(5),
-            // Skip full page past page boundary
-            RowSelector::skip(12),
-            // Select to final page boundary
-            RowSelector::select(12),
-            RowSelector::skip(1),
-            // Skip across final page boundary
-            RowSelector::skip(8),
-            // Select from final page
-            RowSelector::select(4),
-        ]);
-
-        let ranges = selection.scan_ranges(&index);
-
-        // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
-        assert_eq!(ranges, vec![10..20, 20..30, 40..50, 50..60, 60..70]);
-
-        let selection = RowSelectorSelection::from(vec![
-            // Skip first page
-            RowSelector::skip(10),
-            // Multiple selects in same page
-            RowSelector::select(3),
-            RowSelector::skip(3),
-            RowSelector::select(4),
-            // Select to remaining in page and first row of next page
-            RowSelector::skip(5),
-            RowSelector::select(6),
-            // Skip remaining
-            RowSelector::skip(50),
-        ]);
-
-        let ranges = selection.scan_ranges(&index);
-
-        // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
-        assert_eq!(ranges, vec![10..20, 20..30, 30..40]);
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    // Skip first page
+                    RowSelector::skip(10),
+                    // Multiple selects in same page
+                    RowSelector::select(3),
+                    RowSelector::skip(3),
+                    RowSelector::select(4),
+                    // Select to remaining in page and first row of next page
+                    RowSelector::skip(5),
+                    RowSelector::select(6),
+                    // Skip remaining
+                    RowSelector::skip(50),
+                ])
+            },
+            |selection| {
+                let ranges = selection.scan_ranges(&index);
+                // assert_eq!(mask, vec![false, true, true, false, true, true, true]);
+                assert_eq!(ranges, vec![10..20, 20..30, 30..40]);
+            },
+        );
     }
 
     #[test]
