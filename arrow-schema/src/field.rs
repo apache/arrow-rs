@@ -348,7 +348,6 @@ impl Field {
     /// Panics if:
     /// - any type ID is negative
     /// - type IDs contain duplicates
-    /// - fields contain duplicates
     /// - the number of type IDs does not equal the number of fields
     pub fn new_union<S, F, T>(name: S, type_ids: T, fields: F, mode: UnionMode) -> Self
     where
