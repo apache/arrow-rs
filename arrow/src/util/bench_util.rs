@@ -398,6 +398,49 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
     data.iter().map(|x| x.as_deref()).collect()
 }
 
+/// Create a List/LargeList Array  of primitive values
+///
+/// Arguments:
+/// - `size`: number of lists in the array
+/// - `null_density`: density of nulls in the list array
+/// - `list_null_density`: density of nulls in the primitive arrays inside the lists
+/// - `max_list_size`: maximum size of each list (actual size is random between 0 and max_list_size)
+/// - `seed`: seed for the random number generator
+pub fn create_primitive_list_array_with_seed<O, T>(
+    size: usize,
+    null_density: f32,
+    list_null_density: f32,
+    max_list_size: usize,
+    seed: u64,
+) -> GenericListArray<O>
+where
+    O: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let values = (0..size).map(|_| {
+        if rng.random::<f32>() < null_density {
+            None
+        } else {
+            let list_size = rng.random_range(0..=max_list_size);
+            let list_values: Vec<Option<T::Native>> = (0..list_size)
+                .map(|_| {
+                    if rng.random::<f32>() < list_null_density {
+                        None
+                    } else {
+                        Some(rng.random())
+                    }
+                })
+                .collect();
+            Some(list_values)
+        }
+    });
+
+    GenericListArray::<O>::from_iter_primitive::<T, _, _>(values)
+}
+
 /// Create primitive run array for given logical and physical array lengths
 pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
