@@ -225,9 +225,7 @@ impl RowSelection {
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         match self {
             Self::Selectors(selection) => selection.scan_ranges(page_locations),
-            Self::Mask(_mask) => {
-                todo!()
-            }
+            Self::Mask(mask) => mask.scan_ranges(page_locations),
         }
     }
 
@@ -552,11 +550,7 @@ impl RowSelectorSelection {
 
     /// Given an offset index, return the byte ranges for all data pages selected by `self`
     ///
-    /// This is useful for determining what byte ranges to fetch from underlying storage
-    ///
-    /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
-    /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
-    /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
+    /// See [`RowSelection::scan_ranges`] for more details
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         let mut ranges: Vec<Range<u64>> = vec![];
         let mut row_offset = 0;
@@ -570,9 +564,7 @@ impl RowSelectorSelection {
 
         while let Some((selector, page)) = current_selector.as_mut().zip(current_page) {
             if !(selector.skip || current_page_included) {
-                let start = page.offset as u64;
-                let end = start + page.compressed_page_size as u64;
-                ranges.push(start..end);
+                ranges.push(page_location_range(page));
                 current_page_included = true;
             }
 
@@ -595,9 +587,7 @@ impl RowSelectorSelection {
                 }
             } else {
                 if !(selector.skip || current_page_included) {
-                    let start = page.offset as u64;
-                    let end = start + page.compressed_page_size as u64;
-                    ranges.push(start..end);
+                    ranges.push(page_location_range(page));
                 }
                 current_selector = selectors.next()
             }
@@ -1255,6 +1245,13 @@ fn boolean_mask_from_selectors(selectors: &[RowSelector]) -> BooleanBuffer {
         builder.append_n(selector.row_count, !selector.skip);
     }
     builder.finish()
+}
+
+/// Returns the byte range covered by a given `PageLocation`
+fn page_location_range(page: &PageLocation) -> Range<u64> {
+    let start = page.offset as u64;
+    let end = start + page.compressed_page_size as u64;
+    start..end
 }
 
 #[cfg(test)]

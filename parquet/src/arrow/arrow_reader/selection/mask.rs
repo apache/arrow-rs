@@ -15,11 +15,13 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::arrow_reader::RowSelector;
 use crate::arrow::arrow_reader::selection::and_then::boolean_buffer_and_then;
 use crate::arrow::arrow_reader::selection::conversion::{
     boolean_array_to_row_selectors, row_selectors_to_boolean_buffer,
 };
+use crate::arrow::arrow_reader::selection::page_location_range;
+use crate::arrow::arrow_reader::{RowSelection, RowSelector};
+use crate::file::page_index::offset_index::PageLocation;
 use arrow_array::{Array, BooleanArray};
 use arrow_buffer::bit_iterator::BitIndexIterator;
 use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
@@ -138,6 +140,51 @@ impl BitmaskSelection {
         BitmaskSelection {
             mask: buffer.finish(),
         }
+    }
+
+    /// Given an offset index, return the byte ranges for all data pages selected by `self`
+    ///
+    /// See [`RowSelection::scan_ranges`] for more details
+    pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
+        if page_locations.is_empty() {
+            return vec![];
+        }
+        let len = page_locations.len();
+
+        // if only one page, check if any rows are selected at all
+        if len == 1 {
+            if self.mask.count_set_bits() > 0 {
+                return vec![page_location_range(&page_locations[0])];
+            } else {
+                return vec![];
+            }
+        }
+
+        // Check all pages except the last one
+        let mut ranges = Vec::with_capacity(page_locations.len());
+        ranges.extend(
+            page_locations
+                .iter()
+                .zip(page_locations[1..len].iter())
+                .filter_map(|(current_page, next_page)| {
+                    let start_row = current_page.first_row_index as usize;
+                    let num_rows = next_page.first_row_index as usize - 1 - start_row;
+                    if self.mask.slice(start_row, num_rows).count_set_bits() > 0 {
+                        Some(page_location_range(current_page))
+                    } else {
+                        None
+                    }
+                }),
+        );
+
+        // check the  last page
+        let last_page = &page_locations[len - 1];
+        let start_row = last_page.first_row_index as usize;
+        let num_rows = self.mask.len() - start_row;
+        if self.mask.slice(start_row, num_rows).count_set_bits() > 0 {
+            ranges.push(page_location_range(&last_page));
+        }
+        ranges
     }
 
     /// Compute the union of two [`BitmaskSelection`]
