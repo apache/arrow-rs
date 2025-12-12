@@ -327,6 +327,7 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
     ) -> Result<Self> {
         use ArrayVariantToArrowRowBuilder::*;
 
+        // Make List/ListView builders without repeating the constructor boilerplate.
         macro_rules! make_list_builder {
             ($variant:ident, $offset:ty, $is_view:expr, $field:ident) => {
                 $variant(VariantToListArrowRowBuilder::<$offset, $is_view>::try_new(
@@ -401,11 +402,12 @@ where
         cast_options: &'a CastOptions,
         capacity: usize,
     ) -> Result<Self> {
-        let mut offsets = Vec::with_capacity(capacity.checked_add(1).ok_or_else(|| {
-            ArrowError::ComputeError(
-                "Capacity exceeded usize::MAX when reserving list offsets".to_string(),
-            )
-        })?);
+        if capacity >= isize::MAX as usize {
+            return Err(ArrowError::ComputeError(
+                "Capacity exceeds isize::MAX when reserving list offsets".to_string(),
+            ));
+        }
+        let mut offsets = Vec::with_capacity(capacity + 1);
         offsets.push(O::ZERO);
         let element_builder = make_variant_to_shredded_variant_arrow_row_builder(
             element_data_type,
@@ -449,7 +451,8 @@ where
         );
 
         if IS_VIEW {
-            let mut sizes = Vec::with_capacity(self.offsets.len().saturating_sub(1));
+            // NOTE: `offsets` is never empty (constructor pushes an entry)
+            let mut sizes = Vec::with_capacity(self.offsets.len() - 1);
             for i in 1..self.offsets.len() {
                 sizes.push(self.offsets[i] - self.offsets[i - 1]);
             }
