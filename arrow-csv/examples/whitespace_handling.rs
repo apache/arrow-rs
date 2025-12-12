@@ -41,12 +41,7 @@ fn main() {
         "  Chicago",
         "Houston",
     ]);
-    let country = StringArray::from(vec![
-        "  USA  ",
-        "  USA  ",
-        "  USA  ",
-        "  USA  ",
-    ]);
+    let country = StringArray::from(vec!["  USA  ", "  USA  ", "  USA  ", "  USA  "]);
 
     let batch = RecordBatch::try_new(
         Arc::new(schema),
@@ -89,4 +84,3 @@ fn main() {
     drop(writer);
     println!("{}", String::from_utf8(buf).unwrap());
 }
-

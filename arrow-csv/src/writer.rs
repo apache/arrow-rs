@@ -162,7 +162,8 @@ impl<W: Write> Writer<W> {
                     ))
                 })?;
 
-                let field_bytes = self.get_trimmed_field_bytes(&buffer, batch.column(col_idx).data_type());
+                let field_bytes =
+                    self.get_trimmed_field_bytes(&buffer, batch.column(col_idx).data_type());
                 byte_record.push_field(field_bytes);
             }
 
@@ -179,7 +180,10 @@ impl<W: Write> Writer<W> {
     fn get_trimmed_field_bytes<'a>(&self, buffer: &'a str, data_type: &DataType) -> &'a [u8] {
         // Only trim string types when trimming is enabled
         let should_trim = (self.ignore_leading_whitespace || self.ignore_trailing_whitespace)
-            && matches!(data_type, DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View);
+            && matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            );
 
         if !should_trim {
             return buffer.as_bytes();
@@ -194,7 +198,6 @@ impl<W: Write> Writer<W> {
         }
         trimmed.as_bytes()
     }
-
 
     /// Unwraps this `Writer<W>`, returning the underlying writer.
     pub fn into_inner(self) -> W {
@@ -966,8 +969,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         // Test with ignore leading whitespace only
         let mut buf = Vec::new();
-        let builder = WriterBuilder::new()
-            .with_ignore_leading_whitespace(true);
+        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
         let mut writer = builder.build(&mut buf);
         writer.write(&batch).unwrap();
         drop(writer);
@@ -978,8 +980,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         // Test with ignore trailing whitespace only
         let mut buf = Vec::new();
-        let builder = WriterBuilder::new()
-            .with_ignore_trailing_whitespace(true);
+        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
         let mut writer = builder.build(&mut buf);
         writer.write(&batch).unwrap();
         drop(writer);
@@ -1004,9 +1005,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
     #[test]
     fn test_write_csv_whitespace_with_special_chars() {
-        let schema = Schema::new(vec![
-            Field::new("c1", DataType::Utf8, false),
-        ]);
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, false)]);
 
         let c1 = StringArray::from(vec![
             "  quoted \"value\"  ",
@@ -1015,11 +1014,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             "\ttab\tvalue\t",
         ]);
 
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(c1)],
-        )
-        .unwrap();
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1)]).unwrap();
 
         // Test with both ignore leading and trailing whitespace
         let mut buf = Vec::new();
@@ -1047,34 +1042,17 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             Field::new("utf8_view", DataType::Utf8View, false),
         ]);
 
-        let utf8 = StringArray::from(vec![
-            "  leading",
-            "trailing  ",
-            "  both  ",
-            "no_spaces",
-        ]);
+        let utf8 = StringArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
 
-        let large_utf8 = LargeStringArray::from(vec![
-            "  leading",
-            "trailing  ",
-            "  both  ",
-            "no_spaces",
-        ]);
+        let large_utf8 =
+            LargeStringArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
 
-        let utf8_view = StringViewArray::from(vec![
-            "  leading",
-            "trailing  ",
-            "  both  ",
-            "no_spaces",
-        ]);
+        let utf8_view =
+            StringViewArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
 
         let batch = RecordBatch::try_new(
             Arc::new(schema),
-            vec![
-                Arc::new(utf8),
-                Arc::new(large_utf8),
-                Arc::new(utf8_view),
-            ],
+            vec![Arc::new(utf8), Arc::new(large_utf8), Arc::new(utf8_view)],
         )
         .unwrap();
 
@@ -1104,8 +1082,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         // Test with only leading whitespace trimming
         let mut buf = Vec::new();
-        let builder = WriterBuilder::new()
-            .with_ignore_leading_whitespace(true);
+        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
         let mut writer = builder.build(&mut buf);
         writer.write(&batch).unwrap();
         drop(writer);
@@ -1116,8 +1093,7 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
 
         // Test with only trailing whitespace trimming
         let mut buf = Vec::new();
-        let builder = WriterBuilder::new()
-            .with_ignore_trailing_whitespace(true);
+        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
         let mut writer = builder.build(&mut buf);
         writer.write(&batch).unwrap();
         drop(writer);
