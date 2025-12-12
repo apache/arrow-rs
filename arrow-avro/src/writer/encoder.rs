@@ -2981,13 +2981,14 @@ mod tests {
     fn union_encoder_string_int_nonzero_type_ids() {
         let strings = StringArray::from(vec!["hello", "world"]);
         let ints = Int32Array::from(vec![10, 20, 30]);
-        let union_fields = UnionFields::new(
+        let union_fields = UnionFields::try_new(
             vec![2, 5],
             vec![
                 Field::new("v_str", DataType::Utf8, true),
                 Field::new("v_int", DataType::Int32, true),
             ],
-        );
+        )
+        .unwrap();
         let type_ids = Buffer::from_slice_ref([2_i8, 5, 5, 2, 5]);
         let offsets = Buffer::from_slice_ref([0_i32, 0, 1, 1, 2]);
         let union_array = UnionArray::try_new(
