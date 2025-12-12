@@ -20,7 +20,7 @@
 //! This CSV writer allows Arrow data (in record batches) to be written as CSV files.
 //! The writer does not support writing `ListArray` and `StructArray`.
 //!
-//! Example:
+//! # Example
 //!
 //! ```
 //! # use arrow_array::*;
@@ -61,6 +61,85 @@
 //! for batch in batches {
 //!     writer.write(batch).unwrap();
 //! }
+//! ```
+//!
+//! # Whitespace Handling
+//!
+//! The writer supports trimming leading and trailing whitespace from string values,
+//! compatible with Apache Spark's CSV options `ignoreLeadingWhiteSpace` and
+//! `ignoreTrailingWhiteSpace`. This is useful when working with data that may have
+//! unwanted padding.
+//!
+//! Whitespace trimming is applied to all string data types:
+//! - `DataType::Utf8`
+//! - `DataType::LargeUtf8`
+//! - `DataType::Utf8View`
+//!
+//! ## Example with whitespace handling
+//!
+//! ```
+//! # use arrow_array::*;
+//! # use arrow_csv::WriterBuilder;
+//! # use arrow_schema::*;
+//! # use std::sync::Arc;
+//!
+//! let schema = Schema::new(vec![
+//!     Field::new("name", DataType::Utf8, false),
+//!     Field::new("comment", DataType::Utf8, false),
+//! ]);
+//!
+//! let name = StringArray::from(vec![
+//!     "  Alice  ",   // Leading and trailing spaces
+//!     "Bob",         // No spaces
+//!     "  Charlie",   // Leading spaces only
+//! ]);
+//! let comment = StringArray::from(vec![
+//!     "  Great job!  ",
+//!     "Well done",
+//!     "Excellent  ",
+//! ]);
+//!
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema),
+//!     vec![Arc::new(name), Arc::new(comment)],
+//! )
+//! .unwrap();
+//!
+//! // Default behavior (no trimming)
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "name,comment\n  Alice  ,  Great job!  \nBob,Well done\n  Charlie,Excellent  \n"
+//! );
+//!
+//! // Trim both leading and trailing whitespace
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .with_ignore_leading_whitespace(true)
+//!     .with_ignore_trailing_whitespace(true)
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "name,comment\nAlice,Great job!\nBob,Well done\nCharlie,Excellent\n"
+//! );
+//!
+//! // Trim only leading whitespace
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .with_ignore_leading_whitespace(true)
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "name,comment\nAlice  ,Great job!  \nBob,Well done\nCharlie,Excellent  \n"
+//! );
 //! ```
 
 use arrow_array::*;
