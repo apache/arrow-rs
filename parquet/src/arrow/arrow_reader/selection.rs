@@ -415,9 +415,7 @@ impl RowSelection {
             Self::Selectors(selection) => {
                 Self::Selectors(selection.expand_to_batch_boundaries(batch_size, total_rows))
             }
-            Self::Mask(mask) => {
-                Self::Mask(mask.expand_to_batch_boundaries(batch_size, total_rows))
-            }
+            Self::Mask(mask) => Self::Mask(mask.expand_to_batch_boundaries(batch_size, total_rows)),
         }
     }
 }
@@ -1257,8 +1255,8 @@ fn page_location_range(page: &PageLocation) -> Range<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand::{Rng, rng};
     use crate::record::Row;
+    use rand::{Rng, rng};
 
     #[test]
     fn test_from_filters() {
@@ -1738,7 +1736,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn test_iter() {
         // use the iter() API to show it does what is expected and
@@ -2145,63 +2142,67 @@ mod tests {
 
     #[test]
     fn test_expand_to_batch_boundaries() {
-        test_selection(|| {
-            // selection goes up to row 28, total 30 rows
-            RowSelection::from(vec![
-                // select 1 row in range 0..8
-                RowSelector::skip(5),
-                RowSelector::select(1),
-                RowSelector::skip(2),
-                // select no rows in range 8..16
-                RowSelector::skip(8),
-                // select 7 rows in range 16..24
-                RowSelector::skip(1),
-                RowSelector::select(7),
-                // select 1 rows in range 24..30
-                RowSelector::skip(4),
-                RowSelector::select(1),
-                RowSelector::skip(1)
-            ])
-        }, |selection| {
-            let expanded = selection.expand_to_batch_boundaries(8, 30);
-            let expected = vec![
-                RowSelector::select(8),
-                RowSelector::skip(8),
-                RowSelector::select(14),
-            ];
+        test_selection(
+            || {
+                // selection goes up to row 28, total 30 rows
+                RowSelection::from(vec![
+                    // select 1 row in range 0..8
+                    RowSelector::skip(5),
+                    RowSelector::select(1),
+                    RowSelector::skip(2),
+                    // select no rows in range 8..16
+                    RowSelector::skip(8),
+                    // select 7 rows in range 16..24
+                    RowSelector::skip(1),
+                    RowSelector::select(7),
+                    // select 1 rows in range 24..30
+                    RowSelector::skip(4),
+                    RowSelector::select(1),
+                    RowSelector::skip(1),
+                ])
+            },
+            |selection| {
+                let expanded = selection.expand_to_batch_boundaries(8, 30);
+                let expected = vec![
+                    RowSelector::select(8),
+                    RowSelector::skip(8),
+                    RowSelector::select(14),
+                ];
 
-            assert_eq!(into_selectors(&expanded), expected);
-        });
+                assert_eq!(into_selectors(&expanded), expected);
+            },
+        );
 
         // test when there is no selected rows at the end
-        test_selection(|| {
-            RowSelection::from(vec![
-                // select now rows in range 0..8
-                RowSelector::skip(8),
-                // select 6 rows in range 8..16
-                RowSelector::skip(1),
-                RowSelector::select(6),
-                RowSelector::skip(1),
-                // select a row in range 16..24
-                RowSelector::skip(4),
-                RowSelector::select(2),
-                RowSelector::skip(2),
-                // no rows in range 24..30
-                RowSelector::skip(6)
-            ])
-        }, |selection| {
-            let expanded = selection.expand_to_batch_boundaries(8, 30);
-            let expected = vec![
-                RowSelector::skip(8),
-                RowSelector::select(16),
-                RowSelector::skip(6),
-            ];
+        test_selection(
+            || {
+                RowSelection::from(vec![
+                    // select now rows in range 0..8
+                    RowSelector::skip(8),
+                    // select 6 rows in range 8..16
+                    RowSelector::skip(1),
+                    RowSelector::select(6),
+                    RowSelector::skip(1),
+                    // select a row in range 16..24
+                    RowSelector::skip(4),
+                    RowSelector::select(2),
+                    RowSelector::skip(2),
+                    // no rows in range 24..30
+                    RowSelector::skip(6),
+                ])
+            },
+            |selection| {
+                let expanded = selection.expand_to_batch_boundaries(8, 30);
+                let expected = vec![
+                    RowSelector::skip(8),
+                    RowSelector::select(16),
+                    RowSelector::skip(6),
+                ];
 
-            assert_eq!(into_selectors(&expanded), expected);
-        })
-
+                assert_eq!(into_selectors(&expanded), expected);
+            },
+        )
     }
-
 
     /// Runs `verify_fn(s1)` with both Mask and Selector backed cursors
     ///
@@ -2318,6 +2319,4 @@ mod tests {
     fn into_selectors(selection: &RowSelection) -> Vec<RowSelector> {
         selection.clone().into()
     }
-
-
 }
