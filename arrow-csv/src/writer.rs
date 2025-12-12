@@ -417,6 +417,7 @@ impl WriterBuilder {
     }
 
     /// Set whether to ignore leading whitespace in string values
+    /// For example, a string value such as "   foo" will be written as "foo"
     pub fn with_ignore_leading_whitespace(mut self, ignore: bool) -> Self {
         self.ignore_leading_whitespace = ignore;
         self
@@ -428,6 +429,7 @@ impl WriterBuilder {
     }
 
     /// Set whether to ignore trailing whitespace in string values
+    /// For example, a string value such as "foo    " will be written as "foo"
     pub fn with_ignore_trailing_whitespace(mut self, ignore: bool) -> Self {
         self.ignore_trailing_whitespace = ignore;
         self
