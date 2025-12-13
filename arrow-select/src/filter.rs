@@ -300,7 +300,7 @@ pub enum IterationStrategy {
     SlicesIterator,
     /// A lazily evaluated iterator of indices
     ///
-    /// Best for high selectivity filters
+    /// Best for high selectivity filters (which select a relatively low number of rows)
     IndexIterator,
     /// A precomputed list of indices
     Indices(Vec<usize>),
