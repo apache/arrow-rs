@@ -65,11 +65,20 @@ impl BitmaskSelection {
     /// Note this ignores the null bits in the input arrays
     /// TODO: should it call prepnull_mask directly?
     pub fn from_filters(filters: &[BooleanArray]) -> Self {
-        let arrays: Vec<&dyn Array> = filters.iter().map(|x| x as &dyn Array).collect();
-        let result = arrow_select::concat::concat(&arrays).unwrap().into_data();
-        let (boolean_array, _null) = BooleanArray::from(result).into_parts();
+        for filter in filters {
+            assert!(
+                filter.null_count() == 0,
+                "Nulls are not supported in BitmaskSelection"
+            );
+        }
+        let total_len = filters.iter().map(|x| x.len()).sum();
+        let mut builder = BooleanBufferBuilder::new(total_len);
+        for filter in filters {
+            builder.append_buffer(filter.values());
+        }
+
         BitmaskSelection {
-            mask: boolean_array,
+            mask: builder.finish(),
         }
     }
 
