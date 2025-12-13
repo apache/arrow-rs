@@ -98,8 +98,6 @@ impl RowSelector {
     }
 }
 
-// TODO: maybe call this `Selection` and typedef to RowSelection for backwards compatibility?
-
 /// [`RowSelection`] represents the rows that should be selected (decoded)
 /// when reading parquet data.
 ///
@@ -204,6 +202,15 @@ impl RowSelection {
         //Self::Selectors(RowSelectorSelection::from_filters(filters))
     }
 
+    /// Create a [`RowSelection`] from a Vec of [`RowSelector`]
+    ///
+    /// Note this will filter any selectors with row_count == 0 and combining
+    /// consecutive selectors
+    pub fn from_selectors(selectors: Vec<RowSelector>) -> Self {
+        Self::Selectors(RowSelectorSelection::from_selectors(selectors))
+    }
+
+
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
     pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
@@ -216,6 +223,7 @@ impl RowSelection {
     }
 
     /// Forces the materialisation of this [`RowSelection`] as selectors
+    #[inline(never)]
     pub fn to_selectors(self) -> Self {
         let Self::Mask(mask) = self else {
             return self;
@@ -225,6 +233,7 @@ impl RowSelection {
     }
 
     /// Forces the materialisation of this [`RowSelection`] as a mask
+    #[inline(never)]
     pub fn to_mask(self) -> Self {
         let Self::Selectors(selectors) = self else {
             return self;
@@ -527,9 +536,10 @@ struct RowSelectorSelection {
 }
 
 impl RowSelectorSelection {
-    /// Create a [`RowSelection`] from a Vec of [`RowSelector`]
+    /// Create a [`RowSelectorSelection`] from a Vec of [`RowSelector`]
     ///
-    /// Note this will filter any selectors with row_count == 0 and combining consecutive selectors
+    /// Note this will filter any selectors with row_count == 0 and combining
+    /// consecutive selectors
     pub fn from_selectors(selectors: Vec<RowSelector>) -> Self {
         // processing / simplification happens in from_iter
         selectors.into_iter().collect()

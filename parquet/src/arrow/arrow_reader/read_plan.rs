@@ -174,6 +174,7 @@ impl ReadPlanBuilder {
                 _ => filters.push(prep_null_mask_filter(&filter)),
             };
         }
+        
 
         let raw = RowSelection::from_filters(&filters);
         self.selection = match self.selection.take() {
