@@ -259,10 +259,30 @@ impl<'a> BitChunks<'a> {
         self.remainder_len
     }
 
-    /// Returns the number of chunks
+    /// Returns the number of `u64` chunks
     #[inline]
     pub const fn chunk_len(&self) -> usize {
         self.chunk_len
+    }
+
+    /// Return the number of `u64` that are needed to represent all bits
+    /// (including remainder)
+    ///
+    /// This is the size of a
+    #[inline]
+    pub fn num_u64s(&self) -> usize {
+        if self.remainder_len == 0 {
+            self.chunk_len
+        } else {
+            self.chunk_len + 1
+        }
+    }
+
+    /// Return the number of bytes that are needed to represent all bits
+    /// (including remainder)
+    #[inline]
+    pub fn num_bytes(&self) -> usize {
+        ceil(self.chunk_len * 64 + self.remainder_len, 8)
     }
 
     /// Returns the bitmask of remaining bits
