@@ -116,9 +116,8 @@ impl Buffer {
 
     /// Create a new [`Buffer`] by applying the bitwise operation `op` to two input buffers.
     ///
-    /// This function is highly optimized for bitwise operations on large
-    /// bitmaps by processing input buffers in chunks of 64 bits (8 bytes) at a
-    /// time, and thus is much faster than applying the operation bit by bit.
+    /// This function is much faster than applying the operation bit by bit as
+    /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
     ///
     /// # Notes:
     /// * `op` takes two `u64` inputs and produces one `u64` output,
@@ -167,31 +166,36 @@ impl Buffer {
     where
         F: FnMut(u64, u64) -> u64,
     {
+        // each chunk is 64 bits
         let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
 
-        let chunks = left_chunks
+        let num_u64s = if left_chunks.remainder_len() > 0 {
+            left_chunks.chunk_len() + 1
+        } else {
+            left_chunks.chunk_len()
+        };
+
+        let mut result = Vec::with_capacity(num_u64s * size_of::<u64>());
+        result.extend(left_chunks
             .iter()
             .zip(right_chunks.iter())
-            .map(|(left, right)| op(left, right));
-        // Soundness: `BitChunks` is a `BitChunks` iterator which
-        // correctly reports its upper bound
-        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
+            .map(|(left, right)| op(left, right))
+        );
+        if left_chunks.remainder_len() > 0 {
+            debug_assert_eq!(result.capacity(), result.len() + 8);
+            result.push(op(left_chunks.remainder_bits(), right_chunks.remainder_bits()));
+        }
 
-        let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-        let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
-        // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-        let rem = &rem.to_le_bytes()[0..remainder_bytes];
-        buffer.extend_from_slice(rem);
-
-        buffer.into()
+        // Note the result is a vec of u64, so it may have more bytes than the remainder,
+        // so we need to slice it down to the correct length
+        Buffer::from(result).slice_with_length(0, ceil(len_in_bits, 8))
     }
 
     /// Create a new [`Buffer`] by applying the bitwise operation to `op` to an input buffer.
     ///
-    /// This function is highly optimized for bitwise operations on large
-    /// bitmaps by processing input buffers in chunks of 64 bits (8 bytes) at a
-    /// time, and thus is much faster than applying the operation bit by bit.
+    /// This function is much faster than applying the operation bit by bit as
+    /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
     ///
     /// # Notes:
     /// * `op` takes two `u64` inputs and produces one `u64` output,

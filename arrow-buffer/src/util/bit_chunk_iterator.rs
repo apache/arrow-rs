@@ -259,7 +259,7 @@ impl<'a> BitChunks<'a> {
         self.remainder_len
     }
 
-    /// Returns the number of chunks
+    /// Returns the number of `u64` chunks
     #[inline]
     pub const fn chunk_len(&self) -> usize {
         self.chunk_len
