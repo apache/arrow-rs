@@ -20,11 +20,11 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
 #[cfg(feature = "pool")]
 use crate::pool::MemoryPool;
 use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
+use crate::BufferBuilder;
 use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
 use super::{MutableBuffer, ScalarBuffer};
@@ -169,7 +169,7 @@ impl Buffer {
         let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
 
-        let mut result = Vec::with_capacity(left_chunks.num_u64s() * 8);
+        let mut result = Vec::with_capacity(left_chunks.num_u64s());
         result.extend(
             left_chunks
                 .iter()
@@ -177,7 +177,7 @@ impl Buffer {
                 .map(|(left, right)| op(left, right)),
         );
         if left_chunks.remainder_len() > 0 {
-            debug_assert_eq!(result.capacity(), result.len() + 8); // should not reallocate
+            debug_assert_eq!(result.capacity(), result.len() + 1); // should not reallocate
             result.push(op(
                 left_chunks.remainder_bits(),
                 right_chunks.remainder_bits(),
@@ -238,11 +238,10 @@ impl Buffer {
     {
         // each chunk is 64 bits
         let left_chunks = BitChunks::new(left.as_ref(), offset_in_bits, len_in_bits);
-
-        let mut result = Vec::with_capacity(left_chunks.num_u64s() * 8);
+        let mut result = Vec::with_capacity(left_chunks.num_u64s());
         result.extend(left_chunks.iter().map(&mut op));
         if left_chunks.remainder_len() > 0 {
-            debug_assert_eq!(result.capacity(), result.len() + 8); // should not reallocate
+            debug_assert_eq!(result.capacity(), result.len() + 1); // should not reallocate
             result.push(op(left_chunks.remainder_bits()));
         }
 
