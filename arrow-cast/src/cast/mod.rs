@@ -221,12 +221,34 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
         (Struct(from_fields), Struct(to_fields)) => {
-            from_fields.len() == to_fields.len()
-                && from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
+            if from_fields.len() != to_fields.len() {
+                return false;
+            }
+
+            // fast path, all field names are in the same order and same number of fields
+            if from_fields
+                .iter()
+                .zip(to_fields.iter())
+                .all(|(f1, f2)| f1.name() == f2.name())
+            {
+                return from_fields.iter().zip(to_fields.iter()).all(|(f1, f2)| {
                     // Assume that nullability between two structs are compatible, if not,
                     // cast kernel will return error.
                     can_cast_types(f1.data_type(), f2.data_type())
-                })
+                });
+            }
+
+            // slow path, we match the fields by name
+            to_fields.iter().all(|to_field| {
+                from_fields
+                    .iter()
+                    .find(|from_field| from_field.name() == to_field.name())
+                    .is_some_and(|from_field| {
+                        // Assume that nullability between two structs are compatible, if not,
+                        // cast kernel will return error.
+                        can_cast_types(from_field.data_type(), to_field.data_type())
+                    })
+            })
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
@@ -290,7 +312,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         // temporal casts
         (Int32, Date32 | Date64 | Time32(_)) => true,
         (Date32, Int32 | Int64) => true,
-        (Time32(_), Int32) => true,
+        (Time32(_), Int32 | Int64) => true,
         (Int64, Date64 | Date32 | Time64(_)) => true,
         (Date64, Int64 | Int32) => true,
         (Time64(_), Int64) => true,
@@ -1169,14 +1191,46 @@ pub fn cast_with_options(
                 cast_options,
             )
         }
-        (Struct(_), Struct(to_fields)) => {
+        (Struct(from_fields), Struct(to_fields)) => {
             let array = array.as_struct();
-            let fields = array
-                .columns()
-                .iter()
-                .zip(to_fields.iter())
-                .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
-                .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+
+            // Fast path: if field names are in the same order, we can just zip and cast
+            let fields_match_order = from_fields.len() == to_fields.len()
+                && from_fields
+                    .iter()
+                    .zip(to_fields.iter())
+                    .all(|(f1, f2)| f1.name() == f2.name());
+
+            let fields = if fields_match_order {
+                // Fast path: cast columns in order
+                array
+                    .columns()
+                    .iter()
+                    .zip(to_fields.iter())
+                    .map(|(column, field)| {
+                        cast_with_options(column, field.data_type(), cast_options)
+                    })
+                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+            } else {
+                // Slow path: match fields by name and reorder
+                to_fields
+                    .iter()
+                    .map(|to_field| {
+                        let from_field_idx = from_fields
+                            .iter()
+                            .position(|from_field| from_field.name() == to_field.name())
+                            .ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "Field '{}' not found in source struct",
+                                    to_field.name()
+                                ))
+                            })?;
+                        let column = array.column(from_field_idx);
+                        cast_with_options(column, to_field.data_type(), cast_options)
+                    })
+                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+            };
+
             let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
             Ok(Arc::new(array) as ArrayRef)
         }
@@ -1644,6 +1698,16 @@ pub fn cast_with_options(
         (Time32(TimeUnit::Millisecond), Int32) => {
             cast_reinterpret_arrays::<Time32MillisecondType, Int32Type>(array)
         }
+        (Time32(TimeUnit::Second), Int64) => cast_with_options(
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Int64,
+            cast_options,
+        ),
+        (Time32(TimeUnit::Millisecond), Int64) => cast_with_options(
+            &cast_with_options(array, &Int32, cast_options)?,
+            &Int64,
+            cast_options,
+        ),
         (Int64, Date64) => cast_reinterpret_arrays::<Int64Type, Date64Type>(array),
         (Int64, Date32) => cast_with_options(
             &cast_with_options(array, &Int32, cast_options)?,
@@ -8805,7 +8869,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Utf8), unsorted) to Map("entries": Struct("key": Utf8, "value": Utf8), sorted) not supported"#
+            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Utf8), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Utf8), sorted) not supported"#
         );
     }
 
@@ -8856,7 +8920,7 @@ mod tests {
         };
         assert_eq!(
             t,
-            r#"Casting from Map("entries": Struct("key": Utf8, "value": nullable Interval(DayTime)), unsorted) to Map("entries": Struct("key": Utf8, "value": Duration(s)), sorted) not supported"#
+            r#"Casting from Map("entries": non-null Struct("key": non-null Utf8, "value": Interval(DayTime)), unsorted) to Map("entries": non-null Struct("key": non-null Utf8, "value": non-null Duration(s)), sorted) not supported"#
         );
     }
 
@@ -10836,11 +10900,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(Field::new("a", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("c", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10884,11 +10948,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![Some(42), None, Some(19), None]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(Field::new("a", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("c", DataType::Int32, true)),
+                Arc::new(Field::new("b", DataType::Int32, true)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10918,11 +10982,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![i32::MAX, 25, 1, 100]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("b", DataType::Boolean, false)),
+                Arc::new(Field::new("a", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("c", DataType::Int32, false)),
+                Arc::new(Field::new("b", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10961,7 +11025,7 @@ mod tests {
         let to_type = DataType::Utf8;
         let result = cast(&struct_array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Struct("a": Boolean) to Utf8 not supported"#,
+            r#"Cast error: Casting from Struct("a": non-null Boolean) to Utf8 not supported"#,
             result.unwrap_err().to_string()
         );
     }
@@ -10972,9 +11036,168 @@ mod tests {
         let to_type = DataType::Struct(vec![Field::new("a", DataType::Boolean, false)].into());
         let result = cast(&array, &to_type);
         assert_eq!(
-            r#"Cast error: Casting from Utf8 to Struct("a": Boolean) not supported"#,
+            r#"Cast error: Casting from Utf8 to Struct("a": non-null Boolean) not supported"#,
             result.unwrap_err().to_string()
         );
+    }
+
+    #[test]
+    fn test_cast_struct_with_different_field_order() {
+        // Test slow path: fields are in different order
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, false)),
+                string.clone() as ArrayRef,
+            ),
+        ]);
+
+        // Target has fields in different order: c, a, b instead of a, b, c
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("c", DataType::Utf8, false),
+                Field::new("a", DataType::Utf8, false), // Boolean to Utf8
+                Field::new("b", DataType::Utf8, false), // Int32 to Utf8
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type).unwrap();
+        let result_struct = result.as_struct();
+
+        assert_eq!(result_struct.data_type(), &to_type);
+        assert_eq!(result_struct.num_columns(), 3);
+
+        // Verify field "c" (originally position 2, now position 0) remains Utf8
+        let c_column = result_struct.column(0).as_string::<i32>();
+        assert_eq!(
+            c_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["foo", "bar", "baz", "qux"]
+        );
+
+        // Verify field "a" (originally position 0, now position 1) was cast from Boolean to Utf8
+        let a_column = result_struct.column(1).as_string::<i32>();
+        assert_eq!(
+            a_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["false", "false", "true", "true"]
+        );
+
+        // Verify field "b" (originally position 1, now position 2) was cast from Int32 to Utf8
+        let b_column = result_struct.column(2).as_string::<i32>();
+        assert_eq!(
+            b_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["42", "28", "19", "31"]
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_with_missing_field() {
+        // Test that casting fails when target has a field not present in source
+        let boolean = Arc::new(BooleanArray::from(vec![false, true]));
+        let struct_array = StructArray::from(vec![(
+            Arc::new(Field::new("a", DataType::Boolean, false)),
+            boolean.clone() as ArrayRef,
+        )]);
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Utf8, false),
+                Field::new("b", DataType::Int32, false), // Field "b" doesn't exist in source
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "Cast error: Field 'b' not found in source struct"
+        );
+    }
+
+    #[test]
+    fn test_cast_struct_with_subset_of_fields() {
+        // Test casting to a struct with fewer fields (selecting a subset)
+        let boolean = Arc::new(BooleanArray::from(vec![false, false, true, true]));
+        let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
+        let string = Arc::new(StringArray::from(vec!["foo", "bar", "baz", "qux"]));
+
+        let struct_array = StructArray::from(vec![
+            (
+                Arc::new(Field::new("a", DataType::Boolean, false)),
+                boolean.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("b", DataType::Int32, false)),
+                int.clone() as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("c", DataType::Utf8, false)),
+                string.clone() as ArrayRef,
+            ),
+        ]);
+
+        // Target has only fields "c" and "a", omitting "b"
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("c", DataType::Utf8, false),
+                Field::new("a", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+
+        let result = cast(&struct_array, &to_type).unwrap();
+        let result_struct = result.as_struct();
+
+        assert_eq!(result_struct.data_type(), &to_type);
+        assert_eq!(result_struct.num_columns(), 2);
+
+        // Verify field "c" remains Utf8
+        let c_column = result_struct.column(0).as_string::<i32>();
+        assert_eq!(
+            c_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["foo", "bar", "baz", "qux"]
+        );
+
+        // Verify field "a" was cast from Boolean to Utf8
+        let a_column = result_struct.column(1).as_string::<i32>();
+        assert_eq!(
+            a_column.into_iter().flatten().collect::<Vec<_>>(),
+            vec!["false", "false", "true", "true"]
+        );
+    }
+
+    #[test]
+    fn test_can_cast_struct_with_missing_field() {
+        // Test that can_cast_types returns false when target has a field not in source
+        let from_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int32, false),
+                Field::new("b", DataType::Utf8, false),
+            ]
+            .into(),
+        );
+
+        let to_type = DataType::Struct(
+            vec![
+                Field::new("a", DataType::Int64, false),
+                Field::new("c", DataType::Boolean, false), // Field "c" not in source
+            ]
+            .into(),
+        );
+
+        assert!(!can_cast_types(&from_type, &to_type));
     }
 
     fn run_decimal_cast_test_case_between_multiple_types(t: DecimalCastTestConfig) {
@@ -11865,5 +12088,139 @@ mod tests {
 
         // Verify the run-ends were cast correctly (run ends at 3, 6, 9)
         assert_eq!(run_array.run_ends().values(), &[3i64, 6i64, 9i64]);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_int64() {
+        let array = Time32SecondArray::from(vec![1000, 2000, 3000]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let to_type = DataType::Int64;
+        let cast_options = CastOptions::default();
+
+        assert!(can_cast_types(array.data_type(), &to_type));
+
+        let result = cast_with_options(&array, &to_type, &cast_options);
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Second) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        assert_eq!(cast_array.value(0), 1000);
+        assert_eq!(cast_array.value(1), 2000);
+        assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_int64() {
+        let array = Time32MillisecondArray::from(vec![1000, 2000, 3000]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let to_type = DataType::Int64;
+        let cast_options = CastOptions::default();
+
+        assert!(can_cast_types(array.data_type(), &to_type));
+
+        let result = cast_with_options(&array, &to_type, &cast_options);
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Millisecond) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        assert_eq!(cast_array.value(0), 1000);
+        assert_eq!(cast_array.value(1), 2000);
+        assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_string_to_time32_second_to_int64() {
+        // Mimic: select arrow_cast('03:12:44'::time, 'Time32(Second)')::bigint;
+        // raised in https://github.com/apache/datafusion/issues/19036
+        let array = StringArray::from(vec!["03:12:44"]);
+        let array = Arc::new(array) as Arc<dyn Array>;
+        let cast_options = CastOptions::default();
+
+        // 1. Cast String to Time32(Second)
+        let time32_type = DataType::Time32(TimeUnit::Second);
+        let time32_array = cast_with_options(&array, &time32_type, &cast_options).unwrap();
+
+        // 2. Cast Time32(Second) to Int64
+        let int64_type = DataType::Int64;
+        assert!(can_cast_types(time32_array.data_type(), &int64_type));
+
+        let result = cast_with_options(&time32_array, &int64_type, &cast_options);
+
+        assert!(
+            result.is_ok(),
+            "Failed to cast Time32(Second) to Int64: {:?}",
+            result.err()
+        );
+
+        let cast_array = result.unwrap();
+        let cast_array = cast_array.as_any().downcast_ref::<Int64Array>().unwrap();
+
+        // 03:12:44 = 3*3600 + 12*60 + 44 = 10800 + 720 + 44 = 11564
+        assert_eq!(cast_array.value(0), 11564);
+    }
+    #[test]
+    fn test_string_dicts_to_binary_view() {
+        let expected = BinaryViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(StringArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(StringViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeStringArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array =
+                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::BinaryView).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
+    }
+
+    #[test]
+    fn test_binary_dicts_to_string_view() {
+        let expected = StringViewArray::from_iter(vec![
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[0],
+            None,
+            VIEW_TEST_DATA[3],
+            None,
+            VIEW_TEST_DATA[1],
+            VIEW_TEST_DATA[4],
+        ]);
+
+        let values_arrays: [ArrayRef; _] = [
+            Arc::new(BinaryArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(BinaryViewArray::from_iter(VIEW_TEST_DATA)),
+            Arc::new(LargeBinaryArray::from_iter(VIEW_TEST_DATA)),
+        ];
+        for values in values_arrays {
+            let keys =
+                Int8Array::from_iter([Some(1), Some(0), None, Some(3), None, Some(1), Some(4)]);
+            let string_dict_array =
+                DictionaryArray::<Int8Type>::try_new(keys, Arc::new(values)).unwrap();
+
+            let casted = cast(&string_dict_array, &DataType::Utf8View).unwrap();
+            assert_eq!(casted.as_ref(), &expected);
+        }
     }
 }

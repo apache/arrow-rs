@@ -641,33 +641,7 @@ impl RowGroupReaderBuilder {
 
     /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
     fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
-        let schema = self.metadata.file_metadata().schema_descr();
-        let num_leaves = schema.num_columns();
-
-        // Count how many leaves each root column has
-        let num_roots = schema.root_schema().get_fields().len();
-        let mut root_leaf_counts = vec![0usize; num_roots];
-        for leaf_idx in 0..num_leaves {
-            let root_idx = schema.get_column_root_idx(leaf_idx);
-            root_leaf_counts[root_idx] += 1;
-        }
-
-        // Keep only leaves whose root has exactly one leaf (non-nested)
-        let mut included_leaves = Vec::new();
-        for leaf_idx in 0..num_leaves {
-            if mask.leaf_included(leaf_idx) {
-                let root_idx = schema.get_column_root_idx(leaf_idx);
-                if root_leaf_counts[root_idx] == 1 {
-                    included_leaves.push(leaf_idx);
-                }
-            }
-        }
-
-        if included_leaves.is_empty() {
-            None
-        } else {
-            Some(ProjectionMask::leaves(schema, included_leaves))
-        }
+        mask.without_nested_types(self.metadata.file_metadata().schema_descr())
     }
 
     /// Get the offset index for the specified row group, if any

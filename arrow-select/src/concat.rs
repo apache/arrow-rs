@@ -107,7 +107,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         .inspect(|d| output_len += d.len())
         .collect();
 
-    if !should_merge_dictionary_values::<K>(&dictionaries, output_len) {
+    if !should_merge_dictionary_values::<K>(&dictionaries, output_len).0 {
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
