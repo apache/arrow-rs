@@ -296,7 +296,7 @@ impl FilterBuilder {
 pub enum IterationStrategy {
     /// A lazily evaluated iterator of ranges (slices)
     ///
-    /// Best for low selectivity filters
+    /// Best for low selectivity filters (which select a relatively large number of rows)
     SlicesIterator,
     /// A lazily evaluated iterator of indices
     ///
