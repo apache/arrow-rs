@@ -193,6 +193,8 @@ impl Default for RowSelection {
 impl RowSelection {
     /// Creates a [`RowSelection`] from a slice of [`BooleanArray`]
     ///
+    /// This always creates a `BitmaskSelection`.
+    ///
     /// # Panic
     ///
     /// Panics if any of the [`BooleanArray`] contain nulls
@@ -209,6 +211,24 @@ impl RowSelection {
     pub fn from_selectors(selectors: Vec<RowSelector>) -> Self {
         Self::Selectors(RowSelectorSelection::from_selectors(selectors))
     }
+
+    /// Creates a [`RowSelection`] from a slice of [`BooleanArray`] given the specified
+    /// strategy
+    ///
+    /// # Panic
+    ///
+    /// Panics if any of the [`BooleanArray`] contain nulls
+    pub fn from_filters_with_strategy(filters: &[BooleanArray], strategy: RowSelectionStrategy) -> Self {
+        match strategy{
+            RowSelectionStrategy::Mask => {
+                 Self::Mask(BitmaskSelection::from_filters(filters))
+            },
+            RowSelectionStrategy::Selectors => {
+                 Self::Selectors(RowSelectorSelection::from_filters(filters))
+            },
+        }
+    }
+
 
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep

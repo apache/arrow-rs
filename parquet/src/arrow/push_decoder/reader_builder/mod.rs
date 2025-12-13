@@ -706,10 +706,18 @@ fn override_selector_strategy_if_needed(
 
     // override the plan builder strategy with the resolved one
     let new_policy = match resolved_strategy {
-        RowSelectionStrategy::Mask => RowSelectionPolicy::Mask,
+        RowSelectionStrategy::Mask => {
+            RowSelectionPolicy::Mask
+        },
         RowSelectionStrategy::Selectors => RowSelectionPolicy::Selectors,
     };
 
+    if plan_builder.row_selection_policy() != &new_policy {
+        println!(
+            "WARNING: Overriding row selection strategy to {:?} based on projection and offset index",
+            resolved_strategy
+        );
+    }
     plan_builder.with_row_selection_policy(new_policy)
 }
 
