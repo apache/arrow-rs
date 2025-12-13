@@ -785,7 +785,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         (bytes.into(), buffers, Some(NullBuffer::new_valid(length)))
     }
 
-    fn create_output_on_non_nulls(
+    fn get_scalar_buffers_and_nulls_for_non_nullable(
         predicate: BooleanBuffer,
         result_len: usize,
         truthy: &GenericByteViewArray<T>,
@@ -822,13 +822,12 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
         let predicate = maybe_prep_null_mask_filter(predicate);
 
         let (views, buffers, nulls) = match (self.truthy.as_ref(), self.falsy.as_ref()) {
-            (Some(truthy), Some(falsy)) => {
-                Self::create_output_on_non_nulls(predicate, result_len, truthy, falsy)
-            }
+            (Some(truthy), Some(falsy)) => Self::get_scalar_buffers_and_nulls_for_non_nullable(
+                predicate, result_len, truthy, falsy,
+            ),
             (Some(truthy), None) => {
                 Self::get_scalar_buffers_and_nulls_for_single_non_nullable(predicate, truthy)
             }
-
             (None, Some(falsy)) => {
                 let predicate = predicate.not();
                 Self::get_scalar_buffers_and_nulls_for_single_non_nullable(predicate, falsy)
