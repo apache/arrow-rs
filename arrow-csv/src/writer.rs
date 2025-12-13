@@ -20,7 +20,7 @@
 //! This CSV writer allows Arrow data (in record batches) to be written as CSV files.
 //! The writer does not support writing `ListArray` and `StructArray`.
 //!
-//! Example:
+//! # Example
 //!
 //! ```
 //! # use arrow_array::*;
@@ -62,6 +62,85 @@
 //!     writer.write(batch).unwrap();
 //! }
 //! ```
+//!
+//! # Whitespace Handling
+//!
+//! The writer supports trimming leading and trailing whitespace from string values,
+//! compatible with Apache Spark's CSV options `ignoreLeadingWhiteSpace` and
+//! `ignoreTrailingWhiteSpace`. This is useful when working with data that may have
+//! unwanted padding.
+//!
+//! Whitespace trimming is applied to all string data types:
+//! - `DataType::Utf8`
+//! - `DataType::LargeUtf8`
+//! - `DataType::Utf8View`
+//!
+//! ## Example with whitespace handling
+//!
+//! ```
+//! # use arrow_array::*;
+//! # use arrow_csv::WriterBuilder;
+//! # use arrow_schema::*;
+//! # use std::sync::Arc;
+//!
+//! let schema = Schema::new(vec![
+//!     Field::new("name", DataType::Utf8, false),
+//!     Field::new("comment", DataType::Utf8, false),
+//! ]);
+//!
+//! let name = StringArray::from(vec![
+//!     "  Alice  ",   // Leading and trailing spaces
+//!     "Bob",         // No spaces
+//!     "  Charlie",   // Leading spaces only
+//! ]);
+//! let comment = StringArray::from(vec![
+//!     "  Great job!  ",
+//!     "Well done",
+//!     "Excellent  ",
+//! ]);
+//!
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema),
+//!     vec![Arc::new(name), Arc::new(comment)],
+//! )
+//! .unwrap();
+//!
+//! // Default behavior (no trimming)
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "name,comment\n  Alice  ,  Great job!  \nBob,Well done\n  Charlie,Excellent  \n"
+//! );
+//!
+//! // Trim both leading and trailing whitespace
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .with_ignore_leading_whitespace(true)
+//!     .with_ignore_trailing_whitespace(true)
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "name,comment\nAlice,Great job!\nBob,Well done\nCharlie,Excellent\n"
+//! );
+//!
+//! // Trim only leading whitespace
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .with_ignore_leading_whitespace(true)
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "name,comment\nAlice  ,Great job!  \nBob,Well done\nCharlie,Excellent  \n"
+//! );
+//! ```
 
 use arrow_array::*;
 use arrow_cast::display::*;
@@ -93,6 +172,10 @@ pub struct Writer<W: Write> {
     beginning: bool,
     /// The value to represent null entries, defaults to [`DEFAULT_NULL_VALUE`]
     null_value: Option<String>,
+    /// Whether to ignore leading whitespace in string values
+    ignore_leading_whitespace: bool,
+    /// Whether to ignore trailing whitespace in string values
+    ignore_trailing_whitespace: bool,
 }
 
 impl<W: Write> Writer<W> {
@@ -157,7 +240,10 @@ impl<W: Write> Writer<W> {
                         col_idx + 1
                     ))
                 })?;
-                byte_record.push_field(buffer.as_bytes());
+
+                let field_bytes =
+                    self.get_trimmed_field_bytes(&buffer, batch.column(col_idx).data_type());
+                byte_record.push_field(field_bytes);
             }
 
             self.writer
@@ -167,6 +253,29 @@ impl<W: Write> Writer<W> {
         self.writer.flush()?;
 
         Ok(())
+    }
+
+    /// Returns the bytes for a field, applying whitespace trimming if configured and applicable
+    fn get_trimmed_field_bytes<'a>(&self, buffer: &'a str, data_type: &DataType) -> &'a [u8] {
+        // Only trim string types when trimming is enabled
+        let should_trim = (self.ignore_leading_whitespace || self.ignore_trailing_whitespace)
+            && matches!(
+                data_type,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            );
+
+        if !should_trim {
+            return buffer.as_bytes();
+        }
+
+        let mut trimmed = buffer;
+        if self.ignore_leading_whitespace {
+            trimmed = trimmed.trim_start();
+        }
+        if self.ignore_trailing_whitespace {
+            trimmed = trimmed.trim_end();
+        }
+        trimmed.as_bytes()
     }
 
     /// Unwraps this `Writer<W>`, returning the underlying writer.
@@ -211,6 +320,10 @@ pub struct WriterBuilder {
     time_format: Option<String>,
     /// Optional value to represent null
     null_value: Option<String>,
+    /// Whether to ignore leading whitespace in string values. Defaults to `false`
+    ignore_leading_whitespace: bool,
+    /// Whether to ignore trailing whitespace in string values. Defaults to `false`
+    ignore_trailing_whitespace: bool,
 }
 
 impl Default for WriterBuilder {
@@ -227,6 +340,8 @@ impl Default for WriterBuilder {
             timestamp_tz_format: None,
             time_format: None,
             null_value: None,
+            ignore_leading_whitespace: false,
+            ignore_trailing_whitespace: false,
         }
     }
 }
@@ -389,6 +504,30 @@ impl WriterBuilder {
         self.null_value.as_deref().unwrap_or(DEFAULT_NULL_VALUE)
     }
 
+    /// Set whether to ignore leading whitespace in string values
+    /// For example, a string value such as "   foo" will be written as "foo"
+    pub fn with_ignore_leading_whitespace(mut self, ignore: bool) -> Self {
+        self.ignore_leading_whitespace = ignore;
+        self
+    }
+
+    /// Get whether to ignore leading whitespace in string values
+    pub fn ignore_leading_whitespace(&self) -> bool {
+        self.ignore_leading_whitespace
+    }
+
+    /// Set whether to ignore trailing whitespace in string values
+    /// For example, a string value such as "foo    " will be written as "foo"
+    pub fn with_ignore_trailing_whitespace(mut self, ignore: bool) -> Self {
+        self.ignore_trailing_whitespace = ignore;
+        self
+    }
+
+    /// Get whether to ignore trailing whitespace in string values
+    pub fn ignore_trailing_whitespace(&self) -> bool {
+        self.ignore_trailing_whitespace
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let mut builder = csv::WriterBuilder::new();
@@ -408,6 +547,8 @@ impl WriterBuilder {
             timestamp_format: self.timestamp_format,
             timestamp_tz_format: self.timestamp_tz_format,
             null_value: self.null_value,
+            ignore_leading_whitespace: self.ignore_leading_whitespace,
+            ignore_trailing_whitespace: self.ignore_trailing_whitespace,
         }
     }
 }
@@ -857,6 +998,186 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             ,,436f6d696320426f6f6b20477579\n\
             4e6564,466c616e64657273,\n\
             ",
+            String::from_utf8(buf).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_whitespace_handling() {
+        let schema = Schema::new(vec![
+            Field::new("c1", DataType::Utf8, false),
+            Field::new("c2", DataType::Float64, true),
+            Field::new("c3", DataType::Utf8, true),
+        ]);
+
+        let c1 = StringArray::from(vec![
+            "  leading space",
+            "trailing space  ",
+            "  both spaces  ",
+            "no spaces",
+        ]);
+        let c2 = PrimitiveArray::<Float64Type>::from(vec![
+            Some(123.45),
+            Some(678.90),
+            None,
+            Some(111.22),
+        ]);
+        let c3 = StringArray::from(vec![
+            Some("  test  "),
+            Some("value  "),
+            None,
+            Some("  another"),
+        ]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(c1), Arc::new(c2), Arc::new(c3)],
+        )
+        .unwrap();
+
+        // Test with no whitespace handling (default)
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new();
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\n  leading space,123.45,  test  \ntrailing space  ,678.9,value  \n  both spaces  ,,\nno spaces,111.22,  another\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with ignore leading whitespace only
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\nleading space,123.45,test  \ntrailing space  ,678.9,value  \nboth spaces  ,,\nno spaces,111.22,another\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with ignore trailing whitespace only
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\n  leading space,123.45,  test\ntrailing space,678.9,value\n  both spaces,,\nno spaces,111.22,  another\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with both ignore leading and trailing whitespace
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "c1,c2,c3\nleading space,123.45,test\ntrailing space,678.9,value\nboth spaces,,\nno spaces,111.22,another\n",
+            String::from_utf8(buf).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_whitespace_with_special_chars() {
+        let schema = Schema::new(vec![Field::new("c1", DataType::Utf8, false)]);
+
+        let c1 = StringArray::from(vec![
+            "  quoted \"value\"  ",
+            "  new\nline  ",
+            "  comma,value  ",
+            "\ttab\tvalue\t",
+        ]);
+
+        let batch = RecordBatch::try_new(Arc::new(schema), vec![Arc::new(c1)]).unwrap();
+
+        // Test with both ignore leading and trailing whitespace
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+
+        // Note: tabs are trimmed as they are whitespace characters
+        assert_eq!(
+            "c1\n\"quoted \"\"value\"\"\"\n\"new\nline\"\n\"comma,value\"\ntab\tvalue\n",
+            String::from_utf8(buf).unwrap()
+        );
+    }
+
+    #[test]
+    fn test_write_csv_whitespace_all_string_types() {
+        use arrow_array::{LargeStringArray, StringViewArray};
+
+        let schema = Schema::new(vec![
+            Field::new("utf8", DataType::Utf8, false),
+            Field::new("large_utf8", DataType::LargeUtf8, false),
+            Field::new("utf8_view", DataType::Utf8View, false),
+        ]);
+
+        let utf8 = StringArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
+
+        let large_utf8 =
+            LargeStringArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
+
+        let utf8_view =
+            StringViewArray::from(vec!["  leading", "trailing  ", "  both  ", "no_spaces"]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(utf8), Arc::new(large_utf8), Arc::new(utf8_view)],
+        )
+        .unwrap();
+
+        // Test with no whitespace handling (default)
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new();
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing  ,trailing  ,trailing  \n  both  ,  both  ,  both  \nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with both ignore leading and trailing whitespace
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new()
+            .with_ignore_leading_whitespace(true)
+            .with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing,trailing,trailing\nboth,both,both\nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with only leading whitespace trimming
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_leading_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\nleading,leading,leading\ntrailing  ,trailing  ,trailing  \nboth  ,both  ,both  \nno_spaces,no_spaces,no_spaces\n",
+            String::from_utf8(buf).unwrap()
+        );
+
+        // Test with only trailing whitespace trimming
+        let mut buf = Vec::new();
+        let builder = WriterBuilder::new().with_ignore_trailing_whitespace(true);
+        let mut writer = builder.build(&mut buf);
+        writer.write(&batch).unwrap();
+        drop(writer);
+        assert_eq!(
+            "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing,trailing,trailing\n  both,  both,  both\nno_spaces,no_spaces,no_spaces\n",
             String::from_utf8(buf).unwrap()
         );
     }
