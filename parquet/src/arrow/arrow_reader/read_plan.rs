@@ -25,8 +25,8 @@ use crate::arrow::arrow_reader::{
     ArrowPredicate, ParquetRecordBatchReader, RowSelection, RowSelectionCursor, RowSelector,
 };
 use crate::errors::{ParquetError, Result};
-use arrow_array::Array;
-use arrow_select::filter::prep_null_mask_filter;
+use arrow_array::{Array, BooleanArray};
+use arrow_select::filter::{prep_null_mask_filter, SlicesIterator};
 use std::collections::VecDeque;
 
 /// A builder for [`ReadPlan`]
@@ -58,8 +58,19 @@ impl ReadPlanBuilder {
     /// Configure the policy to use when materialising the [`RowSelection`]
     ///
     /// Defaults to [`RowSelectionPolicy::Auto`]
+    ///
+    /// If a particular policy is specified, this guarantees that the resulting
+    /// `ReadPlan` will use the specified strategy
     pub fn with_row_selection_policy(mut self, policy: RowSelectionPolicy) -> Self {
         self.row_selection_policy = policy;
+        // force the selection to be in the correct format
+        self.selection = self
+            .selection
+            .take()
+            .map(|s| match self.resolve_selection_strategy() {
+                RowSelectionStrategy::Mask => s.to_mask(),
+                RowSelectionStrategy::Selectors => s.to_selectors(),
+            });
         self
     }
 
@@ -164,7 +175,10 @@ impl ReadPlanBuilder {
             };
         }
 
-        let raw = RowSelection::from_filters(&filters);
+        // TODO implement and_then directly with BooleanArray to avoid
+        // constructing RowSelection twice?
+        let strategy = choose_filter_representation(&filters);
+        let raw = RowSelection::from_filters_with_strategy(&filters, strategy);
         self.selection = match self.selection.take() {
             Some(selection) => Some(selection.and_then(&raw)),
             None => Some(raw),
@@ -208,6 +222,44 @@ impl ReadPlanBuilder {
             row_selection_cursor,
         }
     }
+}
+
+/// Given the results of a filter, choose the best representation for
+/// row selection
+///
+/// TODO: should this be in RowSelection??
+fn choose_filter_representation(filters: &[BooleanArray]) -> RowSelectionStrategy {
+    let mut total_rows = 0;
+    let mut selected_rows = 0;
+    let num_selected_slices: usize = filters.iter()
+        .inspect(|filter| {
+            total_rows += filter.len();
+            selected_rows += filter.values().count_set_bits();
+        })
+        .map(|filter| {
+            SlicesIterator::new(filter).count()
+        })
+        .sum();
+
+    // TODO base this on the policy (w/ threshold)
+    let avg_run_length = if num_selected_slices > 0 {
+        // total number of runs is the selected and skipped slices (so estimate *2)
+        let total_selections = 2 * num_selected_slices;
+        total_rows / total_selections
+    } else {
+        0
+    };
+
+    let strategy = if avg_run_length > 32 {
+        RowSelectionStrategy::Selectors
+    } else {
+        RowSelectionStrategy::Mask
+    };
+
+
+    let num_filters = filters.len();
+    println!("Predicate selected {selected_rows} / {total_rows} rows in {num_selected_slices} slices ({avg_run_length} avg len) across {num_filters} filters --> {strategy:?}");
+strategy
 }
 
 /// Builder for [`ReadPlan`] that applies a limit and offset to the read plan
