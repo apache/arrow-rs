@@ -26,17 +26,20 @@ use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 ///
-/// `BooleanBuffer`s can be creating using [`BooleanBufferBuilder`]
+/// `BooleanBuffer`s can be creating modified using [`BooleanBufferBuilder`]
 ///
 /// # See Also
 ///
+/// * [`Buffer`] for working with bytes
 /// * [`NullBuffer`] for representing null values in Arrow arrays
 ///
 /// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug, Clone, Eq)]
 pub struct BooleanBuffer {
     buffer: Buffer,
+    // offset in bits
     offset: usize,
+    // length in bits
     len: usize,
 }
 
@@ -87,6 +90,162 @@ impl BooleanBuffer {
             buffer,
             offset: 0,
             len: length,
+        }
+    }
+
+    /// Create a new [`Buffer`] by applying the bitwise operation `op` to two input buffers.
+    ///
+    /// This function is much faster than applying the operation bit by bit as
+    /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
+    ///
+    /// # Notes:
+    /// * `op` takes two `u64` inputs and produces one `u64` output,
+    ///   operating on 64 bits at a time. **It must only apply bitwise operations
+    ///   on the relevant bits, as the input `u64` may contain irrelevant bits
+    ///   and may be processed differently on different endian architectures.**
+    /// * The inputs are treated as bitmaps, meaning that offsets and length
+    ///   are specified in number of bits.
+    /// * The output always has zero offset
+    ///
+    /// # See Also
+    /// - [`Buffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
+    /// - [`apply_bitwise_binary_op`](bit_util::apply_bitwise_binary_op) for in-place binary bitwise operations
+    ///
+    /// # Example: Create new [`Buffer`] from bitwise `AND` of two [`Buffer`]s
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let left = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
+    /// let right = [0b10101010u8, 0b11011100u8, 0b11110000u8]; // 3 bytes = 24 bits
+    /// // AND of the first 12 bits
+    /// let result = BooleanBuffer::from_bitwise_binary_op(
+    ///   &left, 0, &right, 0, 12, |a, b| a & b
+    /// );
+    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
+    /// ```
+    ///
+    /// # Example: Create new [`Buffer`] from bitwise `OR` of two byte slices
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let left = [0b11001100u8, 0b10111010u8];
+    /// let right = [0b10101010u8, 0b11011100u8];
+    /// // OR of bits 4..16 from left and bits 0..12 from right
+    /// let result = BooleanBuffer::from_bitwise_binary_op(
+    ///  &left, 4, &right, 0, 12, |a, b| a | b
+    /// );
+    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8]);
+    /// ```
+    pub fn from_bitwise_binary_op<F>(
+        left: impl AsRef<[u8]>,
+        left_offset_in_bits: usize,
+        right: impl AsRef<[u8]>,
+        right_offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) -> Self
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        // each chunk is 64 bits
+        let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
+        let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
+
+        let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
+
+        for (left, right) in left_chunks.iter().zip(right_chunks.iter()) {
+            // SAFETY: we have reserved enough capacity above, and we are
+            // pushing exactly num_u64s() items and `BitChunks` correctly
+            // reports its upper bound
+            unsafe {
+                result.push_unchecked(op(left, right));
+            }
+        }
+        if left_chunks.remainder_len() > 0 {
+            debug_assert!(result.capacity() > result.len() + 8); // should not reallocate
+            result.push(op(
+                left_chunks.remainder_bits(),
+                right_chunks.remainder_bits(),
+            ));
+            // Just pushed one u64, which may have trailing zeros,
+            // so truncate back to the correct length
+            result.truncate(left_chunks.num_bytes());
+        }
+
+        BooleanBuffer {
+            buffer: Buffer::from(result),
+            offset: 0,
+            len: len_in_bits,
+        }
+    }
+
+    /// Create a new [`Buffer`] by applying the bitwise operation to `op` to an input buffer.
+    ///
+    /// This function is much faster than applying the operation bit by bit as
+    /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
+    ///
+    /// # Notes:
+    /// * `op` takes two `u64` inputs and produces one `u64` output,
+    ///   operating on 64 bits at a time. **It must only apply bitwise operations
+    ///   on the relevant bits, as the input `u64` may contain irrelevant bits
+    ///   and may be processed differently on different endian architectures.**
+    /// * The inputs are treated as bitmaps, meaning that offsets and length
+    ///   are specified in number of bits.
+    /// * The output always has zero offset
+    ///
+    /// # See Also
+    /// - [`Buffer::from_bitwise_binary_op`] for binary operations on a single input buffer.
+    /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
+    ///
+    /// # Example: Create new [`Buffer`] from bitwise `NOT` of an input [`Buffer`]
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let input = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
+    /// // NOT of the first 12 bits
+    /// let result = BooleanBuffer::from_bitwise_unary_op(
+    ///  &input, 0, 12, |a| !a
+    /// );
+    /// assert_eq!(result.inner().as_slice(), &[0b00110011u8, 0b11110101u8]);
+    /// ```
+    ///
+    /// # Example: Create a new [`Buffer`] copying a bit slice from in input slice
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let input = [0b11001100u8, 0b10111010u8];
+    /// // // Copy bits 4..16 from input
+    /// let result = BooleanBuffer::from_bitwise_unary_op(
+    ///    &input, 4, 12, |a| a
+    /// );
+    /// assert_eq!(result.inner().as_slice(), &[0b10101100u8, 0b00001011u8]);
+    pub fn from_bitwise_unary_op<F>(
+        left: impl AsRef<[u8]>,
+        offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) -> Self
+    where
+        F: FnMut(u64) -> u64,
+    {
+        // each chunk is 64 bits
+        let left_chunks = BitChunks::new(left.as_ref(), offset_in_bits, len_in_bits);
+        let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
+        for left in left_chunks.iter() {
+            // SAFETY: we have reserved enough capacity above, and we are
+            // pushing exactly num_u64s() items and `BitChunks` correctly
+            // reports its upper bound
+            unsafe {
+                result.push_unchecked(op(left));
+            }
+        }
+        if left_chunks.remainder_len() > 0 {
+            debug_assert!(result.capacity() > result.len() + 8); // should not reallocate
+            result.push(op(left_chunks.remainder_bits()));
+            // Just pushed one u64, which may have have trailing zeros,
+            result.truncate(left_chunks.num_bytes());
+        }
+
+        BooleanBuffer {
+            buffer: Buffer::from(result),
+            offset: 0,
+            len: len_in_bits,
         }
     }
 
@@ -188,6 +347,8 @@ impl BooleanBuffer {
     }
 
     /// Returns the inner [`Buffer`]
+    ///
+    /// Note this does not account for offset and length of this [`BooleanBuffer`]
     #[inline]
     pub fn inner(&self) -> &Buffer {
         &self.buffer

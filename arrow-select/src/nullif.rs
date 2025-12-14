@@ -18,7 +18,7 @@
 //! Implements the `nullif` function for Arrow arrays.
 
 use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
-use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
 
 /// Returns a new array with the same values and the validity bit to false where
@@ -74,7 +74,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
     let (combined, null_count) = match left_data.nulls() {
         Some(left) => {
             let mut valid_count = 0;
-            let b = Buffer::from_bitwise_binary_op(
+            let b = BooleanBuffer::from_bitwise_binary_op(
                 left.buffer(),
                 left.offset(),
                 right.inner(),
@@ -90,7 +90,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer = Buffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| {
+            let buffer = BooleanBuffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| {
                 let t = !b;
                 null_count += t.count_zeros() as usize;
                 t
@@ -99,7 +99,6 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
     };
 
-    let combined = BooleanBuffer::new(combined, 0, len);
     // Safety:
     // Counted nulls whilst computing
     let nulls = unsafe { NullBuffer::new_unchecked(combined, null_count) };
