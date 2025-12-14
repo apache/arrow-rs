@@ -169,24 +169,26 @@ impl Buffer {
         let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
 
-        let mut result = Vec::with_capacity(left_chunks.num_u64s());
-        result.extend(
-            left_chunks
-                .iter()
-                .zip(right_chunks.iter())
-                .map(|(left, right)| op(left, right)),
-        );
+        let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
+
+        for (left, right) in left_chunks.iter().zip(right_chunks.iter()) {
+            // SAFETY: we have reserved enough capacity above
+            unsafe {
+                result.push_unchecked(op(left, right));
+            }
+        }
         if left_chunks.remainder_len() > 0 {
-            debug_assert_eq!(result.capacity(), result.len() + 1); // should not reallocate
+            debug_assert!(result.capacity() > result.len() + 8); // should not reallocate
             result.push(op(
                 left_chunks.remainder_bits(),
                 right_chunks.remainder_bits(),
             ));
+            // Just pushed one u64, which may have have trailing zeros,
+            // so truncate back to the correct length
+            result.truncate(left_chunks.num_bytes());
         }
 
-        // Result a vec of u64, so it may have trailing zero bytes, so we need
-        // to slice it down to the correct length
-        Buffer::from(result).slice_with_length(0, left_chunks.num_bytes())
+        Buffer::from(result)
     }
 
     /// Create a new [`Buffer`] by applying the bitwise operation to `op` to an input buffer.
@@ -238,16 +240,21 @@ impl Buffer {
     {
         // each chunk is 64 bits
         let left_chunks = BitChunks::new(left.as_ref(), offset_in_bits, len_in_bits);
-        let mut result = Vec::with_capacity(left_chunks.num_u64s());
-        result.extend(left_chunks.iter().map(&mut op));
+        let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
+        for left in left_chunks.iter() {
+            // SAFETY: we have reserved enough capacity above
+            unsafe {
+                result.push_unchecked(op(left));
+            }
+        }
         if left_chunks.remainder_len() > 0 {
-            debug_assert_eq!(result.capacity(), result.len() + 1); // should not reallocate
+            debug_assert!(result.capacity() > result.len() + 8); // should not reallocate
             result.push(op(left_chunks.remainder_bits()));
+            // Just pushed one u64, which may have have trailing zeros,
+            result.truncate(left_chunks.num_bytes());
         }
 
-        // Result a vec of u64, so it may have trailing zero bytes, so we need
-        // to slice it down to the correct length
-        Buffer::from(result).slice_with_length(0, left_chunks.num_bytes())
+        Buffer::from(result)
     }
 
     /// Returns the offset, in bytes, of `Self::ptr` to `Self::data`
