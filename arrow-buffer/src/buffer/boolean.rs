@@ -93,22 +93,24 @@ impl BooleanBuffer {
         }
     }
 
-    /// Create a new [`Buffer`] by applying the bitwise operation `op` to two input buffers.
+    /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
+    /// two input buffers.
     ///
     /// This function is much faster than applying the operation bit by bit as
     /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
     ///
     /// # Notes:
     /// * `op` takes two `u64` inputs and produces one `u64` output,
-    ///   operating on 64 bits at a time. **It must only apply bitwise operations
-    ///   on the relevant bits, as the input `u64` may contain irrelevant bits
-    ///   and may be processed differently on different endian architectures.**
+    ///   operating on 64 bits at a time.
+    /// * `op` must only apply bitwise operations on the relevant bits, as
+    ///   the input `u64` may contain irrelevant bits and may be processed
+    ///   differently on different endian architectures.
     /// * The inputs are treated as bitmaps, meaning that offsets and length
     ///   are specified in number of bits.
-    /// * The output always has zero offset
+    /// * The output always has zero offset.
     ///
     /// # See Also
-    /// - [`Buffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
+    /// - [`BooleanBuffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
     /// - [`apply_bitwise_binary_op`](bit_util::apply_bitwise_binary_op) for in-place binary bitwise operations
     ///
     /// # Example: Create new [`Buffer`] from bitwise `AND` of two [`Buffer`]s
@@ -203,7 +205,7 @@ impl BooleanBuffer {
         F: FnMut(u64, u64) -> u64,
     {
         unsafe {
-            // safety: all valid bytes are valid u64s
+            // safety: all  bytes are valid u64s
             let (left_prefix, left_u64s, left_suffix) = left.align_to::<u64>();
             let (right_prefix, right_u64s, right_suffix) = right.align_to::<u64>();
             // if there is no prefix or suffix, both buffers are aligned and we can do the operation directly
@@ -230,22 +232,23 @@ impl BooleanBuffer {
         }
     }
 
-    /// Create a new [`Buffer`] by applying the bitwise operation to `op` to an input buffer.
+    /// Create a new [`BooleanBuffer`] by applying the bitwise operation to `op` to an input buffer.
     ///
     /// This function is much faster than applying the operation bit by bit as
     /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
     ///
     /// # Notes:
-    /// * `op` takes two `u64` inputs and produces one `u64` output,
-    ///   operating on 64 bits at a time. **It must only apply bitwise operations
+    /// * `op` takes a single `u64` inputs and produces one `u64` output
+    ///   operating on 64 bits at a time.
+    /// * `op` must only apply bitwise operations
     ///   on the relevant bits, as the input `u64` may contain irrelevant bits
-    ///   and may be processed differently on different endian architectures.**
+    ///   and may be processed differently on different endian architectures.
     /// * The inputs are treated as bitmaps, meaning that offsets and length
     ///   are specified in number of bits.
     /// * The output always has zero offset
     ///
     /// # See Also
-    /// - [`Buffer::from_bitwise_binary_op`] for binary operations on a single input buffer.
+    /// - [`BooleanBuffer::from_bitwise_binary_op`] for binary operations on a single input buffer.
     /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
     ///
     /// # Example: Create new [`Buffer`] from bitwise `NOT` of an input [`Buffer`]
@@ -259,7 +262,7 @@ impl BooleanBuffer {
     /// assert_eq!(result.inner().as_slice(), &[0b00110011u8, 0b11110101u8]);
     /// ```
     ///
-    /// # Example: Create a new [`Buffer`] copying a bit slice from in input slice
+    /// # Example: Create a new [`BooleanBuffer`] copying a bit slice from in input slice
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
     /// let input = [0b11001100u8, 0b10111010u8];
@@ -441,7 +444,7 @@ impl BooleanBuffer {
 
     /// Returns the inner [`Buffer`]
     ///
-    /// Note this does not account for offset and length of this [`BooleanBuffer`]
+    /// Note: this does not account for offset and length of this [`BooleanBuffer`]
     #[inline]
     pub fn inner(&self) -> &Buffer {
         &self.buffer
