@@ -191,7 +191,7 @@ impl BooleanBuffer {
         }
     }
 
-    /// Like [`from_bitwise_binary_op`] but optimized for the case where the
+    /// Like [`Self::from_bitwise_binary_op`] but optimized for the case where the
     /// inputs are aligned to byte boundaries
     ///
     /// Returns `None` if the inputs are not fully u64 aligned
@@ -316,7 +316,7 @@ impl BooleanBuffer {
         }
     }
 
-    /// Like [`from_bitwise_unary_op`] but optimized for the case where the
+    /// Like [`Self::from_bitwise_unary_op`] but optimized for the case where the
     /// input is aligned to byte boundaries
     fn try_from_aligned_bitwise_unary_op<F>(
         left: &[u8],
