@@ -737,5 +737,35 @@ mod tests {
 
     #[test]
     fn test_from_bitwise_binary_op() {
+        // pick random boolean inputs
+        let input_bools_left = (0..1024).map(|_| rand::random::<bool>()).collect::<Vec<bool>>();
+        let input_bools_right = (0..1024).map(|_| rand::random::<bool>()).collect::<Vec<bool>>();
+        let input_buffer_left = BooleanBuffer::from(&input_bools_left[..]);
+        let input_buffer_right = BooleanBuffer::from(&input_bools_right[..]);
+
+        for left_offset in 0..200 {
+            for right_offset in [0, 4, 5, 17, 33, 24, 45, 64, 65, 100, 200] {
+                for len_offset in [0, 1, 44, 100, 256, 300, 512] {
+                    let len = 1024 - len_offset - left_offset.max(right_offset); // ensure we don't go out of bounds
+                    // compute with AND
+                    let result = BooleanBuffer::from_bitwise_binary_op(
+                        input_buffer_left.values(),
+                        left_offset,
+                        input_buffer_right.values(),
+                        right_offset,
+                        len,
+                        |a, b| a & b,
+                    );
+                    // compute directly from bools
+                    let expected = input_bools_left[left_offset..]
+                        .iter()
+                        .zip(&input_bools_right[right_offset..])
+                        .take(len)
+                        .map(|(a, b)| *a & *b)
+                        .collect::<BooleanBuffer>();
+                    assert_eq!(result, expected);
+                }
+            }
+        }
     }
 }
