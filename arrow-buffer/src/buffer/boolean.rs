@@ -145,6 +145,18 @@ impl BooleanBuffer {
     where
         F: FnMut(u64, u64) -> u64,
     {
+        // Fast path for aligned inputs
+        if left_offset_in_bits % 8 == 0 && right_offset_in_bits % 8 == 0 {
+            if let Some(result) = Self::try_from_aligned_bitwise_binary_op(
+                &left.as_ref()[left_offset_in_bits / 8..], // aligned to byte boundary
+                &right.as_ref()[right_offset_in_bits / 8..],
+                len_in_bits,
+                &mut op,
+            ) {
+                return result;
+            }
+        }
+
         // each chunk is 64 bits
         let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
@@ -176,6 +188,46 @@ impl BooleanBuffer {
             len: len_in_bits,
         }
     }
+
+    /// Like [`from_bitwise_binary_op`] but optimized for the case where the
+    /// inputs are aligned to byte boundaries
+    ///
+    /// Returns `None` if the inputs are not fully u64 aligned
+    fn try_from_aligned_bitwise_binary_op<F>(
+        left: &[u8],
+        right: &[u8],
+        len_in_bits: usize,
+        op: &mut F,
+    ) -> Option<Self>
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        unsafe {
+            // safety: all valid bytes are valid u64s
+            let (left_prefix, left_u64s, left_suffix) = left.align_to::<u64>();
+            let (right_prefix, right_u64s, right_suffix) = right.align_to::<u64>();
+            // if there is no prefix or suffix, both buffers are aligned and we can do the operation directly
+            // on u64s
+            // TODO also handle non empty suffixes by processing them separately
+            if left_prefix.is_empty()
+                && right_prefix.is_empty()
+                && left_suffix.is_empty()
+                && right_suffix.is_empty()
+            {
+                let result_u64s = left_u64s
+                .iter()
+                .zip(right_u64s.iter())
+                .map(|(l, r)| op(*l, *r))
+                .collect::<Vec<u64>>();
+                Some(BooleanBuffer::new(Buffer::from(result_u64s), 0, len_in_bits))
+            }
+            else {
+                None
+            }
+        }
+
+    }
+
 
     /// Create a new [`Buffer`] by applying the bitwise operation to `op` to an input buffer.
     ///
@@ -224,6 +276,17 @@ impl BooleanBuffer {
     where
         F: FnMut(u64) -> u64,
     {
+        // try fast path for aligned input
+        if offset_in_bits % 8 == 0 {
+            if let Some(result) = Self::try_from_aligned_bitwise_unary_op(
+                &left.as_ref()[offset_in_bits / 8..], // align to byte boundary
+                len_in_bits,
+                &mut op,
+            ) {
+                return result;
+            }
+        }
+
         // each chunk is 64 bits
         let left_chunks = BitChunks::new(left.as_ref(), offset_in_bits, len_in_bits);
         let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
@@ -247,6 +310,36 @@ impl BooleanBuffer {
             offset: 0,
             len: len_in_bits,
         }
+    }
+
+    /// Like [`from_bitwise_unary_op`] but optimized for the case where the
+    /// input is aligned to byte boundaries
+    fn try_from_aligned_bitwise_unary_op<F>(
+        left: &[u8],
+        len_in_bits: usize,
+        op: &mut F,
+    ) -> Option<Self>
+    where
+        F: FnMut(u64) -> u64,
+    {
+        unsafe {
+            // safety: all valid bytes are valid u64s
+            let (left_prefix, left_u64s, left_suffix) = left.align_to::<u64>();
+            // if there is no prefix or suffix, the buffer is aligned and we can do the operation directly
+            // on u64s
+            // TODO also handle non empty suffixes by processing them separately
+            if left_prefix.is_empty() && left_suffix.is_empty() {
+                let result_u64s = left_u64s
+                .iter()
+                .map(|l| op(*l))
+                .collect::<Vec<u64>>();
+                Some(BooleanBuffer::new(Buffer::from(result_u64s), 0, len_in_bits))
+            }
+            else {
+                None
+            }
+        }
+
     }
 
     /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
