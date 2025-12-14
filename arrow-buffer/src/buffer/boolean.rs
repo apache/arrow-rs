@@ -716,6 +716,23 @@ mod tests {
                 .collect::<BooleanBuffer>();
             assert_eq!(result, expected);
         }
+
+        // Also test when the input doesn't cover the entire buffer
+        for offset in 0..512 {
+            let len = 512 - offset; // fixed length less than total
+            let result = BooleanBuffer::from_bitwise_unary_op(
+                input_buffer.values(),
+                offset,
+                len,
+                |a| !a,
+            );
+            let expected = input_bools[offset..]
+                .iter()
+                .take(len)
+                .map(|b| !*b)
+                .collect::<BooleanBuffer>();
+            assert_eq!(result, expected);
+        }
     }
 
     #[test]
