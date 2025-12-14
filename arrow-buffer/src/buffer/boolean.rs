@@ -113,11 +113,11 @@ impl BooleanBuffer {
     /// - [`BooleanBuffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
     /// - [`apply_bitwise_binary_op`](bit_util::apply_bitwise_binary_op) for in-place binary bitwise operations
     ///
-    /// # Example: Create new [`Buffer`] from bitwise `AND` of two [`Buffer`]s
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `AND` of two [`Buffer`]s
     /// ```
-    /// # use arrow_buffer::BooleanBuffer;
-    /// let left = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
-    /// let right = [0b10101010u8, 0b11011100u8, 0b11110000u8]; // 3 bytes = 24 bits
+    /// # use arrow_buffer::{Buffer, BooleanBuffer};
+    /// let left = Buffer::from(vec![0b11001100u8, 0b10111010u8]); // 2 bytes = 16 bits
+    /// let right = Buffer::from(vec![0b10101010u8, 0b11011100u8, 0b11110000u8]); // 3 bytes = 24 bits
     /// // AND of the first 12 bits
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///   &left, 0, &right, 0, 12, |a, b| a & b
@@ -125,7 +125,7 @@ impl BooleanBuffer {
     /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
     /// ```
     ///
-    /// # Example: Create new [`Buffer`] from bitwise `OR` of two byte slices
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `OR` of two byte slices
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
     /// let left = [0b11001100u8, 0b10111010u8];
@@ -693,5 +693,32 @@ mod tests {
         assert_eq!(buf.len(), 3);
         assert_eq!(buf.values().len(), 1);
         assert!(buf.value(0));
+    }
+
+    #[test]
+    fn test_from_bitwise_unary_op() {
+        // Use 1024 boolean values so that at least some of the tests cover multiple u64 chunks and
+        // perfect alignment
+        let input_bools = (0..1024).map(|_| rand::random::<bool>()).collect::<Vec<bool>>();
+        let input_buffer = BooleanBuffer::from(&input_bools[..]);
+
+        // Note ensure we test offsets over 100 to cover multiple u64 chunks
+        for offset in 0..1024 {
+            let result = BooleanBuffer::from_bitwise_unary_op(
+                input_buffer.values(),
+                offset,
+                input_buffer.len() - offset,
+                |a| !a,
+            );
+            let expected = input_bools[offset..]
+                .iter()
+                .map(|b| !*b)
+                .collect::<BooleanBuffer>();
+            assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_from_bitwise_binary_op() {
     }
 }
