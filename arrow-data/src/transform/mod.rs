@@ -686,6 +686,12 @@ impl<'a> MutableArrayData<'a> {
                     })
                     .collect::<Result<Vec<_>, ArrowError>>();
                 match result {
+                    // This can happen if dict_concat is set to true, while the underlying
+                    // values of dictionaries are logically equal (dict_concat is determined only
+                    // by ptr comparison which is not always correct), or because they just have
+                    // lots of duplicate values
+                    // If this happens then fallback to a slower path of merging/deduplicating
+                    // the values
                     Err(ArrowError::DictionaryKeyOverflowError) => {
                         let (extends, merged_dictionary_values) = merge_dictionaries(
                             key_data_type.as_ref(),
