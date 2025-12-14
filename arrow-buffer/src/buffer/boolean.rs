@@ -699,7 +699,9 @@ mod tests {
     fn test_from_bitwise_unary_op() {
         // Use 1024 boolean values so that at least some of the tests cover multiple u64 chunks and
         // perfect alignment
-        let input_bools = (0..1024).map(|_| rand::random::<bool>()).collect::<Vec<bool>>();
+        let input_bools = (0..1024)
+            .map(|_| rand::random::<bool>())
+            .collect::<Vec<bool>>();
         let input_buffer = BooleanBuffer::from(&input_bools[..]);
 
         // Note ensure we test offsets over 100 to cover multiple u64 chunks
@@ -720,12 +722,8 @@ mod tests {
         // Also test when the input doesn't cover the entire buffer
         for offset in 0..512 {
             let len = 512 - offset; // fixed length less than total
-            let result = BooleanBuffer::from_bitwise_unary_op(
-                input_buffer.values(),
-                offset,
-                len,
-                |a| !a,
-            );
+            let result =
+                BooleanBuffer::from_bitwise_unary_op(input_buffer.values(), offset, len, |a| !a);
             let expected = input_bools[offset..]
                 .iter()
                 .take(len)
@@ -738,8 +736,12 @@ mod tests {
     #[test]
     fn test_from_bitwise_binary_op() {
         // pick random boolean inputs
-        let input_bools_left = (0..1024).map(|_| rand::random::<bool>()).collect::<Vec<bool>>();
-        let input_bools_right = (0..1024).map(|_| rand::random::<bool>()).collect::<Vec<bool>>();
+        let input_bools_left = (0..1024)
+            .map(|_| rand::random::<bool>())
+            .collect::<Vec<bool>>();
+        let input_bools_right = (0..1024)
+            .map(|_| rand::random::<bool>())
+            .collect::<Vec<bool>>();
         let input_buffer_left = BooleanBuffer::from(&input_bools_left[..]);
         let input_buffer_right = BooleanBuffer::from(&input_bools_right[..]);
 
