@@ -90,11 +90,12 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer = BooleanBuffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| {
-                let t = !b;
-                null_count += t.count_zeros() as usize;
-                t
-            });
+            let buffer =
+                BooleanBuffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| {
+                    let t = !b;
+                    null_count += t.count_zeros() as usize;
+                    t
+                });
             (buffer, null_count)
         }
     };

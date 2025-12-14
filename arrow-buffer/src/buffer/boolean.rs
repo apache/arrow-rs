@@ -172,7 +172,7 @@ impl BooleanBuffer {
             }
         }
         if left_chunks.remainder_len() > 0 {
-            debug_assert!(result.capacity() > result.len() + 8); // should not reallocate
+            debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate 
             result.push(op(
                 left_chunks.remainder_bits(),
                 right_chunks.remainder_bits(),
@@ -215,19 +215,20 @@ impl BooleanBuffer {
                 && right_suffix.is_empty()
             {
                 let result_u64s = left_u64s
-                .iter()
-                .zip(right_u64s.iter())
-                .map(|(l, r)| op(*l, *r))
-                .collect::<Vec<u64>>();
-                Some(BooleanBuffer::new(Buffer::from(result_u64s), 0, len_in_bits))
-            }
-            else {
+                    .iter()
+                    .zip(right_u64s.iter())
+                    .map(|(l, r)| op(*l, *r))
+                    .collect::<Vec<u64>>();
+                Some(BooleanBuffer::new(
+                    Buffer::from(result_u64s),
+                    0,
+                    len_in_bits,
+                ))
+            } else {
                 None
             }
         }
-
     }
-
 
     /// Create a new [`Buffer`] by applying the bitwise operation to `op` to an input buffer.
     ///
@@ -299,7 +300,7 @@ impl BooleanBuffer {
             }
         }
         if left_chunks.remainder_len() > 0 {
-            debug_assert!(result.capacity() > result.len() + 8); // should not reallocate
+            debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
             result.push(op(left_chunks.remainder_bits()));
             // Just pushed one u64, which may have have trailing zeros,
             result.truncate(left_chunks.num_bytes());
@@ -329,17 +330,16 @@ impl BooleanBuffer {
             // on u64s
             // TODO also handle non empty suffixes by processing them separately
             if left_prefix.is_empty() && left_suffix.is_empty() {
-                let result_u64s = left_u64s
-                .iter()
-                .map(|l| op(*l))
-                .collect::<Vec<u64>>();
-                Some(BooleanBuffer::new(Buffer::from(result_u64s), 0, len_in_bits))
-            }
-            else {
+                let result_u64s = left_u64s.iter().map(|l| op(*l)).collect::<Vec<u64>>();
+                Some(BooleanBuffer::new(
+                    Buffer::from(result_u64s),
+                    0,
+                    len_in_bits,
+                ))
+            } else {
                 None
             }
         }
-
     }
 
     /// Invokes `f` with indexes `0..len` collecting the boolean results into a new `BooleanBuffer`
