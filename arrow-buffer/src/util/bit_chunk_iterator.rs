@@ -204,7 +204,7 @@ fn compute_suffix_mask(len: usize, lead_padding: usize) -> (u64, usize) {
 
 /// Iterates over an arbitrarily aligned byte buffer 64 bits at a time
 ///
-/// Yields an iterator of `u64`, and a remainder. The first byte in the buffer
+/// [`Self::iter`] yields iterator of `u64`, and a remainder. The first byte in the buffer
 /// will be the least significant byte in output u64
 #[derive(Debug)]
 pub struct BitChunks<'a> {
@@ -313,7 +313,7 @@ impl<'a> BitChunks<'a> {
         ceil(self.chunk_len * 64 + self.remainder_len, 8)
     }
 
-    /// Returns an iterator over chunks of 64 bits represented as an u64
+    /// Returns an iterator over chunks of 64 bits represented as an `u64`
     #[inline]
     pub const fn iter(&self) -> BitChunkIterator<'a> {
         BitChunkIterator::<'a> {

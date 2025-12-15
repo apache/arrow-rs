@@ -150,16 +150,15 @@ impl BooleanBuffer {
     {
         // try fast path for aligned input
         if offset_in_bits % 8 == 0 {
-            if let Some(result) = Self::try_from_aligned_bitwise_unary_op(
-                &left.as_ref()[offset_in_bits / 8..], // align to byte boundary
-                len_in_bits,
-                &mut op,
-            ) {
+            // align to byte boundary
+            let aligned_left = &left.as_ref()[offset_in_bits / 8..];
+            if let Some(result) =
+                Self::try_from_aligned_bitwise_unary_op(aligned_left, len_in_bits, &mut op)
+            {
                 return result;
             }
         }
 
-        // each chunk is 64 bits
         let left_chunks = BitChunks::new(left.as_ref(), offset_in_bits, len_in_bits);
         let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
         for left in left_chunks.iter() {
@@ -173,19 +172,22 @@ impl BooleanBuffer {
         if left_chunks.remainder_len() > 0 {
             debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
             result.push(op(left_chunks.remainder_bits()));
-            // Just pushed one u64, which may have have trailing zeros,
+            // Just pushed one u64, which may have trailing zeros
             result.truncate(left_chunks.num_bytes());
         }
 
+        let buffer = Buffer::from(result);
         BooleanBuffer {
-            buffer: Buffer::from(result),
+            buffer,
             offset: 0,
             len: len_in_bits,
         }
     }
 
-    /// Like [`Self::from_bitwise_unary_op`] but optimized for the case where the
-    /// input is aligned to byte boundaries
+    /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
+    /// byte boundaries
+    ///
+    /// Returns None if the fast path cannot be taken
     fn try_from_aligned_bitwise_unary_op<F>(
         left: &[u8],
         len_in_bits: usize,
@@ -194,20 +196,17 @@ impl BooleanBuffer {
     where
         F: FnMut(u64) -> u64,
     {
-        // safety: all valid bytes are valid u64s
+        // Safety: all valid bytes are valid u64s
         let (left_prefix, left_u64s, left_suffix) = unsafe { left.align_to::<u64>() };
-        // if there is no prefix or suffix, the buffer is aligned and we can do
-        // the operation directly on u64s
-        if left_prefix.is_empty() && left_suffix.is_empty() {
-            let result_u64s: Vec<u64> = left_u64s.iter().map(|l| op(*l)).collect();
-            Some(BooleanBuffer::new(
-                Buffer::from(result_u64s),
-                0,
-                len_in_bits,
-            ))
-        } else {
-            None
+        if !(left_prefix.is_empty() && left_suffix.is_empty()) {
+            // Couldn't make this case any faster than the default path, see
+            // https://github.com/apache/arrow-rs/pull/8996/changes#r2620022082
+            return None;
         }
+        // the buffer is word (64 bit) aligned, so use optimized Vec code.
+        let result_u64s: Vec<u64> = left_u64s.iter().map(|l| op(*l)).collect();
+        let buffer = Buffer::from(result_u64s);
+        Some(BooleanBuffer::new(buffer, 0, len_in_bits))
     }
 
     /// Returns the number of set bits in this buffer
