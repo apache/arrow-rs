@@ -241,14 +241,14 @@ fn bench_zip_on_string_view_scalars(
         .as_str(),
     );
 
-    let null_scalar = input_generator_1.generate_null();
+    let null_scalar = input_generator_1.generate_null_scalar();
 
-    let non_null_scalar_1 = input_generator_1.generate();
-    let non_null_scalar_2 = input_generator_2.generate();
+    let non_null_scalar_1 = input_generator_1.generate_scalar();
+    let non_null_scalar_2 = input_generator_2.generate_scalar();
 
     let masks = mask_cases(ARRAY_LEN);
 
-    for (description, truthy, falsy) in &[
+    for (description, truthy, falsy) in [
         ("null_vs_non_null_scalar", &null_scalar, &non_null_scalar_1),
         (
             "non_null_scalar_vs_null_scalar",
@@ -257,13 +257,7 @@ fn bench_zip_on_string_view_scalars(
         ),
         ("non_nulls_scalars", &non_null_scalar_1, &non_null_scalar_2),
     ] {
-        bench_zip_input_on_all_masks(
-            description,
-            &mut group,
-            &masks,
-            &Scalar::new(truthy),
-            &Scalar::new(falsy),
-        );
+        bench_zip_input_on_all_masks(description, &mut group, &masks, truthy, falsy);
     }
     group.finish();
 }
@@ -278,16 +272,16 @@ impl GenerateStringView {
     fn name(&self) -> &str {
         self.description.as_str()
     }
-    fn generate_null(&self) -> ArrayRef {
-        new_null_array(&DataType::Utf8View, 1)
+    fn generate_null_scalar(&self) -> Scalar<ArrayRef> {
+        Scalar::new(new_null_array(&DataType::Utf8View, 1))
     }
 
-    fn generate(&self) -> ArrayRef {
-        Arc::new(create_string_view_array_with_fixed_len(
+    fn generate_scalar(&self) -> Scalar<ArrayRef> {
+        Scalar::new(Arc::new(create_string_view_array_with_fixed_len(
             1,
             0.0,
             self.str_len,
-        ))
+        )))
     }
 }
 
