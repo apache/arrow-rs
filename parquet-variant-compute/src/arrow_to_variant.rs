@@ -16,16 +16,17 @@
 // under the License.
 
 use crate::type_conversion::CastOptions;
-use arrow::array::{
-    Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
+use arrow_array::{
+    Array, cast::AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
     GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
-use arrow::compute::kernels::cast;
-use arrow::datatypes::{
-    self as datatypes, ArrowNativeType, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType,
+use arrow_cast::cast;
+use arrow_array::types::{
+    self as datatypes, ArrowPrimitiveType, ArrowTemporalType, ArrowTimestampType,
     DecimalType, RunEndIndexType,
 };
-use arrow::temporal_conversions::{as_date, as_datetime, as_time};
+use arrow_buffer::ArrowNativeType;
+use arrow_array::temporal_conversions::{as_date, as_datetime, as_time};
 use arrow_schema::{ArrowError, DataType, TimeUnit};
 use chrono::{DateTime, TimeZone, Utc};
 use parquet_variant::{
@@ -390,7 +391,7 @@ macro_rules! define_row_builder {
 
 define_row_builder!(
     struct BooleanArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::BooleanArray { array.as_boolean() }
+    |array| -> arrow_array::BooleanArray { array.as_boolean() }
 );
 
 define_row_builder!(
@@ -417,7 +418,7 @@ define_row_builder!(
         options: &'a CastOptions,
         scale: i8,
     },
-    |array| -> arrow::array::Decimal256Array { array.as_primitive() },
+    |array| -> arrow_array::Decimal256Array { array.as_primitive() },
     |value| -> Option<_> {
         let value = value.to_i128();
         value.and_then(|v| VariantDecimal16::try_new_with_signed_scale(v, *scale).ok())
@@ -480,12 +481,12 @@ define_row_builder!(
 
 define_row_builder!(
     struct BinaryViewArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::BinaryViewArray { array.as_byte_view() }
+    |array| -> arrow_array::BinaryViewArray { array.as_byte_view() }
 );
 
 define_row_builder!(
     struct FixedSizeBinaryArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::FixedSizeBinaryArray { array.as_fixed_size_binary() }
+    |array| -> arrow_array::FixedSizeBinaryArray { array.as_fixed_size_binary() }
 );
 
 define_row_builder!(
@@ -495,7 +496,7 @@ define_row_builder!(
 
 define_row_builder!(
     struct StringViewArrowToVariantBuilder<'a>,
-    |array| -> arrow::array::StringViewArray { array.as_string_view() }
+    |array| -> arrow_array::StringViewArray { array.as_string_view() }
 );
 
 /// Null builder that always appends null
@@ -603,13 +604,13 @@ impl ListLikeArray for FixedSizeListArray {
 
 /// Struct builder for StructArray
 pub(crate) struct StructArrowToVariantBuilder<'a> {
-    struct_array: &'a arrow::array::StructArray,
+    struct_array: &'a arrow_array::StructArray,
     field_builders: Vec<(&'a str, ArrowToVariantRowBuilder<'a>)>,
 }
 
 impl<'a> StructArrowToVariantBuilder<'a> {
     pub(crate) fn new(
-        struct_array: &'a arrow::array::StructArray,
+        struct_array: &'a arrow_array::StructArray,
         options: &'a CastOptions,
     ) -> Result<Self, ArrowError> {
         let mut field_builders = Vec::new();
@@ -659,8 +660,8 @@ impl<'a> StructArrowToVariantBuilder<'a> {
 
 /// Map builder for MapArray types
 pub(crate) struct MapArrowToVariantBuilder<'a> {
-    map_array: &'a arrow::array::MapArray,
-    key_strings: arrow::array::StringArray,
+    map_array: &'a arrow_array::MapArray,
+    key_strings: arrow_array::StringArray,
     values_builder: Box<ArrowToVariantRowBuilder<'a>>,
 }
 
@@ -719,7 +720,7 @@ impl<'a> MapArrowToVariantBuilder<'a> {
 ///
 /// NOTE: Union type ids are _not_ required to be dense, hence the hash map for child builders.
 pub(crate) struct UnionArrowToVariantBuilder<'a> {
-    union_array: &'a arrow::array::UnionArray,
+    union_array: &'a arrow_array::UnionArray,
     child_builders: HashMap<i8, Box<ArrowToVariantRowBuilder<'a>>>,
 }
 
@@ -808,7 +809,7 @@ impl<'a> DictionaryArrowToVariantBuilder<'a> {
 
 /// Run-end encoded array builder with efficient sequential access
 pub(crate) struct RunEndEncodedArrowToVariantBuilder<'a, R: RunEndIndexType> {
-    run_array: &'a arrow::array::RunArray<R>,
+    run_array: &'a arrow_array::RunArray<R>,
     values_builder: Box<ArrowToVariantRowBuilder<'a>>,
 
     run_ends: &'a [R::Native],
@@ -893,7 +894,7 @@ impl<'a, R: RunEndIndexType> RunEndEncodedArrowToVariantBuilder<'a, R> {
 mod tests {
     use super::*;
     use crate::{VariantArray, VariantArrayBuilder};
-    use arrow::array::{ArrayRef, BooleanArray, Int32Array, StringArray};
+    use arrow_array::{ArrayRef, BooleanArray, Int32Array, StringArray};
     use arrow::datatypes::Int32Type;
     use std::sync::Arc;
 
@@ -980,7 +981,7 @@ mod tests {
 
     #[test]
     fn test_struct_row_builder() {
-        use arrow::array::{ArrayRef, Int32Array, StringArray, StructArray};
+        use arrow_array::{ArrayRef, Int32Array, StringArray, StructArray};
         use arrow_schema::{DataType, Field};
         use std::sync::Arc;
 
@@ -1027,7 +1028,7 @@ mod tests {
 
     #[test]
     fn test_run_end_encoded_row_builder() {
-        use arrow::array::{Int32Array, RunArray};
+        use arrow_array::{Int32Array, RunArray};
         use arrow::datatypes::Int32Type;
 
         // Create a run-end encoded array: [A, A, B, B, B, C]
@@ -1050,7 +1051,7 @@ mod tests {
 
     #[test]
     fn test_run_end_encoded_random_access() {
-        use arrow::array::{Int32Array, RunArray};
+        use arrow_array::{Int32Array, RunArray};
         use arrow::datatypes::Int32Type;
 
         // Create a run-end encoded array: [A, A, B, B, B, C]
@@ -1076,7 +1077,7 @@ mod tests {
 
     #[test]
     fn test_run_end_encoded_with_nulls() {
-        use arrow::array::{Int32Array, RunArray};
+        use arrow_array::{Int32Array, RunArray};
         use arrow::datatypes::Int32Type;
 
         // Create a run-end encoded array with null values: [A, A, null, null, B]
@@ -1107,7 +1108,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_row_builder() {
-        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow_array::{DictionaryArray, Int32Array};
         use arrow::datatypes::Int32Type;
 
         // Create a dictionary array: keys=[0, 1, 0, 2, 1], values=["apple", "banana", "cherry"]
@@ -1127,7 +1128,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_with_nulls() {
-        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow_array::{DictionaryArray, Int32Array};
         use arrow::datatypes::Int32Type;
 
         // Create a dictionary array with null keys: keys=[0, null, 1, null, 2], values=["x", "y", "z"]
@@ -1159,7 +1160,7 @@ mod tests {
 
     #[test]
     fn test_dictionary_random_access() {
-        use arrow::array::{DictionaryArray, Int32Array};
+        use arrow_array::{DictionaryArray, Int32Array};
         use arrow::datatypes::Int32Type;
 
         // Create a dictionary array: keys=[0, 1, 2, 0, 1, 2], values=["red", "green", "blue"]
@@ -1186,7 +1187,7 @@ mod tests {
 
     #[test]
     fn test_nested_dictionary() {
-        use arrow::array::{DictionaryArray, Int32Array, StructArray};
+        use arrow_array::{DictionaryArray, Int32Array, StructArray};
         use arrow::datatypes::{Field, Int32Type};
 
         // Create a dictionary with struct values
@@ -1250,7 +1251,7 @@ mod tests {
 
     #[test]
     fn test_list_row_builder() {
-        use arrow::array::ListArray;
+        use arrow_array::ListArray;
 
         // Create a list array: [[1, 2], [3, 4, 5], null, []]
         let data = vec![
@@ -1289,7 +1290,7 @@ mod tests {
 
     #[test]
     fn test_sliced_list_row_builder() {
-        use arrow::array::ListArray;
+        use arrow_array::ListArray;
 
         // Create a list array: [[1, 2], [3, 4, 5], [6]]
         let data = vec![
@@ -1328,7 +1329,7 @@ mod tests {
 
     #[test]
     fn test_nested_list_row_builder() {
-        use arrow::array::ListArray;
+        use arrow_array::ListArray;
         use arrow::datatypes::Field;
 
         // Build the nested structure manually
@@ -1385,7 +1386,7 @@ mod tests {
 
     #[test]
     fn test_map_row_builder() {
-        use arrow::array::{Int32Array, MapArray, StringArray, StructArray};
+        use arrow_array::{Int32Array, MapArray, StringArray, StructArray};
         use arrow::buffer::{NullBuffer, OffsetBuffer};
         use arrow::datatypes::{DataType, Field, Fields};
         use std::sync::Arc;
@@ -1456,7 +1457,7 @@ mod tests {
 
     #[test]
     fn test_union_sparse_row_builder() {
-        use arrow::array::{Float64Array, Int32Array, StringArray, UnionArray};
+        use arrow_array::{Float64Array, Int32Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
         use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
@@ -1501,7 +1502,7 @@ mod tests {
 
     #[test]
     fn test_union_dense_row_builder() {
-        use arrow::array::{Float64Array, Int32Array, StringArray, UnionArray};
+        use arrow_array::{Float64Array, Int32Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
         use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
@@ -1561,7 +1562,7 @@ mod tests {
 
     #[test]
     fn test_union_sparse_type_ids_row_builder() {
-        use arrow::array::{Int32Array, StringArray, UnionArray};
+        use arrow_array::{Int32Array, StringArray, UnionArray};
         use arrow::buffer::ScalarBuffer;
         use arrow::datatypes::{DataType, Field, UnionFields};
         use std::sync::Arc;
@@ -1613,7 +1614,7 @@ mod tests {
 
     #[test]
     fn test_decimal32_row_builder() {
-        use arrow::array::Decimal32Array;
+        use arrow_array::Decimal32Array;
         use parquet_variant::VariantDecimal4;
 
         // Test Decimal32Array with scale 2 (e.g., for currency: 12.34)
@@ -1633,7 +1634,7 @@ mod tests {
 
     #[test]
     fn test_decimal128_row_builder() {
-        use arrow::array::Decimal128Array;
+        use arrow_array::Decimal128Array;
         use parquet_variant::VariantDecimal16;
 
         // Test Decimal128Array with negative scale (multiply by 10^|scale|)
@@ -1653,7 +1654,7 @@ mod tests {
 
     #[test]
     fn test_decimal256_overflow_row_builder() {
-        use arrow::array::Decimal256Array;
+        use arrow_array::Decimal256Array;
         use arrow::datatypes::i256;
 
         // Test Decimal256Array with a value that overflows i128
@@ -1674,7 +1675,7 @@ mod tests {
 
     #[test]
     fn test_binary_row_builder() {
-        use arrow::array::BinaryArray;
+        use arrow_array::BinaryArray;
 
         let binary_data = vec![
             Some(b"hello".as_slice()),
@@ -1697,7 +1698,7 @@ mod tests {
 
     #[test]
     fn test_binary_view_row_builder() {
-        use arrow::array::BinaryViewArray;
+        use arrow_array::BinaryViewArray;
 
         let binary_data = vec![
             Some(b"short".as_slice()),
@@ -1720,7 +1721,7 @@ mod tests {
 
     #[test]
     fn test_fixed_size_binary_row_builder() {
-        use arrow::array::FixedSizeBinaryArray;
+        use arrow_array::FixedSizeBinaryArray;
 
         let binary_data = vec![
             Some([0x01, 0x02, 0x03, 0x04]),
@@ -1743,7 +1744,7 @@ mod tests {
 
     #[test]
     fn test_utf8_view_row_builder() {
-        use arrow::array::StringViewArray;
+        use arrow_array::StringViewArray;
 
         let string_data = vec![
             Some("short"),
@@ -1766,7 +1767,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_second_row_builder() {
-        use arrow::array::TimestampSecondArray;
+        use arrow_array::TimestampSecondArray;
 
         let timestamp_data = vec![
             Some(1609459200), // 2021-01-01 00:00:00 UTC
@@ -1790,7 +1791,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_with_timezone_row_builder() {
-        use arrow::array::TimestampMicrosecondArray;
+        use arrow_array::TimestampMicrosecondArray;
         use chrono::DateTime;
 
         let timestamp_data = vec![
@@ -1817,7 +1818,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_nanosecond_precision_row_builder() {
-        use arrow::array::TimestampNanosecondArray;
+        use arrow_array::TimestampNanosecondArray;
 
         let timestamp_data = vec![
             Some(1609459200123456789), // 2021-01-01 00:00:00.123456789 UTC
@@ -1843,7 +1844,7 @@ mod tests {
 
     #[test]
     fn test_timestamp_millisecond_row_builder() {
-        use arrow::array::TimestampMillisecondArray;
+        use arrow_array::TimestampMillisecondArray;
 
         let timestamp_data = vec![
             Some(1609459200123), // 2021-01-01 00:00:00.123 UTC
@@ -1869,7 +1870,7 @@ mod tests {
 
     #[test]
     fn test_date32_row_builder() {
-        use arrow::array::Date32Array;
+        use arrow_array::Date32Array;
         use chrono::NaiveDate;
 
         let date_data = vec![
@@ -1897,7 +1898,7 @@ mod tests {
 
     #[test]
     fn test_date64_row_builder() {
-        use arrow::array::Date64Array;
+        use arrow_array::Date64Array;
         use chrono::NaiveDate;
 
         // Test Date64Array with various dates (milliseconds since epoch)
@@ -1926,7 +1927,7 @@ mod tests {
 
     #[test]
     fn test_time32_second_row_builder() {
-        use arrow::array::Time32SecondArray;
+        use arrow_array::Time32SecondArray;
         use chrono::NaiveTime;
 
         // Test Time32SecondArray with various times (seconds since midnight)
@@ -1955,7 +1956,7 @@ mod tests {
 
     #[test]
     fn test_time32_millisecond_row_builder() {
-        use arrow::array::Time32MillisecondArray;
+        use arrow_array::Time32MillisecondArray;
         use chrono::NaiveTime;
 
         // Test Time32MillisecondArray with various times (milliseconds since midnight)
@@ -1984,7 +1985,7 @@ mod tests {
 
     #[test]
     fn test_time64_microsecond_row_builder() {
-        use arrow::array::Time64MicrosecondArray;
+        use arrow_array::Time64MicrosecondArray;
         use chrono::NaiveTime;
 
         // Test Time64MicrosecondArray with various times (microseconds since midnight)
@@ -2013,7 +2014,7 @@ mod tests {
 
     #[test]
     fn test_time64_nanosecond_row_builder() {
-        use arrow::array::Time64NanosecondArray;
+        use arrow_array::Time64NanosecondArray;
         use chrono::NaiveTime;
 
         // Test Time64NanosecondArray with various times (nanoseconds since midnight)

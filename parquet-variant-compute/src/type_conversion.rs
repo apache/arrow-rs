@@ -17,8 +17,8 @@
 
 //! Module for transforming a typed arrow `Array` to `VariantArray`.
 
-use arrow::compute::{DecimalCast, rescale_decimal};
-use arrow::datatypes::{
+use arrow_cast::{DecimalCast, rescale_decimal};
+use arrow_array::types::{ 
     self, ArrowPrimitiveType, ArrowTimestampType, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType,
 };
@@ -73,24 +73,24 @@ macro_rules! impl_timestamp_from_variant {
     };
 }
 
-impl_primitive_from_variant!(datatypes::Int32Type, as_int32);
-impl_primitive_from_variant!(datatypes::Int16Type, as_int16);
-impl_primitive_from_variant!(datatypes::Int8Type, as_int8);
-impl_primitive_from_variant!(datatypes::Int64Type, as_int64);
-impl_primitive_from_variant!(datatypes::UInt8Type, as_u8);
-impl_primitive_from_variant!(datatypes::UInt16Type, as_u16);
-impl_primitive_from_variant!(datatypes::UInt32Type, as_u32);
-impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
-impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
-impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
-impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
-impl_primitive_from_variant!(datatypes::Date32Type, as_naive_date, |v| {
-    Some(datatypes::Date32Type::from_naive_date(v))
+impl_primitive_from_variant!(types::Int32Type, as_int32);
+impl_primitive_from_variant!(types::Int16Type, as_int16);
+impl_primitive_from_variant!(types::Int8Type, as_int8);
+impl_primitive_from_variant!(types::Int64Type, as_int64);
+impl_primitive_from_variant!(types::UInt8Type, as_u8);
+impl_primitive_from_variant!(types::UInt16Type, as_u16);
+impl_primitive_from_variant!(types::UInt32Type, as_u32);
+impl_primitive_from_variant!(types::UInt64Type, as_u64);
+impl_primitive_from_variant!(types::Float16Type, as_f16);
+impl_primitive_from_variant!(types::Float32Type, as_f32);
+impl_primitive_from_variant!(types::Float64Type, as_f64);
+impl_primitive_from_variant!(types::Date32Type, as_naive_date, |v| {
+    Some(types::Date32Type::from_naive_date(v))
 });
-impl_primitive_from_variant!(datatypes::Date64Type, as_naive_date, |v| {
-    Some(datatypes::Date64Type::from_naive_date(v))
+impl_primitive_from_variant!(types::Date64Type, as_naive_date, |v| {
+    Some(types::Date64Type::from_naive_date(v))
 });
-impl_primitive_from_variant!(datatypes::Time32SecondType, as_time_utc, |v| {
+impl_primitive_from_variant!(types::Time32SecondType, as_time_utc, |v| {
     // Return None if there are leftover nanoseconds
     if v.nanosecond() != 0 {
         None
@@ -98,7 +98,7 @@ impl_primitive_from_variant!(datatypes::Time32SecondType, as_time_utc, |v| {
         Some(v.num_seconds_from_midnight() as i32)
     }
 });
-impl_primitive_from_variant!(datatypes::Time32MillisecondType, as_time_utc, |v| {
+impl_primitive_from_variant!(types::Time32MillisecondType, as_time_utc, |v| {
     // Return None if there are leftover microseconds
     if v.nanosecond() % 1_000_000 != 0 {
         None
@@ -106,15 +106,15 @@ impl_primitive_from_variant!(datatypes::Time32MillisecondType, as_time_utc, |v| 
         Some((v.num_seconds_from_midnight() * 1_000) as i32 + (v.nanosecond() / 1_000_000) as i32)
     }
 });
-impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
+impl_primitive_from_variant!(types::Time64MicrosecondType, as_time_utc, |v| {
     Some((v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64)
 });
-impl_primitive_from_variant!(datatypes::Time64NanosecondType, as_time_utc, |v| {
+impl_primitive_from_variant!(types::Time64NanosecondType, as_time_utc, |v| {
     // convert micro to nano seconds
     Some(v.num_seconds_from_midnight() as i64 * 1_000_000_000 + v.nanosecond() as i64)
 });
 impl_timestamp_from_variant!(
-    datatypes::TimestampSecondType,
+    types::TimestampSecondType,
     as_timestamp_ntz_nanos,
     ntz = true,
     |timestamp| {
@@ -127,7 +127,7 @@ impl_timestamp_from_variant!(
     }
 );
 impl_timestamp_from_variant!(
-    datatypes::TimestampSecondType,
+    types::TimestampSecondType,
     as_timestamp_nanos,
     ntz = false,
     |timestamp| {
@@ -140,7 +140,7 @@ impl_timestamp_from_variant!(
     }
 );
 impl_timestamp_from_variant!(
-    datatypes::TimestampMillisecondType,
+    types::TimestampMillisecondType,
     as_timestamp_ntz_nanos,
     ntz = true,
     |timestamp| {
@@ -153,7 +153,7 @@ impl_timestamp_from_variant!(
     }
 );
 impl_timestamp_from_variant!(
-    datatypes::TimestampMillisecondType,
+    types::TimestampMillisecondType,
     as_timestamp_nanos,
     ntz = false,
     |timestamp| {
@@ -166,25 +166,25 @@ impl_timestamp_from_variant!(
     }
 );
 impl_timestamp_from_variant!(
-    datatypes::TimestampMicrosecondType,
+    types::TimestampMicrosecondType,
     as_timestamp_ntz_micros,
     ntz = true,
     Self::make_value,
 );
 impl_timestamp_from_variant!(
-    datatypes::TimestampMicrosecondType,
+    types::TimestampMicrosecondType,
     as_timestamp_micros,
     ntz = false,
     |timestamp| Self::make_value(timestamp.naive_utc())
 );
 impl_timestamp_from_variant!(
-    datatypes::TimestampNanosecondType,
+    types::TimestampNanosecondType,
     as_timestamp_ntz_nanos,
     ntz = true,
     Self::make_value
 );
 impl_timestamp_from_variant!(
-    datatypes::TimestampNanosecondType,
+    types::TimestampNanosecondType,
     as_timestamp_nanos,
     ntz = false,
     |timestamp| Self::make_value(timestamp.naive_utc())
@@ -299,7 +299,7 @@ macro_rules! generic_conversion_single_value_with_result {
             Err(e) => Err(ArrowError::CastError(format!(
                 "Cast failed at index {idx} (array type: {ty}): {e}",
                 idx = $index,
-                ty = <$t as ::arrow::datatypes::ArrowPrimitiveType>::DATA_TYPE
+                ty = <$t as ::arrow_array::types::ArrowPrimitiveType>::DATA_TYPE
             ))),
         }
     }};

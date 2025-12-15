@@ -22,11 +22,11 @@ use crate::variant_to_arrow::{
     PrimitiveVariantToArrowRowBuilder, make_primitive_variant_to_arrow_row_builder,
 };
 use crate::{VariantArray, VariantValueArrayBuilder};
-use arrow::array::{ArrayRef, BinaryViewArray, NullBufferBuilder};
-use arrow::buffer::NullBuffer;
-use arrow::compute::CastOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Fields, TimeUnit};
-use arrow::error::{ArrowError, Result};
+use arrow_array::{ArrayRef, BinaryViewArray};
+use arrow_buffer::{NullBuffer, NullBufferBuilder};
+use arrow_cast::CastOptions;
+use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
+use std::result::Result;
 use parquet_variant::{Variant, VariantBuilderExt, VariantPath, VariantPathElement};
 
 use indexmap::IndexMap;
@@ -67,7 +67,7 @@ use std::sync::Arc;
 ///
 /// See [`ShreddedSchemaBuilder`] for a convenient way to build the `as_type`
 /// value passed to this function.
-pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray> {
+pub fn shred_variant(array: &VariantArray, as_type: &DataType) -> Result<VariantArray, ArrowError> {
     if array.typed_value_field().is_some() {
         return Err(ArrowError::InvalidArgumentError(
             "Input is already shredded".to_string(),
@@ -107,7 +107,7 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
     cast_options: &'a CastOptions,
     capacity: usize,
     top_level: bool,
-) -> Result<VariantToShreddedVariantRowBuilder<'a>> {
+) -> Result<VariantToShreddedVariantRowBuilder<'a>, ArrowError> {
     let builder = match data_type {
         DataType::Struct(fields) => {
             let typed_value_builder = VariantToShreddedObjectVariantRowBuilder::try_new(
@@ -169,7 +169,7 @@ pub(crate) enum VariantToShreddedVariantRowBuilder<'a> {
     Object(VariantToShreddedObjectVariantRowBuilder<'a>),
 }
 impl<'a> VariantToShreddedVariantRowBuilder<'a> {
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) -> Result<(), ArrowError> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
             Primitive(b) => b.append_null(),
@@ -177,7 +177,7 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
         }
     }
 
-    pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+    pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool, ArrowError> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
             Primitive(b) => b.append_value(value),
@@ -185,7 +185,7 @@ impl<'a> VariantToShreddedVariantRowBuilder<'a> {
         }
     }
 
-    pub fn finish(self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
+    pub fn finish(self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>), ArrowError> {
         use VariantToShreddedVariantRowBuilder::*;
         match self {
             Primitive(b) => b.finish(),
@@ -215,14 +215,14 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
             top_level,
         }
     }
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         // Only the top-level struct that represents the variant can be nullable; object fields and
         // array elements are non-nullable.
         self.nulls.append(!self.top_level);
         self.value_builder.append_null();
         self.typed_value_builder.append_null()
     }
-    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool, ArrowError> {
         self.nulls.append_non_null();
         if self.typed_value_builder.append_value(&value)? {
             self.value_builder.append_null();
@@ -231,7 +231,7 @@ impl<'a> VariantToShreddedPrimitiveVariantRowBuilder<'a> {
         }
         Ok(true)
     }
-    fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
+    fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>), ArrowError> {
         Ok((
             self.value_builder.build()?,
             self.typed_value_builder.finish()?,
@@ -254,7 +254,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         cast_options: &'a CastOptions,
         capacity: usize,
         top_level: bool,
-    ) -> Result<Self> {
+    ) -> Result<Self, ArrowError> {
         let typed_value_builders = fields.iter().map(|field| {
             let builder = make_variant_to_shredded_variant_arrow_row_builder(
                 field.data_type(),
@@ -266,14 +266,14 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         });
         Ok(Self {
             value_builder: VariantValueArrayBuilder::new(capacity),
-            typed_value_builders: typed_value_builders.collect::<Result<_>>()?,
+            typed_value_builders: typed_value_builders.collect::<Result<_, ArrowError>>()?,
             typed_value_nulls: NullBufferBuilder::new(capacity),
             nulls: NullBufferBuilder::new(capacity),
             top_level,
         })
     }
 
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         // Only the top-level struct that represents the variant can be nullable; object fields and
         // array elements are non-nullable.
         self.nulls.append(!self.top_level);
@@ -284,7 +284,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         }
         Ok(())
     }
-    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool, ArrowError> {
         let Variant::Object(ref obj) = value else {
             // Not an object => fall back
             self.nulls.append_non_null();
@@ -333,7 +333,7 @@ impl<'a> VariantToShreddedObjectVariantRowBuilder<'a> {
         self.nulls.append_non_null();
         Ok(true)
     }
-    fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>)> {
+    fn finish(mut self) -> Result<(BinaryViewArray, ArrayRef, Option<NullBuffer>), ArrowError> {
         let mut builder = StructArrayBuilder::new();
         for (field_name, typed_value_builder) in self.typed_value_builders {
             let (value, typed_value, nulls) = typed_value_builder.finish()?;
@@ -578,7 +578,7 @@ impl VariantSchemaNode {
 mod tests {
     use super::*;
     use crate::VariantArrayBuilder;
-    use arrow::array::{Array, FixedSizeBinaryArray, Float64Array, Int64Array};
+    use arrow_array::{Array, FixedSizeBinaryArray, Float64Array, Int64Array};
     use arrow::datatypes::{DataType, Field, Fields, TimeUnit, UnionFields, UnionMode};
     use parquet_variant::{
         ObjectBuilder, ReadOnlyMetadataBuilder, Variant, VariantBuilder, VariantPath,
@@ -772,7 +772,7 @@ mod tests {
             .typed_value_field()
             .unwrap()
             .as_any()
-            .downcast_ref::<arrow::array::Int32Array>()
+            .downcast_ref::<arrow_array::Int32Array>()
             .unwrap();
         assert_eq!(typed_value_int32.value(0), 42);
         assert!(typed_value_int32.is_null(1)); // float doesn't convert to int32
@@ -916,7 +916,7 @@ mod tests {
             .typed_value_field()
             .unwrap()
             .as_any()
-            .downcast_ref::<arrow::array::StructArray>()
+            .downcast_ref::<arrow_array::StructArray>()
             .unwrap();
 
         // Extract score and age fields from typed_value struct
@@ -1309,7 +1309,7 @@ mod tests {
             .typed_value_field()
             .unwrap()
             .as_any()
-            .downcast_ref::<arrow::array::StructArray>()
+            .downcast_ref::<arrow_array::StructArray>()
             .unwrap();
 
         // Extract id and session_id fields from typed_value struct
@@ -1616,7 +1616,7 @@ mod tests {
             .typed_value_field()
             .unwrap()
             .as_any()
-            .downcast_ref::<arrow::array::StructArray>()
+            .downcast_ref::<arrow_array::StructArray>()
             .unwrap();
 
         let time_field =
@@ -1636,7 +1636,7 @@ mod tests {
             .typed_value_field()
             .unwrap()
             .as_any()
-            .downcast_ref::<arrow::array::StringArray>()
+            .downcast_ref::<arrow_array::StringArray>()
             .unwrap();
 
         // Row 0

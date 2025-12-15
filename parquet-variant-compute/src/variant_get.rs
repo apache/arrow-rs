@@ -14,12 +14,11 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use arrow::{
-    array::{self, Array, ArrayRef, BinaryViewArray, StructArray},
-    compute::CastOptions,
-    datatypes::Field,
-    error::Result,
-};
+use arrow_array::{self, Array, ArrayRef, BinaryViewArray, StructArray};
+use arrow_cast::cast::CastOptions;
+use arrow_schema::Field;
+use std::result::Result;
+
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use parquet_variant::{VariantPath, VariantPathElement};
 
@@ -27,7 +26,7 @@ use crate::VariantArray;
 use crate::variant_array::BorrowedShreddingState;
 use crate::variant_to_arrow::make_variant_to_arrow_row_builder;
 
-use arrow::array::AsArray;
+use arrow_array::cast::AsArray;
 use std::sync::Arc;
 
 pub(crate) enum ShreddedPathStep<'a> {
@@ -51,7 +50,7 @@ pub(crate) fn follow_shredded_path_element<'a>(
     shredding_state: &BorrowedShreddingState<'a>,
     path_element: &VariantPathElement<'_>,
     cast_options: &CastOptions,
-) -> Result<ShreddedPathStep<'a>> {
+) -> Result<ShreddedPathStep<'a>, ArrowError> {
     // If the requested path element is not present in `typed_value`, and `value` is missing, then
     // we know it does not exist; it, and all paths under it, are all-NULL.
     let missing_path_step = || match shredding_state.value_field() {
@@ -117,13 +116,13 @@ fn shredded_get_path(
     path: &[VariantPathElement<'_>],
     as_field: Option<&Field>,
     cast_options: &CastOptions,
-) -> Result<ArrayRef> {
+) -> Result<ArrayRef, ArrowError> {
     // Helper that creates a new VariantArray from the given nested value and typed_value columns,
     // properly accounting for accumulated nulls from path traversal
     let make_target_variant =
         |value: Option<BinaryViewArray>,
          typed_value: Option<ArrayRef>,
-         accumulated_nulls: Option<arrow::buffer::NullBuffer>| {
+         accumulated_nulls: Option<arrow_buffer::NullBuffer>| {
             let metadata = input.metadata_field().clone();
             VariantArray::from_parts(metadata, value, typed_value, accumulated_nulls)
         };
@@ -168,7 +167,7 @@ fn shredded_get_path(
             ShreddedPathStep::Success(state) => {
                 // Union nulls from the typed_value we just accessed
                 if let Some(typed_value) = shredding_state.typed_value_field() {
-                    accumulated_nulls = arrow::buffer::NullBuffer::union(
+                    accumulated_nulls = arrow_buffer::NullBuffer::union(
                         accumulated_nulls.as_ref(),
                         typed_value.nulls(),
                     );
@@ -180,8 +179,8 @@ fn shredded_get_path(
             ShreddedPathStep::Missing => {
                 let num_rows = input.len();
                 let arr = match as_field.map(|f| f.data_type()) {
-                    Some(data_type) => Arc::new(array::new_null_array(data_type, num_rows)) as _,
-                    None => Arc::new(array::NullArray::new(num_rows)) as _,
+                    Some(data_type) => Arc::new(arrow_array::new_null_array(data_type, num_rows)) as _,
+                    None => Arc::new(arrow_array::NullArray::new(num_rows)) as _,
                 };
                 return Ok(arr);
             }
@@ -226,7 +225,7 @@ fn shredded_get_path(
                     cast_options,
                 )
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let struct_nulls = target.nulls().cloned();
 
@@ -274,7 +273,7 @@ fn try_perfect_shredding(variant_array: &VariantArray, as_field: &Field) -> Opti
 /// variant? Caller can pass None as the requested type to fetch a specific path, but it would
 /// quickly become annoying (and inefficient) to call `variant_get` for each leaf value in a struct or
 /// list and then try to assemble the results.
-pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef> {
+pub fn variant_get(input: &ArrayRef, options: GetOptions) -> Result<ArrayRef, ArrowError> {
     let variant_array = VariantArray::try_new(input)?;
 
     let GetOptions {

@@ -19,7 +19,7 @@
 //! STRUCT<metadata: BINARY, value: BINARY>
 
 use crate::{VariantArray, VariantArrayBuilder};
-use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
+use arrow_array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
 use arrow_schema::ArrowError;
 use parquet_variant_json::JsonToVariant;
 

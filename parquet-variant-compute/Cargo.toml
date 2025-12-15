@@ -29,8 +29,10 @@ rust-version = { workspace = true }
 
 
 [dependencies]
-arrow = { workspace = true , features = ["canonical_extension_types"]}
-arrow-schema = { workspace = true }
+arrow-array = { workspace = true }
+arrow-buffer = { workspace = true }
+arrow-cast = { workspace = true }
+arrow-schema = { workspace = true, features = ["canonical_extension_types"] }
 half = { version = "2.1", default-features = false }
 indexmap = "2.10.0"
 parquet-variant = { workspace = true }

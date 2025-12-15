@@ -17,7 +17,7 @@
 
 use crate::arrow_to_variant::make_arrow_to_variant_row_builder;
 use crate::{CastOptions, VariantArray, VariantArrayBuilder};
-use arrow::array::Array;
+use arrow_array::Array;
 use arrow_schema::ArrowError;
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you

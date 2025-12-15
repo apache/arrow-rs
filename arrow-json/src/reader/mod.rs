@@ -141,6 +141,8 @@ use std::io::BufRead;
 use std::sync::Arc;
 
 use chrono::Utc;
+#[cfg(feature = "variant_experimental")]
+use parquet_variant_compute::VariantType;
 use serde_core::Serialize;
 
 use arrow_array::timezone::Tz;
@@ -162,6 +164,9 @@ use crate::reader::struct_array::StructArrayDecoder;
 use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
+#[cfg(feature = "variant_experimental")]
+use crate::reader::variant_array::VariantArrayDecoder;
+
 mod binary_array;
 mod boolean_array;
 mod decimal_array;
@@ -176,6 +181,8 @@ mod string_view_array;
 mod struct_array;
 mod tape;
 mod timestamp_array;
+#[cfg(feature = "variant_experimental")]
+mod variant_array;
 
 /// A builder for [`Reader`] and [`Decoder`]
 pub struct ReaderBuilder {
@@ -304,6 +311,7 @@ impl ReaderBuilder {
         };
 
         let decoder = make_decoder(
+            None,
             data_type,
             self.coerce_primitive,
             self.strict_mode,
@@ -686,12 +694,18 @@ macro_rules! primitive_decoder {
 }
 
 fn make_decoder(
+    field: Option<FieldRef>,
     data_type: DataType,
     coerce_primitive: bool,
     strict_mode: bool,
     is_nullable: bool,
     struct_mode: StructMode,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+    #[cfg(feature = "variant_experimental")]
+    if let Some(field) = field && field.try_extension_type::<VariantType>().is_ok() {
+        return Ok(Box::new(VariantArrayDecoder{}));
+    }
+
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
@@ -758,6 +772,7 @@ fn make_decoder(
 
 #[cfg(test)]
 mod tests {
+    use parquet_variant::VariantBuilder;
     use serde_json::json;
     use std::fs::File;
     use std::io::{BufReader, Cursor, Seek};
@@ -2770,6 +2785,106 @@ mod tests {
             "Json error: whilst decoding field 'r': found 0 columns for 1 fields".to_owned()
         );
     }
+
+    #[cfg(feature = "variant_experimental")]
+    #[test]
+    fn test_variant() {
+        use parquet_variant::Variant;
+        use parquet_variant_compute::VariantArrayBuilder;
+
+        let do_test = |json_input: &str, ids: Vec<i32>, variants: Vec<Variant>| {
+            let variant_array = VariantArrayBuilder::new(0).build();
+
+            let struct_field = Schema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                // call VariantArray::field to get the correct Field
+                variant_array.field("var"),
+            ]);
+
+            let builder = ReaderBuilder::new(Arc::new(struct_field.clone()));
+            let result = builder
+                .with_struct_mode(StructMode::ObjectOnly)
+                .build(Cursor::new(json_input.as_bytes()))
+                .unwrap()
+                .next()
+                .unwrap()
+                .unwrap();
+
+            let int_array = arrow_array::array::Int32Array::from(ids);
+
+            let variant_array = {
+                let mut variant_builder = VariantArrayBuilder::new(variants.len());
+                for v in variants {
+                    variant_builder.append_variant(v);
+                }
+                variant_builder.build()
+            };
+
+            let variant_struct_array: StructArray = variant_array.into();
+
+            let expected = RecordBatch::try_new(
+                struct_field.into(),
+                vec![Arc::new(int_array), Arc::new(variant_struct_array)],
+            )
+            .unwrap();
+
+            assert_eq!(result, expected);
+        };
+
+        do_test(
+            "{\"id\": 1, \"var\": \"a\"}\n{\"id\": 2, \"var\": \"b\"}",
+            vec![1, 2],
+            vec![Variant::from("a"), Variant::from("b")],
+        );
+
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        object_builder.insert("int64", Variant::Int64(1));
+        object_builder.insert("double", Variant::Double(1.0));
+        object_builder.insert("null", Variant::Null);
+        object_builder.insert("true", Variant::BooleanTrue);
+        object_builder.insert("false", Variant::BooleanFalse);
+        object_builder.insert("string", Variant::from("a"));
+        object_builder.finish();
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+        do_test(
+            "{\"id\": 1, \"var\": {\"int64\": 1, \"double\": 1.0, \"null\": null, \"true\": true, \"false\": false, \"string\": \"a\"}}",
+            vec![1],
+            vec![variant],
+        );
+
+        // nested structs 
+        let mut builder = VariantBuilder::new();
+        let mut object_builder = builder.new_object();
+        {
+            let mut list_builder = object_builder.new_list("somelist");
+            {
+                let mut nested_object_builder = list_builder.new_object();
+                nested_object_builder.insert("num", Variant::Int64(2));
+                nested_object_builder.finish();
+            }
+            {
+                let mut nested_object_builder = list_builder.new_object();
+                nested_object_builder.insert("num", Variant::Int64(3));
+                nested_object_builder.finish();
+            }   
+            list_builder.finish();
+            object_builder.insert("scalar", Variant::from("a"));
+        }
+        object_builder.finish();
+
+        let (metadata, value) = builder.finish();
+        let variant = Variant::try_new(&metadata, &value).unwrap();
+
+        do_test(
+            "{\"id\": 1, \"var\": {\"somelist\": [{\"num\": 2}, {\"num\": 3}], \"scalar\": \"a\"}}",
+            vec![1],
+            vec![variant],
+        );
+    }
+
 
     #[test]
     fn test_decode_list_struct_with_wrong_types() {

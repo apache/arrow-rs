@@ -19,18 +19,20 @@
 
 use crate::arrow_to_variant::ListLikeArray;
 use crate::{BorrowedShreddingState, VariantArray, VariantValueArrayBuilder};
-use arrow::array::{
-    Array, AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
+use arrow_array::{
+    Array, cast::AsArray as _, BinaryViewArray, BooleanArray, FixedSizeBinaryArray, FixedSizeListArray,
     GenericListArray, GenericListViewArray, PrimitiveArray, StringArray, StructArray,
 };
-use arrow::buffer::NullBuffer;
-use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type,
+use arrow_buffer::NullBuffer;
+use arrow_array::types::{
+    ArrowPrimitiveType, Date32Type, Decimal32Type, Decimal64Type, Decimal128Type,
     DecimalType, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type, Int64Type,
-    Time64MicrosecondType, TimeUnit, TimestampMicrosecondType, TimestampNanosecondType,
+    Time64MicrosecondType, TimestampMicrosecondType, TimestampNanosecondType,
 };
-use arrow::error::{ArrowError, Result};
-use arrow::temporal_conversions::time64us_to_time;
+use arrow_schema::{DataType, TimeUnit};
+use arrow_schema::ArrowError;
+use std::result::Result;
+use arrow_array::temporal_conversions::time64us_to_time;
 use chrono::{DateTime, Utc};
 use indexmap::IndexMap;
 use parquet_variant::{
@@ -55,7 +57,7 @@ use uuid::Uuid;
 /// # Errors
 /// - If the shredded data contains spec violations (e.g., field name conflicts)
 /// - If unsupported data types are encountered in typed_value columns
-pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray> {
+pub fn unshred_variant(array: &VariantArray) -> Result<VariantArray, ArrowError> {
     // Check if already unshredded (optimization for common case)
     if array.typed_value_field().is_none() && array.value_field().is_some() {
         return Ok(array.clone());
@@ -129,7 +131,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         match self {
             Self::PrimitiveInt8(b) => b.append_row(builder, metadata, index),
             Self::PrimitiveInt16(b) => b.append_row(builder, metadata, index),
@@ -161,7 +163,7 @@ impl<'a> UnshredVariantRowBuilder<'a> {
 
     /// Creates a new UnshredVariantRowBuilder from shredding state
     /// Returns None for None/None case - caller decides how to handle based on context
-    fn try_new_opt(shredding_state: BorrowedShreddingState<'a>) -> Result<Option<Self>> {
+    fn try_new_opt(shredding_state: BorrowedShreddingState<'a>) -> Result<Option<Self>, ArrowError> {
         let value = shredding_state.value_field();
         let typed_value = shredding_state.typed_value_field();
         let Some(typed_value) = typed_value else {
@@ -284,7 +286,7 @@ impl<'a> NullUnshredVariantBuilder<'a> {
         builder: &mut impl VariantBuilderExt,
         _metadata: &VariantMetadata,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         if self.nulls.is_some_and(|nulls| nulls.is_null(index)) {
             builder.append_null();
         } else {
@@ -296,7 +298,7 @@ impl<'a> NullUnshredVariantBuilder<'a> {
 
 /// Builder for arrays that only have value column (already unshredded)
 struct ValueOnlyUnshredVariantBuilder<'a> {
-    value: &'a arrow::array::BinaryViewArray,
+    value: &'a arrow_array::BinaryViewArray,
 }
 
 impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
@@ -309,7 +311,7 @@ impl<'a> ValueOnlyUnshredVariantBuilder<'a> {
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         if self.value.is_null(index) {
             builder.append_null();
         } else {
@@ -327,7 +329,7 @@ trait AppendToVariantBuilder: Array {
         &self,
         builder: &mut impl VariantBuilderExt,
         index: usize,
-    ) -> Result<()>;
+    ) -> Result<(), ArrowError>;
 }
 
 /// Macro that handles the unshredded case (typed_value is missing or NULL) and returns early if
@@ -373,8 +375,8 @@ impl<'a, T: AppendToVariantBuilder> UnshredPrimitiveRowBuilder<'a, T> {
         &mut self,
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
-        index: usize,
-    ) -> Result<()> {
+        index: usize,   
+    ) -> Result<(), ArrowError> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         // If we get here, typed_value is valid and value is NULL
@@ -390,7 +392,7 @@ macro_rules! impl_append_to_variant_builder {
                 &self,
                 builder: &mut impl VariantBuilderExt,
                 index: usize,
-            ) -> Result<()> {
+            ) -> Result<(), ArrowError> {
                 let value = self.value(index);
                 $(
                     let $v = value;
@@ -436,11 +438,11 @@ impl_append_to_variant_builder!(FixedSizeBinaryArray, |bytes| {
 
 /// Trait for timestamp types to handle conversion to `DateTime<Utc>`
 trait TimestampType: ArrowPrimitiveType<Native = i64> {
-    fn to_datetime_utc(value: i64) -> Result<DateTime<Utc>>;
+    fn to_datetime_utc(value: i64) -> Result<DateTime<Utc>, ArrowError>;
 }
 
 impl TimestampType for TimestampMicrosecondType {
-    fn to_datetime_utc(micros: i64) -> Result<DateTime<Utc>> {
+    fn to_datetime_utc(micros: i64) -> Result<DateTime<Utc>, ArrowError> {
         DateTime::from_timestamp_micros(micros).ok_or_else(|| {
             ArrowError::InvalidArgumentError(format!(
                 "Invalid timestamp microsecond value: {micros}"
@@ -450,7 +452,7 @@ impl TimestampType for TimestampMicrosecondType {
 }
 
 impl TimestampType for TimestampNanosecondType {
-    fn to_datetime_utc(nanos: i64) -> Result<DateTime<Utc>> {
+    fn to_datetime_utc(nanos: i64) -> Result<DateTime<Utc>, ArrowError> {
         Ok(DateTime::from_timestamp_nanos(nanos))
     }
 }
@@ -480,7 +482,7 @@ impl<'a, T: TimestampType> TimestampUnshredRowBuilder<'a, T> {
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         // If we get here, typed_value is valid and value is NULL
@@ -524,7 +526,7 @@ where
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         let raw = self.typed_value.value(index);
@@ -536,13 +538,13 @@ where
 
 /// Builder for unshredding struct/object types with nested fields
 struct StructUnshredVariantBuilder<'a> {
-    value: Option<&'a arrow::array::BinaryViewArray>,
-    typed_value: &'a arrow::array::StructArray,
+    value: Option<&'a arrow_array::BinaryViewArray>,
+    typed_value: &'a arrow_array::StructArray,
     field_unshredders: IndexMap<&'a str, Option<UnshredVariantRowBuilder<'a>>>,
 }
 
 impl<'a> StructUnshredVariantBuilder<'a> {
-    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a StructArray) -> Result<Self> {
+    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a StructArray) -> Result<Self, ArrowError> {
         // Create unshredders for each field in constructor
         let mut field_unshredders = IndexMap::new();
         for (field, field_array) in typed_value.fields().iter().zip(typed_value.columns()) {
@@ -569,7 +571,7 @@ impl<'a> StructUnshredVariantBuilder<'a> {
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         let value = handle_unshredded_case!(self, builder, metadata, index, true);
 
         // If we get here, typed_value is valid and value may or may not be valid
@@ -614,7 +616,7 @@ struct ListUnshredVariantBuilder<'a, L: ListLikeArray> {
 }
 
 impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
-    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a L) -> Result<Self> {
+    fn try_new(value: Option<&'a BinaryViewArray>, typed_value: &'a L) -> Result<Self, ArrowError> {
         // Create a recursive unshredder for the list elements
         // The element type comes from the values array of the list
         let element_values = typed_value.values();
@@ -647,7 +649,7 @@ impl<'a, L: ListLikeArray> ListUnshredVariantBuilder<'a, L> {
         builder: &mut impl VariantBuilderExt,
         metadata: &VariantMetadata,
         index: usize,
-    ) -> Result<()> {
+    ) -> Result<(), ArrowError> {
         handle_unshredded_case!(self, builder, metadata, index, false);
 
         // If we get here, typed_value is valid and value is NULL -- process the list elements

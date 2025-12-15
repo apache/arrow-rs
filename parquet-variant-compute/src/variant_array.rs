@@ -22,15 +22,15 @@ use crate::type_conversion::{
     generic_conversion_single_value, generic_conversion_single_value_with_result,
     primitive_conversion_single_value,
 };
-use arrow::array::{Array, ArrayRef, AsArray, BinaryViewArray, StructArray};
-use arrow::buffer::NullBuffer;
-use arrow::compute::cast;
-use arrow::datatypes::{
+use arrow_array::{Array, ArrayRef, cast::AsArray, BinaryViewArray, StructArray};
+use arrow_buffer::NullBuffer;
+use arrow_cast::cast;
+use arrow_array::types::{
     Date32Type, Decimal32Type, Decimal64Type, Decimal128Type, Float16Type, Float32Type,
     Float64Type, Int8Type, Int16Type, Int32Type, Int64Type, Time64MicrosecondType,
     TimestampMicrosecondType, TimestampNanosecondType,
 };
-use arrow::error::Result;
+use std::result::Result;
 use arrow_schema::extension::ExtensionType;
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields, TimeUnit};
 use chrono::{DateTime, NaiveTime};
@@ -62,11 +62,11 @@ impl ExtensionType for VariantType {
         Some(String::new())
     }
 
-    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata> {
+    fn deserialize_metadata(_metadata: Option<&str>) -> Result<Self::Metadata, ArrowError> {
         Ok("")
     }
 
-    fn supports_data_type(&self, data_type: &DataType) -> Result<()> {
+    fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError> {
         if matches!(data_type, DataType::Struct(_)) {
             Ok(())
         } else {
@@ -76,7 +76,7 @@ impl ExtensionType for VariantType {
         }
     }
 
-    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self> {
+    fn try_new(data_type: &DataType, _metadata: Self::Metadata) -> Result<Self, ArrowError> {
         Self.supports_data_type(data_type)?;
         Ok(Self)
     }
@@ -253,7 +253,7 @@ impl VariantArray {
     /// int8.
     ///
     /// Currently, only [`BinaryViewArray`] are supported.
-    pub fn try_new(inner: &dyn Array) -> Result<Self> {
+    pub fn try_new(inner: &dyn Array) -> Result<Self, ArrowError> {
         // Workaround lack of support for Binary
         // https://github.com/apache/arrow-rs/issues/8387
         let inner = cast_to_binary_view_arrays(inner)?;
@@ -367,7 +367,7 @@ impl VariantArray {
     ///
     /// Note: Does not do deep validation of the [`Variant`], so it is up to the
     /// caller to ensure that the metadata and value were constructed correctly.
-    pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>> {
+    pub fn try_value(&self, index: usize) -> Result<Variant<'_, '_>, ArrowError> {
         match (self.typed_value_field(), self.value_field()) {
             // Always prefer typed_value, if available
             (Some(typed_value), value) if typed_value.is_valid(index) => {
@@ -627,7 +627,7 @@ impl ShreddedVariantFieldArray {
     ///    or be a list, large_list, list_view or struct
     ///
     /// Currently, only `value` columns of type [`BinaryViewArray`] are supported.
-    pub fn try_new(inner: &dyn Array) -> Result<Self> {
+    pub fn try_new(inner: &dyn Array) -> Result<Self, ArrowError> {
         let Some(inner_struct) = inner.as_struct_opt() else {
             return Err(ArrowError::InvalidArgumentError(
                 "Invalid ShreddedVariantFieldArray: requires StructArray as input".to_string(),
@@ -859,7 +859,7 @@ impl<'a> BorrowedShreddingState<'a> {
 impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
     type Error = ArrowError;
 
-    fn try_from(inner_struct: &'a StructArray) -> Result<Self> {
+    fn try_from(inner_struct: &'a StructArray) -> Result<Self, ArrowError> {
         // The `value` column need not exist, but if it does it must be a binary view.
         let value = if let Some(value_col) = inner_struct.column_by_name("value") {
             let Some(binary_view) = value_col.as_binary_view_opt() else {
@@ -880,7 +880,7 @@ impl<'a> TryFrom<&'a StructArray> for BorrowedShreddingState<'a> {
 impl TryFrom<&StructArray> for ShreddingState {
     type Error = ArrowError;
 
-    fn try_from(inner_struct: &StructArray) -> Result<Self> {
+    fn try_from(inner_struct: &StructArray) -> Result<Self, ArrowError> {
         Ok(BorrowedShreddingState::try_from(inner_struct)?.into())
     }
 }
@@ -938,7 +938,7 @@ fn typed_value_to_variant<'a>(
     typed_value: &'a ArrayRef,
     value: Option<&BinaryViewArray>,
     index: usize,
-) -> Result<Variant<'a, 'a>> {
+) -> Result<Variant<'a, 'a>, ArrowError> {
     let data_type = typed_value.data_type();
     if value.is_some_and(|v| !matches!(data_type, DataType::Struct(_)) && v.is_valid(index)) {
         // Only a partially shredded struct is allowed to have values for both columns
@@ -1109,7 +1109,7 @@ fn typed_value_to_variant<'a>(
 /// * `StructArray<metadata: BinaryView, value: BinaryView>`
 ///
 /// So cast them to get the right type.
-fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef> {
+fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
     let new_type = canonicalize_and_verify_data_type(array.data_type())?;
     if let Cow::Borrowed(_) = new_type {
         if let Some(array) = array.as_struct_opt() {
@@ -1122,7 +1122,7 @@ fn cast_to_binary_view_arrays(array: &dyn Array) -> Result<ArrayRef> {
 /// Recursively visits a data type, ensuring that it only contains data types that can legally
 /// appear in a (possibly shredded) variant array. It also replaces Binary fields with BinaryView,
 /// since that's what comes back from the parquet reader and what the variant code expects to find.
-fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, DataType>> {
+fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, DataType>, ArrowError> {
     use DataType::*;
 
     // helper macros
@@ -1220,7 +1220,7 @@ fn canonicalize_and_verify_data_type(data_type: &DataType) -> Result<Cow<'_, Dat
     Ok(new_data_type)
 }
 
-fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field>>> {
+fn canonicalize_and_verify_field(field: &Arc<Field>) -> Result<Cow<'_, Arc<Field>>, ArrowError> {
     let Cow::Owned(new_data_type) = canonicalize_and_verify_data_type(field.data_type())? else {
         return Ok(Cow::Borrowed(field));
     };

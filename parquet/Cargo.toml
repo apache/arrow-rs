@@ -131,7 +131,7 @@ encryption = ["dep:ring"]
 flate2-rust_backened = ["flate2/rust_backend"]
 flate2-zlib-rs = ["flate2/zlib-rs"]
 # Enable parquet variant support
-variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
+variant_experimental = ["arrow", "arrow/variant_experimental", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
 # Enable geospatial support
 geospatial = ["parquet-geospatial"]
 

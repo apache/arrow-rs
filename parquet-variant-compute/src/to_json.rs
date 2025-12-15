@@ -18,10 +18,9 @@
 //! Module for transforming a batch of Variants represented as
 //! STRUCT<metadata: BINARY, value: BINARY> into a batch of JSON strings.
 
-use arrow::array::{Array, ArrayRef, BinaryArray, BooleanBufferBuilder, StringArray, StructArray};
-use arrow::buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::DataType;
-use arrow_schema::ArrowError;
+use arrow_array::{Array, ArrayRef, BinaryArray, StringArray, StructArray};
+use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer, ScalarBuffer, BooleanBufferBuilder};
+use arrow_schema::{ArrowError, DataType};
 use parquet_variant::Variant;
 use parquet_variant_json::VariantToJson;
 

@@ -15,14 +15,14 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{
-    ArrayRef, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewArray, BinaryViewBuilder,
-    BooleanBuilder, FixedSizeBinaryBuilder, LargeBinaryBuilder, LargeStringBuilder, NullArray,
-    NullBufferBuilder, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
+use arrow_array::{
+    ArrayRef, builder::BinaryBuilder, builder::BinaryLikeArrayBuilder, builder::BinaryViewBuilder, builder::BooleanBuilder, builder::FixedSizeBinaryBuilder, builder::LargeBinaryBuilder, 
+    builder::LargeStringBuilder, builder::NullBufferBuilder, builder::PrimitiveBuilder, builder::StringBuilder, builder::StringLikeArrayBuilder, builder::StringViewBuilder, NullArray, BinaryViewArray,
 };
-use arrow::compute::{CastOptions, DecimalCast};
-use arrow::datatypes::{self, DataType, DecimalType};
-use arrow::error::{ArrowError, Result};
+use arrow_cast::{CastOptions, DecimalCast};
+use arrow_array::types::{self, DecimalType};
+use arrow_schema::{ArrowError, DataType};
+use std::result::Result;
 use parquet_variant::{Variant, VariantPath};
 
 use crate::type_conversion::{
@@ -39,39 +39,39 @@ use std::sync::Arc;
 pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Null(VariantToNullArrowRowBuilder<'a>),
     Boolean(VariantToBooleanArrowRowBuilder<'a>),
-    Int8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int8Type>),
-    Int16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int16Type>),
-    Int32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int32Type>),
-    Int64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Int64Type>),
-    UInt8(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt8Type>),
-    UInt16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt16Type>),
-    UInt32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt32Type>),
-    UInt64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::UInt64Type>),
-    Float16(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float16Type>),
-    Float32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float32Type>),
-    Float64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Float64Type>),
-    Decimal32(VariantToDecimalArrowRowBuilder<'a, datatypes::Decimal32Type>),
-    Decimal64(VariantToDecimalArrowRowBuilder<'a, datatypes::Decimal64Type>),
-    Decimal128(VariantToDecimalArrowRowBuilder<'a, datatypes::Decimal128Type>),
-    Decimal256(VariantToDecimalArrowRowBuilder<'a, datatypes::Decimal256Type>),
-    TimestampSecond(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampSecondType>),
-    TimestampSecondNtz(VariantToTimestampNtzArrowRowBuilder<'a, datatypes::TimestampSecondType>),
-    TimestampMilli(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampMillisecondType>),
+    Int8(VariantToPrimitiveArrowRowBuilder<'a, types::Int8Type>),
+    Int16(VariantToPrimitiveArrowRowBuilder<'a, types::Int16Type>),
+    Int32(VariantToPrimitiveArrowRowBuilder<'a, types::Int32Type>),
+    Int64(VariantToPrimitiveArrowRowBuilder<'a, types::Int64Type>),
+    UInt8(VariantToPrimitiveArrowRowBuilder<'a, types::UInt8Type>),
+    UInt16(VariantToPrimitiveArrowRowBuilder<'a, types::UInt16Type>),
+    UInt32(VariantToPrimitiveArrowRowBuilder<'a, types::UInt32Type>),
+    UInt64(VariantToPrimitiveArrowRowBuilder<'a, types::UInt64Type>),
+    Float16(VariantToPrimitiveArrowRowBuilder<'a, types::Float16Type>),
+    Float32(VariantToPrimitiveArrowRowBuilder<'a, types::Float32Type>),
+    Float64(VariantToPrimitiveArrowRowBuilder<'a, types::Float64Type>),
+    Decimal32(VariantToDecimalArrowRowBuilder<'a, types::Decimal32Type>),
+    Decimal64(VariantToDecimalArrowRowBuilder<'a, types::Decimal64Type>),
+    Decimal128(VariantToDecimalArrowRowBuilder<'a, types::Decimal128Type>),
+    Decimal256(VariantToDecimalArrowRowBuilder<'a, types::Decimal256Type>),
+    TimestampSecond(VariantToTimestampArrowRowBuilder<'a, types::TimestampSecondType>),
+    TimestampSecondNtz(VariantToTimestampNtzArrowRowBuilder<'a, types::TimestampSecondType>),
+    TimestampMilli(VariantToTimestampArrowRowBuilder<'a, types::TimestampMillisecondType>),
     TimestampMilliNtz(
-        VariantToTimestampNtzArrowRowBuilder<'a, datatypes::TimestampMillisecondType>,
+        VariantToTimestampNtzArrowRowBuilder<'a, types::TimestampMillisecondType>,
     ),
-    TimestampMicro(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>),
+    TimestampMicro(VariantToTimestampArrowRowBuilder<'a, types::TimestampMicrosecondType>),
     TimestampMicroNtz(
-        VariantToTimestampNtzArrowRowBuilder<'a, datatypes::TimestampMicrosecondType>,
+        VariantToTimestampNtzArrowRowBuilder<'a, types::TimestampMicrosecondType>,
     ),
-    TimestampNano(VariantToTimestampArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
-    TimestampNanoNtz(VariantToTimestampNtzArrowRowBuilder<'a, datatypes::TimestampNanosecondType>),
-    Time32Second(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Time32SecondType>),
-    Time32Milli(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Time32MillisecondType>),
-    Time64Micro(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Time64MicrosecondType>),
-    Time64Nano(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Time64NanosecondType>),
-    Date32(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date32Type>),
-    Date64(VariantToPrimitiveArrowRowBuilder<'a, datatypes::Date64Type>),
+    TimestampNano(VariantToTimestampArrowRowBuilder<'a, types::TimestampNanosecondType>),
+    TimestampNanoNtz(VariantToTimestampNtzArrowRowBuilder<'a, types::TimestampNanosecondType>),
+    Time32Second(VariantToPrimitiveArrowRowBuilder<'a, types::Time32SecondType>),
+    Time32Milli(VariantToPrimitiveArrowRowBuilder<'a, types::Time32MillisecondType>),
+    Time64Micro(VariantToPrimitiveArrowRowBuilder<'a, types::Time64MicrosecondType>),
+    Time64Nano(VariantToPrimitiveArrowRowBuilder<'a, types::Time64NanosecondType>),
+    Date32(VariantToPrimitiveArrowRowBuilder<'a, types::Date32Type>),
+    Date64(VariantToPrimitiveArrowRowBuilder<'a, types::Date64Type>),
     Uuid(VariantToUuidArrowRowBuilder<'a>),
     String(VariantToStringArrowBuilder<'a, StringBuilder>),
     LargeString(VariantToStringArrowBuilder<'a, LargeStringBuilder>),
@@ -94,7 +94,7 @@ pub(crate) enum VariantToArrowRowBuilder<'a> {
 }
 
 impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) -> Result<(), ArrowError> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
             Null(b) => b.append_null(),
@@ -138,7 +138,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
         }
     }
 
-    pub fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+    pub fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool, ArrowError> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
             Null(b) => b.append_value(value),
@@ -182,7 +182,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
         }
     }
 
-    pub fn finish(self) -> Result<ArrayRef> {
+    pub fn finish(self) -> Result<ArrayRef, ArrowError> {
         use PrimitiveVariantToArrowRowBuilder::*;
         match self {
             Null(b) => b.finish(),
@@ -228,7 +228,7 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
 }
 
 impl<'a> VariantToArrowRowBuilder<'a> {
-    pub fn append_null(&mut self) -> Result<()> {
+    pub fn append_null(&mut self) -> Result<(), ArrowError> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.append_null(),
@@ -237,7 +237,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         }
     }
 
-    pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+    pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool, ArrowError> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.append_value(&value),
@@ -246,7 +246,7 @@ impl<'a> VariantToArrowRowBuilder<'a> {
         }
     }
 
-    pub fn finish(self) -> Result<ArrayRef> {
+    pub fn finish(self) -> Result<ArrayRef, ArrowError> {
         use VariantToArrowRowBuilder::*;
         match self {
             Primitive(b) => b.finish(),
@@ -261,7 +261,7 @@ pub(crate) fn make_primitive_variant_to_arrow_row_builder<'a>(
     data_type: &'a DataType,
     cast_options: &'a CastOptions,
     capacity: usize,
-) -> Result<PrimitiveVariantToArrowRowBuilder<'a>> {
+) -> Result<PrimitiveVariantToArrowRowBuilder<'a>, ArrowError> {
     use PrimitiveVariantToArrowRowBuilder::*;
 
     let builder =
@@ -433,7 +433,7 @@ pub(crate) fn make_variant_to_arrow_row_builder<'a>(
     data_type: Option<&'a DataType>,
     cast_options: &'a CastOptions,
     capacity: usize,
-) -> Result<VariantToArrowRowBuilder<'a>> {
+) -> Result<VariantToArrowRowBuilder<'a>, ArrowError> {
     use VariantToArrowRowBuilder::*;
 
     let mut builder = match data_type {
@@ -484,11 +484,11 @@ pub(crate) struct VariantPathRowBuilder<'a> {
 }
 
 impl<'a> VariantPathRowBuilder<'a> {
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         self.builder.append_null()
     }
 
-    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool, ArrowError> {
         if let Some(v) = value.get_path(&self.path) {
             self.builder.append_value(v)
         } else {
@@ -497,7 +497,7 @@ impl<'a> VariantPathRowBuilder<'a> {
         }
     }
 
-    fn finish(self) -> Result<ArrayRef> {
+    fn finish(self) -> Result<ArrayRef, ArrowError> {
         self.builder.finish()
     }
 }
@@ -526,12 +526,12 @@ macro_rules! define_variant_to_primitive_builder {
                 }
             }
 
-            fn append_null(&mut self) -> Result<()> {
+            fn append_null(&mut self) -> Result<(), ArrowError> {
                 self.builder.append_null();
                 Ok(())
             }
 
-            fn append_value(&mut self, $value: &Variant<'_, '_>) -> Result<bool> {
+            fn append_value(&mut self, $value: &Variant<'_, '_>) -> Result<bool, ArrowError> {
                 if let Some(v) = $value_transform {
                     self.builder.append_value(v);
                     Ok(true)
@@ -553,7 +553,7 @@ macro_rules! define_variant_to_primitive_builder {
             // Add this to silence unused mut warning from macro-generated code
             // This is mainly for `FakeNullBuilder`
             #[allow(unused_mut)]
-            fn finish(mut self) -> Result<ArrayRef> {
+            fn finish(mut self) -> Result<ArrayRef, ArrowError> {
                 Ok(Arc::new(self.builder.finish()))
             }
         }
@@ -571,7 +571,7 @@ define_variant_to_primitive_builder!(
     struct VariantToBooleanArrowRowBuilder<'a>
     |capacity| -> BooleanBuilder { BooleanBuilder::with_capacity(capacity) },
     |value|  value.as_boolean(),
-    type_name: datatypes::BooleanType::DATA_TYPE
+    type_name: types::BooleanType::DATA_TYPE
 );
 
 define_variant_to_primitive_builder!(
@@ -626,7 +626,7 @@ where
         capacity: usize,
         precision: u8,
         scale: i8,
-    ) -> Result<Self> {
+    ) -> Result<Self, ArrowError> {
         let builder = PrimitiveBuilder::<T>::with_capacity(capacity)
             .with_precision_and_scale(precision, scale)?;
         Ok(Self {
@@ -637,12 +637,12 @@ where
         })
     }
 
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         self.builder.append_null();
         Ok(())
     }
 
-    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool, ArrowError> {
         if let Some(scaled) = variant_to_unscaled_decimal::<T>(value, self.precision, self.scale) {
             self.builder.append_value(scaled);
             Ok(true)
@@ -660,7 +660,7 @@ where
         }
     }
 
-    fn finish(mut self) -> Result<ArrayRef> {
+    fn finish(mut self) -> Result<ArrayRef, ArrowError> {
         Ok(Arc::new(self.builder.finish()))
     }
 }
@@ -679,12 +679,12 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
         }
     }
 
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         self.builder.append_null();
         Ok(())
     }
 
-    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool> {
+    fn append_value(&mut self, value: &Variant<'_, '_>) -> Result<bool, ArrowError> {
         match value.as_uuid() {
             Some(uuid) => {
                 self.builder
@@ -703,7 +703,7 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
         }
     }
 
-    fn finish(mut self) -> Result<ArrayRef> {
+    fn finish(mut self) -> Result<ArrayRef, ArrowError> {
         Ok(Arc::new(self.builder.finish()))
     }
 }
@@ -726,19 +726,19 @@ impl VariantToBinaryVariantArrowRowBuilder {
 }
 
 impl VariantToBinaryVariantArrowRowBuilder {
-    fn append_null(&mut self) -> Result<()> {
+    fn append_null(&mut self) -> Result<(), ArrowError> {
         self.builder.append_null();
         self.nulls.append_null();
         Ok(())
     }
 
-    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool, ArrowError> {
         self.builder.append_value(value);
         self.nulls.append_non_null();
         Ok(true)
     }
 
-    fn finish(mut self) -> Result<ArrayRef> {
+    fn finish(mut self) -> Result<ArrayRef, ArrowError> {
         let variant_array = VariantArray::from_parts(
             self.metadata,
             Some(self.builder.build()?),
@@ -779,9 +779,8 @@ define_variant_to_primitive_builder!(
 #[cfg(test)]
 mod tests {
     use super::make_primitive_variant_to_arrow_row_builder;
-    use arrow::compute::CastOptions;
-    use arrow::datatypes::{DataType, Field, Fields, UnionFields, UnionMode};
-    use arrow::error::ArrowError;
+    use arrow_cast::CastOptions;
+    use arrow_schema::{ArrowError, DataType, Field, Fields, UnionFields, UnionMode};
     use std::sync::Arc;
 
     #[test]

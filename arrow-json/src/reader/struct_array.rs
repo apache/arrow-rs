@@ -46,6 +46,7 @@ impl StructArrayDecoder {
                 // it doesn't contain any nulls not masked by its parent
                 let nullable = f.is_nullable() || is_nullable;
                 make_decoder(
+                    Some(f.clone()),
                     f.data_type().clone(),
                     coerce_primitive,
                     strict_mode,

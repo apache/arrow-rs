@@ -18,7 +18,7 @@
 //! [`VariantArrayBuilder`] implementation
 
 use crate::VariantArray;
-use arrow::array::{ArrayRef, BinaryViewArray, BinaryViewBuilder, NullBufferBuilder, StructArray};
+use arrow_array::{ArrayRef, BinaryViewArray, builder::BinaryViewBuilder, builder::NullBufferBuilder, StructArray};
 use arrow_schema::{ArrowError, DataType, Field, Fields};
 use parquet_variant::{
     BuilderSpecificState, ListBuilder, MetadataBuilder, ObjectBuilder, Variant, VariantBuilderExt,
