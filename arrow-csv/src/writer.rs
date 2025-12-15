@@ -113,7 +113,11 @@
 //!     .unwrap();
 //! assert_eq!(
 //!     String::from_utf8(output).unwrap(),
-//!     "name,comment\nAlice,Great job!\nBob,Well done\nCharlie,Excellent\n"
+//!     "\
+//! name,comment\n\
+//! Alice,Great job!\n\
+//! Bob,Well done\n\
+//! Charlie,Excellent\n"
 //! );
 
 use arrow_array::*;
@@ -326,9 +330,10 @@ impl Default for WriterBuilder {
 }
 
 impl WriterBuilder {
-    /// Create a new builder for configuring CSV writing options.
+    /// Create a new builder for configuring CSV [`Writer`] options.
     ///
-    /// To convert a builder into a writer, call `WriterBuilder::build`
+    /// To convert a builder into a writer, call [`WriterBuilder::build`]. See
+    /// the [module documentation](crate::writer) for more examples.
     ///
     /// # Example
     ///
