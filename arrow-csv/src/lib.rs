@@ -15,7 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Transfer data between the Arrow memory format and CSV (comma-separated values).
+//! Transfer data between the [Apache Arrow] memory format and CSV (comma-separated values).
+//!
+//! [Apache Arrow]: https://arrow.apache.org/
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",

@@ -15,13 +15,12 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! CSV Writer
+//! CSV Writing: [`Writer`] and [`WriterBuilder`]
 //!
 //! This CSV writer allows Arrow data (in record batches) to be written as CSV files.
 //! The writer does not support writing `ListArray` and `StructArray`.
 //!
 //! # Example
-//!
 //! ```
 //! # use arrow_array::*;
 //! # use arrow_array::types::*;
@@ -75,14 +74,13 @@
 //! - `DataType::LargeUtf8`
 //! - `DataType::Utf8View`
 //!
-//! ## Example with whitespace handling
+//! ## Example: Use [`WriterBuilder`] to control whitespace handling
 //!
 //! ```
 //! # use arrow_array::*;
 //! # use arrow_csv::WriterBuilder;
 //! # use arrow_schema::*;
 //! # use std::sync::Arc;
-//!
 //! let schema = Schema::new(vec![
 //!     Field::new("name", DataType::Utf8, false),
 //!     Field::new("comment", DataType::Utf8, false),
@@ -105,17 +103,6 @@
 //! )
 //! .unwrap();
 //!
-//! // Default behavior (no trimming)
-//! let mut output = Vec::new();
-//! WriterBuilder::new()
-//!     .build(&mut output)
-//!     .write(&batch)
-//!     .unwrap();
-//! assert_eq!(
-//!     String::from_utf8(output).unwrap(),
-//!     "name,comment\n  Alice  ,  Great job!  \nBob,Well done\n  Charlie,Excellent  \n"
-//! );
-//!
 //! // Trim both leading and trailing whitespace
 //! let mut output = Vec::new();
 //! WriterBuilder::new()
@@ -128,19 +115,6 @@
 //!     String::from_utf8(output).unwrap(),
 //!     "name,comment\nAlice,Great job!\nBob,Well done\nCharlie,Excellent\n"
 //! );
-//!
-//! // Trim only leading whitespace
-//! let mut output = Vec::new();
-//! WriterBuilder::new()
-//!     .with_ignore_leading_whitespace(true)
-//!     .build(&mut output)
-//!     .write(&batch)
-//!     .unwrap();
-//! assert_eq!(
-//!     String::from_utf8(output).unwrap(),
-//!     "name,comment\nAlice  ,Great job!  \nBob,Well done\nCharlie,Excellent  \n"
-//! );
-//! ```
 
 use arrow_array::*;
 use arrow_cast::display::*;
@@ -152,6 +126,8 @@ use crate::map_csv_error;
 const DEFAULT_NULL_VALUE: &str = "";
 
 /// A CSV writer
+///
+/// See the [module documentation](crate::writer) for examples.
 #[derive(Debug)]
 pub struct Writer<W: Write> {
     /// The object to write to
@@ -180,12 +156,15 @@ pub struct Writer<W: Write> {
 
 impl<W: Write> Writer<W> {
     /// Create a new CsvWriter from a writable object, with default options
+    ///
+    /// See [`WriterBuilder`] for configure options, and the [module
+    /// documentation](crate::writer) for examples.
     pub fn new(writer: W) -> Self {
         let delimiter = b',';
         WriterBuilder::new().with_delimiter(delimiter).build(writer)
     }
 
-    /// Write a RecordBatch to a writable object
+    /// Write a RecordBatch to the underlying writer
     pub fn write(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         let num_columns = batch.num_columns();
         if self.beginning {
