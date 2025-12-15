@@ -162,16 +162,19 @@ impl BooleanBuffer {
         let left_chunks = BitChunks::new(left.as_ref(), offset_in_bits, len_in_bits);
         let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
         for left in left_chunks.iter() {
-            // SAFETY: we have reserved enough capacity above, and we are
-            // pushing exactly num_u64s() items and `BitChunks` correctly
-            // reports its upper bound
+            // SAFETY: reserved enough capacity above, (exactly num_u64s()
+            // items) and we assume `BitChunks` correctly reports upper bound
             unsafe {
                 result.push_unchecked(op(left));
             }
         }
         if left_chunks.remainder_len() > 0 {
             debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
-            result.push(op(left_chunks.remainder_bits()));
+            // SAFETY: reserved enough capacity above, (exactly num_u64s()
+            // items) and we assume `BitChunks` correctly reports upper bound
+            unsafe {
+                result.push_unchecked(op(left_chunks.remainder_bits()));
+            }
             // Just pushed one u64, which may have trailing zeros
             result.truncate(left_chunks.num_bytes());
         }
