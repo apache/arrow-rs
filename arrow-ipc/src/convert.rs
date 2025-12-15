@@ -490,8 +490,9 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             };
 
             let fields = match union.typeIds() {
-                None => UnionFields::new(0_i8..fields.len() as i8, fields),
-                Some(ids) => UnionFields::new(ids.iter().map(|i| i as i8), fields),
+                None => UnionFields::from_fields(fields),
+                Some(ids) => UnionFields::try_new(ids.iter().map(|i| i as i8), fields)
+                    .expect("invalid union field"),
             };
 
             DataType::Union(fields, union_mode)
@@ -1151,13 +1152,14 @@ mod tests {
                 Field::new(
                     "union<int32, utf8>",
                     DataType::Union(
-                        UnionFields::new(
+                        UnionFields::try_new(
                             vec![2, 3], // non-default type ids
                             vec![
                                 Field::new("int32", DataType::Int32, true),
                                 Field::new("utf8", DataType::Utf8, true),
                             ],
-                        ),
+                        )
+                        .unwrap(),
                         UnionMode::Dense,
                     ),
                     true,

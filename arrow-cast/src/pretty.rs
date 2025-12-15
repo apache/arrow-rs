@@ -1610,10 +1610,11 @@ mod tests {
             extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
             "my_money".to_owned(),
         )]);
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             vec![0],
             vec![Field::new("income", DataType::Int32, true).with_metadata(money_metadata.clone())],
-        );
+        )
+        .unwrap();
 
         // Create nested data and construct it with the correct metadata
         let mut array_builder = UnionBuilder::new_dense();
