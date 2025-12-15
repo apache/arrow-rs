@@ -620,10 +620,11 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
     }
 }
 
-/// A trait for Arrow String Arrays, currently three types are supported:
+/// A trait for Arrow Binary Arrays, currently four types are supported:
 /// - `BinaryArray`
 /// - `LargeBinaryArray`
 /// - `BinaryViewArray`
+/// - `FixedSizeBinaryArray`
 ///
 /// This trait helps to abstract over the different types of binary arrays
 /// so that we don't need to duplicate the implementation for each type.
@@ -640,6 +641,11 @@ impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
 impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
     fn iter(&self) -> ArrayIter<Self> {
         BinaryViewArray::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a FixedSizeBinaryArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        FixedSizeBinaryArray::iter(self)
     }
 }
 
@@ -1067,13 +1073,14 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![2, 1],
                     vec![
                         Field::new("foo", DataType::Int32, true),
                         Field::new("bar", DataType::Int64, true),
                     ],
-                ),
+                )
+                .unwrap(),
                 mode,
             );
             let array = new_null_array(&data_type, 4);

@@ -2636,7 +2636,7 @@ mod tests {
 
     #[test]
     fn test_take_union_dense_all_match_issue_6206() {
-        let fields = UnionFields::new(vec![0], vec![Field::new("a", DataType::Int64, false)]);
+        let fields = UnionFields::from_fields(vec![Field::new("a", DataType::Int64, false)]);
         let ints = Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5]));
 
         let array = UnionArray::try_new(

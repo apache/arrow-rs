@@ -1835,13 +1835,10 @@ mod tests {
         let fixed_size_list_data_type =
             DataType::FixedSizeList(Arc::new(Field::new_list_field(DataType::Int32, false)), 3);
 
-        let union_fields = UnionFields::new(
-            vec![0, 1],
-            vec![
-                Field::new("a", DataType::Int32, false),
-                Field::new("b", DataType::Float64, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Float64, false),
+        ]);
 
         let union_data_type = DataType::Union(union_fields, UnionMode::Dense);
 
@@ -3107,13 +3104,14 @@ mod tests {
     #[test]
     fn test_validation_of_invalid_union_array() {
         let array = unsafe {
-            let fields = UnionFields::new(
+            let fields = UnionFields::try_new(
                 vec![1, 3], // typeids : type id 2 is not valid
                 vec![
                     Field::new("a", DataType::Int32, false),
                     Field::new("b", DataType::Utf8, false),
                 ],
-            );
+            )
+            .unwrap();
             let type_ids = ScalarBuffer::from(vec![1i8, 2, 3]); // 2 is invalid
             let offsets = None;
             let children: Vec<ArrayRef> = vec![
