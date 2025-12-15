@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! CSV Reader
+//! CSV Reading: [`Reader`] and [`ReaderBuilder`]
 //!
 //! # Basic Usage
 //!
