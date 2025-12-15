@@ -12304,7 +12304,6 @@ mod tests {
 
         let expected = ListViewArray::from_iter_primitive::<Int32Type, _, _>(int32_list_values());
         assert_eq!(got, &expected);
-        assert_eq!(got, &expected);
     }
 
     #[test]
