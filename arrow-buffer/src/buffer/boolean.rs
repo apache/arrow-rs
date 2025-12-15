@@ -149,7 +149,7 @@ impl BooleanBuffer {
         F: FnMut(u64) -> u64,
     {
         // try fast path for aligned input
-        if offset_in_bits % 8 == 0 {
+        if offset_in_bits & 0x7 == 0 {
             // align to byte boundary
             let aligned = &src.as_ref()[offset_in_bits / 8..];
             if let Some(result) =
