@@ -1903,13 +1903,12 @@ unsafe fn decode_column(
 
                 let child_row = &row[1..];
                 rows_by_field[field_idx].push((idx, child_row));
-
-                *row = &row[row.len()..];
             }
 
             let mut child_arrays: Vec<ArrayRef> = Vec::with_capacity(converters.len());
-
             let mut offsets = (*mode == UnionMode::Dense).then(|| Vec::with_capacity(len));
+
+            let mut bytes_consumed = vec![0usize; len];
 
             for (field_idx, converter) in converters.iter().enumerate() {
                 let field_rows = &rows_by_field[field_idx];
@@ -1929,6 +1928,12 @@ unsafe fn decode_column(
 
                         let child_array =
                             unsafe { converter.convert_raw(&mut child_data, validate_utf8) }?;
+
+                        // track bytes consumed by comparing original and remaining lengths
+                        for (i, (row_idx, child_row)) in field_rows.iter().enumerate() {
+                            let remaining_len = child_data[i].len();
+                            bytes_consumed[*row_idx] = 1 + child_row.len() - remaining_len;
+                        }
 
                         child_arrays.push(child_array.into_iter().next().unwrap());
                     }
@@ -1951,9 +1956,24 @@ unsafe fn decode_column(
 
                         let child_array =
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
+
+                        // track bytes consumed for rows that belong to this field
+                        for (row_idx, child_row) in field_rows.iter() {
+                            let remaining_len = sparse_data[*row_idx].len();
+                            bytes_consumed[*row_idx] = 1 + child_row.len() - remaining_len;
+                        }
+
                         child_arrays.push(child_array.into_iter().next().unwrap());
                     }
                 }
+            }
+
+            // advance all row slices by the bytes consumed
+            // this is necessary when multiple columns exist, since each decoder needs to
+            // advance the row slice by the bytes it consumed so the next column's decoder
+            // can read its data
+            for (i, row) in rows.iter_mut().enumerate() {
+                *row = &row[bytes_consumed[i]..];
             }
 
             // build offsets for dense unions
@@ -4049,5 +4069,143 @@ mod tests {
         // among strigns
         // "a" < "z"
         assert!(rows.row(3) < rows.row(1));
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_many_union_columns() {
+        // col 1: Union(Int32, Utf8) [67, "hello"]
+        let fields1 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array1 = Int32Array::from(vec![Some(67), None]);
+        let string_array1 = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids1 = vec![0i8, 1].into();
+
+        let union_array1 = UnionArray::try_new(
+            fields1.clone(),
+            type_ids1,
+            None,
+            vec![
+                Arc::new(int_array1) as ArrayRef,
+                Arc::new(string_array1) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // col 2: Union(Int32, Utf8) [100, "world"]
+        let fields2 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array2 = Int32Array::from(vec![Some(100), None]);
+        let string_array2 = StringArray::from(vec![None::<&str>, Some("world")]);
+        let type_ids2 = vec![0i8, 1].into();
+
+        let union_array2 = UnionArray::try_new(
+            fields2.clone(),
+            type_ids2,
+            None,
+            vec![
+                Arc::new(int_array2) as ArrayRef,
+                Arc::new(string_array2) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // create a row converter with 2 union columns
+        let field1 = Field::new("col1", DataType::Union(fields1, UnionMode::Sparse), true);
+        let field2 = Field::new("col2", DataType::Union(fields2, UnionMode::Sparse), true);
+
+        let sort_field1 = SortField::new(field1.data_type().clone());
+        let sort_field2 = SortField::new(field2.data_type().clone());
+
+        let converter = RowConverter::new(vec![sort_field1, sort_field2]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[
+                Arc::new(union_array1.clone()) as ArrayRef,
+                Arc::new(union_array2.clone()) as ArrayRef,
+            ])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1, col2] = out.as_slice() else {
+            panic!("expected 2 columns")
+        };
+
+        let col1 = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        let col2 = col2.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        for (expected, got) in [union_array1, union_array2].iter().zip([col1, col2]) {
+            assert_eq!(expected.len(), got.len());
+            assert_eq!(expected.type_ids(), got.type_ids());
+
+            for i in 0..expected.len() {
+                assert_eq!(expected.value(i).as_ref(), got.value(i).as_ref());
+            }
+        }
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_one_union_column() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array = Int32Array::from(vec![Some(67), None]);
+        let string_array = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids = vec![0i8, 1].into();
+
+        let union_array = UnionArray::try_new(
+            fields.clone(),
+            type_ids,
+            None,
+            vec![
+                Arc::new(int_array) as ArrayRef,
+                Arc::new(string_array) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let field = Field::new("col", DataType::Union(fields, UnionMode::Sparse), true);
+        let sort_field = SortField::new(field.data_type().clone());
+        let converter = RowConverter::new(vec![sort_field]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone()) as ArrayRef])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1] = out.as_slice() else {
+            panic!("expected 1 column")
+        };
+
+        let col = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(col.len(), union_array.len());
+        assert_eq!(col.type_ids(), union_array.type_ids());
+
+        for i in 0..col.len() {
+            assert_eq!(col.value(i).as_ref(), union_array.value(i).as_ref());
+        }
     }
 }
