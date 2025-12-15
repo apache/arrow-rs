@@ -205,71 +205,10 @@ impl NullBufferBuilder {
     /// assert_eq!(builder.len(), 4);
     /// ```
     pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
-        let (lower, upper) = iter.size_hint();
-        let len = upper.expect("Iterator must have exact size_hint");
-        debug_assert_eq!(lower, len, "Iterator must have exact size_hint");
-
-        if len == 0 {
-            return;
-        }
-
         // Materialize since we're about to append bits
         self.materialize_if_needed();
 
-        let buf = self.bitmap_builder.as_mut().unwrap();
-        let start_len = buf.len();
-        // Advance to allocate space, initializing new bits to 0
-        buf.advance(len);
-
-        let slice = buf.as_slice_mut();
-        let mut bit_idx = start_len;
-        let end_bit = start_len + len;
-
-        // Process in chunks of 64 bits when byte-aligned for better performance
-        if start_len % 8 == 0 {
-            let start_byte = start_len / 8;
-            let mut iter = iter.peekable();
-
-            // Process full u64 chunks (64 bits at a time)
-            while bit_idx + 64 <= end_bit && iter.peek().is_some() {
-                let mut chunk: u64 = 0;
-                for i in 0..64 {
-                    if let Some(valid) = iter.next() {
-                        if valid {
-                            chunk |= 1u64 << i;
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                let byte_idx = (bit_idx - start_len) / 8 + start_byte;
-                // Write the u64 chunk as 8 bytes
-                slice[byte_idx..byte_idx + 8].copy_from_slice(&chunk.to_le_bytes());
-                bit_idx += 64;
-            }
-
-            // Process remaining bits
-            for valid in iter {
-                if valid {
-                    let byte_idx = bit_idx / 8;
-                    let bit_offset = bit_idx % 8;
-                    slice[byte_idx] |= 1 << bit_offset;
-                }
-                bit_idx += 1;
-            }
-        } else {
-            // Non-aligned case: process bit by bit
-            for valid in iter {
-                if valid {
-                    let byte_idx = bit_idx / 8;
-                    let bit_offset = bit_idx % 8;
-                    slice[byte_idx] |= 1 << bit_offset;
-                }
-                bit_idx += 1;
-            }
-        }
-
-        debug_assert_eq!(bit_idx, start_len + len);
+        self.bitmap_builder.as_mut().unwrap().extend(iter)
     }
 
     /// Builds the null buffer and resets the builder.
