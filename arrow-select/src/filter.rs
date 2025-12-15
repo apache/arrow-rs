@@ -118,7 +118,33 @@ fn filter_count(filter: &BooleanArray) -> usize {
     filter.values().count_set_bits()
 }
 
-/// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
+/// Convert all null values in `BooleanArray` to `false`
+///
+/// This is useful for filter-like operations which select only `true`
+/// values, but not `false` or `NULL` values
+///
+/// Internally this is implemented as a bitwise `AND` operation with null bits
+/// and the boolean bits.
+///
+/// # Example
+/// ```
+/// # use arrow_array::{Array, BooleanArray};
+/// # use arrow_select::filter::prep_null_mask_filter;
+/// let filter = BooleanArray::from(vec![
+///   Some(true),
+///   Some(false),
+///   None
+/// ]);
+/// // convert Boolean array to a filter mask
+/// let null_mask = prep_null_mask_filter(&filter);
+/// // there are no nulls in the output mask
+/// assert!(null_mask.nulls().is_none());
+/// assert_eq!(null_mask, BooleanArray::from(vec![
+///  true,
+///  false,
+///  false, // Null is converted to false
+/// ]));
+/// ```
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let nulls = filter.nulls().unwrap();
     let mask = filter.values() & nulls.inner();
