@@ -20,8 +20,9 @@ use std::sync::Arc;
 
 use parquet::basic::{Encoding, PageType, Type as PhysicalType};
 use parquet::file::metadata::{
-    ColumnChunkMetaData, FileMetaData, PageEncodingStats, ParquetMetaData, ParquetMetaDataOptions,
-    ParquetMetaDataReader, ParquetMetaDataWriter, ParquetStatisticsPolicy, RowGroupMetaData,
+    ColumnChunkMetaData, FileMetaData, LevelHistogram, PageEncodingStats, ParquetMetaData,
+    ParquetMetaDataOptions, ParquetMetaDataReader, ParquetMetaDataWriter, ParquetStatisticsPolicy,
+    RowGroupMetaData,
 };
 use parquet::file::statistics::Statistics;
 use parquet::file::writer::TrackedWrite;
@@ -40,7 +41,7 @@ use parquet::file::serialized_reader::ReadOptionsBuilder;
 const NUM_COLUMNS: usize = 10_000;
 const NUM_ROW_GROUPS: usize = 10;
 
-fn encoded_meta() -> Vec<u8> {
+fn encoded_meta(is_nullable: bool, has_lists: bool) -> Vec<u8> {
     let mut rng = seedable_rng();
 
     let mut column_desc_ptrs: Vec<ColumnDescPtr> = Vec::with_capacity(NUM_COLUMNS);
@@ -65,6 +66,23 @@ fn encoded_meta() -> Vec<u8> {
         .unwrap();
 
     let stats = Statistics::float(Some(rng.random()), Some(rng.random()), None, Some(0), false);
+
+    let (var_size, rep_hist, def_hist) = match (is_nullable, has_lists) {
+        (true, true) => {
+            let rep_hist = LevelHistogram::from(vec![1500i64; 2]);
+            let def_hist = LevelHistogram::from(vec![1000i64; 3]);
+            (
+                Some(rng.random_range(0..1000000000)),
+                Some(rep_hist),
+                Some(def_hist),
+            )
+        }
+        (true, false) => {
+            let def_hist = LevelHistogram::from(vec![1500i64; 2]);
+            (Some(rng.random_range(0..1000000000)), None, Some(def_hist))
+        }
+        (_, _) => (None, None, None),
+    };
 
     let row_groups = (0..NUM_ROW_GROUPS)
         .map(|i| {
@@ -94,6 +112,9 @@ fn encoded_meta() -> Vec<u8> {
                         .set_offset_index_length(Some(rng.random_range(1..100000)))
                         .set_column_index_offset(Some(rng.random_range(0..2000000000)))
                         .set_column_index_length(Some(rng.random_range(1..100000)))
+                        .set_unencoded_byte_array_data_bytes(var_size)
+                        .set_repetition_level_histogram(rep_hist.clone())
+                        .set_definition_level_histogram(def_hist.clone())
                         .build()
                         .unwrap()
                 })
@@ -199,7 +220,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let buf: Bytes = black_box(encoded_meta()).into();
+    let buf: Bytes = black_box(encoded_meta(false, false)).into();
     c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata(&buf).unwrap();
@@ -245,6 +266,23 @@ fn criterion_benchmark(c: &mut Criterion) {
             ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
         })
     });
+
+    let buf: Bytes = black_box(encoded_meta(true, true)).into();
+    c.bench_function("decode parquet metadata w/ size stats (wide)", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata(&buf).unwrap();
+        })
+    });
+
+    let buf: Bytes = black_box(encoded_meta(true, false)).into();
+    c.bench_function(
+        "decode parquet metadata w/ size stats no lists (wide)",
+        |b| {
+            b.iter(|| {
+                ParquetMetaDataReader::decode_metadata(&buf).unwrap();
+            })
+        },
+    );
 }
 
 criterion_group!(benches, criterion_benchmark);
