@@ -188,7 +188,7 @@ impl BooleanBuffer {
     }
 
     /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
-    /// byte boundaries
+    /// 8-byte (64-bit) boundaries
     ///
     /// Returns None if the fast path cannot be taken
     fn try_from_aligned_bitwise_unary_op<F>(
