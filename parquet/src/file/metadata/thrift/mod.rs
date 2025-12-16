@@ -1606,9 +1606,20 @@ impl WriteThrift for ColumnChunkMetaData {
             .file_offset()
             .write_thrift_field(writer, 2, last_field_id)?;
 
-        writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
-        serialize_column_meta_data(self, writer)?;
-        last_field_id = 3;
+        #[cfg(feature = "encryption")]
+        let write_meta_data = self.encrypted_column_metadata.is_none();
+        #[cfg(not(feature = "encryption"))]
+        let write_meta_data = true;
+
+        // Skip writing the plaintext meta_data field to reduce footer size if
+        // encrypted_column_metadata is present. The encrypted version should contain
+        // all column information. The reader handles this case by checking for
+        // encrypted_column_metadata.
+        if write_meta_data {
+            writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
+            serialize_column_meta_data(self, writer)?;
+            last_field_id = 3;
+        }
 
         if let Some(offset_idx_off) = self.offset_index_offset() {
             last_field_id = offset_idx_off.write_thrift_field(writer, 4, last_field_id)?;
