@@ -1927,6 +1927,7 @@ mod tests {
         // test skipping all
         let options = ReadOptionsBuilder::new()
             .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
             .build();
         let file_reader = Arc::new(
             SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
@@ -1936,12 +1937,14 @@ mod tests {
         for column in row_group_metadata.columns() {
             assert!(column.page_encoding_stats().is_none());
             assert!(column.page_encoding_stats_mask().is_none());
+            assert!(column.statistics().is_none());
         }
 
         // test skipping all but one column
         let options = ReadOptionsBuilder::new()
             .with_encoding_stats_as_mask(true)
             .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .with_column_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
             .build();
         let file_reader = Arc::new(
             SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
@@ -1951,6 +1954,7 @@ mod tests {
         for (idx, column) in row_group_metadata.columns().iter().enumerate() {
             assert!(column.page_encoding_stats().is_none());
             assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
+            assert_eq!(column.statistics().is_some(), idx == 0);
         }
     }
 

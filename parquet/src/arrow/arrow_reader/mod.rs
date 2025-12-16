@@ -1548,8 +1548,9 @@ pub(crate) mod tests {
         let file = File::open(path).unwrap();
 
         // test skipping all
-        let arrow_options =
-            ArrowReaderOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+        let arrow_options = ArrowReaderOptions::new()
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll);
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,
@@ -1560,12 +1561,14 @@ pub(crate) mod tests {
         for column in row_group_metadata.columns() {
             assert!(column.page_encoding_stats().is_none());
             assert!(column.page_encoding_stats_mask().is_none());
+            assert!(column.statistics().is_none());
         }
 
         // test skipping all but one column and converting to mask
         let arrow_options = ArrowReaderOptions::new()
             .with_encoding_stats_as_mask(true)
-            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]));
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .with_column_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]));
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,
@@ -1576,6 +1579,7 @@ pub(crate) mod tests {
         for (idx, column) in row_group_metadata.columns().iter().enumerate() {
             assert!(column.page_encoding_stats().is_none());
             assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
+            assert_eq!(column.statistics().is_some(), idx == 0);
         }
     }
 
