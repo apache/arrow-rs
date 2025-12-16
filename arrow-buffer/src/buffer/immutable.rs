@@ -20,15 +20,13 @@ use std::fmt::Debug;
 use std::ptr::NonNull;
 use std::sync::Arc;
 
-use crate::BufferBuilder;
 use crate::alloc::{Allocation, Deallocation};
-use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
-use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
-
 #[cfg(feature = "pool")]
 use crate::pool::MemoryPool;
+use crate::util::bit_chunk_iterator::{BitChunks, UnalignedBitChunk};
+use crate::{BooleanBuffer, BufferBuilder};
+use crate::{bit_util, bytes::Bytes, native::ArrowNativeType};
 
-use super::ops::bitwise_unary_op_helper;
 use super::{MutableBuffer, ScalarBuffer};
 
 /// A contiguous memory region that can be shared with other buffers and across
@@ -344,10 +342,10 @@ impl Buffer {
             return self.slice_with_length(offset / 8, bit_util::ceil(len, 8));
         }
 
-        bitwise_unary_op_helper(self, offset, len, |a| a)
+        BooleanBuffer::from_bitwise_unary_op(self, offset, len, |a| a).into_inner()
     }
 
-    /// Returns a `BitChunks` instance which can be used to iterate over this buffers bits
+    /// Returns a `BitChunks` instance which can be used to iterate over this buffer's bits
     /// in larger chunks and starting at arbitrary bit offsets.
     /// Note that both `offset` and `length` are measured in bits.
     pub fn bit_chunks(&self, offset: usize, len: usize) -> BitChunks<'_> {
