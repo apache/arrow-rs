@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_mask, bit_util};
+use crate::bit_util::apply_bitwise_binary_op;
+use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_util};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
@@ -218,13 +219,16 @@ impl BooleanBufferBuilder {
     pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
         let offset_write = self.len;
         let len = range.end - range.start;
+        // allocate new bits as 0
         self.advance(len);
-        bit_mask::set_bits(
+        // copy bits from to_set into self.buffer a word at a time
+        apply_bitwise_binary_op(
             self.buffer.as_slice_mut(),
-            to_set,
             offset_write,
+            to_set,
             range.start,
             len,
+            |_a, b| b, // copy bits from to_set
         );
     }
 

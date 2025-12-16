@@ -17,8 +17,8 @@
 
 use crate::type_conversion::CastOptions;
 use arrow::array::{
-    Array, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray, GenericListViewArray,
-    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+    Array, ArrayRef, AsArray, FixedSizeListArray, GenericBinaryArray, GenericListArray,
+    GenericListViewArray, GenericStringArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::compute::kernels::cast;
 use arrow::datatypes::{
@@ -556,14 +556,14 @@ impl<'a, L: ListLikeArray> ListArrowToVariantBuilder<'a, L> {
 /// Trait for list-like arrays that can provide element ranges
 pub(crate) trait ListLikeArray: Array {
     /// Get the values array
-    fn values(&self) -> &dyn Array;
+    fn values(&self) -> &ArrayRef;
 
     /// Get the start and end indices for a list element
     fn element_range(&self, index: usize) -> Range<usize>;
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -576,7 +576,7 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListArray<O> {
 }
 
 impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -590,7 +590,7 @@ impl<O: OffsetSizeTrait> ListLikeArray for GenericListViewArray<O> {
 }
 
 impl ListLikeArray for FixedSizeListArray {
-    fn values(&self) -> &dyn Array {
+    fn values(&self) -> &ArrayRef {
         self.values()
     }
 
@@ -1467,14 +1467,11 @@ mod tests {
         let string_array = StringArray::from(vec![None, None, Some("hello"), None, None, None]);
         let type_ids = [0, 1, 2, 1, 0, 0].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -1515,14 +1512,11 @@ mod tests {
             .into_iter()
             .collect::<ScalarBuffer<i32>>();
 
-        let union_fields = UnionFields::new(
-            vec![0, 1, 2],
-            vec![
-                Field::new("int_field", DataType::Int32, false),
-                Field::new("float_field", DataType::Float64, false),
-                Field::new("string_field", DataType::Utf8, false),
-            ],
-        );
+        let union_fields = UnionFields::from_fields(vec![
+            Field::new("int_field", DataType::Int32, false),
+            Field::new("float_field", DataType::Float64, false),
+            Field::new("string_field", DataType::Utf8, false),
+        ]);
 
         let children: Vec<Arc<dyn Array>> = vec![
             Arc::new(int_array),
@@ -1571,13 +1565,14 @@ mod tests {
         let string_array = StringArray::from(vec![None, Some("test")]);
         let type_ids = [1, 3].into_iter().collect::<ScalarBuffer<i8>>();
 
-        let union_fields = UnionFields::new(
+        let union_fields = UnionFields::try_new(
             vec![1, 3], // Non-contiguous type IDs
             vec![
                 Field::new("int_field", DataType::Int32, false),
                 Field::new("string_field", DataType::Utf8, false),
             ],
-        );
+        )
+        .unwrap();
 
         let children: Vec<Arc<dyn Array>> = vec![Arc::new(int_array), Arc::new(string_array)];
 

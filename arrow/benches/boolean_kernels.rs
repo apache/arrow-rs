@@ -47,24 +47,31 @@ fn add_benchmark(c: &mut Criterion) {
     c.bench_function("or", |b| b.iter(|| bench_or(&array1, &array2)));
     c.bench_function("not", |b| b.iter(|| bench_not(&array1)));
 
-    let array1_slice = array1.slice(1, size - 1);
-    let array1_slice = array1_slice
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap();
-    let array2_slice = array2.slice(1, size - 1);
-    let array2_slice = array2_slice
-        .as_any()
-        .downcast_ref::<BooleanArray>()
-        .unwrap();
+    // Slice by 1 (not aligned to byte (8 bit) or word (64 bit) boundaries)
+    let offset = 1;
+    let array1_slice = array1.slice(offset, size - offset);
+    let array2_slice = array2.slice(offset, size - offset);
 
-    c.bench_function("and_sliced", |b| {
-        b.iter(|| bench_and(array1_slice, array2_slice))
+    c.bench_function("and_sliced_1", |b| {
+        b.iter(|| bench_and(&array1_slice, &array2_slice))
     });
-    c.bench_function("or_sliced", |b| {
-        b.iter(|| bench_or(array1_slice, array2_slice))
+    c.bench_function("or_sliced_1", |b| {
+        b.iter(|| bench_or(&array1_slice, &array2_slice))
     });
-    c.bench_function("not_sliced", |b| b.iter(|| bench_not(array1_slice)));
+    c.bench_function("not_sliced_1", |b| b.iter(|| bench_not(&array1_slice)));
+
+    // Slice by 24 (aligned on byte (8 bit) but not word (64 bit) boundaries)
+    let offset = 24;
+    let array1_slice = array1.slice(offset, size - offset);
+    let array2_slice = array2.slice(offset, size - offset);
+
+    c.bench_function("and_sliced_24", |b| {
+        b.iter(|| bench_and(&array1_slice, &array2_slice))
+    });
+    c.bench_function("or_sliced_24", |b| {
+        b.iter(|| bench_or(&array1_slice, &array2_slice))
+    });
+    c.bench_function("not_slice_24", |b| b.iter(|| bench_not(&array1_slice)));
 }
 
 criterion_group!(benches, add_benchmark);

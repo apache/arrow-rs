@@ -771,9 +771,10 @@ fn into_zero_offset_run_array<R: RunEndIndexType>(
 }
 
 /// Controls how dictionaries are handled in Arrow IPC messages
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DictionaryHandling {
     /// Send the entire dictionary every time it is encountered (default)
+    #[default]
     Resend,
     /// Send only new dictionary values since the last batch (delta encoding)
     ///
@@ -781,12 +782,6 @@ pub enum DictionaryHandling {
     /// For subsequent batches, only values that are new (not previously sent)
     /// are transmitted with the `isDelta` flag set to true.
     Delta,
-}
-
-impl Default for DictionaryHandling {
-    fn default() -> Self {
-        Self::Resend
-    }
 }
 
 /// Describes what kind of update took place after a call to [`DictionaryTracker::insert`].
@@ -1710,6 +1705,28 @@ fn get_list_array_buffers<O: OffsetSizeTrait>(data: &ArrayData) -> (Buffer, Arra
     (offsets, child_data)
 }
 
+/// Returns the sliced views [`Buffer`] for a BinaryView/Utf8View array.
+///
+/// The views buffer is sliced to only include views in the valid range based on
+/// the array's offset and length. This helps reduce the encoded size of sliced
+/// arrays
+///
+fn get_or_truncate_buffer(array_data: &ArrayData) -> &[u8] {
+    let buffer = &array_data.buffers()[0];
+    let layout = layout(array_data.data_type());
+    let spec = &layout.buffers[0];
+
+    let byte_width = get_buffer_element_width(spec);
+    let min_length = array_data.len() * byte_width;
+    if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
+        let byte_offset = array_data.offset() * byte_width;
+        let buffer_length = min(min_length, buffer.len() - byte_offset);
+        &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)]
+    } else {
+        buffer.as_slice()
+    }
+}
+
 /// Write array data to a vector of bytes
 #[allow(clippy::too_many_arguments)]
 fn write_array_data(
@@ -1777,7 +1794,18 @@ fn write_array_data(
         // Current implementation just serialize the raw arrays as given and not try to optimize anything.
         // If users wants to "compact" the arrays prior to sending them over IPC,
         // they should consider the gc API suggested in #5513
-        for buffer in array_data.buffers() {
+        let views = get_or_truncate_buffer(array_data);
+        offset = write_buffer(
+            views,
+            buffers,
+            arrow_data,
+            offset,
+            compression_codec,
+            compression_context,
+            write_options.alignment,
+        )?;
+
+        for buffer in array_data.buffers().iter().skip(1) {
             offset = write_buffer(
                 buffer.as_slice(),
                 buffers,
@@ -1811,21 +1839,9 @@ fn write_array_data(
         // Truncate values
         assert_eq!(array_data.buffers().len(), 1);
 
-        let buffer = &array_data.buffers()[0];
-        let layout = layout(data_type);
-        let spec = &layout.buffers[0];
-
-        let byte_width = get_buffer_element_width(spec);
-        let min_length = array_data.len() * byte_width;
-        let buffer_slice = if buffer_need_truncate(array_data.offset(), buffer, spec, min_length) {
-            let byte_offset = array_data.offset() * byte_width;
-            let buffer_length = min(min_length, buffer.len() - byte_offset);
-            &buffer.as_slice()[byte_offset..(byte_offset + buffer_length)]
-        } else {
-            buffer.as_slice()
-        };
+        let buffer = get_or_truncate_buffer(array_data);
         offset = write_buffer(
-            buffer_slice,
+            buffer,
             buffers,
             arrow_data,
             offset,
@@ -2025,6 +2041,7 @@ mod tests {
     use arrow_array::builder::Float32Builder;
     use arrow_array::builder::Int64Builder;
     use arrow_array::builder::MapBuilder;
+    use arrow_array::builder::StringViewBuilder;
     use arrow_array::builder::UnionBuilder;
     use arrow_array::builder::{GenericListBuilder, ListBuilder, StringBuilder};
     use arrow_array::builder::{PrimitiveRunBuilder, UInt32Builder};
@@ -2920,6 +2937,40 @@ mod tests {
         ls.finish()
     }
 
+    fn generate_utf8view_list_data<O: OffsetSizeTrait>() -> GenericListArray<O> {
+        let mut ls = GenericListBuilder::<O, _>::new(StringViewBuilder::new());
+
+        for i in 0..100_000 {
+            for value in [
+                format!("value{}", i),
+                format!("value{}", i),
+                format!("value{}", i),
+            ] {
+                ls.values().append_value(&value);
+            }
+            ls.append(true)
+        }
+
+        ls.finish()
+    }
+
+    fn generate_string_list_data<O: OffsetSizeTrait>() -> GenericListArray<O> {
+        let mut ls = GenericListBuilder::<O, _>::new(StringBuilder::new());
+
+        for i in 0..100_000 {
+            for value in [
+                format!("value{}", i),
+                format!("value{}", i),
+                format!("value{}", i),
+            ] {
+                ls.values().append_value(&value);
+            }
+            ls.append(true)
+        }
+
+        ls.finish()
+    }
+
     fn generate_nested_list_data<O: OffsetSizeTrait>() -> GenericListArray<O> {
         let mut ls =
             GenericListBuilder::<O, _>::new(GenericListBuilder::<O, _>::new(UInt32Builder::new()));
@@ -3077,6 +3128,49 @@ mod tests {
         // also ensure serialized sliced version is significantly smaller than serialized full
         let in_batch = RecordBatch::try_new(schema, vec![values]).unwrap();
         roundtrip_ensure_sliced_smaller(in_batch, 1000);
+    }
+
+    #[test]
+    fn encode_large_lists_non_zero_offset() {
+        let val_inner = Field::new_list_field(DataType::UInt32, true);
+        let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = Arc::new(generate_list_data::<i64>());
+
+        check_sliced_list_array(schema, values);
+    }
+
+    #[test]
+    fn encode_large_lists_string_non_zero_offset() {
+        let val_inner = Field::new_list_field(DataType::Utf8, true);
+        let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = Arc::new(generate_string_list_data::<i64>());
+
+        check_sliced_list_array(schema, values);
+    }
+
+    #[test]
+    fn encode_large_list_string_view_non_zero_offset() {
+        let val_inner = Field::new_list_field(DataType::Utf8View, true);
+        let val_list_field = Field::new("val", DataType::LargeList(Arc::new(val_inner)), false);
+        let schema = Arc::new(Schema::new(vec![val_list_field]));
+
+        let values = Arc::new(generate_utf8view_list_data::<i64>());
+
+        check_sliced_list_array(schema, values);
+    }
+
+    fn check_sliced_list_array(schema: Arc<Schema>, values: Arc<GenericListArray<i64>>) {
+        for (offset, len) in [(999, 1), (0, 13), (47, 12), (values.len() - 13, 13)] {
+            let in_batch = RecordBatch::try_new(schema.clone(), vec![values.clone()])
+                .unwrap()
+                .slice(offset, len);
+            let out_batch = deserialize_file(serialize_file(&in_batch));
+            assert_eq!(in_batch, out_batch);
+        }
     }
 
     #[test]

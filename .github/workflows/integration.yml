@@ -89,39 +89,39 @@ jobs:
       - name: Check cmake
         run: which cmake
       - name: Checkout Arrow
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow
           submodules: true
           fetch-depth: 0
       - name: Checkout Arrow Rust
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           path: rust
           submodules: true
           fetch-depth: 0
       - name: Checkout Arrow .NET
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow-dotnet
           path: dotnet
       - name: Checkout Arrow Go
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow-go
           path: go
       - name: Checkout Arrow Java
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow-java
           path: java
       - name: Checkout Arrow JavaScript
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow-js
           path: js
       - name: Checkout Arrow nanoarrow
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
@@ -140,7 +140,7 @@ jobs:
         # PyArrow 15 was the first version to introduce StringView/BinaryView support
         pyarrow: ["15", "16", "17"]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -149,12 +149,12 @@ jobs:
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt clippy
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /home/runner/.cargo
           key: cargo-maturin-cache-
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.

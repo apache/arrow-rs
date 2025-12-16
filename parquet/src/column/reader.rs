@@ -451,7 +451,7 @@ where
                                 self.rep_level_decoder
                                     .as_mut()
                                     .unwrap()
-                                    .set_data(rep_level_encoding, level_data);
+                                    .set_data(rep_level_encoding, level_data)?;
                             }
 
                             if max_def_level > 0 {
@@ -466,7 +466,7 @@ where
                                 self.def_level_decoder
                                     .as_mut()
                                     .unwrap()
-                                    .set_data(def_level_encoding, level_data);
+                                    .set_data(def_level_encoding, level_data)?;
                             }
 
                             self.values_decoder.set_data(
@@ -512,7 +512,7 @@ where
                                 self.rep_level_decoder.as_mut().unwrap().set_data(
                                     Encoding::RLE,
                                     buf.slice(..rep_levels_byte_len as usize),
-                                );
+                                )?;
                             }
 
                             // DataPage v2 only supports RLE encoding for definition
@@ -524,7 +524,7 @@ where
                                         rep_levels_byte_len as usize
                                             ..(rep_levels_byte_len + def_levels_byte_len) as usize,
                                     ),
-                                );
+                                )?;
                             }
 
                             self.values_decoder.set_data(

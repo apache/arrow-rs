@@ -737,6 +737,11 @@ impl EncodingMask {
         self.0 & (1 << (val as i32)) != 0
     }
 
+    /// Test if this mask has only the bit for the given [`Encoding`] set.
+    pub fn is_only(&self, val: Encoding) -> bool {
+        self.0 == (1 << (val as i32))
+    }
+
     /// Test if all [`Encoding`]s in a given set are present in this mask.
     pub fn all_set<'a>(&self, mut encodings: impl Iterator<Item = &'a Encoding>) -> bool {
         encodings.all(|&e| self.is_set(e))
@@ -994,8 +999,10 @@ enum BoundaryOrder {
 /// Edge interpolation algorithm for [`LogicalType::Geography`]
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 #[repr(i32)]
+#[derive(Default)]
 pub enum EdgeInterpolationAlgorithm {
     /// Edges are interpolated as geodesics on a sphere.
+    #[default]
     SPHERICAL = 0,
     /// <https://en.wikipedia.org/wiki/Vincenty%27s_formulae>
     VINCENTY = 1,
@@ -1009,9 +1016,62 @@ pub enum EdgeInterpolationAlgorithm {
     _Unknown(i32),
 }
 
+#[cfg(feature = "geospatial")]
+impl EdgeInterpolationAlgorithm {
+    /// Converts an [`EdgeInterpolationAlgorithm`] into its corresponding algorithm defined by
+    /// [`parquet_geospatial::WkbEdges`].
+    ///
+    /// This method will only return an Err if the [`EdgeInterpolationAlgorithm`] is the `_Unknown`
+    /// variant.
+    pub fn try_as_edges(&self) -> Result<parquet_geospatial::WkbEdges> {
+        match &self {
+            Self::SPHERICAL => Ok(parquet_geospatial::WkbEdges::Spherical),
+            Self::VINCENTY => Ok(parquet_geospatial::WkbEdges::Vincenty),
+            Self::THOMAS => Ok(parquet_geospatial::WkbEdges::Thomas),
+            Self::ANDOYER => Ok(parquet_geospatial::WkbEdges::Andoyer),
+            Self::KARNEY => Ok(parquet_geospatial::WkbEdges::Karney),
+            unknown => Err(general_err!(
+                "Unknown edge interpolation algorithm: {}",
+                unknown
+            )),
+        }
+    }
+}
+
 impl fmt::Display for EdgeInterpolationAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!("{0:?}", self))
+    }
+}
+
+#[cfg(feature = "geospatial")]
+impl From<parquet_geospatial::WkbEdges> for EdgeInterpolationAlgorithm {
+    fn from(value: parquet_geospatial::WkbEdges) -> Self {
+        match value {
+            parquet_geospatial::WkbEdges::Spherical => Self::SPHERICAL,
+            parquet_geospatial::WkbEdges::Vincenty => Self::VINCENTY,
+            parquet_geospatial::WkbEdges::Thomas => Self::THOMAS,
+            parquet_geospatial::WkbEdges::Andoyer => Self::ANDOYER,
+            parquet_geospatial::WkbEdges::Karney => Self::KARNEY,
+        }
+    }
+}
+
+impl FromStr for EdgeInterpolationAlgorithm {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "SPHERICAL" => Ok(EdgeInterpolationAlgorithm::SPHERICAL),
+            "VINCENTY" => Ok(EdgeInterpolationAlgorithm::VINCENTY),
+            "THOMAS" => Ok(EdgeInterpolationAlgorithm::THOMAS),
+            "ANDOYER" => Ok(EdgeInterpolationAlgorithm::ANDOYER),
+            "KARNEY" => Ok(EdgeInterpolationAlgorithm::KARNEY),
+            unknown => Err(general_err!(
+                "Unknown edge interpolation algorithm: {}",
+                unknown
+            )),
+        }
     }
 }
 
@@ -1045,12 +1105,6 @@ impl WriteThrift for EdgeInterpolationAlgorithm {
 }
 
 write_thrift_field!(EdgeInterpolationAlgorithm, FieldType::I32);
-
-impl Default for EdgeInterpolationAlgorithm {
-    fn default() -> Self {
-        Self::SPHERICAL
-    }
-}
 
 // ----------------------------------------------------------------------
 // Mirrors thrift union `BloomFilterAlgorithm`
@@ -1136,12 +1190,24 @@ pub enum ColumnOrder {
 
 impl ColumnOrder {
     /// Returns sort order for a physical/logical type.
+    #[deprecated(
+        since = "57.1.0",
+        note = "use `ColumnOrder::sort_order_for_type` instead"
+    )]
     pub fn get_sort_order(
         logical_type: Option<LogicalType>,
         converted_type: ConvertedType,
         physical_type: Type,
     ) -> SortOrder {
-        // TODO: Should this take converted and logical type, for compatibility?
+        Self::sort_order_for_type(logical_type.as_ref(), converted_type, physical_type)
+    }
+
+    /// Returns sort order for a physical/logical type.
+    pub fn sort_order_for_type(
+        logical_type: Option<&LogicalType>,
+        converted_type: ConvertedType,
+        physical_type: Type,
+    ) -> SortOrder {
         match logical_type {
             Some(logical) => match logical {
                 LogicalType::String | LogicalType::Enum | LogicalType::Json | LogicalType::Bson => {
@@ -2448,6 +2514,35 @@ mod tests {
         assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
     }
 
+    #[test]
+    fn test_from_str_edge_algo() {
+        assert_eq!(
+            "spHErical".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::SPHERICAL
+        );
+        assert_eq!(
+            "vinceNTY".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::VINCENTY
+        );
+        assert_eq!(
+            "tHOmas".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::THOMAS
+        );
+        assert_eq!(
+            "anDOYEr".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::ANDOYER
+        );
+        assert_eq!(
+            "kaRNey".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::KARNEY
+        );
+        assert!(
+            "does not exist"
+                .parse::<EdgeInterpolationAlgorithm>()
+                .is_err()
+        );
+    }
+
     fn encodings_roundtrip(mut encodings: Vec<Encoding>) {
         encodings.sort();
         let mask = EncodingMask::new_from_encodings(encodings.iter());
@@ -2501,5 +2596,15 @@ mod tests {
             err.to_string(),
             "Parquet error: Attempt to create invalid mask: 0x2"
         );
+    }
+
+    #[test]
+    fn test_encoding_mask_is_only() {
+        let mask = EncodingMask::new_from_encodings([Encoding::PLAIN].iter());
+        assert!(mask.is_only(Encoding::PLAIN));
+
+        let mask =
+            EncodingMask::new_from_encodings([Encoding::PLAIN, Encoding::PLAIN_DICTIONARY].iter());
+        assert!(!mask.is_only(Encoding::PLAIN));
     }
 }
