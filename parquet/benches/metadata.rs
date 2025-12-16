@@ -258,15 +258,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let options = ParquetMetaDataOptions::new()
-        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
-        .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
-    c.bench_function("decode metadata (wide) with skip all stats", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
-        })
-    });
-
     let buf: Bytes = black_box(encoded_meta(true, true)).into();
     c.bench_function("decode parquet metadata w/ size stats (wide)", |b| {
         b.iter(|| {
@@ -274,15 +265,23 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let buf: Bytes = black_box(encoded_meta(true, false)).into();
-    c.bench_function(
-        "decode parquet metadata w/ size stats no lists (wide)",
-        |b| {
-            b.iter(|| {
-                ParquetMetaDataReader::decode_metadata(&buf).unwrap();
-            })
-        },
-    );
+    let options =
+        ParquetMetaDataOptions::new().with_size_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata (wide) with skip size stats", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
+
+    let options = ParquetMetaDataOptions::new()
+        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_size_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    c.bench_function("decode metadata (wide) with skip all stats", |b| {
+        b.iter(|| {
+            ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
+        })
+    });
 }
 
 criterion_group!(benches, criterion_benchmark);

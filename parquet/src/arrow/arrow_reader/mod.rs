@@ -590,6 +590,15 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// Sets the decoding policy for [`size_statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`size_statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L936
+    pub fn with_size_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_size_stats_policy(policy);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
