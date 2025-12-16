@@ -148,15 +148,7 @@
 //! CSV options like `quoteAll`. You can control when fields are quoted using the
 //! [`QuoteStyle`] enum.
 //!
-//! ## Available Quoting Styles
-//!
-//! - `QuoteStyle::Necessary` (default): Only quotes fields when necessary (e.g., when they
-//!   contain delimiters, quotes, or newlines)
-//! - `QuoteStyle::Always`: Quotes all fields (equivalent to Spark's `quoteAll=true`)
-//! - `QuoteStyle::NonNumeric`: Quotes only non-numeric fields
-//! - `QuoteStyle::Never`: Never quotes fields (warning: can produce invalid CSV)
-//!
-//! ## Example with quoting styles
+//! ## Example
 //!
 //! ```
 //! # use arrow_array::*;
@@ -1287,6 +1279,31 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         );
     }
 
+    fn write_quote_style(batch: &RecordBatch, quote_style: QuoteStyle) -> String {
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_quote_style(quote_style)
+            .build(&mut buf);
+        writer.write(batch).unwrap();
+        drop(writer);
+        String::from_utf8(buf).unwrap()
+    }
+
+    fn write_quote_style_with_null(
+        batch: &RecordBatch,
+        quote_style: QuoteStyle,
+        null_value: &str,
+    ) -> String {
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_quote_style(quote_style)
+            .with_null(null_value.to_string())
+            .build(&mut buf);
+        writer.write(batch).unwrap();
+        drop(writer);
+        String::from_utf8(buf).unwrap()
+    }
+
     #[test]
     fn test_write_csv_quote_style() {
         let schema = Schema::new(vec![
@@ -1306,48 +1323,28 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         .unwrap();
 
         // Test with QuoteStyle::Necessary (default)
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_quote_style(QuoteStyle::Necessary);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
         assert_eq!(
             "text,number,float\nhello,1,1.1\nworld,2,2.2\n\"comma,value\",3,3.3\n\"quote\"\"test\",4,4.4\n",
-            String::from_utf8(buf).unwrap()
+            write_quote_style(&batch, QuoteStyle::Necessary)
         );
 
         // Test with QuoteStyle::Always (equivalent to Spark's quoteAll=true)
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_quote_style(QuoteStyle::Always);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
         assert_eq!(
             "\"text\",\"number\",\"float\"\n\"hello\",\"1\",\"1.1\"\n\"world\",\"2\",\"2.2\"\n\"comma,value\",\"3\",\"3.3\"\n\"quote\"\"test\",\"4\",\"4.4\"\n",
-            String::from_utf8(buf).unwrap()
+            write_quote_style(&batch, QuoteStyle::Always)
         );
 
         // Test with QuoteStyle::NonNumeric
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_quote_style(QuoteStyle::NonNumeric);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
         assert_eq!(
             "\"text\",\"number\",\"float\"\n\"hello\",1,1.1\n\"world\",2,2.2\n\"comma,value\",3,3.3\n\"quote\"\"test\",4,4.4\n",
-            String::from_utf8(buf).unwrap()
+            write_quote_style(&batch, QuoteStyle::NonNumeric)
         );
 
         // Test with QuoteStyle::Never (warning: can produce invalid CSV)
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_quote_style(QuoteStyle::Never);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
         // Note: This produces invalid CSV for fields with commas or quotes
         assert_eq!(
             "text,number,float\nhello,1,1.1\nworld,2,2.2\ncomma,value,3,3.3\nquote\"test,4,4.4\n",
-            String::from_utf8(buf).unwrap()
+            write_quote_style(&batch, QuoteStyle::Never)
         );
     }
 
@@ -1365,27 +1362,15 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
             RecordBatch::try_new(Arc::new(schema), vec![Arc::new(text), Arc::new(number)]).unwrap();
 
         // Test with QuoteStyle::Always
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new().with_quote_style(QuoteStyle::Always);
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
         assert_eq!(
             "\"text\",\"number\"\n\"hello\",\"1\"\n\"\",\"2\"\n\"world\",\"\"\n",
-            String::from_utf8(buf).unwrap()
+            write_quote_style(&batch, QuoteStyle::Always)
         );
 
         // Test with QuoteStyle::Always and custom null value
-        let mut buf = Vec::new();
-        let builder = WriterBuilder::new()
-            .with_quote_style(QuoteStyle::Always)
-            .with_null("NULL".to_string());
-        let mut writer = builder.build(&mut buf);
-        writer.write(&batch).unwrap();
-        drop(writer);
         assert_eq!(
             "\"text\",\"number\"\n\"hello\",\"1\"\n\"NULL\",\"2\"\n\"world\",\"NULL\"\n",
-            String::from_utf8(buf).unwrap()
+            write_quote_style_with_null(&batch, QuoteStyle::Always, "NULL")
         );
     }
 }
