@@ -219,7 +219,7 @@ pub(crate) fn read_bloom_filter_header_and_length(
     read_bloom_filter_header_and_length_from_bytes(buffer.as_ref())
 }
 
-/// given a byte slice, try to read out a bloom filter header and return both the header and
+/// Given a byte slice, try to read out a bloom filter header and return both the header and
 /// length of the header.
 #[inline]
 fn read_bloom_filter_header_and_length_from_bytes(
@@ -292,7 +292,7 @@ impl Sbbf {
     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
-    /// This method usually is used in conjunction with from_bytes for serialization/deserialization.
+    /// This method usually is used in conjunction with [`Self::from_bytes`] for serialization/deserialization.
     pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
         self.header().write_thrift(&mut protocol).map_err(|e| {
@@ -428,7 +428,7 @@ impl Sbbf {
         self.0.capacity() * std::mem::size_of::<Block>()
     }
 
-    /// reads a Sbff from thrift encoded bytes
+    /// Reads a Sbff from Thrift encoded bytes
     ///
     /// # Examples
     ///
@@ -628,20 +628,14 @@ mod tests {
         let reconstructed = Sbbf::from_bytes(&output).unwrap();
 
         // Most importantly: verify the bloom filter WORKS correctly after round-trip
+        // Note: bloom filters can have false positives, but should never have false negatives
+        // So we can't assert !check(), but we should verify inserted values are found
         for value in &test_values {
             assert!(
                 reconstructed.check(value),
                 "Value '{}' should be present after round-trip",
                 value
             );
-        }
-
-        // Verify false negative check (values not inserted should not be found)
-        let missing_values = ["missing", "absent", "nothere"];
-        for value in &missing_values {
-            // Note: bloom filters can have false positives, but should never have false negatives
-            // So we can't assert !check(), but we should verify inserted values are found
-            let _ = reconstructed.check(value); // Just exercise the code path
         }
     }
 }
