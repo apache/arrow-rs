@@ -1361,11 +1361,8 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         let text = StringArray::from(vec![Some("hello"), None, Some("world")]);
         let number = Int32Array::from(vec![Some(1), Some(2), None]);
 
-        let batch = RecordBatch::try_new(
-            Arc::new(schema),
-            vec![Arc::new(text), Arc::new(number)],
-        )
-        .unwrap();
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(text), Arc::new(number)]).unwrap();
 
         // Test with QuoteStyle::Always
         let mut buf = Vec::new();

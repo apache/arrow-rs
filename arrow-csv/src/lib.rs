@@ -30,9 +30,9 @@ pub mod writer;
 pub use self::reader::Reader;
 pub use self::reader::ReaderBuilder;
 pub use self::reader::infer_schema_from_files;
+pub use self::writer::QuoteStyle;
 pub use self::writer::Writer;
 pub use self::writer::WriterBuilder;
-pub use self::writer::QuoteStyle;
 use arrow_schema::ArrowError;
 
 fn map_csv_error(error: csv::Error) -> ArrowError {
