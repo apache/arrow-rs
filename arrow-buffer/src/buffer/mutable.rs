@@ -23,7 +23,7 @@ use crate::alloc::{ALIGNMENT, Deallocation};
 use crate::{
     bytes::Bytes,
     native::{ArrowNativeType, ToByteSlice},
-    util::bit_util,
+    util::bit_util::{self, apply_bitwise_binary_op, apply_bitwise_unary_op},
 };
 
 #[cfg(feature = "pool")]
@@ -633,6 +633,40 @@ impl MutableBuffer {
     pub fn claim(&self, pool: &dyn MemoryPool) {
         *self.reservation.lock().unwrap() = Some(pool.reserve(self.capacity()));
     }
+
+    /// Apply a bitwise unary operation in place to this buffer.
+    ///
+    /// The operation is applied to `len` bits starting at `offset` bits.
+    ///
+    /// # Arguments
+    ///
+    /// * `offset` - The bit offset to start the operation.
+    /// * `len` - The number of bits to process.
+    /// * `op` - The unary operation to apply.
+    pub fn bitwise_unary_inplace<F>(&mut self, offset: usize, len: usize, op: F)
+    where
+        F: Fn(u64) -> u64,
+    {
+        apply_bitwise_unary_op(self.as_slice_mut(), offset, len, op)
+    }
+
+    /// Apply a bitwise binary operation in place between this buffer and another.
+    ///
+    /// The operation is applied to `len` bits starting at `self_offset` in self and `other_offset` in other.
+    ///
+    /// # Arguments
+    ///
+    /// * `other` - The other buffer.
+    /// * `self_offset` - The bit offset in self.
+    /// * `other_offset` - The bit offset in other.
+    /// * `len` - The number of bits to process.
+    /// * `op` - The binary operation to apply.
+    pub fn bitwise_binary_inplace<F>(&mut self, other: &Buffer, self_offset: usize, other_offset: usize, len: usize, op: F)
+    where
+        F: Fn(u64, u64) -> u64,
+    {
+        apply_bitwise_binary_op(self.as_slice_mut(), self_offset, other.as_slice(), other_offset, len, op)
+    }
 }
 
 /// Creates a non-null pointer with alignment of [`ALIGNMENT`]
@@ -968,6 +1002,7 @@ impl<T: ArrowNativeType> std::iter::FromIterator<T> for MutableBuffer {
 
 #[cfg(test)]
 mod tests {
+    use rand::{Rng, SeedableRng};
     use super::*;
 
     #[test]
@@ -1418,5 +1453,180 @@ mod tests {
 
         let data_1000: Vec<i32> = (0..1000).collect();
         test_repeat_count(repeat_count, &data_1000);
+    }
+
+    #[test]
+    fn test_mutable_buffer_bitwise_inplace() {
+        let initial = vec![0b10101010u8, 0b01010101u8];
+        let other = Buffer::from(vec![0b11110000u8, 0b00001111u8]);
+
+        // Test in-place and vs allocating
+        let mut mutable = MutableBuffer::from(initial.clone());
+        mutable.bitwise_binary_inplace(&other, 0, 0, 16, |a, b| a & b);
+        let inplace_result = Buffer::from(mutable);
+
+        let allocating_result = Buffer::from(initial.clone()).bitwise_binary(&other, 0, 0, 16, |a, b| a & b);
+
+        assert_eq!(inplace_result, allocating_result);
+
+        // Test with offsets
+        let mut mutable = MutableBuffer::from(initial.clone());
+        mutable.bitwise_binary_inplace(&other, 1, 1, 7, |a, b| a | b);
+        let inplace_result = Buffer::from(mutable);
+
+        let allocating_result = Buffer::from(initial.clone()).bitwise_binary(&other, 1, 1, 7, |a, b| a | b);
+
+        // Extract the operated bits: bits 1 to 7 from inplace_result (all in byte 0)
+        let operated_value = ((inplace_result.as_slice()[0] >> 1) & 0x7F) as u8;
+        assert_eq!(operated_value, allocating_result.as_slice()[0]);
+
+        // Test unary in-place
+        let mut mutable = MutableBuffer::from(initial.clone());
+        mutable.bitwise_unary_inplace(0, 16, |a| !a);
+        let inplace_result = Buffer::from(mutable);
+
+        let allocating_result = Buffer::from(initial).bitwise_unary(0, 16, |a| !a);
+
+        assert_eq!(inplace_result, allocating_result);
+    }
+
+    #[test]
+    fn test_mutable_buffer_bitwise_inplace_random_equivalence() {
+        // Use a fixed seed for reproducible tests
+        let mut rng = rand::rngs::StdRng::from_seed([44u8; 32]);
+
+        let buffer_sizes = [8, 16, 32, 64];
+        let offsets = [0, 1, 3, 7, 8, 13];
+        let lengths = [1, 2, 7, 8, 9, 15, 16];
+
+        for &size in &buffer_sizes {
+            for _ in 0..5 { // Generate 5 random pairs per size
+                let initial_vec: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+                let other_vec: Vec<u8> = (0..size).map(|_| rng.random::<u8>()).collect();
+                let other = Buffer::from(other_vec);
+                let buffer_bits = initial_vec.len() * 8;
+
+                for &offset in &offsets {
+                    if offset >= buffer_bits { continue; }
+                    for &len in &lengths {
+                        if offset + len > buffer_bits { continue; }
+
+                        // Test binary AND in-place
+                        let mut mutable = MutableBuffer::from(initial_vec.clone());
+                        mutable.bitwise_binary_inplace(&other, offset, offset, len, |a, b| a & b);
+                        let inplace_result = Buffer::from(mutable);
+
+                        let allocating_result = Buffer::from(initial_vec.clone()).bitwise_binary(&other, offset, offset, len, |a, b| a & b);
+
+                        // Compare bit by bit
+                        for i in 0..len {
+                            let inplace_bit = crate::bit_util::get_bit(inplace_result.as_slice(), offset + i);
+                            let expected_bit = crate::bit_util::get_bit(allocating_result.as_slice(), i);
+                            assert_eq!(inplace_bit, expected_bit, "AND bit {} mismatch for offset={}, len={}", i, offset, len);
+                        }
+
+                        // Test binary OR in-place
+                        let mut mutable = MutableBuffer::from(initial_vec.clone());
+                        mutable.bitwise_binary_inplace(&other, offset, offset, len, |a, b| a | b);
+                        let inplace_result = Buffer::from(mutable);
+
+                        let allocating_result = Buffer::from(initial_vec.clone()).bitwise_binary(&other, offset, offset, len, |a, b| a | b);
+
+                        // Compare bit by bit
+                        for i in 0..len {
+                            let inplace_bit = crate::bit_util::get_bit(inplace_result.as_slice(), offset + i);
+                            let expected_bit = crate::bit_util::get_bit(allocating_result.as_slice(), i);
+                            assert_eq!(inplace_bit, expected_bit, "OR bit {} mismatch for offset={}, len={}", i, offset, len);
+                        }
+
+                        // Test unary NOT in-place
+                        let mut mutable = MutableBuffer::from(initial_vec.clone());
+                        mutable.bitwise_unary_inplace(offset, len, |a| !a);
+                        let inplace_result = Buffer::from(mutable);
+
+                        let allocating_result = Buffer::from(initial_vec.clone()).bitwise_unary(offset, len, |a| !a);
+
+                        // Compare bit by bit
+                        for i in 0..len {
+                            let inplace_bit = crate::bit_util::get_bit(inplace_result.as_slice(), offset + i);
+                            let expected_bit = crate::bit_util::get_bit(allocating_result.as_slice(), i);
+                            assert_eq!(inplace_bit, expected_bit, "NOT bit {} mismatch for offset={}, len={}", i, offset, len);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_mutable_buffer_bitwise_inplace_boundaries() {
+        // Use a fixed seed for reproducible tests
+        let mut rng = rand::rngs::StdRng::from_seed([47u8; 32]);
+
+        // Create large buffers: 1024 bytes
+        let data: Vec<u8> = (0..1024).map(|_| rng.random::<u8>()).collect();
+        let other_data: Vec<u8> = (0..1024).map(|_| rng.random::<u8>()).collect();
+        let other = Buffer::from(other_data);
+        let total_bits = data.len() * 8;
+
+        // Boundary configurations
+        let boundary_configs = vec![
+            (0, 0), // zero length
+            (0, total_bits), // full length
+            (1, total_bits - 1), // offset 1, to end
+            (7, total_bits - 7), // offset 7, crosses byte
+            (8, total_bits - 8), // offset at byte boundary
+            (total_bits - 1, 1), // last bit
+            (total_bits - 8, 8), // last byte
+            (total_bits - 9, 9), // last byte plus one
+        ];
+
+        for (offset, len) in boundary_configs {
+            if offset + len > total_bits {
+                continue; // skip invalid
+            }
+
+            // Test unary in-place
+            let mut mutable = MutableBuffer::from(data.clone());
+            mutable.bitwise_unary_inplace(offset, len, |a| !a);
+            let inplace_result = Buffer::from(mutable);
+
+            let allocating_result = Buffer::from(data.clone()).bitwise_unary(offset, len, |a| !a);
+
+            // Compare bit by bit
+            for i in 0..len {
+                let inplace_bit = crate::bit_util::get_bit(inplace_result.as_slice(), offset + i);
+                let expected_bit = crate::bit_util::get_bit(allocating_result.as_slice(), i);
+                assert_eq!(inplace_bit, expected_bit, "Unary bit {} mismatch for offset={}, len={}", i, offset, len);
+            }
+
+            // Test binary in-place AND
+            let mut mutable = MutableBuffer::from(data.clone());
+            mutable.bitwise_binary_inplace(&other, offset, offset, len, |a, b| a & b);
+            let inplace_result = Buffer::from(mutable);
+
+            let allocating_result = Buffer::from(data.clone()).bitwise_binary(&other, offset, offset, len, |a, b| a & b);
+
+            // Compare bit by bit
+            for i in 0..len {
+                let inplace_bit = crate::bit_util::get_bit(inplace_result.as_slice(), offset + i);
+                let expected_bit = crate::bit_util::get_bit(allocating_result.as_slice(), i);
+                assert_eq!(inplace_bit, expected_bit, "Binary AND bit {} mismatch for offset={}, len={}", i, offset, len);
+            }
+
+            // Test binary in-place OR
+            let mut mutable = MutableBuffer::from(data.clone());
+            mutable.bitwise_binary_inplace(&other, offset, offset, len, |a, b| a | b);
+            let inplace_result = Buffer::from(mutable);
+
+            let allocating_result = Buffer::from(data.clone()).bitwise_binary(&other, offset, offset, len, |a, b| a | b);
+
+            // Compare bit by bit
+            for i in 0..len {
+                let inplace_bit = crate::bit_util::get_bit(inplace_result.as_slice(), offset + i);
+                let expected_bit = crate::bit_util::get_bit(allocating_result.as_slice(), i);
+                assert_eq!(inplace_bit, expected_bit, "Binary OR bit {} mismatch for offset={}, len={}", i, offset, len);
+            }
+        }
     }
 }

@@ -18,8 +18,7 @@
 use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::{
-    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
-    buffer_bin_xor, buffer_unary_not,
+    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util,
 };
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
@@ -224,7 +223,7 @@ impl Not for &BooleanBuffer {
 
     fn not(self) -> Self::Output {
         BooleanBuffer {
-            buffer: buffer_unary_not(&self.buffer, self.offset, self.len),
+            buffer: self.buffer.bitwise_unary(self.offset, self.len, |a| !a),
             offset: 0,
             len: self.len,
         }
@@ -237,7 +236,7 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_and(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
+            buffer: self.buffer.bitwise_binary(&rhs.buffer, self.offset, rhs.offset, self.len, |a, b| a & b),
             offset: 0,
             len: self.len,
         }
@@ -250,7 +249,7 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
     fn bitor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_or(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
+            buffer: self.buffer.bitwise_binary(&rhs.buffer, self.offset, rhs.offset, self.len, |a, b| a | b),
             offset: 0,
             len: self.len,
         }
@@ -263,7 +262,7 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
     fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
         assert_eq!(self.len, rhs.len);
         BooleanBuffer {
-            buffer: buffer_bin_xor(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
+            buffer: self.buffer.bitwise_binary(&rhs.buffer, self.offset, rhs.offset, self.len, |a, b| a ^ b),
             offset: 0,
             len: self.len,
         }
