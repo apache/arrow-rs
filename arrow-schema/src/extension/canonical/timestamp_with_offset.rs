@@ -34,9 +34,9 @@ use crate::{ArrowError, DataType, extension::ExtensionType};
 /// - `timestamp`: a non-nullable `Timestamp(time_unit, "UTC")`, where `time_unit` is any Arrow `TimeUnit` (s, ms, us or ns).
 /// - `offset_minutes`: a non-nullable signed 16-bit integer (`Int16`) representing the offset in minutes
 ///   from the UTC timezone. Negative offsets represent time zones west of UTC, while positive offsets represent
-///   east. Offsets range from -779 (-12:59) to +780 (+13:00).
+///   east. Offsets normally range from -779 (-12:59) to +780 (+13:00).
 ///
-/// This type has a `time_unit` type parameter which is a `TimeUnit`.
+/// This type has no type parameters.
 ///
 /// Metadata is either empty or an empty string.
 ///
