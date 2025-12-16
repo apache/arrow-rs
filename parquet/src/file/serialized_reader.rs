@@ -1959,6 +1959,42 @@ mod tests {
     }
 
     #[test]
+    fn test_file_reader_size_stats_skipped() {
+        let file = get_test_file("repeated_primitive_no_list.parquet");
+
+        // test skipping all
+        let options = ReadOptionsBuilder::new()
+            .with_size_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for column in row_group_metadata.columns() {
+            assert!(column.repetition_level_histogram().is_none());
+            assert!(column.definition_level_histogram().is_none());
+            assert!(column.unencoded_byte_array_data_bytes().is_none());
+        }
+
+        // test skipping all but one column
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(true)
+            .with_size_stats_policy(ParquetStatisticsPolicy::skip_except(&[1]))
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for (idx, column) in row_group_metadata.columns().iter().enumerate() {
+            assert_eq!(column.repetition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.definition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.unencoded_byte_array_data_bytes().is_some(), idx == 1);
+        }
+    }
+
+    #[test]
     fn test_file_reader_with_no_filter() -> Result<()> {
         let test_file = get_test_file("alltypes_plain.parquet");
         let origin_reader = SerializedFileReader::new(test_file)?;
