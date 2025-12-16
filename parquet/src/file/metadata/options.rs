@@ -221,7 +221,7 @@ impl ParquetMetaDataOptions {
     ///
     /// The default policy is to decode all `size_statistics`.
     ///
-    /// [`statistics`]:
+    /// [`size_statistics`]:
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L936
     pub fn set_size_stats_policy(&mut self, policy: ParquetStatisticsPolicy) {
         self.size_stats_policy = policy;
