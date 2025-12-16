@@ -254,7 +254,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             }
 
             // slow path, we match the fields by name
-            to_fields.iter().all(|to_field| {
+            if to_fields.iter().all(|to_field| {
                 from_fields
                     .iter()
                     .find(|from_field| from_field.name() == to_field.name())
@@ -263,7 +263,15 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
                         // cast kernel will return error.
                         can_cast_types(from_field.data_type(), to_field.data_type())
                     })
-            })
+            }) {
+                return true;
+            }
+
+            // if we couldn't match by name, we try to see if they can be matched by position
+            from_fields
+                .iter()
+                .zip(to_fields.iter())
+                .all(|(f1, f2)| can_cast_types(f1.data_type(), f2.data_type()))
         }
         (Struct(_), _) => false,
         (_, Struct(_)) => false,
@@ -1229,7 +1237,7 @@ pub fn cast_with_options(
                     .all(|(f1, f2)| f1.name() == f2.name());
 
             let fields = if fields_match_order {
-                // Fast path: cast columns in order
+                // Fast path: cast columns in order if their names match
                 array
                     .columns()
                     .iter()
@@ -1239,23 +1247,34 @@ pub fn cast_with_options(
                     })
                     .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
             } else {
-                // Slow path: match fields by name and reorder
-                to_fields
-                    .iter()
-                    .map(|to_field| {
-                        let from_field_idx = from_fields
-                            .iter()
-                            .position(|from_field| from_field.name() == to_field.name())
-                            .ok_or_else(|| {
-                                ArrowError::CastError(format!(
-                                    "Field '{}' not found in source struct",
-                                    to_field.name()
-                                ))
-                            })?;
-                        let column = array.column(from_field_idx);
-                        cast_with_options(column, to_field.data_type(), cast_options)
-                    })
-                    .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+                let all_fields_match_by_name = to_fields.iter().all(|to_field| {
+                    from_fields
+                        .iter()
+                        .any(|from_field| from_field.name() == to_field.name())
+                });
+
+                if all_fields_match_by_name {
+                    // Slow path: match fields by name and reorder
+                    to_fields
+                        .iter()
+                        .map(|to_field| {
+                            let from_field_idx = from_fields
+                                .iter()
+                                .position(|from_field| from_field.name() == to_field.name())
+                                .unwrap(); // safe because we checked above
+                            let column = array.column(from_field_idx);
+                            cast_with_options(column, to_field.data_type(), cast_options)
+                        })
+                        .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+                } else {
+                    // Fallback: cast field by field in order
+                    array
+                        .columns()
+                        .iter()
+                        .zip(to_fields.iter())
+                        .map(|(l, field)| cast_with_options(l, field.data_type(), cast_options))
+                        .collect::<Result<Vec<ArrayRef>, ArrowError>>()?
+                }
             };
 
             let array = StructArray::try_new(to_fields.clone(), fields, array.nulls().cloned())?;
@@ -10917,11 +10936,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![42, 28, 19, 31]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("a", DataType::Boolean, false)),
+                Arc::new(Field::new("b", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("b", DataType::Int32, false)),
+                Arc::new(Field::new("c", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10965,11 +10984,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![Some(42), None, Some(19), None]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("a", DataType::Boolean, false)),
+                Arc::new(Field::new("b", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("b", DataType::Int32, true)),
+                Arc::new(Field::new("c", DataType::Int32, true)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -10999,11 +11018,11 @@ mod tests {
         let int = Arc::new(Int32Array::from(vec![i32::MAX, 25, 1, 100]));
         let struct_array = StructArray::from(vec![
             (
-                Arc::new(Field::new("a", DataType::Boolean, false)),
+                Arc::new(Field::new("b", DataType::Boolean, false)),
                 boolean.clone() as ArrayRef,
             ),
             (
-                Arc::new(Field::new("b", DataType::Int32, false)),
+                Arc::new(Field::new("c", DataType::Int32, false)),
                 int.clone() as ArrayRef,
             ),
         ]);
@@ -11139,7 +11158,7 @@ mod tests {
         assert!(result.is_err());
         assert_eq!(
             result.unwrap_err().to_string(),
-            "Cast error: Field 'b' not found in source struct"
+            "Invalid argument error: Incorrect number of arrays for StructArray fields, expected 2 got 1"
         );
     }
 
@@ -11196,7 +11215,7 @@ mod tests {
     }
 
     #[test]
-    fn test_can_cast_struct_with_missing_field() {
+    fn test_can_cast_struct_rename_field() {
         // Test that can_cast_types returns false when target has a field not in source
         let from_type = DataType::Struct(
             vec![
@@ -11214,7 +11233,7 @@ mod tests {
             .into(),
         );
 
-        assert!(!can_cast_types(&from_type, &to_type));
+        assert!(can_cast_types(&from_type, &to_type));
     }
 
     fn run_decimal_cast_test_case_between_multiple_types(t: DecimalCastTestConfig) {
