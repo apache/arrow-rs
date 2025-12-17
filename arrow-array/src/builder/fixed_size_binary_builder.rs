@@ -297,7 +297,7 @@ mod tests {
         other_builder.append_value(b"arrow").unwrap();
         let other_array = other_builder.finish();
 
-        let mut builder = FixedSizeBinaryBuilder::with_capacity(3, 5);
+        let mut builder = FixedSizeBinaryBuilder::with_capacity(6, 5);
         builder.append_array(&other_array).unwrap();
         // Append again to test if breaks when appending multiple times
         builder.append_array(&other_array).unwrap();
@@ -312,10 +312,12 @@ mod tests {
         }
 
         assert_eq!(b"hello", array.value(0));
-        assert_eq!(b"hello", array.value(3));
-        assert_eq!(b"arrow", array.value(5));
         assert!(array.is_null(1));
+        assert_eq!(b"arrow", array.value(2));
+
+        assert_eq!(b"hello", array.value(3));
         assert!(array.is_null(4));
+        assert_eq!(b"arrow", array.value(5));
     }
 
     #[test]
