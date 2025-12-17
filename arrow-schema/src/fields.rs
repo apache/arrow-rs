@@ -318,7 +318,7 @@ impl<'a> IntoIterator for &'a Fields {
 }
 
 /// A cheaply cloneable, owned collection of [`FieldRef`] and their corresponding type ids
-#[derive(Clone, Eq, Ord, PartialOrd)]
+#[derive(Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
 pub struct UnionFields(Arc<[(i8, FieldRef)]>);
@@ -342,21 +342,6 @@ impl std::ops::Index<usize> for UnionFields {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.0[index]
-    }
-}
-
-impl PartialEq for UnionFields {
-    fn eq(&self, other: &Self) -> bool {
-        self.len() == other.len() && self.iter().all(|a| other.iter().any(|b| a == b))
-    }
-}
-
-impl Hash for UnionFields {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        let mut v = self.0.iter().collect::<Vec<_>>();
-        v.sort_by_key(|(id, _)| *id);
-
-        v.hash(state);
     }
 }
 
