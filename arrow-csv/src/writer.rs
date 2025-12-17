@@ -141,6 +141,58 @@
 //!     "name,comment\nAlice  ,Great job!  \nBob,Well done\nCharlie,Excellent  \n"
 //! );
 //! ```
+//!
+//! # Quoting Styles
+//!
+//! The writer supports different quoting styles for fields, compatible with Apache Spark's
+//! CSV options like `quoteAll`. You can control when fields are quoted using the
+//! [`QuoteStyle`] enum.
+//!
+//! ## Example
+//!
+//! ```
+//! # use arrow_array::*;
+//! # use arrow_csv::{WriterBuilder, QuoteStyle};
+//! # use arrow_schema::*;
+//! # use std::sync::Arc;
+//!
+//! let schema = Schema::new(vec![
+//!     Field::new("product", DataType::Utf8, false),
+//!     Field::new("price", DataType::Float64, false),
+//! ]);
+//!
+//! let product = StringArray::from(vec!["apple", "banana,organic", "cherry"]);
+//! let price = Float64Array::from(vec![1.50, 2.25, 3.00]);
+//!
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema),
+//!     vec![Arc::new(product), Arc::new(price)],
+//! )
+//! .unwrap();
+//!
+//! // Default behavior (QuoteStyle::Necessary)
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "product,price\napple,1.5\n\"banana,organic\",2.25\ncherry,3.0\n"
+//! );
+//!
+//! // Quote all fields (Spark's quoteAll=true)
+//! let mut output = Vec::new();
+//! WriterBuilder::new()
+//!     .with_quote_style(QuoteStyle::Always)
+//!     .build(&mut output)
+//!     .write(&batch)
+//!     .unwrap();
+//! assert_eq!(
+//!     String::from_utf8(output).unwrap(),
+//!     "\"product\",\"price\"\n\"apple\",\"1.5\"\n\"banana,organic\",\"2.25\"\n\"cherry\",\"3.0\"\n"
+//! );
+//! ```
 
 use arrow_array::*;
 use arrow_cast::display::*;
@@ -150,6 +202,22 @@ use std::io::Write;
 
 use crate::map_csv_error;
 const DEFAULT_NULL_VALUE: &str = "";
+
+/// The quoting style to use when writing CSV files.
+///
+/// This type is re-exported from the `csv` crate and supports different
+/// strategies for quoting fields. It is compatible with Apache Spark's
+/// CSV options like `quoteAll`.
+///
+/// # Example
+///
+/// ```
+/// use arrow_csv::{WriterBuilder, QuoteStyle};
+///
+/// let builder = WriterBuilder::new()
+///     .with_quote_style(QuoteStyle::Always); // Equivalent to Spark's quoteAll=true
+/// ```
+pub use csv::QuoteStyle;
 
 /// A CSV writer
 #[derive(Debug)]
@@ -324,6 +392,8 @@ pub struct WriterBuilder {
     ignore_leading_whitespace: bool,
     /// Whether to ignore trailing whitespace in string values. Defaults to `false`
     ignore_trailing_whitespace: bool,
+    /// The quoting style to use. Defaults to `QuoteStyle::Necessary`
+    quote_style: QuoteStyle,
 }
 
 impl Default for WriterBuilder {
@@ -342,6 +412,7 @@ impl Default for WriterBuilder {
             null_value: None,
             ignore_leading_whitespace: false,
             ignore_trailing_whitespace: false,
+            quote_style: QuoteStyle::default(),
         }
     }
 }
@@ -528,12 +599,38 @@ impl WriterBuilder {
         self.ignore_trailing_whitespace
     }
 
+    /// Set the quoting style for writing CSV files
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use arrow_csv::{WriterBuilder, QuoteStyle};
+    ///
+    /// // Quote all fields (equivalent to Spark's quoteAll=true)
+    /// let builder = WriterBuilder::new()
+    ///     .with_quote_style(QuoteStyle::Always);
+    ///
+    /// // Only quote when necessary (default)
+    /// let builder = WriterBuilder::new()
+    ///     .with_quote_style(QuoteStyle::Necessary);
+    /// ```
+    pub fn with_quote_style(mut self, quote_style: QuoteStyle) -> Self {
+        self.quote_style = quote_style;
+        self
+    }
+
+    /// Get the configured quoting style
+    pub fn quote_style(&self) -> QuoteStyle {
+        self.quote_style
+    }
+
     /// Create a new `Writer`
     pub fn build<W: Write>(self, writer: W) -> Writer<W> {
         let mut builder = csv::WriterBuilder::new();
         let writer = builder
             .delimiter(self.delimiter)
             .quote(self.quote)
+            .quote_style(self.quote_style)
             .double_quote(self.double_quote)
             .escape(self.escape)
             .from_writer(writer);
@@ -1179,6 +1276,101 @@ sed do eiusmod tempor,-556132.25,1,,2019-04-18T02:45:55.555,23:46:03,foo
         assert_eq!(
             "utf8,large_utf8,utf8_view\n  leading,  leading,  leading\ntrailing,trailing,trailing\n  both,  both,  both\nno_spaces,no_spaces,no_spaces\n",
             String::from_utf8(buf).unwrap()
+        );
+    }
+
+    fn write_quote_style(batch: &RecordBatch, quote_style: QuoteStyle) -> String {
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_quote_style(quote_style)
+            .build(&mut buf);
+        writer.write(batch).unwrap();
+        drop(writer);
+        String::from_utf8(buf).unwrap()
+    }
+
+    fn write_quote_style_with_null(
+        batch: &RecordBatch,
+        quote_style: QuoteStyle,
+        null_value: &str,
+    ) -> String {
+        let mut buf = Vec::new();
+        let mut writer = WriterBuilder::new()
+            .with_quote_style(quote_style)
+            .with_null(null_value.to_string())
+            .build(&mut buf);
+        writer.write(batch).unwrap();
+        drop(writer);
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn test_write_csv_quote_style() {
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, false),
+            Field::new("number", DataType::Int32, false),
+            Field::new("float", DataType::Float64, false),
+        ]);
+
+        let text = StringArray::from(vec!["hello", "world", "comma,value", "quote\"test"]);
+        let number = Int32Array::from(vec![1, 2, 3, 4]);
+        let float = Float64Array::from(vec![1.1, 2.2, 3.3, 4.4]);
+
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![Arc::new(text), Arc::new(number), Arc::new(float)],
+        )
+        .unwrap();
+
+        // Test with QuoteStyle::Necessary (default)
+        assert_eq!(
+            "text,number,float\nhello,1,1.1\nworld,2,2.2\n\"comma,value\",3,3.3\n\"quote\"\"test\",4,4.4\n",
+            write_quote_style(&batch, QuoteStyle::Necessary)
+        );
+
+        // Test with QuoteStyle::Always (equivalent to Spark's quoteAll=true)
+        assert_eq!(
+            "\"text\",\"number\",\"float\"\n\"hello\",\"1\",\"1.1\"\n\"world\",\"2\",\"2.2\"\n\"comma,value\",\"3\",\"3.3\"\n\"quote\"\"test\",\"4\",\"4.4\"\n",
+            write_quote_style(&batch, QuoteStyle::Always)
+        );
+
+        // Test with QuoteStyle::NonNumeric
+        assert_eq!(
+            "\"text\",\"number\",\"float\"\n\"hello\",1,1.1\n\"world\",2,2.2\n\"comma,value\",3,3.3\n\"quote\"\"test\",4,4.4\n",
+            write_quote_style(&batch, QuoteStyle::NonNumeric)
+        );
+
+        // Test with QuoteStyle::Never (warning: can produce invalid CSV)
+        // Note: This produces invalid CSV for fields with commas or quotes
+        assert_eq!(
+            "text,number,float\nhello,1,1.1\nworld,2,2.2\ncomma,value,3,3.3\nquote\"test,4,4.4\n",
+            write_quote_style(&batch, QuoteStyle::Never)
+        );
+    }
+
+    #[test]
+    fn test_write_csv_quote_style_with_nulls() {
+        let schema = Schema::new(vec![
+            Field::new("text", DataType::Utf8, true),
+            Field::new("number", DataType::Int32, true),
+        ]);
+
+        let text = StringArray::from(vec![Some("hello"), None, Some("world")]);
+        let number = Int32Array::from(vec![Some(1), Some(2), None]);
+
+        let batch =
+            RecordBatch::try_new(Arc::new(schema), vec![Arc::new(text), Arc::new(number)]).unwrap();
+
+        // Test with QuoteStyle::Always
+        assert_eq!(
+            "\"text\",\"number\"\n\"hello\",\"1\"\n\"\",\"2\"\n\"world\",\"\"\n",
+            write_quote_style(&batch, QuoteStyle::Always)
+        );
+
+        // Test with QuoteStyle::Always and custom null value
+        assert_eq!(
+            "\"text\",\"number\"\n\"hello\",\"1\"\n\"NULL\",\"2\"\n\"world\",\"NULL\"\n",
+            write_quote_style_with_null(&batch, QuoteStyle::Always, "NULL")
         );
     }
 }
