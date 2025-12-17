@@ -417,7 +417,7 @@ impl UnionFields {
 
         loop {
             match (type_ids_iter.next(), fields_iter.next()) {
-                (None, None) => return Ok(Self(out.into())),
+                (None, None) => break,
                 (Some(type_id), Some(field)) => {
                     // check type id is non-negative
                     if type_id < 0 {
@@ -450,6 +450,11 @@ impl UnionFields {
                 }
             }
         }
+
+        // sort by type ids to produce a consistent ordering
+        out.sort_unstable_by_key(|&(i, _)| i);
+
+        Ok(Self(out.into()))
     }
 
     /// Create a new [`UnionFields`] from a collection of fields with automatically
