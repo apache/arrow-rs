@@ -339,23 +339,21 @@ impl RecordBatchDecoder<'_> {
         buffers: &[Buffer],
         child_array: ArrayRef,
     ) -> Result<ArrayRef, ArrowError> {
+        assert!(matches!(data_type, ListView(_) | LargeListView(_)));
+
         let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
         let length = field_node.length() as usize;
         let child_data = child_array.into_data();
 
-        let mut builder = match data_type {
-            ListView(_) | LargeListView(_) => ArrayData::builder(data_type.clone())
+        self.create_array_from_builder(
+            ArrayData::builder(data_type.clone())
                 .len(length)
                 .add_buffer(buffers[1].clone()) // offsets
                 .add_buffer(buffers[2].clone()) // sizes
                 .add_child_data(child_data)
-                .null_bit_buffer(null_buffer),
-            _ => unreachable!("Cannot create listview array from {:?}", data_type),
-        };
-
-        builder = builder.null_count(field_node.null_count() as usize);
-
-        self.create_array_from_builder(builder)
+                .null_bit_buffer(null_buffer)
+                .null_count(field_node.null_count() as usize),
+        )
     }
 
     fn create_struct_array(
