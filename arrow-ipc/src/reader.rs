@@ -122,6 +122,16 @@ impl RecordBatchDecoder<'_> {
                 let values = self.create_array(list_field, variadic_counts)?;
                 self.create_list_array(list_node, data_type, &list_buffers, values)
             }
+            ListView(list_field) | LargeListView(list_field) => {
+                let list_node = self.next_node(field)?;
+                let list_buffers = [
+                    self.next_buffer()?, // null buffer
+                    self.next_buffer()?, // offsets
+                    self.next_buffer()?, // sizes
+                ];
+                let values = self.create_array(list_field, variadic_counts)?;
+                self.create_list_view_array(list_node, data_type, &list_buffers, values)
+            }
             FixedSizeList(list_field, _) => {
                 let list_node = self.next_node(field)?;
                 let list_buffers = [self.next_buffer()?];
@@ -320,6 +330,30 @@ impl RecordBatchDecoder<'_> {
         builder = builder.null_count(field_node.null_count() as usize);
 
         self.create_array_from_builder(builder)
+    }
+
+    fn create_list_view_array(
+        &self,
+        field_node: &FieldNode,
+        data_type: &DataType,
+        buffers: &[Buffer],
+        child_array: ArrayRef,
+    ) -> Result<ArrayRef, ArrowError> {
+        assert!(matches!(data_type, ListView(_) | LargeListView(_)));
+
+        let null_buffer = (field_node.null_count() > 0).then_some(buffers[0].clone());
+        let length = field_node.length() as usize;
+        let child_data = child_array.into_data();
+
+        self.create_array_from_builder(
+            ArrayData::builder(data_type.clone())
+                .len(length)
+                .add_buffer(buffers[1].clone()) // offsets
+                .add_buffer(buffers[2].clone()) // sizes
+                .add_child_data(child_data)
+                .null_bit_buffer(null_buffer)
+                .null_count(field_node.null_count() as usize),
+        )
     }
 
     fn create_struct_array(
