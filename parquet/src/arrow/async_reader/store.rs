@@ -33,7 +33,7 @@ use tokio::runtime::Handle;
 /// # use std::io::stdout;
 /// # use std::sync::Arc;
 /// # use object_store::azure::MicrosoftAzureBuilder;
-/// # use object_store::ObjectStore;
+/// # use object_store::{ObjectStore, ObjectStoreExt};
 /// # use object_store::path::Path;
 /// # use parquet::arrow::async_reader::ParquetObjectReader;
 /// # use parquet::arrow::ParquetRecordBatchStreamBuilder;
@@ -93,7 +93,7 @@ impl ParquetObjectReader {
     /// Providing this size up front is an important optimization to avoid extra calls when the
     /// underlying store does not support suffix range requests.
     ///
-    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStore::head`].
+    /// The file size can be obtained using [`ObjectStore::list`] or [`ObjectStoreExt::head`].
     pub fn with_file_size(self, file_size: u64) -> Self {
         Self {
             file_size: Some(file_size),
