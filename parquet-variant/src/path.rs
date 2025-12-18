@@ -234,4 +234,22 @@ mod tests {
 
         assert_eq!(path, expected);
     }
+
+    #[test]
+    fn test_variant_path_dot_notation_with_only_array_index() {
+        let path = VariantPath::from("[3]");
+
+        let expected = VariantPath::from(3);
+
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_variant_path_dot_notation_with_starting_array_index() {
+        let path = VariantPath::from("[3].title");
+
+        let expected = VariantPath::from(3).join("title");
+
+        assert_eq!(path, expected);
+    }
 }
