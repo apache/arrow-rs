@@ -3293,7 +3293,11 @@ mod tests {
     fn generate_list_view_data<O: OffsetSizeTrait>() -> GenericListViewArray<O> {
         let mut builder = GenericListViewBuilder::<O, _>::new(UInt32Builder::new());
 
-        for i in 0..100_000 {
+        for i in 0u32..100_000 {
+            if i.is_multiple_of(10_000) {
+                builder.append(false);
+                continue;
+            }
             for value in [i, i, i] {
                 builder.values().append_value(value);
             }
@@ -3306,7 +3310,7 @@ mod tests {
     #[test]
     fn encode_list_view_arrays() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
-        let val_field = Field::new("val", DataType::ListView(Arc::new(val_inner)), false);
+        let val_field = Field::new("val", DataType::ListView(Arc::new(val_inner)), true);
         let schema = Arc::new(Schema::new(vec![val_field]));
 
         let values = Arc::new(generate_list_view_data::<i32>());
@@ -3319,7 +3323,7 @@ mod tests {
     #[test]
     fn encode_large_list_view_arrays() {
         let val_inner = Field::new_list_field(DataType::UInt32, true);
-        let val_field = Field::new("val", DataType::LargeListView(Arc::new(val_inner)), false);
+        let val_field = Field::new("val", DataType::LargeListView(Arc::new(val_inner)), true);
         let schema = Arc::new(Schema::new(vec![val_field]));
 
         let values = Arc::new(generate_list_view_data::<i64>());
@@ -3366,7 +3370,12 @@ mod tests {
         let middle_builder = GenericListViewBuilder::<O, _>::new(inner_builder);
         let mut outer_builder = GenericListViewBuilder::<O, _>::new(middle_builder);
 
-        for i in 0..10_000 {
+        for i in 0u32..10_000 {
+            if i.is_multiple_of(1_000) {
+                outer_builder.append(false);
+                continue;
+            }
+
             for _ in 0..3 {
                 for value in [i, i + 1, i + 2] {
                     outer_builder.values().values().append_value(value);
