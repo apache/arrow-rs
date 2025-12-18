@@ -118,13 +118,13 @@ impl From<BufWriter> for ParquetObjectWriter {
 }
 #[cfg(test)]
 mod tests {
-    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
-    use object_store::memory::InMemory;
-    use std::sync::Arc;
-
     use super::*;
     use crate::arrow::AsyncArrowWriter;
     use crate::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    use arrow_array::{ArrayRef, Int64Array, RecordBatch};
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_async_writer() {
