@@ -262,23 +262,25 @@ where
     let zero = <T::Offset as Zero>::zero();
 
     // When array is [Large]StringArray, we will check whether `offset` is at a valid char boundary.
-    let check_char_boundary = {
-        |offset: T::Offset| {
+    let check_char_boundary =
+        |value_bytes: &[u8], offset: T::Offset| -> Result<T::Offset, ArrowError> {
             if !matches!(T::DATA_TYPE, DataType::Utf8 | DataType::LargeUtf8) {
                 return Ok(offset);
             }
-            // Safety: a StringArray must contain valid UTF8 data
-            let data_str = unsafe { std::str::from_utf8_unchecked(data) };
+
             let offset_usize = offset.as_usize();
-            if data_str.is_char_boundary(offset_usize) {
+
+            // Safety: StringArray / LargeStringArray always contain valid UTF-8
+            let value_str = unsafe { std::str::from_utf8_unchecked(value_bytes) };
+
+            if offset_usize <= value_str.len() && value_str.is_char_boundary(offset_usize) {
                 Ok(offset)
             } else {
                 Err(ArrowError::ComputeError(format!(
                     "The offset {offset_usize} is at an invalid utf-8 boundary."
                 )))
             }
-        }
-    };
+        };
 
     // start and end offsets of all substrings
     let mut new_starts_ends: Vec<(T::Offset, T::Offset)> = Vec::with_capacity(array.len());
@@ -289,15 +291,31 @@ where
     offsets
         .windows(2)
         .try_for_each(|pair| -> Result<(), ArrowError> {
+            let start_usize = pair[0].as_usize();
+            let end_usize = pair[1].as_usize();
+            let value_bytes = &data[start_usize..end_usize];
+
             let new_start = match start.cmp(&zero) {
-                Ordering::Greater => check_char_boundary((pair[0] + start).min(pair[1]))?,
+                Ordering::Greater => {
+                    let off = (pair[0] + start).min(pair[1]) - pair[0];
+                    pair[0] + check_char_boundary(value_bytes, off)?
+                }
                 Ordering::Equal => pair[0],
-                Ordering::Less => check_char_boundary((pair[1] + start).max(pair[0]))?,
+                Ordering::Less => {
+                    let off = (pair[1] + start).max(pair[0]) - pair[0];
+                    pair[0] + check_char_boundary(value_bytes, off)?
+                }
             };
+
             let new_end = match length {
-                Some(length) => check_char_boundary((length + new_start).min(pair[1]))?,
+                Some(length) => {
+                    let end = (new_start + length).min(pair[1]);
+                    let off = end - pair[0];
+                    pair[0] + check_char_boundary(value_bytes, off)?
+                }
                 None => pair[1],
             };
+
             len_so_far += new_end - new_start;
             new_starts_ends.push((new_start, new_end));
             new_offsets.push(len_so_far);
