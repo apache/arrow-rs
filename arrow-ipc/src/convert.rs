@@ -425,6 +425,20 @@ pub(crate) fn get_data_type(field: crate::Field, may_be_dictionary: bool) -> Dat
             }
             DataType::LargeList(Arc::new(children.get(0).into()))
         }
+        crate::Type::ListView => {
+            let children = field.children().unwrap();
+            if children.len() != 1 {
+                panic!("expect a listview to have one child")
+            }
+            DataType::ListView(Arc::new(children.get(0).into()))
+        }
+        crate::Type::LargeListView => {
+            let children = field.children().unwrap();
+            if children.len() != 1 {
+                panic!("expect a large listview to have one child")
+            }
+            DataType::LargeListView(Arc::new(children.get(0).into()))
+        }
         crate::Type::FixedSizeList => {
             let children = field.children().unwrap();
             if children.len() != 1 {
@@ -769,7 +783,24 @@ pub(crate) fn get_fb_field_type<'a>(
                 children: Some(fbb.create_vector(&[child])),
             }
         }
-        ListView(_) | LargeListView(_) => unimplemented!("ListView/LargeListView not implemented"),
+        ListView(list_type) => {
+            let child = build_field(fbb, dictionary_tracker, list_type);
+            FBFieldType {
+                type_type: crate::Type::ListView,
+                type_: crate::ListViewBuilder::new(fbb).finish().as_union_value(),
+                children: Some(fbb.create_vector(&[child])),
+            }
+        }
+        LargeListView(list_type) => {
+            let child = build_field(fbb, dictionary_tracker, list_type);
+            FBFieldType {
+                type_type: crate::Type::LargeListView,
+                type_: crate::LargeListViewBuilder::new(fbb)
+                    .finish()
+                    .as_union_value(),
+                children: Some(fbb.create_vector(&[child])),
+            }
+        }
         LargeList(list_type) => {
             let child = build_field(fbb, dictionary_tracker, list_type);
             FBFieldType {
