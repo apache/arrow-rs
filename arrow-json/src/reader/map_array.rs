@@ -62,6 +62,7 @@ impl MapArrayDecoder {
         };
 
         let keys = make_decoder(
+            Some(fields[0].clone()),
             fields[0].data_type().clone(),
             coerce_primitive,
             strict_mode,
@@ -70,6 +71,7 @@ impl MapArrayDecoder {
             decoder_factory.clone(),
         )?;
         let values = make_decoder(
+            Some(fields[1].clone()),
             fields[1].data_type().clone(),
             coerce_primitive,
             strict_mode,

@@ -50,6 +50,7 @@ impl<O: OffsetSizeTrait> ListArrayDecoder<O> {
             _ => unreachable!(),
         };
         let decoder = make_decoder(
+            Some(field.clone()),
             field.data_type().clone(),
             coerce_primitive,
             strict_mode,

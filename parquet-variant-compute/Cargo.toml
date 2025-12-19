@@ -30,9 +30,13 @@ rust-version = { workspace = true }
 
 [dependencies]
 arrow = { workspace = true , features = ["canonical_extension_types"]}
+arrow-array = { workspace = true }
+arrow-data = { workspace = true }
+arrow-json = { workspace = true }
 arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
 indexmap = "2.10.0"
+lexical-core = { version = "1.0", default-features = false}
 parquet-variant = { workspace = true }
 parquet-variant-json = { workspace = true }
 chrono = { workspace = true }

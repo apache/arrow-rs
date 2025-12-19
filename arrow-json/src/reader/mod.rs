@@ -315,6 +315,7 @@ impl ReaderBuilder {
         };
 
         let decoder = make_decoder(
+            None,
             data_type,
             self.coerce_primitive,
             self.strict_mode,
@@ -425,6 +426,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 /// impl DecoderFactory for IncorrectStringAsNullDecoderFactory {
 ///     fn make_default_decoder<'a>(
 ///         &self,
+///         _field: Option<FieldRef>,
 ///         data_type: DataType,
 ///         _coerce_primitive: bool,
 ///         _strict_mode: bool,
@@ -464,14 +466,13 @@ pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     /// This can be used to override how e.g. error in decoding are handled.
     fn make_default_decoder(
         &self,
+        _field: Option<FieldRef>,
         _data_type: DataType,
         _coerce_primitive: bool,
         _strict_mode: bool,
         _is_nullable: bool,
         _struct_mode: StructMode,
-    ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-        Ok(None)
-    }
+    ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError>;
 }
 
 /// A low-level interface for reading JSON data from a byte stream
@@ -788,6 +789,7 @@ macro_rules! primitive_decoder {
 }
 
 fn make_decoder(
+    field: Option<FieldRef>,
     data_type: DataType,
     coerce_primitive: bool,
     strict_mode: bool,
@@ -797,6 +799,7 @@ fn make_decoder(
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     if let Some(ref factory) = decoder_factory {
         if let Some(decoder) = factory.make_default_decoder(
+            field.clone(),
             data_type.clone(),
             coerce_primitive,
             strict_mode,
@@ -2953,6 +2956,7 @@ mod tests {
         impl DecoderFactory for AlwaysNullStringArrayDecoderFactory {
             fn make_default_decoder<'a>(
                 &self,
+                _field: Option<FieldRef>,
                 data_type: DataType,
                 _coerce_primitive: bool,
                 _strict_mode: bool,
