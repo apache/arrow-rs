@@ -62,4 +62,4 @@ pub use to_json::variant_to_json;
 pub use type_conversion::CastOptions;
 pub use unshred_variant::unshred_variant;
 pub use variant_get::{GetOptions, variant_get};
-pub use decoder::VariantArrayDecoder;
+pub use decoder::VariantArrayDecoderFactory;
