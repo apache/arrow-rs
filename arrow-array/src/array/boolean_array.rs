@@ -830,11 +830,7 @@ mod tests {
         assert!(nulls.is_none());
     }
 
-
-
-
-
-     #[test]
+    #[test]
     fn test_new_null_array() {
         let arr = BooleanArray::new_null(5);
 
@@ -849,10 +845,7 @@ mod tests {
         }
     }
 
-
-
-
-     #[test]
+    #[test]
     fn test_slice_with_nulls() {
         let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
         let sliced = arr.slice(1, 2);
@@ -864,6 +857,4 @@ mod tests {
         assert!(sliced.is_valid(1));
         assert!(!sliced.value(1));
     }
-
-    
 }
