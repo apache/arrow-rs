@@ -2439,6 +2439,27 @@ mod tests {
     }
 
     #[test]
+    fn test_take_runs_sliced() {
+        let logical_array: Vec<i32> = vec![1, 1, 2, 2, 3, 3, 3, 4, 4, 5, 5, 6, 6];
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend(logical_array.into_iter().map(Some));
+        let run_array = builder.finish();
+
+        let run_array = run_array.slice(4, 6); // [3, 3, 3, 4, 4, 5]
+
+        let take_indices: PrimitiveArray<Int32Type> = vec![0, 5, 5, 1, 4].into_iter().collect();
+
+        let result = take_run(&run_array, &take_indices).unwrap();
+        let result = result.downcast::<Int32Array>().unwrap();
+
+        let expected = vec![3, 5, 5, 3, 4];
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn test_take_value_index_from_fixed_list() {
         let list = FixedSizeListArray::from_iter_primitive::<Int32Type, _, _>(
             vec![
