@@ -1729,7 +1729,7 @@ pub fn cast_with_options(
         (Time32(TimeUnit::Millisecond), Time64(TimeUnit::Nanosecond)) => Ok(Arc::new(
             array
                 .as_primitive::<Time32MillisecondType>()
-                .unary::<_, Time64NanosecondType>(|x| x as i64 * (MICROSECONDS / NANOSECONDS)),
+                .unary::<_, Time64NanosecondType>(|x| x as i64 * (NANOSECONDS / MILLISECONDS)),
         )),
 
         (Time64(TimeUnit::Microsecond), Time32(TimeUnit::Second)) => Ok(Arc::new(
@@ -13275,6 +13275,52 @@ mod tests {
         assert_eq!(cast_array.value(0), 1000);
         assert_eq!(cast_array.value(1), 2000);
         assert_eq!(cast_array.value(2), 3000);
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_time64_nanosecond() {
+        let array =
+            Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
+        assert_eq!(c.value(0), 1_000_000_000);
+        assert_eq!(c.value(1), 2_000_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_millisecond_to_time64_microsecond() {
+        let array =
+            Time32MillisecondArray::from(vec![Some(1_000), Some(2_000), None, Some(43_200_000)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
+        assert_eq!(c.value(0), 1_000_000);
+        assert_eq!(c.value(1), 2_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_time64_nanosecond() {
+        let array = Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Nanosecond)).unwrap();
+        let c = b.as_primitive::<Time64NanosecondType>();
+        assert_eq!(c.value(0), 1_000_000_000);
+        assert_eq!(c.value(1), 60_000_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000_000);
+    }
+
+    #[test]
+    fn test_cast_time32_second_to_time64_microsecond() {
+        let array = Time32SecondArray::from(vec![Some(1), Some(60), None, Some(43_200)]);
+        let b = cast(&array, &DataType::Time64(TimeUnit::Microsecond)).unwrap();
+        let c = b.as_primitive::<Time64MicrosecondType>();
+        assert_eq!(c.value(0), 1_000_000);
+        assert_eq!(c.value(1), 60_000_000);
+        assert!(c.is_null(2));
+        assert_eq!(c.value(3), 43_200_000_000);
     }
 
     #[test]
