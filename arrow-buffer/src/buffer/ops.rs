@@ -16,6 +16,7 @@
 // under the License.
 
 use super::{Buffer, MutableBuffer};
+use crate::BooleanBuffer;
 use crate::util::bit_util::ceil;
 
 /// Apply a bitwise operation `op` to four inputs and return the result as a Buffer.
@@ -93,36 +94,20 @@ where
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
+#[deprecated(
+    since = "57.2.0",
+    note = "use BooleanBuffer::from_bitwise_unary_op instead"
+)]
 pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
     F: FnMut(u64) -> u64,
 {
-    // reserve capacity and set length so we can get a typed view of u64 chunks
-    let mut result =
-        MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
-
-    let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
-
-    let result_chunks = result.typed_data_mut::<u64>().iter_mut();
-
-    result_chunks
-        .zip(left_chunks.iter())
-        .for_each(|(res, left)| {
-            *res = op(left);
-        });
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    result.extend_from_slice(rem);
-
-    result.into()
+    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, op).into_inner()
 }
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
@@ -204,5 +189,6 @@ pub fn buffer_bin_and_not(
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
 pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {
-    bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
+    // TODO: should we deprecate this function in favor of the Buffer ! impl ?
+    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, |a| !a).into_inner()
 }
