@@ -161,13 +161,12 @@ impl BooleanBuffer {
         }
 
         let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
+        let result_chunks = chunks.iter().map(|chunk| op(chunk));
         let mut result = MutableBuffer::with_capacity(chunks.num_u64s() * 8);
-        for chunk in chunks.iter() {
-            // SAFETY: reserved enough capacity above, (exactly num_u64s()
-            // items) and we assume `BitChunks` correctly reports upper bound
-            unsafe {
-                result.push_unchecked(op(chunk));
-            }
+        // SAFETY: reserved enough capacity above, (exactly num_u64s()
+        // items) and we assume `BitChunks` correctly reports upper bound
+        unsafe {
+            result.extend_from_trusted_len_iter(result_chunks);
         }
         if chunks.remainder_len() > 0 {
             debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
@@ -277,14 +276,16 @@ impl BooleanBuffer {
         assert_eq!(left_chunks.num_u64s(), right_chunks.num_u64s());
 
         let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
-
-        for (left, right) in left_chunks.iter().zip(right_chunks.iter()) {
-            // SAFETY: reserved enough capacity above, (exactly num_u64s()
-            // items) and we assume `BitChunks` correctly reports upper bound
-            unsafe {
-                result.push_unchecked(op(left, right));
-            }
+        let output_chunks = left_chunks
+            .iter()
+            .zip(right_chunks.iter())
+            .map(|(left, right)| op(left, right));
+        // SAFETY: reserved enough capacity above, (exactly num_u64s()
+        // items) and we assume `BitChunks` correctly reports upper bound
+        unsafe {
+            result.extend_from_trusted_len_iter(output_chunks);
         }
+
         if left_chunks.remainder_len() > 0 {
             debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
             let op_result = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
