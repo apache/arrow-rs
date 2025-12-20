@@ -18,11 +18,11 @@
 use crate::ArrowNativeType;
 use crate::buffer::ScalarBuffer;
 
-/// A slice-able buffer of monotonically increasing, positive integers used to
-/// store run-ends.
+/// A buffer of monotonically increasing, positive integers used to store run-ends.
 ///
 /// Used to compactly represent runs of the same value. Values being represented
-/// are stored in a separate buffer from this struct.
+/// are stored in a separate buffer from this struct. See [`RunArray`] for an example
+/// of how this is used with a companion array to represent the values.
 ///
 /// # Logical vs Physical
 ///
@@ -91,6 +91,7 @@ use crate::buffer::ScalarBuffer;
 /// (A [`RunEndBuffer`] is considered unsliced when `logical_offset` is `0` and
 /// `logical_length` is equal to the last value in `run_ends`)
 ///
+/// [`RunArray`]: https://docs.rs/arrow/latest/arrow/array/struct.RunArray.html
 /// [Run-End encoded layout]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
 #[derive(Debug, Clone)]
 pub struct RunEndBuffer<E: ArrowNativeType> {
