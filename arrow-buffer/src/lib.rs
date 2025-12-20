@@ -26,8 +26,8 @@
 //! There are also several wrappers over [`Buffer`] with methods for
 //! easier manipulation:
 //!
-//! - [`BooleanBuffer`] for Bitmasks (buffer of packed bits)
-//! - [`NullBuffer`], Arrow null (validity) bitmaps ([`BooleanBuffer`] with extra utilities)
+//! - [`BooleanBuffer`]: Bitmasks (buffer of packed bits)
+//! - [`NullBuffer`]: Arrow null (validity) bitmaps ([`BooleanBuffer`] with extra utilities)
 //! - [`ScalarBuffer<T>`]: Typed buffer for primitive types (e.g., `i32`, `f64`)
 //! - [`OffsetBuffer<O>`]: Offsets used in variable-length types (e.g., strings, lists)
 //! - [`RunEndBuffer<E>`]: Run-lengths used in run-encoded encoded data
