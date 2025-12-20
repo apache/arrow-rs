@@ -62,9 +62,9 @@ use std::ops::{BitAnd, BitOr, BitXor, Not};
 ///
 ///        length = 10 bits, offset = 3
 /// ```
-/// Note that the bits marked `?` are not part of the (logical) mask and
-/// may contain either `0` or `1`
 ///
+/// Note that the bits marked `?` are not logically part of the mask and may
+/// contain either `0` or `1`
 ///
 /// # See Also
 /// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
