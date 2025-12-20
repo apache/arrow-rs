@@ -222,6 +222,10 @@ impl LevelInfoBuilder {
                     _ => unreachable!(),
                 })
             }
+            DataType::RunEndEncoded(_, v) if is_leaf(v.data_type()) => {
+                let levels = ArrayLevels::new(parent_ctx, is_nullable, array.clone());
+                Ok(Self::Primitive(levels))
+            }
             d => Err(nyi_err!("Datatype {} is not yet supported", d)),
         }
     }
