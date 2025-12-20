@@ -53,8 +53,8 @@ use crate::buffer::ScalarBuffer;
 /// unsliced. See the section below on slicing for more details on how this buffer
 /// handles slicing.
 ///
-/// We can see how logically the values are represented by the same physical index,
-/// how multiple logical indices map to the same physical index. So the [`RunEndBuffer`]
+/// This means that multiple logical values are represented in the same physical index,
+/// and multiple logical indices map to the same physical index. The [`RunEndBuffer`]
 /// containing `[3, 4, 6]` is essentially the physical indices `[0, 0, 0, 1, 2, 2]`,
 /// and having a separately stored buffer of values such as `[A, B, C]` can turn
 /// this into a representation of `[A, A, A, B, C, C]`.
