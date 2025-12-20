@@ -127,9 +127,10 @@ impl BooleanBuffer {
     /// * The output always has zero offset
     ///
     /// # See Also
+    /// - [`BooleanBuffer::from_bitwise_binary_op`] to create a new buffer from a binary operation
     /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
     ///
-    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT` of an input [`Buffer`]
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT` of a byte slice
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
     /// let input = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
@@ -179,9 +180,8 @@ impl BooleanBuffer {
             result.truncate(chunks.num_bytes());
         }
 
-        let buffer = Buffer::from(result);
         BooleanBuffer {
-            buffer,
+            buffer: Buffer::from(result),
             offset: 0,
             len: len_in_bits,
         }
@@ -210,6 +210,136 @@ impl BooleanBuffer {
         let result_u64s: Vec<u64> = aligned_u6us.iter().map(|l| op(*l)).collect();
         let buffer = Buffer::from(result_u64s);
         Some(BooleanBuffer::new(buffer, 0, len_in_bits))
+    }
+
+    /// Create a new [`BooleanBuffer`] by applying the bitwise operation `op` to
+    /// the relevant bits from two input buffers.
+    ///
+    /// This function is faster than applying the operation bit by bit as
+    /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
+    ///
+    /// # Notes:
+    /// See notes on [Self::from_bitwise_unary_op]
+    ///
+    /// # See Also
+    /// - [`BooleanBuffer::from_bitwise_unary_op`] for unary operations on a single input buffer.
+    /// - [`apply_bitwise_binary_op`](bit_util::apply_bitwise_binary_op) for in-place binary bitwise operations
+    ///
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `AND` of two [`Buffer`]s
+    /// ```
+    /// # use arrow_buffer::{Buffer, BooleanBuffer};
+    /// let left = Buffer::from(vec![0b11001100u8, 0b10111010u8]); // 2 bytes = 16 bits
+    /// let right = Buffer::from(vec![0b10101010u8, 0b11011100u8, 0b11110000u8]); // 3 bytes = 24 bits
+    /// // AND of the first 12 bits
+    /// let result = BooleanBuffer::from_bitwise_binary_op(
+    ///   &left, 0, &right, 0, 12, |a, b| a & b
+    /// );
+    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
+    /// ```
+    ///
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `OR` of two byte slices
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let left = [0b11001100u8, 0b10111010u8];
+    /// let right = [0b10101010u8, 0b11011100u8];
+    /// // OR of bits 4..16 from left and bits 0..12 from right
+    /// let result = BooleanBuffer::from_bitwise_binary_op(
+    ///  &left, 4, &right, 0, 12, |a, b| a | b
+    /// );
+    /// assert_eq!(result.inner().as_slice(), &[0b10101110u8, 0b00001111u8]);
+    /// ```
+    pub fn from_bitwise_binary_op<F>(
+        left: impl AsRef<[u8]>,
+        left_offset_in_bits: usize,
+        right: impl AsRef<[u8]>,
+        right_offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) -> Self
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        // try fast path for aligned input
+        if left_offset_in_bits % 8 == 0 && right_offset_in_bits % 8 == 0 {
+            if let Some(result) = Self::try_from_aligned_bitwise_binary_op(
+                &left.as_ref()[left_offset_in_bits / 8..], // aligned to byte boundary
+                &right.as_ref()[right_offset_in_bits / 8..],
+                len_in_bits,
+                &mut op,
+            ) {
+                return result;
+            }
+        }
+
+        // each chunk is 64 bits
+        let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
+        let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
+        assert_eq!(left_chunks.num_u64s(), right_chunks.num_u64s());
+
+        let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
+
+        for (left, right) in left_chunks.iter().zip(right_chunks.iter()) {
+            // SAFETY: reserved enough capacity above, (exactly num_u64s()
+            // items) and we assume `BitChunks` correctly reports upper bound
+            unsafe {
+                result.push_unchecked(op(left, right));
+            }
+        }
+        if left_chunks.remainder_len() > 0 {
+            debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
+            let op_result = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
+            // SAFETY: reserved enough capacity above, (exactly num_u64s()
+            // items) and we assume `BitChunks` correctly reports upper bound
+            unsafe {
+                result.push_unchecked(op_result);
+            }
+            // Just pushed one u64, which may have trailing zeros
+            result.truncate(left_chunks.num_bytes());
+        }
+
+        BooleanBuffer {
+            buffer: Buffer::from(result),
+            offset: 0,
+            len: len_in_bits,
+        }
+    }
+
+    /// Like [`Self::from_bitwise_binary_op`] but optimized for the case where the
+    /// inputs are aligned to byte boundaries
+    ///
+    /// Returns `None` if the inputs are not fully u64 aligned
+    fn try_from_aligned_bitwise_binary_op<F>(
+        left: &[u8],
+        right: &[u8],
+        len_in_bits: usize,
+        op: &mut F,
+    ) -> Option<Self>
+    where
+        F: FnMut(u64, u64) -> u64,
+    {
+        // Safety: all valid bytes are valid u64s
+        let (left_prefix, left_u64s, left_suffix) = unsafe { left.align_to::<u64>() };
+        let (right_prefix, right_u64s, right_suffix) = unsafe { right.align_to::<u64>() };
+        if !(left_prefix.is_empty()
+            && right_prefix.is_empty()
+            && left_suffix.is_empty()
+            && right_suffix.is_empty())
+        {
+            // Couldn't make this case any faster than the default path
+            // would be cool to handle non empty prefixes/suffixes too,
+            return None;
+        }
+        // the buffers are word (64 bit) aligned, so use optimized Vec code.
+        let result_u64s = left_u64s
+            .iter()
+            .zip(right_u64s.iter())
+            .map(|(l, r)| op(*l, *r))
+            .collect::<Vec<u64>>();
+        Some(BooleanBuffer::new(
+            Buffer::from(result_u64s),
+            0,
+            len_in_bits,
+        ))
     }
 
     /// Returns the number of set bits in this buffer
@@ -589,6 +719,44 @@ mod tests {
                 .map(|b| !*b)
                 .collect::<BooleanBuffer>();
             assert_eq!(result, expected);
+        }
+    }
+
+    #[test]
+    fn test_from_bitwise_binary_op() {
+        // pick random boolean inputs
+        let input_bools_left = (0..1024)
+            .map(|_| rand::random::<bool>())
+            .collect::<Vec<bool>>();
+        let input_bools_right = (0..1024)
+            .map(|_| rand::random::<bool>())
+            .collect::<Vec<bool>>();
+        let input_buffer_left = BooleanBuffer::from(&input_bools_left[..]);
+        let input_buffer_right = BooleanBuffer::from(&input_bools_right[..]);
+
+        for left_offset in 0..200 {
+            for right_offset in [0, 4, 5, 17, 33, 24, 45, 64, 65, 100, 200] {
+                for len_offset in [0, 1, 44, 100, 256, 300, 512] {
+                    let len = 1024 - len_offset - left_offset.max(right_offset); // ensure we don't go out of bounds
+                    // compute with AND
+                    let result = BooleanBuffer::from_bitwise_binary_op(
+                        input_buffer_left.values(),
+                        left_offset,
+                        input_buffer_right.values(),
+                        right_offset,
+                        len,
+                        |a, b| a & b,
+                    );
+                    // compute directly from bools
+                    let expected = input_bools_left[left_offset..]
+                        .iter()
+                        .zip(&input_bools_right[right_offset..])
+                        .take(len)
+                        .map(|(a, b)| *a & *b)
+                        .collect::<BooleanBuffer>();
+                    assert_eq!(result, expected);
+                }
+            }
         }
     }
 }
