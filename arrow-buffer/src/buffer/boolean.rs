@@ -161,7 +161,7 @@ impl BooleanBuffer {
         }
 
         let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
-        let result_chunks = chunks.iter().map(|chunk| op(chunk));
+        let result_chunks = chunks.iter().map(&mut op);
         let mut result = MutableBuffer::with_capacity(chunks.num_u64s() * 8);
         // SAFETY: reserved enough capacity above, (exactly num_u64s()
         // items) and we assume `BitChunks` correctly reports upper bound

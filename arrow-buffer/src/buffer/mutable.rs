@@ -717,6 +717,10 @@ impl MutableBuffer {
     }
 
     /// Extends this buffer with an iterator with a trusted length
+    ///
+    /// # Safety
+    /// This method assumes that the iterator's size is correct and is undefined behavior
+    /// to use it on an iterator that reports an incorrect length.
     pub unsafe fn extend_from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         &mut self,
         iterator: I,
