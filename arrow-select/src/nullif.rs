@@ -490,7 +490,18 @@ mod tests {
         let r_data = r.to_data();
         r_data.validate().unwrap();
 
-        assert_eq!(r.as_ref(), &expected);
+        assert_eq!(
+            r.as_ref(),
+            &expected,
+            "expected nulls: {:#?}\n\n\
+        result nulls:   {:#?}\n\n\\
+        expected values: {:#?}\n\n\
+        result values:   {:#?}",
+            expected.nulls(),
+            r.nulls(),
+            expected.values(),
+            r.as_primitive::<Int32Type>().values()
+        );
     }
 
     #[test]
