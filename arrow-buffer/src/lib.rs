@@ -26,11 +26,11 @@
 //! There are also several wrappers over [`Buffer`] with methods for
 //! easier manipulation:
 //!
-//! - [`BooleanBuffer`]: Bitmasks (buffer of packed bits)
-//! - [`NullBuffer`]: Arrow null (validity) bitmaps ([`BooleanBuffer`] with extra utilities)
-//! - [`ScalarBuffer<T>`]: Typed buffer for primitive types (e.g., `i32`, `f64`)
-//! - [`OffsetBuffer<O>`]: Offsets used in variable-length types (e.g., strings, lists)
-//! - [`RunEndBuffer<E>`]: Run-ends used in run-encoded encoded data
+//! - [`BooleanBuffer`][]: Bitmasks (buffer of packed bits)
+//! - [`NullBuffer`][]: Arrow null (validity) bitmaps ([`BooleanBuffer`] with extra utilities)
+//! - [`ScalarBuffer<T>`][]: Typed buffer for primitive types (e.g., `i32`, `f64`)
+//! - [`OffsetBuffer<O>`][]: Offsets used in variable-length types (e.g., strings, lists)
+//! - [`RunEndBuffer<E>`][]: Run-ends used in run-encoded encoded data
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
