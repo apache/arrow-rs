@@ -30,16 +30,15 @@ use crate::{
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
 };
 
-/// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
+/// An array of [run-end encoded values].
 ///
-/// This encoding is variation on [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding)
-/// and is good for representing data containing same values repeated consecutively.
+/// This encoding is variation on [run-length encoding (RLE)] and is good for representing
+/// data containing the same values repeated consecutively.
 ///
-/// [`RunArray`] contains `run_ends` array and `values` array of same length.
-/// The `run_ends` array stores the indexes at which the run ends. The `values` array
-/// stores the value of each run. Below example illustrates how a logical array is represented in
-/// [`RunArray`]
-///
+/// A [`RunArray`] consists of a `run_ends` buffer and a `values` array of equivalent
+/// lengths. The `run_ends` buffer stores the indexes at which the run ends. The
+/// `values` array stores the corresponding value of each run. The below example
+/// illustrates how a logical array is represented by a [`RunArray`]:
 ///
 /// ```text
 /// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
@@ -60,6 +59,9 @@ use crate::{
 ///                                             Logical array
 ///                                                Contents
 /// ```
+///
+/// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
+/// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
 pub struct RunArray<R: RunEndIndexType> {
     data_type: DataType,
     run_ends: RunEndBuffer<R::Native>,
@@ -77,8 +79,8 @@ impl<R: RunEndIndexType> Clone for RunArray<R> {
 }
 
 impl<R: RunEndIndexType> RunArray<R> {
-    /// Calculates the logical length of the array encoded
-    /// by the given run_ends array.
+    /// Calculates the logical length of the array encoded by treating the `run_ends`
+    /// array as if it were a [`RunEndBuffer`].
     pub fn logical_len(run_ends: &PrimitiveArray<R>) -> usize {
         let len = run_ends.len();
         if len == 0 {
@@ -87,9 +89,13 @@ impl<R: RunEndIndexType> RunArray<R> {
         run_ends.value(len - 1).as_usize()
     }
 
-    /// Attempts to create RunArray using given run_ends (index where a run ends)
-    /// and the values (value of the run). Returns an error if the given data is not compatible
-    /// with RunEndEncoded specification.
+    /// Attempts to create a [`RunArray`] using the given `run_ends` and `values`.
+    ///
+    /// # Errors
+    ///
+    /// - If `run_ends` and `values` have different lengths
+    /// - If `run_ends` has any null values
+    /// - If `run_ends` doesn't consist of strictly increasing positive integers
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         let run_ends_type = run_ends.data_type().clone();
         let values_type = values.data_type().clone();
@@ -117,25 +123,29 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(array_data.into())
     }
 
-    /// Returns a reference to [`RunEndBuffer`]
+    /// Returns a reference to the [`RunEndBuffer`].
     pub fn run_ends(&self) -> &RunEndBuffer<R::Native> {
         &self.run_ends
     }
 
-    /// Returns a reference to values array
+    /// Returns a reference to the values array.
     ///
-    /// Note: any slicing of this [`RunArray`] array is not applied to the returned array
-    /// and must be handled separately
+    /// Any slicing of this [`RunArray`] array is **not** applied to the returned
+    /// values here and must be handled separately.
     pub fn values(&self) -> &ArrayRef {
         &self.values
     }
 
     /// Returns the physical index at which the array slice starts.
+    ///
+    /// See [`RunEndBuffer::get_start_physical_index`].
     pub fn get_start_physical_index(&self) -> usize {
         self.run_ends.get_start_physical_index()
     }
 
     /// Returns the physical index at which the array slice ends.
+    ///
+    /// See [`RunEndBuffer::get_end_physical_index`].
     pub fn get_end_physical_index(&self) -> usize {
         self.run_ends.get_end_physical_index()
     }
@@ -152,7 +162,6 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// assert_eq!(typed.value(1), "b");
     /// assert!(typed.values().is_null(2));
     /// ```
-    ///
     pub fn downcast<V: 'static>(&self) -> Option<TypedRunArray<'_, R, V>> {
         let values = self.values.as_any().downcast_ref()?;
         Some(TypedRunArray {
@@ -161,22 +170,31 @@ impl<R: RunEndIndexType> RunArray<R> {
         })
     }
 
-    /// Returns index to the physical array for the given index to the logical array.
-    /// This function adjusts the input logical index based on `ArrayData::offset`
-    /// Performs a binary search on the run_ends array for the input index.
+    /// Calls [`RunEndBuffer::get_physical_index`].
     ///
     /// The result is arbitrary if `logical_index >= self.len()`
     pub fn get_physical_index(&self, logical_index: usize) -> usize {
         self.run_ends.get_physical_index(logical_index)
     }
 
-    /// Returns the physical indices of the input logical indices. Returns error if any of the logical
-    /// index cannot be converted to physical index. The logical indices are sorted and iterated along
-    /// with run_ends array to find matching physical index. The approach used here was chosen over
-    /// finding physical index for each logical index using binary search using the function
-    /// `get_physical_index`. Running benchmarks on both approaches showed that the approach used here
+    /// Given the input `logical_indices`, return the corresponding physical index
+    /// for each, according to the underlying [`RunEndBuffer`], taking into account
+    /// any slicing that has occurred.
+    ///
+    /// Returns an error if any of the provided logical indices is out of range.
+    ///
+    /// # Implementation
+    ///
+    /// The logical indices are sorted and iterated along with the `run_ends` buffer
+    /// to find the matching physical index. The approach used here was chosen over
+    /// finding the physical index for each logical index using binary search via
+    /// the function [`RunEndBuffer::get_physical_index`].
+    ///
+    /// Running benchmarks on both approaches showed that the approach used here
     /// scaled well for larger inputs.
+    ///
     /// See <https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727> for more details.
+    // TODO: this technically should be a method on RunEndBuffer
     #[inline]
     pub fn get_physical_indices<I>(&self, logical_indices: &[I]) -> Result<Vec<usize>, ArrowError>
     where
@@ -244,6 +262,10 @@ impl<R: RunEndIndexType> RunArray<R> {
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    ///
+    /// - Specified slice (`offset` + `length`) exceeds existing length
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
