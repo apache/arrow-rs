@@ -716,61 +716,6 @@ impl MutableBuffer {
         iterator.for_each(|item| self.push(item));
     }
 
-    /// Extends this buffer with an iterator with a trusted length
-    ///
-    /// # Safety
-    /// This method assumes that the iterator's size is correct and is undefined behavior
-    /// to use it on an iterator that reports an incorrect length.
-    #[inline]
-    pub unsafe fn extend_from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
-        &mut self,
-        iterator: I,
-    ) {
-        let item_size = std::mem::size_of::<T>();
-        let (_, upper) = iterator.size_hint();
-        let upper = upper.expect("extend_from_trusted_len_iter requires an upper limit");
-        let len = upper * item_size;
-        self.reserve(len);
-
-        let written = unsafe {
-            let dst = self.data.as_ptr().add(self.len);
-            self.extend_from_trusted_len_iter_inner(iterator, dst)
-        };
-        assert_eq!(
-            written as usize, len,
-            "Trusted iterator length was not accurately reported"
-        );
-        self.len += len;
-    }
-
-    /// Copies the contents of a trusted-length iterator into the provided destination pointer.
-    /// returning the number of bytes written.
-    ///
-    /// This is its own non inlined function to maximize the chances of
-    /// maximally vectorizing the inner loop.
-    ///
-    /// # Safety
-    /// The caller must ensure that `dst` points to a memory region large enough to hold
-    /// all items from the iterator.
-    #[inline(never)]
-    pub unsafe fn extend_from_trusted_len_iter_inner<T: ArrowNativeType, I: Iterator<Item = T>>(
-        &mut self,
-        iterator: I,
-        mut dst: *mut u8,
-    ) -> isize {
-        let item_size = std::mem::size_of::<T>();
-        let start = dst;
-        for item in iterator {
-            // note how there is no reserve here (compared with `extend_from_iter`)
-            let src = item.to_byte_slice().as_ptr();
-            unsafe {
-                std::ptr::copy_nonoverlapping(src, dst, item_size);
-                dst = dst.add(item_size)
-            };
-        }
-        unsafe { dst.offset_from(start) }
-    }
-
     /// Creates a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length.
     /// Prefer this to `collect` whenever possible, as it is faster ~60% faster.
     /// # Example
@@ -792,11 +737,26 @@ impl MutableBuffer {
     pub unsafe fn from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         iterator: I,
     ) -> Self {
-        let mut buffer = MutableBuffer::new(0);
-        // SAFETY: caller guarantees trusted length
-        unsafe {
-            buffer.extend_from_trusted_len_iter(iterator);
+        let item_size = std::mem::size_of::<T>();
+        let (_, upper) = iterator.size_hint();
+        let upper = upper.expect("from_trusted_len_iter requires an upper limit");
+        let len = upper * item_size;
+
+        let mut buffer = MutableBuffer::new(len);
+
+        let mut dst = buffer.data.as_ptr();
+        for item in iterator {
+            // note how there is no reserve here (compared with `extend_from_iter`)
+            let src = item.to_byte_slice().as_ptr();
+            unsafe { std::ptr::copy_nonoverlapping(src, dst, item_size) };
+            dst = unsafe { dst.add(item_size) };
         }
+        assert_eq!(
+            unsafe { dst.offset_from(buffer.data.as_ptr()) } as usize,
+            len,
+            "Trusted iterator length was not accurately reported"
+        );
+        buffer.len = len;
         buffer
     }
 

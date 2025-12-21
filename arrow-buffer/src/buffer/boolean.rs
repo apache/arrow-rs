@@ -19,7 +19,7 @@ use crate::bit_chunk_iterator::BitChunks;
 use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::{
     BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
-    buffer_bin_xor, buffer_unary_not,
+    buffer_bin_xor, buffer_unary_not, util,
 };
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
@@ -161,12 +161,13 @@ impl BooleanBuffer {
         }
 
         let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
-        let result_chunks = chunks.iter().map(&mut op);
         let mut result = MutableBuffer::with_capacity(chunks.num_u64s() * 8);
-        // SAFETY: reserved enough capacity above, (exactly num_u64s()
-        // items) and we assume `BitChunks` correctly reports upper bound
-        unsafe {
-            result.extend_from_trusted_len_iter(result_chunks);
+        for chunk in chunks.iter() {
+            // SAFETY: reserved enough capacity above, (exactly num_u64s()
+            // items) and we assume `BitChunks` correctly reports upper bound
+            unsafe {
+                result.push_unchecked(op(chunk));
+            }
         }
         if chunks.remainder_len() > 0 {
             debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
@@ -269,37 +270,25 @@ impl BooleanBuffer {
                 return result;
             }
         }
-
-        // each chunk is 64 bits
         let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
-        assert_eq!(left_chunks.num_u64s(), right_chunks.num_u64s());
 
-        let mut result = MutableBuffer::with_capacity(left_chunks.num_u64s() * 8);
-        let output_chunks = left_chunks
+        let chunks = left_chunks
             .iter()
             .zip(right_chunks.iter())
             .map(|(left, right)| op(left, right));
-        // SAFETY: reserved enough capacity above, (exactly num_u64s()
-        // items) and we assume `BitChunks` correctly reports upper bound
-        unsafe {
-            result.extend_from_trusted_len_iter(output_chunks);
-        }
+        // Soundness: `BitChunks` is a `BitChunks` iterator which
+        // correctly reports its upper bound
+        let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
-        if left_chunks.remainder_len() > 0 {
-            debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
-            let op_result = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
-            // SAFETY: reserved enough capacity above, (exactly num_u64s()
-            // items) and we assume `BitChunks` correctly reports upper bound
-            unsafe {
-                result.push_unchecked(op_result);
-            }
-            // Just pushed one u64, which may have trailing zeros
-            result.truncate(left_chunks.num_bytes());
-        }
+        let remainder_bytes = util::bit_util::ceil(left_chunks.remainder_len(), 8);
+        let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
+        // we are counting its starting from the least significant bit, to to_le_bytes should be correct
+        let rem = &rem.to_le_bytes()[0..remainder_bytes];
+        buffer.extend_from_slice(rem);
 
         BooleanBuffer {
-            buffer: Buffer::from(result),
+            buffer: Buffer::from(buffer),
             offset: 0,
             len: len_in_bits,
         }
