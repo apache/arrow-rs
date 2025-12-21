@@ -259,7 +259,7 @@ impl BooleanBuffer {
         F: FnMut(u64, u64) -> u64,
     {
         // try fast path for aligned input
-        if left_offset_in_bits % 8 == 0 && right_offset_in_bits % 8 == 0 {
+        if left_offset_in_bits & 0x7  == 0 && right_offset_in_bits & 0x7 == 0 {
             if let Some(result) = Self::try_from_aligned_bitwise_binary_op(
                 &left.as_ref()[left_offset_in_bits / 8..], // aligned to byte boundary
                 &right.as_ref()[right_offset_in_bits / 8..],
