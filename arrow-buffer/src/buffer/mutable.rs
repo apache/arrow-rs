@@ -733,10 +733,13 @@ impl MutableBuffer {
         self.reserve(len);
 
         let written = unsafe {
-            let dst =  self.data.as_ptr().add(self.len);
+            let dst = self.data.as_ptr().add(self.len);
             self.extend_from_trusted_len_iter_inner(iterator, dst)
         };
-        assert_eq!(written as usize, len, "Trusted iterator length was not accurately reported");
+        assert_eq!(
+            written as usize, len,
+            "Trusted iterator length was not accurately reported"
+        );
         self.len += len;
     }
 
@@ -754,8 +757,7 @@ impl MutableBuffer {
         &mut self,
         iterator: I,
         mut dst: *mut u8,
-    ) -> isize
-    {
+    ) -> isize {
         let item_size = std::mem::size_of::<T>();
         let start = dst;
         for item in iterator {
@@ -763,11 +765,10 @@ impl MutableBuffer {
             let src = item.to_byte_slice().as_ptr();
             unsafe {
                 std::ptr::copy_nonoverlapping(src, dst, item_size);
-                dst =  dst.add(item_size)
+                dst = dst.add(item_size)
             };
         }
         unsafe { dst.offset_from(start) }
-
     }
 
     /// Creates a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length.
