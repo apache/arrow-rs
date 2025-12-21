@@ -721,6 +721,7 @@ impl MutableBuffer {
     /// # Safety
     /// This method assumes that the iterator's size is correct and is undefined behavior
     /// to use it on an iterator that reports an incorrect length.
+    #[inline]
     pub unsafe fn extend_from_trusted_len_iter<T: ArrowNativeType, I: Iterator<Item = T>>(
         &mut self,
         iterator: I,
@@ -731,19 +732,42 @@ impl MutableBuffer {
         let len = upper * item_size;
         self.reserve(len);
 
-        let mut dst = self.data.as_ptr();
+        let written = unsafe {
+            let dst =  self.data.as_ptr().add(self.len);
+            self.extend_from_trusted_len_iter_inner(iterator, dst)
+        };
+        assert_eq!(written as usize, len, "Trusted iterator length was not accurately reported");
+        self.len += len;
+    }
+
+    /// Copies the contents of a trusted-length iterator into the provided destination pointer.
+    /// returning the number of bytes written.
+    ///
+    /// This is its own non inlined function to maximize the chances of
+    /// maximally vectorizing the inner loop.
+    ///
+    /// # Safety
+    /// The caller must ensure that `dst` points to a memory region large enough to hold
+    /// all items from the iterator.
+    #[inline(never)]
+    pub unsafe fn extend_from_trusted_len_iter_inner<T: ArrowNativeType, I: Iterator<Item = T>>(
+        &mut self,
+        iterator: I,
+        mut dst: *mut u8,
+    ) -> isize
+    {
+        let item_size = std::mem::size_of::<T>();
+        let start = dst;
         for item in iterator {
             // note how there is no reserve here (compared with `extend_from_iter`)
             let src = item.to_byte_slice().as_ptr();
-            unsafe { std::ptr::copy_nonoverlapping(src, dst, item_size) };
-            dst = unsafe { dst.add(item_size) };
+            unsafe {
+                std::ptr::copy_nonoverlapping(src, dst, item_size);
+                dst =  dst.add(item_size)
+            };
         }
-        assert_eq!(
-            unsafe { dst.offset_from(self.data.as_ptr()) } as usize,
-            len,
-            "Trusted iterator length was not accurately reported"
-        );
-        self.len += len;
+        unsafe { dst.offset_from(start) }
+
     }
 
     /// Creates a [`MutableBuffer`] from an [`Iterator`] with a trusted (upper) length.
