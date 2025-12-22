@@ -424,7 +424,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 /// struct IncorrectStringAsNullDecoderFactory;
 ///
 /// impl DecoderFactory for IncorrectStringAsNullDecoderFactory {
-///     fn make_default_decoder<'a>(
+///     fn make_custom_decoder<'a>(
 ///         &self,
 ///         _field: Option<FieldRef>,
 ///         data_type: DataType,
@@ -464,7 +464,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
     /// Make a decoder that overrides the default decoder for a specific data type.
     /// This can be used to override how e.g. error in decoding are handled.
-    fn make_default_decoder(
+    fn make_custom_decoder(
         &self,
         _field: Option<FieldRef>,
         _data_type: DataType,
@@ -798,7 +798,7 @@ fn make_decoder(
     decoder_factory: Option<Arc<dyn DecoderFactory>>,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
     if let Some(ref factory) = decoder_factory {
-        if let Some(decoder) = factory.make_default_decoder(
+        if let Some(decoder) = factory.make_custom_decoder(
             field.clone(),
             data_type.clone(),
             coerce_primitive,
@@ -2954,7 +2954,7 @@ mod tests {
         struct AlwaysNullStringArrayDecoderFactory;
 
         impl DecoderFactory for AlwaysNullStringArrayDecoderFactory {
-            fn make_default_decoder<'a>(
+            fn make_custom_decoder<'a>(
                 &self,
                 _field: Option<FieldRef>,
                 data_type: DataType,
