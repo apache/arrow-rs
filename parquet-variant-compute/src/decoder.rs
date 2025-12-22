@@ -132,10 +132,26 @@ fn variant_from_tape_element(
             let s = tape.get_string(idx);
             builder.append_value(parse_number(s)?)
         }
-        TapeElement::I64(i) => builder.append_value(i),
-        TapeElement::I32(i) => builder.append_value(i),
-        TapeElement::F64(f) => builder.append_value(f),
-        TapeElement::F32(f) => builder.append_value(f),
+        TapeElement::I64(i) => {
+            return Err(ArrowError::JsonError(format!(
+                "I64 tape element not supported: {i}"
+            )));
+        }
+        TapeElement::I32(i) => {
+            return Err(ArrowError::JsonError(format!(
+                "I32 tape element not supported: {i}"
+            )));
+        }
+        TapeElement::F64(f) => {
+            return Err(ArrowError::JsonError(format!(
+                "F64 tape element not supported: {f}"
+            )));
+        }
+        TapeElement::F32(f) => {
+            return Err(ArrowError::JsonError(format!(
+                "F32 tape element not supported: {f}"
+            )));
+        }
         TapeElement::True => builder.append_value(true),
         TapeElement::False => builder.append_value(false),
         TapeElement::Null => builder.append_value(Variant::Null),
