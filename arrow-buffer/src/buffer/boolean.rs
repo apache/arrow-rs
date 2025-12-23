@@ -26,17 +26,58 @@ use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 ///
-/// `BooleanBuffer`s can be modified using [`BooleanBufferBuilder`]
+/// This structure represents a sequence of boolean values packed into a
+/// byte-aligned [`Buffer`]. Both the offset and length are represented in bits.
 ///
+/// # Layout
+///
+/// The values are represented as little endian bit-packed values, where the
+/// least significant bit of each byte represents the first boolean value and
+/// then proceeding to the most significant bit.
+///
+/// For example, the 10 bit bitmask `0b0111001101` has length 10, and is
+/// represented using 2 bytes with offset 0 like this:
+///
+/// ```text
+///        ┌─────────────────────────────────┐    ┌─────────────────────────────────┐
+///        │┌───┬───┬───┬───┬───┬───┬───┬───┐│    │┌───┬───┬───┬───┬───┬───┬───┬───┐│
+///        ││ 1 │ 0 │ 1 │ 1 │ 0 │ 0 │ 1 │ 1 ││    ││ 1 │ 0 │ ? │ ? │ ? │ ? │ ? │ ? ││
+///        │└───┴───┴───┴───┴───┴───┴───┴───┘│    │└───┴───┴───┴───┴───┴───┴───┴───┘│
+/// bit    └─────────────────────────────────┘    └─────────────────────────────────┘
+/// offset  0             Byte 0             7    0              Byte 1            7
+///
+///         length = 10 bits, offset = 0
+/// ```
+///
+/// The same bitmask with length 10 and offset 3 would be represented using 2
+/// bytes like this:
+///
+/// ```text
+///       ┌─────────────────────────────────┐    ┌─────────────────────────────────┐
+///       │┌───┬───┬───┬───┬───┬───┬───┬───┐│    │┌───┬───┬───┬───┬───┬───┬───┬───┐│
+///       ││ ? │ ? │ ? │ 1 │ 0 │ 1 │ 1 │ 0 ││    ││ 0 │ 1 │ 1 │ 1 │ 0 │ ? │ ? │ ? ││
+///       │└───┴───┴───┴───┴───┴───┴───┴───┘│    │└───┴───┴───┴───┴───┴───┴───┴───┘│
+/// bit   └─────────────────────────────────┘    └─────────────────────────────────┘
+/// offset 0             Byte 0             7    0              Byte 1            7
+///
+///        length = 10 bits, offset = 3
+/// ```
+///
+/// Note that the bits marked `?` are not logically part of the mask and may
+/// contain either `0` or `1`
 ///
 /// # See Also
+/// * [`BooleanBufferBuilder`] for building [`BooleanBuffer`] instances
 /// * [`NullBuffer`] for representing null values in Arrow arrays
 ///
 /// [`NullBuffer`]: crate::NullBuffer
 #[derive(Debug, Clone, Eq)]
 pub struct BooleanBuffer {
+    /// Underlying buffer (byte aligned)
     buffer: Buffer,
+    /// Offset in bits (not bytes)
     offset: usize,
+    /// Length in bits (not bytes)
     len: usize,
 }
 
@@ -304,12 +345,16 @@ impl BooleanBuffer {
     }
 
     /// Returns the inner [`Buffer`]
+    ///
+    /// Note: this does not account for offset and length of this [`BooleanBuffer`]
     #[inline]
     pub fn inner(&self) -> &Buffer {
         &self.buffer
     }
 
     /// Returns the inner [`Buffer`], consuming self
+    ///
+    /// Note: this does not account for offset and length of this [`BooleanBuffer`]
     pub fn into_inner(self) -> Buffer {
         self.buffer
     }
