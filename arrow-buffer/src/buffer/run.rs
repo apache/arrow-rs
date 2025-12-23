@@ -189,6 +189,24 @@ where
         &self.run_ends
     }
 
+    /// Returns an iterator yielding run ends adjusted for the logical slice.
+    ///
+    /// Each yielded value is subtracted by the [`logical_offset`] and capped
+    /// at the [`logical_length`].
+    ///
+    /// [`logical_offset`]: Self::offset
+    /// [`logical_length`]: Self::len
+    pub fn sliced_values(&self) -> impl Iterator<Item = E> + '_ {
+        let offset = self.logical_offset;
+        let len = self.logical_length;
+        let start = self.get_start_physical_index();
+        let end = self.get_end_physical_index();
+        self.run_ends[start..=end].iter().map(move |&val| {
+            let val = val.as_usize().saturating_sub(offset).min(len);
+            E::from_usize(val).unwrap()
+        })
+    }
+
     /// Returns the maximum run-end encoded in the underlying buffer; that is, the
     /// last physical run of the buffer. This does not take into account any logical
     /// slicing that may have occurred.
@@ -367,5 +385,27 @@ mod tests {
         let buffer = RunEndBuffer::new(Vec::<i32>::new().into(), 0, 0);
         assert_eq!(buffer.get_start_physical_index(), 0);
         assert_eq!(buffer.get_end_physical_index(), 0);
+    }
+
+    #[test]
+    fn test_sliced_values() {
+        // [0, 0, 1, 2, 2, 2]
+        let buffer = RunEndBuffer::new(vec![2i32, 3, 6].into(), 0, 6);
+
+        // Slice: [0, 1, 2, 2] start: 1, len: 4
+        // Logical indices: 1, 2, 3, 4
+        // Original run ends: [2, 3, 6]
+        // Adjusted: [2-1, 3-1, 6-1] capped at 4 -> [1, 2, 4]
+        let sliced = buffer.slice(1, 4);
+        let sliced_values: Vec<i32> = sliced.sliced_values().collect();
+        assert_eq!(sliced_values, &[1, 2, 4]);
+
+        // Slice: [2, 2] start: 4, len: 2
+        // Original run ends: [2, 3, 6]
+        // Slicing at 4 means we only have the last run (physical index 2, which ends at 6)
+        // Adjusted: [6-4] capped at 2 -> [2]
+        let sliced = buffer.slice(4, 2);
+        let sliced_values: Vec<i32> = sliced.sliced_values().collect();
+        assert_eq!(sliced_values, &[2]);
     }
 }
