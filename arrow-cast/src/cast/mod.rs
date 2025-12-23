@@ -11746,6 +11746,23 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "assertion `left == right` failed\n  left: ScalarBuffer([1, 1, 2])\n right: [2, 2, 3]"]
+    // TODO: fix cast of RunArrays to account for sliced RunArray's
+    // https://github.com/apache/arrow-rs/issues/9018
+    fn test_sliced_run_end_encoded_to_primitive() {
+        let run_ends = Int32Array::from(vec![2, 5, 6]);
+        let values = Int32Array::from(vec![1, 2, 3]);
+        // [1, 1, 2, 2, 2, 3]
+        let run_array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+        let run_array = run_array.slice(3, 3); // [2, 2, 3]
+        let array_ref = Arc::new(run_array) as ArrayRef;
+
+        let cast_result = cast(&array_ref, &DataType::Int64).unwrap();
+        let result_run_array = cast_result.as_primitive::<Int64Type>();
+        assert_eq!(result_run_array.values(), &[2, 2, 3]);
+    }
+
+    #[test]
     fn test_run_end_encoded_to_string() {
         let run_ends = Int32Array::from(vec![2, 3, 5]);
         let values = Int32Array::from(vec![10, 20, 30]);

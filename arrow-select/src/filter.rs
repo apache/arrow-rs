@@ -1355,6 +1355,26 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "assertion `left == right` failed\n  left: [-2, 9]\n right: [7, -2]"]
+    // TODO: fix filter of RunArrays to account for sliced RunArray's
+    // https://github.com/apache/arrow-rs/issues/9018
+    fn test_filter_run_end_encoding_array_sliced() {
+        let run_ends = Int64Array::from(vec![2, 3, 8]);
+        let values = Int64Array::from(vec![7, -2, 9]);
+        let a = RunArray::try_new(&run_ends, &values).unwrap(); // [7, 7, -2, 9, 9, 9, 9, 9]
+        let a = a.slice(2, 3); // [-2, 9, 9]
+        let b = BooleanArray::from(vec![true, false, true]);
+        let result = filter(&a, &b).unwrap();
+
+        let result = result.as_run::<Int64Type>();
+        let result = result.downcast::<Int64Array>().unwrap();
+
+        let expected = vec![-2, 9];
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
     fn test_filter_run_end_encoding_array_remove_value() {
         let run_ends = Int32Array::from(vec![2, 3, 8, 10]);
         let values = Int32Array::from(vec![7, -2, 9, -8]);
