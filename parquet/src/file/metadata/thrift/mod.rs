@@ -1608,7 +1608,8 @@ impl WriteThrift for ColumnChunkMetaData {
             .write_thrift_field(writer, 2, last_field_id)?;
 
         #[cfg(feature = "encryption")]
-        let write_meta_data = self.encrypted_column_metadata.is_none() || self.plaintext_footer_mode;
+        let write_meta_data =
+            self.encrypted_column_metadata.is_none() || self.plaintext_footer_mode;
         #[cfg(not(feature = "encryption"))]
         let write_meta_data = true;
 
