@@ -19,6 +19,7 @@ use arrow_array::BooleanArray;
 use criterion::*;
 use parquet::arrow::arrow_reader::RowSelection;
 use rand::Rng;
+use std::hint;
 
 /// Generates a random RowSelection with a specified selection ratio.
 ///
@@ -52,14 +53,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("intersection", |b| {
         b.iter(|| {
             let intersection = row_selection_a.intersection(&row_selection_b);
-            criterion::black_box(intersection);
+            hint::black_box(intersection);
         })
     });
 
     c.bench_function("union", |b| {
         b.iter(|| {
             let union = row_selection_a.union(&row_selection_b);
-            criterion::black_box(union);
+            hint::black_box(union);
         })
     });
 
@@ -68,7 +69,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         b.iter(|| {
             let array = boolean_array.clone();
             let selection = RowSelection::from_filters(&[array]);
-            criterion::black_box(selection);
+            hint::black_box(selection);
         })
     });
 
@@ -78,7 +79,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             RowSelection::from_filters(&[generate_random_row_selection(selected, selection_ratio)]);
         b.iter(|| {
             let result = row_selection_a.and_then(&sub_selection);
-            criterion::black_box(result);
+            hint::black_box(result);
         })
     });
 }

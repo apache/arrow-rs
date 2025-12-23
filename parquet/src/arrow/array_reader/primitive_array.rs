@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::record_reader::RecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
 use crate::basic::Type as PhysicalType;
@@ -24,15 +24,16 @@ use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
+    ArrayRef, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
+    TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
+    TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array,
     builder::{
         TimestampMicrosecondBufferBuilder, TimestampMillisecondBufferBuilder,
         TimestampNanosecondBufferBuilder, TimestampSecondBufferBuilder,
     },
-    ArrayRef, BooleanArray, Decimal128Array, Decimal256Array, Float32Array, Float64Array,
-    Int32Array, Int64Array, TimestampMicrosecondArray, TimestampMillisecondArray,
-    TimestampNanosecondArray, TimestampSecondArray, UInt32Array, UInt64Array,
 };
-use arrow_buffer::{i256, BooleanBuffer, Buffer};
+use arrow_buffer::{BooleanBuffer, Buffer, i256};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
@@ -174,6 +175,7 @@ where
                         // `i32::MIN..0` to `(i32::MAX as u32)..u32::MAX`
                         ArrowType::UInt32
                     }
+                    ArrowType::Decimal32(_, _) => target_type.clone(),
                     _ => ArrowType::Int32,
                 }
             }
@@ -184,6 +186,7 @@ where
                         // `i64::MIN..0` to `(i64::MAX as u64)..u64::MAX`
                         ArrowType::UInt64
                     }
+                    ArrowType::Decimal64(_, _) => target_type.clone(),
                     _ => ArrowType::Int64,
                 }
             }
@@ -220,11 +223,13 @@ where
             PhysicalType::INT32 => match array_data.data_type() {
                 ArrowType::UInt32 => Arc::new(UInt32Array::from(array_data)),
                 ArrowType::Int32 => Arc::new(Int32Array::from(array_data)),
+                ArrowType::Decimal32(_, _) => Arc::new(Decimal32Array::from(array_data)),
                 _ => unreachable!(),
             },
             PhysicalType::INT64 => match array_data.data_type() {
                 ArrowType::UInt64 => Arc::new(UInt64Array::from(array_data)),
                 ArrowType::Int64 => Arc::new(Int64Array::from(array_data)),
+                ArrowType::Decimal64(_, _) => Arc::new(Decimal64Array::from(array_data)),
                 _ => unreachable!(),
             },
             PhysicalType::FLOAT => Arc::new(Float32Array::from(array_data)),
@@ -261,15 +266,74 @@ where
         // - date64: cast int32 to date32, then date32 to date64.
         // - decimal: cast int32 to decimal, int64 to decimal
         let array = match target_type {
+            // Using `arrow_cast::cast` has been found to be very slow for converting
+            // INT32 physical type to lower bitwidth logical types. Since rust casts
+            // are infallible, instead use `unary` which is much faster (by up to 40%).
+            // One consequence of this approach is that some malformed integer columns
+            // will return (an arguably correct) result rather than null.
+            // See https://github.com/apache/arrow-rs/issues/7040 for a discussion of this
+            // issue.
+            ArrowType::UInt8 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as u8) as UInt8Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::Int8 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as i8) as Int8Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as u16) as UInt16Array;
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::Int16 if *(array.data_type()) == ArrowType::Int32 => {
+                let array = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .unwrap()
+                    .unary(|i| i as i16) as Int16Array;
+                Arc::new(array) as ArrayRef
+            }
             ArrowType::Date64 if *(array.data_type()) == ArrowType::Int32 => {
                 // this is cheap as it internally reinterprets the data
                 let a = arrow_cast::cast(&array, &ArrowType::Date32)?;
                 arrow_cast::cast(&a, target_type)?
             }
-            ArrowType::Decimal128(p, s) => {
+            ArrowType::Decimal64(p, s) if *(array.data_type()) == ArrowType::Int32 => {
                 // Apply conversion to all elements regardless of null slots as the conversion
-                // to `i128` is infallible. This improves performance by avoiding a branch in
+                // to `i64` is infallible. This improves performance by avoiding a branch in
                 // the inner loop (see docs for `PrimitiveArray::unary`).
+                let array = match array.data_type() {
+                    ArrowType::Int32 => array
+                        .as_any()
+                        .downcast_ref::<Int32Array>()
+                        .unwrap()
+                        .unary(|i| i as i64)
+                        as Decimal64Array,
+                    _ => {
+                        return Err(arrow_err!(
+                            "Cannot convert {:?} to decimal",
+                            array.data_type()
+                        ));
+                    }
+                }
+                .with_precision_and_scale(*p, *s)?;
+
+                Arc::new(array) as ArrayRef
+            }
+            ArrowType::Decimal128(p, s) => {
+                // See above comment. Conversion to `i128` is likewise infallible.
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
                         .as_any()
@@ -321,6 +385,50 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Dictionary(_, value_type) => match value_type.as_ref() {
+                ArrowType::Decimal32(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(|i| i)
+                            as Decimal32Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
+                ArrowType::Decimal64(p, s) => {
+                    let array = match array.data_type() {
+                        ArrowType::Int32 => array
+                            .as_any()
+                            .downcast_ref::<Int32Array>()
+                            .unwrap()
+                            .unary(|i| i as i64)
+                            as Decimal64Array,
+                        ArrowType::Int64 => array
+                            .as_any()
+                            .downcast_ref::<Int64Array>()
+                            .unwrap()
+                            .unary(|i| i)
+                            as Decimal64Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal dictionary",
+                                array.data_type()
+                            ));
+                        }
+                    }
+                    .with_precision_and_scale(*p, *s)?;
+
+                    arrow_cast::cast(&array, target_type)?
+                }
                 ArrowType::Decimal128(p, s) => {
                     let array = match array.data_type() {
                         ArrowType::Int32 => array
@@ -405,8 +513,8 @@ mod tests {
     use crate::data_type::{Int32Type, Int64Type};
     use crate::schema::parser::parse_message_type;
     use crate::schema::types::SchemaDescriptor;
-    use crate::util::test_common::rand_gen::make_pages;
     use crate::util::InMemoryPageIterator;
+    use crate::util::test_common::rand_gen::make_pages;
     use arrow::datatypes::ArrowPrimitiveType;
     use arrow_array::{Array, Date32Array, PrimitiveArray};
 

@@ -44,9 +44,11 @@ arrow-schema = { workspace = true }
 arrow-data = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { version = "0.10", optional = true }
-num = { version = "0.4.1", default-features = false, features = ["std"] }
+num-complex = { version = "0.4.6", default-features = false, features = ["std"] }
+num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
-hashbrown = { version = "0.15.1", default-features = false }
+hashbrown = { version = "0.16.0", default-features = false }
 
 [package.metadata.docs.rs]
 all-features = true
@@ -57,14 +59,14 @@ force_validate = []
 
 [dev-dependencies]
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-criterion = { version = "0.5", default-features = false }
+criterion = { workspace = true, default-features = false }
 
 [[bench]]
 name = "occupancy"
 harness = false
 
 [[bench]]
-name = "gc_view_types"
+name = "view_types"
 harness = false
 
 [[bench]]
@@ -77,4 +79,8 @@ harness = false
 
 [[bench]]
 name = "union_array"
+harness = false
+
+[[bench]]
+name = "record_batch"
 harness = false

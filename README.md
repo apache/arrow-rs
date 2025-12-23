@@ -65,27 +65,23 @@ Planned Release Schedule
 
 | Approximate Date | Version    | Notes                                   |
 | ---------------- | ---------- | --------------------------------------- |
-| Apr 2025         | [`55.0.0`] | Major, potentially breaking API changes |
-| May 2025         | [`55.1.0`] | Minor, NO breaking API changes          |
-| June 2025        | [`55.2.0`] | Minor, NO breaking API changes          |
-| July 2025        | [`56.0.0`] | Major, potentially breaking API changes |
+| October 2025     | [`57.0.0`] | Major, potentially breaking API changes |
+| November 2025    | [`57.1.0`] | Minor, NO breaking API changes          |
+| December 2025    | [`57.2.0`] | Minor, NO breaking API changes          |
+| January 2026     | [`58.0.0`] | Major, potentially breaking API changes |
 
-[`55.0.0`]: https://github.com/apache/arrow-rs/issues/7084
-[`55.1.0`]: https://github.com/apache/arrow-rs/issues/7393
-[`55.2.0`]: https://github.com/apache/arrow-rs/issues/7394
-[`56.0.0`]: https://github.com/apache/arrow-rs/issues/7395
+[`57.0.0`]: https://github.com/apache/arrow-rs/issues/7835
+[`57.1.0`]: https://github.com/apache/arrow-rs/milestone/3
+[`57.2.0`]: https://github.com/apache/arrow-rs/milestone/5
+[`58.0.0`]: https://github.com/apache/arrow-rs/milestone/6
 [ticket #5368]: https://github.com/apache/arrow-rs/issues/5368
 [semantic versioning]: https://semver.org/
 
 ### Rust Version Compatibility Policy
 
-arrow-rs, parquet and object_store are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on a need by basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
+arrow-rs and parquet are built and tested with stable Rust, and will keep a rolling MSRV (minimum supported Rust version) that can only be updated in major releases on a need by basis (e.g. project dependencies bump their MSRV or a particular Rust feature is useful for us etc.). The new MSRV if selected will be at least 6 months old. The minor releases are guaranteed to have the same MSRV.
 
 Note: If a Rust hotfix is released for the current MSRV, the MSRV will be updated to the specific minor version that includes all applicable hotfixes preceding other policies.
-
-E.g.
-
-in Apr 2025 we will release version 55.0.0 which might have a version bump. But the Rust version selected in this case will be at most version 1.81.
 
 ### Guidelines for `panic` vs `Result`
 
@@ -112,7 +108,7 @@ The deprecated version is the next version which will be released (please
 consult the list above). To mark the API as deprecated, use the
 `#[deprecated(since = "...", note = "...")]` attribute.
 
-Foe example
+For example
 
 ```rust
 #[deprecated(since = "51.0.0", note = "Use `date_part` instead")]

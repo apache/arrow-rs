@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::arrow::record_reader::buffer::ValuesBuffer;
-use arrow_array::{builder::make_view, make_array, ArrayRef};
+use arrow_array::{ArrayRef, builder::make_view, make_array};
 use arrow_buffer::Buffer;
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
@@ -49,9 +49,9 @@ impl ViewBuffer {
     /// - `offset` and `offset + len` are valid indices into the buffer
     /// - The `(offset, offset + len)` is valid value for the native type.
     pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
-        let b = self.buffers.get_unchecked(block as usize);
+        let b = unsafe { self.buffers.get_unchecked(block as usize) };
         let end = offset.saturating_add(len);
-        let b = b.get_unchecked(offset as usize..end as usize);
+        let b = unsafe { b.get_unchecked(offset as usize..end as usize) };
 
         let view = make_view(b, block, offset);
 
@@ -91,7 +91,7 @@ impl ViewBuffer {
                 let array = unsafe { builder.build_unchecked() };
                 make_array(array)
             }
-            _ => panic!("Unsupported data type: {:?}", data_type),
+            _ => panic!("Unsupported data type: {data_type}"),
         }
     }
 }

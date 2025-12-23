@@ -18,21 +18,25 @@
 #[macro_use]
 extern crate criterion;
 
-use criterion::{Criterion, Throughput};
-use std::env;
-use std::fs::File;
+use criterion::{Bencher, Criterion, Throughput};
+use parquet::arrow::arrow_writer::{ArrowRowGroupWriterFactory, compute_leaves};
+use parquet::basic::{Compression, ZstdLevel};
 
 extern crate arrow;
 extern crate parquet;
 
+use std::hint::black_box;
+use std::io::Empty;
 use std::sync::Arc;
 
 use arrow::datatypes::*;
 use arrow::util::bench_util::{create_f16_array, create_f32_array, create_f64_array};
 use arrow::{record_batch::RecordBatch, util::data_gen::*};
 use arrow_array::RecordBatchOptions;
-use parquet::file::properties::WriterProperties;
-use parquet::{arrow::ArrowWriter, errors::Result};
+use parquet::arrow::ArrowSchemaConverter;
+use parquet::errors::Result;
+use parquet::file::properties::{WriterProperties, WriterVersion};
+use parquet::file::writer::SerializedFileWriter;
 
 fn create_primitive_bench_batch(
     size: usize,
@@ -333,197 +337,134 @@ fn _create_nested_bench_batch(
     )?)
 }
 
-#[inline]
-fn write_batch(batch: &RecordBatch) -> Result<()> {
-    write_batch_with_option(batch, None)
-}
+fn write_batch_with_option(
+    bench: &mut Bencher,
+    batch: &RecordBatch,
+    props: Option<WriterProperties>,
+) -> Result<()> {
+    let mut file = Empty::default();
+    let props = Arc::new(props.unwrap_or_default());
+    let parquet_schema = ArrowSchemaConverter::new()
+        .with_coerce_types(props.coerce_types())
+        .convert(batch.schema_ref())?;
+    let writer = SerializedFileWriter::new(&mut file, parquet_schema.root_schema_ptr(), props)?;
+    let row_group_writer_factory = ArrowRowGroupWriterFactory::new(&writer, batch.schema());
 
-#[inline]
-fn write_batch_enable_bloom_filter(batch: &RecordBatch) -> Result<()> {
-    let option = WriterProperties::builder()
-        .set_bloom_filter_enabled(true)
-        .build();
+    bench.iter(|| {
+        let mut row_group = row_group_writer_factory.create_column_writers(0).unwrap();
 
-    write_batch_with_option(batch, Some(option))
-}
+        let mut writers = row_group.iter_mut();
+        for (field, column) in batch
+            .schema()
+            .fields()
+            .iter()
+            .zip(black_box(batch).columns())
+        {
+            for leaf in compute_leaves(field.as_ref(), column).unwrap() {
+                writers.next().unwrap().write(&leaf).unwrap()
+            }
+        }
 
-#[inline]
-fn write_batch_with_option(batch: &RecordBatch, props: Option<WriterProperties>) -> Result<()> {
-    let path = env::temp_dir().join("arrow_writer.temp");
-    let file = File::create(path).unwrap();
-    let mut writer = ArrowWriter::try_new(file, batch.schema(), props)?;
+        for writer in row_group.into_iter() {
+            black_box(writer.close()).unwrap();
+        }
+    });
 
-    writer.write(batch)?;
-    writer.close()?;
     Ok(())
 }
 
-fn bench_primitive_writer(c: &mut Criterion) {
-    let batch = create_primitive_bench_batch(4096, 0.25, 0.75).unwrap();
-    let mut group = c.benchmark_group("write_batch primitive");
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values primitive", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+fn create_batches() -> Vec<(&'static str, RecordBatch)> {
+    const BATCH_SIZE: usize = 4096;
 
-    group.bench_function("4096 values primitive with bloom filter", |b| {
-        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
-    });
+    let mut batches = vec![];
 
-    let batch = create_primitive_bench_batch_non_null(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values primitive non-null", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    let batch = create_primitive_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("primitive", batch));
 
-    group.bench_function("4096 values primitive non-null with bloom filter", |b| {
-        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
-    });
+    let batch = create_primitive_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("primitive_non_null", batch));
 
-    let batch = create_bool_bench_batch(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values bool", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    let batch = create_bool_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("bool", batch));
 
-    let batch = create_bool_bench_batch_non_null(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values bool non-null", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    let batch = create_bool_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("bool_non_null", batch));
 
-    let batch = create_string_bench_batch(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values string", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    let batch = create_string_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("string", batch));
 
-    group.bench_function("4096 values string with bloom filter", |b| {
-        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
-    });
+    let batch = create_string_and_binary_view_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("string_and_binary_view", batch));
 
-    let batch = create_string_and_binary_view_bench_batch(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values string", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    let batch = create_string_dictionary_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("string_dictionary", batch));
 
-    group.bench_function("4096 values string with bloom filter", |b| {
-        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
-    });
+    let batch = create_string_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("string_non_null", batch));
 
-    let batch = create_string_dictionary_bench_batch(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values string dictionary", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    let batch = create_float_bench_batch_with_nans(BATCH_SIZE, 0.5).unwrap();
+    batches.push(("float_with_nans", batch));
 
-    group.bench_function("4096 values string dictionary with bloom filter", |b| {
-        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
-    });
+    let batch = create_list_primitive_bench_batch(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("list_primitive", batch));
 
-    let batch = create_string_bench_batch_non_null(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values string non-null", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    let batch = create_list_primitive_bench_batch_non_null(BATCH_SIZE, 0.25, 0.75).unwrap();
+    batches.push(("list_primitive_non_null", batch));
 
-    group.bench_function("4096 values string non-null with bloom filter", |b| {
-        b.iter(|| write_batch_enable_bloom_filter(&batch).unwrap())
-    });
-
-    let batch = create_float_bench_batch_with_nans(4096, 0.5).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values float with NaNs", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
-
-    group.finish();
+    batches
 }
 
-// This bench triggers a write error, it is ignored for now
-fn bench_nested_writer(c: &mut Criterion) {
-    let batch = create_list_primitive_bench_batch(4096, 0.25, 0.75).unwrap();
-    let mut group = c.benchmark_group("write_batch nested");
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values primitive list", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+fn create_writer_props() -> Vec<(&'static str, WriterProperties)> {
+    let mut props = vec![];
 
-    let batch = create_list_primitive_bench_batch_non_null(4096, 0.25, 0.75).unwrap();
-    group.throughput(Throughput::Bytes(
-        batch
-            .columns()
-            .iter()
-            .map(|f| f.get_array_memory_size() as u64)
-            .sum(),
-    ));
-    group.bench_function("4096 values primitive list non-null", |b| {
-        b.iter(|| write_batch(&batch).unwrap())
-    });
+    props.push(("default", Default::default()));
 
-    group.finish();
+    let prop = WriterProperties::builder()
+        .set_bloom_filter_enabled(true)
+        .build();
+    props.push(("bloom_filter", prop));
+
+    let prop = WriterProperties::builder()
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .build();
+    props.push(("parquet_2", prop));
+
+    let prop = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::default()))
+        .build();
+    props.push(("zstd", prop));
+
+    let prop = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::default()))
+        .set_writer_version(WriterVersion::PARQUET_2_0)
+        .build();
+    props.push(("zstd_parquet_2", prop));
+
+    props
 }
 
-criterion_group!(benches, bench_primitive_writer, bench_nested_writer);
+fn bench_all_writers(c: &mut Criterion) {
+    let batches = create_batches();
+    let props = create_writer_props();
+
+    for (batch_name, batch) in &batches {
+        let mut group = c.benchmark_group(*batch_name);
+        group.throughput(Throughput::Bytes(
+            batch
+                .columns()
+                .iter()
+                .map(|f| f.get_array_memory_size() as u64)
+                .sum(),
+        ));
+
+        for (prop_name, prop) in &props {
+            group.bench_function(*prop_name, |b| {
+                write_batch_with_option(b, batch, Some(prop.clone())).unwrap()
+            });
+        }
+        group.finish();
+    }
+}
+
+criterion_group!(benches, bench_all_writers);
 criterion_main!(benches);

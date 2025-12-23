@@ -57,11 +57,11 @@ use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::StringViewBuilder;
 use arrow_array::StringViewArray;
+use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use arrow_cast::pretty::pretty_format_batches;
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
@@ -70,9 +70,9 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::Compression;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -109,18 +109,42 @@ fn create_float64_array(size: usize) -> ArrayRef {
 }
 
 /// Creates a utf8View array of a given size with random strings.
-/// Now, this column is used in one filter case.
-fn create_utf8_view_array(size: usize, null_density: f32) -> ArrayRef {
+///
+/// This is modeled after the "SearchPhrase" column in the ClickBench benchmark.
+///
+/// See <https://github.com/apache/arrow-rs/issues/7460> for calculations.
+///
+/// The important ClickBench data properties are:
+/// * Selectivity is: 13172392 / 99997497 = 0.132
+/// * Number of RowSelections = 14054784
+/// * Average run length of each RowSelection: 99997497 / 14054784 = 7.114
+///
+/// The properties of this array are:
+/// * Selectivity is: 15144 / 100000 = 0.15144
+/// * Number of RowSelections = 12904
+/// * Average run length of each RowSelection: 100000 / 12904 = 7.75
+fn create_utf8_view_array(size: usize) -> ArrayRef {
+    const AVG_RUN_LENGTH: usize = 4; // average number of empty/non-empty strings in a row
+    const EMPTY_DENSITY: u32 = 85; // percent chance that each run is an empty string
+
     let mut builder = StringViewBuilder::with_capacity(size);
     let mut rng = StdRng::seed_from_u64(44);
-    for _ in 0..size {
+    while builder.len() < size {
+        let mut run_length = rng.random_range(1..AVG_RUN_LENGTH);
+        if builder.len() + run_length > size {
+            // cap to size rows
+            run_length = size - builder.len();
+        }
+
         let choice = rng.random_range(0..100);
-        if choice < (null_density * 100.0) as u32 {
-            builder.append_value("");
-        } else if choice < 25 {
-            builder.append_value("const");
+        if choice < EMPTY_DENSITY {
+            for _ in 0..run_length {
+                builder.append_value("");
+            }
         } else {
-            builder.append_value(random_string(&mut rng));
+            for _ in 0..run_length {
+                builder.append_value(random_string(&mut rng));
+            }
         }
     }
     Arc::new(builder.finish()) as ArrayRef
@@ -149,7 +173,7 @@ fn create_record_batch(size: usize) -> RecordBatch {
 
     let int64_array = create_int64_array(size);
     let float64_array = create_float64_array(size);
-    let utf8_array = create_utf8_view_array(size, 0.2);
+    let utf8_array = create_utf8_view_array(size);
     let ts_array = create_ts_array(size);
 
     let arrays: Vec<ArrayRef> = vec![int64_array, float64_array, utf8_array, ts_array];
@@ -317,7 +341,7 @@ impl std::fmt::Display for FilterType {
             FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -437,7 +461,7 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
             let projection_mask = ProjectionMask::roots(schema_descr, output_projection.clone());
             let pred_mask = ProjectionMask::roots(schema_descr, filter_col.clone());
 
-            let benchmark_name = format!("{filter_type:?}/{proj_case}",);
+            let benchmark_name = format!("{filter_type}/{proj_case}",);
 
             // run the benchmark for the async reader
             let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");
@@ -526,7 +550,8 @@ struct InMemoryReader {
 
 impl InMemoryReader {
     fn try_new(inner: &Bytes) -> parquet::errors::Result<Self> {
-        let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        let mut metadata_reader =
+            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
         metadata_reader.try_parse(inner)?;
         let metadata = metadata_reader.finish().map(Arc::new)?;
 

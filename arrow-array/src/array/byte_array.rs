@@ -18,8 +18,8 @@
 use crate::array::{get_offsets, print_long_array};
 use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
-use crate::types::bytes::ByteArrayNativeType;
 use crate::types::ByteArrayType;
+use crate::types::bytes::ByteArrayNativeType;
 use crate::{Array, ArrayAccessor, ArrayRef, OffsetSizeTrait, Scalar};
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_buffer::{NullBuffer, OffsetBuffer};
@@ -190,6 +190,29 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         Scalar::new(Self::from_iter_values(std::iter::once(value)))
     }
 
+    /// Create a new [`GenericByteArray`] where `value` is repeated `repeat_count` times.
+    ///
+    /// # Panics
+    /// This will panic if value's length multiplied by `repeat_count` overflows usize.
+    ///
+    pub fn new_repeated(value: impl AsRef<T::Native>, repeat_count: usize) -> Self {
+        let s: &[u8] = value.as_ref().as_ref();
+        let value_offsets = OffsetBuffer::from_repeated_length(s.len(), repeat_count);
+        let bytes: Buffer = {
+            let mut mutable_buffer = MutableBuffer::with_capacity(0);
+            mutable_buffer.repeat_slice_n_times(s, repeat_count);
+
+            mutable_buffer.into()
+        };
+
+        Self {
+            data_type: T::DATA_TYPE,
+            value_data: bytes,
+            value_offsets,
+            nulls: None,
+        }
+    }
+
     /// Creates a [`GenericByteArray`] based on an iterator of values without nulls
     pub fn from_iter_values<Ptr, I>(iter: I) -> Self
     where
@@ -276,11 +299,15 @@ impl<T: ByteArrayType> GenericByteArray<T> {
     }
 
     /// Returns the element at index `i`
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller is responsible for ensuring that the index is within the bounds of the array
     pub unsafe fn value_unchecked(&self, i: usize) -> &T::Native {
-        let end = *self.value_offsets().get_unchecked(i + 1);
-        let start = *self.value_offsets().get_unchecked(i);
+        let end = *unsafe { self.value_offsets().get_unchecked(i + 1) };
+        let start = *unsafe { self.value_offsets().get_unchecked(i) };
 
         // Soundness
         // pointer alignment & location is ensured by RawPtrBox
@@ -291,17 +318,25 @@ impl<T: ByteArrayType> GenericByteArray<T> {
         // OffsetSizeTrait. Currently, only i32 and i64 implement OffsetSizeTrait,
         // both of which should cleanly cast to isize on an architecture that supports
         // 32/64-bit offsets
-        let b = std::slice::from_raw_parts(
-            self.value_data.as_ptr().offset(start.to_isize().unwrap()),
-            (end - start).to_usize().unwrap(),
-        );
+        let b = unsafe {
+            std::slice::from_raw_parts(
+                self.value_data
+                    .as_ptr()
+                    .offset(start.to_isize().unwrap_unchecked()),
+                (end - start).to_usize().unwrap_unchecked(),
+            )
+        };
 
         // SAFETY:
         // ArrayData is valid
-        T::Native::from_bytes_unchecked(b)
+        unsafe { T::Native::from_bytes_unchecked(b) }
     }
 
     /// Returns the element at index `i`
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds.
     pub fn value(&self, i: usize) -> &T::Native {
@@ -499,7 +534,7 @@ impl<'a, T: ByteArrayType> ArrayAccessor for &'a GenericByteArray<T> {
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        GenericByteArray::value_unchecked(self, index)
+        unsafe { GenericByteArray::value_unchecked(self, index) }
     }
 }
 
@@ -581,7 +616,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{BinaryArray, StringArray};
+    use crate::{Array, BinaryArray, StringArray};
     use arrow_buffer::{Buffer, NullBuffer, OffsetBuffer};
 
     #[test]
@@ -593,14 +628,23 @@ mod tests {
         let nulls = NullBuffer::new_null(3);
         let err =
             StringArray::try_new(offsets.clone(), data.clone(), Some(nulls.clone())).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for StringArray, expected 2 got 3");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for StringArray, expected 2 got 3"
+        );
 
         let err = BinaryArray::try_new(offsets.clone(), data.clone(), Some(nulls)).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Incorrect length of null buffer for BinaryArray, expected 2 got 3");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Incorrect length of null buffer for BinaryArray, expected 2 got 3"
+        );
 
         let non_utf8_data = Buffer::from_slice_ref(b"he\xFFloworld");
         let err = StringArray::try_new(offsets.clone(), non_utf8_data.clone(), None).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Encountered non UTF-8 data: invalid utf-8 sequence of 1 bytes from index 2"
+        );
 
         BinaryArray::new(offsets, non_utf8_data, None);
 
@@ -629,5 +673,43 @@ mod tests {
         );
 
         BinaryArray::new(offsets, non_ascii_data, None);
+    }
+
+    #[test]
+    fn create_repeated() {
+        let arr = BinaryArray::new_repeated(b"hello", 3);
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.value(0), b"hello");
+        assert_eq!(arr.value(1), b"hello");
+        assert_eq!(arr.value(2), b"hello");
+
+        let arr = StringArray::new_repeated("world", 2);
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr.value(0), "world");
+        assert_eq!(arr.value(1), "world");
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", (usize::MAX / "hello".len()) + 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "usize overflow")]
+    fn create_repeated_usize_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX);
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_1() {
+        let _arr = BinaryArray::new_repeated(b"hello", usize::MAX / "hello".len());
+    }
+
+    #[test]
+    #[should_panic(expected = "offset overflow")]
+    fn create_repeated_i32_offset_overflow_2() {
+        let _arr = BinaryArray::new_repeated(b"hello", ((i32::MAX as usize) / "hello".len()) + 1);
     }
 }

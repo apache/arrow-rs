@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::reader::tape::{Tape, TapeElement};
-use crate::reader::{make_decoder, ArrayDecoder, StructMode};
+use crate::reader::{ArrayDecoder, StructMode, make_decoder};
 use arrow_array::builder::BooleanBufferBuilder;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -106,8 +106,7 @@ impl ArrayDecoder for StructArrayDecoder {
                             None => {
                                 if self.strict_mode {
                                     return Err(ArrowError::JsonError(format!(
-                                        "column '{}' missing from schema",
-                                        field_name
+                                        "column '{field_name}' missing from schema",
                                     )));
                                 }
                             }

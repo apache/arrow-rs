@@ -22,10 +22,10 @@ use crate::datatypes::*;
 use crate::util::test_util::seedable_rng;
 use arrow_buffer::{Buffer, IntervalMonthDayNano};
 use half::f16;
-use rand::distr::uniform::SampleUniform;
-use rand::rng;
 use rand::Rng;
 use rand::SeedableRng;
+use rand::distr::uniform::SampleUniform;
+use rand::rng;
 use rand::{
     distr::{Alphanumeric, Distribution, StandardUniform},
     prelude::StdRng,
@@ -156,6 +156,27 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
     max_str_len: usize,
     prefix: &str,
 ) -> GenericStringArray<Offset> {
+    create_string_array_with_len_range_and_prefix_and_seed(
+        size,
+        null_density,
+        min_str_len,
+        max_str_len,
+        prefix,
+        42,
+    )
+}
+
+/// Creates a random [`GenericStringArray`] of a given `size` and `null_density`
+/// filling it with random strings with lengths in the specified range,
+/// all starting with the provided `prefix`, generated using the provided `seed`.
+pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    min_str_len: usize,
+    max_str_len: usize,
+    prefix: &str,
+    seed: u64,
+) -> GenericStringArray<Offset> {
     assert!(
         min_str_len <= max_str_len,
         "min_str_len must be <= max_str_len"
@@ -165,7 +186,7 @@ fn create_string_array_with_len_range_and_prefix<Offset: OffsetSizeTrait>(
         "Prefix length must be <= max_str_len"
     );
 
-    let rng = &mut seedable_rng();
+    let rng = &mut StdRng::seed_from_u64(seed);
     (0..size)
         .map(|_| {
             if rng.random::<f32>() < null_density {
@@ -228,7 +249,7 @@ fn create_string_view_array_with_len_range_and_prefix(
 }
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
-fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
+pub fn create_string_array_with_max_len<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
     max_str_len: usize,
@@ -277,7 +298,7 @@ pub fn create_string_view_array(size: usize, null_density: f32) -> StringViewArr
 }
 
 /// Creates a random (but fixed-seeded) array of rand size with a given max size, null density and length
-fn create_string_view_array_with_max_len(
+pub fn create_string_view_array_with_max_len(
     size: usize,
     null_density: f32,
     max_str_len: usize,
@@ -289,6 +310,26 @@ fn create_string_view_array_with_max_len(
                 None
             } else {
                 let str_len = rng.random_range(0..max_str_len);
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+/// Creates a random (but fixed-seeded) array of a given size, null density and length
+pub fn create_string_view_array_with_fixed_len(
+    size: usize,
+    null_density: f32,
+    str_len: usize,
+) -> StringViewArray {
+    let rng = &mut seedable_rng();
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
@@ -357,6 +398,49 @@ pub fn create_string_dict_array<K: ArrowDictionaryKeyType>(
     data.iter().map(|x| x.as_deref()).collect()
 }
 
+/// Create a List/LargeList Array  of primitive values
+///
+/// Arguments:
+/// - `size`: number of lists in the array
+/// - `null_density`: density of nulls in the list array
+/// - `list_null_density`: density of nulls in the primitive arrays inside the lists
+/// - `max_list_size`: maximum size of each list (actual size is random between 0 and max_list_size)
+/// - `seed`: seed for the random number generator
+pub fn create_primitive_list_array_with_seed<O, T>(
+    size: usize,
+    null_density: f32,
+    list_null_density: f32,
+    max_list_size: usize,
+    seed: u64,
+) -> GenericListArray<O>
+where
+    O: OffsetSizeTrait,
+    T: ArrowPrimitiveType,
+    StandardUniform: Distribution<T::Native>,
+{
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    let values = (0..size).map(|_| {
+        if rng.random::<f32>() < null_density {
+            None
+        } else {
+            let list_size = rng.random_range(0..=max_list_size);
+            let list_values: Vec<Option<T::Native>> = (0..list_size)
+                .map(|_| {
+                    if rng.random::<f32>() < list_null_density {
+                        None
+                    } else {
+                        Some(rng.random())
+                    }
+                })
+                .collect();
+            Some(list_values)
+        }
+    });
+
+    GenericListArray::<O>::from_iter_primitive::<T, _, _>(values)
+}
+
 /// Create primitive run array for given logical and physical array lengths
 pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
     logical_array_len: usize,
@@ -376,7 +460,7 @@ pub fn create_primitive_run_array<R: RunEndIndexType, V: ArrowPrimitiveType>(
                 take_len += 1;
                 run_len_extra -= 1;
             }
-            std::iter::repeat(V::Native::from_usize(s).unwrap()).take(take_len)
+            std::iter::repeat_n(V::Native::from_usize(s).unwrap(), take_len)
         })
         .collect();
     while values.len() < logical_array_len {
@@ -414,7 +498,7 @@ pub fn create_string_array_for_runs(
                 take_len += 1;
                 run_len_extra -= 1;
             }
-            std::iter::repeat(s).take(take_len)
+            std::iter::repeat_n(s, take_len)
         })
         .collect();
     while values.len() < logical_array_len {
@@ -429,8 +513,29 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
     size: usize,
     null_density: f32,
 ) -> GenericBinaryArray<Offset> {
-    let rng = &mut seedable_rng();
-    let range_rng = &mut seedable_rng();
+    create_binary_array_with_seed(
+        size,
+        null_density,
+        42, // bytes_seed
+        42, // bytes_length_seed
+    )
+}
+
+/// Creates a random [`GenericBinaryArray`] of a given `size` and `null_density`
+/// filling it with random bytes, generated using the provided `seed`s.
+///
+/// the `bytes_seed` is used to seed the RNG for generating the byte values,
+/// while the `bytes_length_seed` is used to seed the RNG for generating the length of an array item
+///
+/// These values can be the same as they are used to seed different RNGs internally.
+pub fn create_binary_array_with_seed<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    bytes_seed: u64,
+    bytes_length_seed: u64,
+) -> GenericBinaryArray<Offset> {
+    let rng = &mut StdRng::seed_from_u64(bytes_seed);
+    let range_rng = &mut StdRng::seed_from_u64(bytes_length_seed);
 
     (0..size)
         .map(|_| {
@@ -441,6 +546,41 @@ pub fn create_binary_array<Offset: OffsetSizeTrait>(
                     .sample_iter::<u8, _>(StandardUniform)
                     .take(range_rng.random_range(0..8))
                     .collect::<Vec<u8>>();
+                Some(value)
+            }
+        })
+        .collect()
+}
+
+/// Creates a random [`GenericBinaryArray`] of a given `size` and `null_density`
+/// filling it with random bytes with lengths in the specified range,
+/// all starting with the provided `prefix`, generated using the provided `seed`.
+///
+pub fn create_binary_array_with_len_range_and_prefix_and_seed<Offset: OffsetSizeTrait>(
+    size: usize,
+    null_density: f32,
+    min_len: usize,
+    max_len: usize,
+    prefix: &[u8],
+    seed: u64,
+) -> GenericBinaryArray<Offset> {
+    assert!(min_len <= max_len, "min_len must be <= max_len");
+    assert!(prefix.len() <= max_len, "Prefix length must be <= max_len");
+
+    let rng = &mut StdRng::seed_from_u64(seed);
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let remaining_len = rng
+                    .random_range(min_len.saturating_sub(prefix.len())..=(max_len - prefix.len()));
+
+                let remaining = rng
+                    .sample_iter::<u8, _>(StandardUniform)
+                    .take(remaining_len);
+
+                let value = prefix.iter().copied().chain(remaining).collect::<Vec<u8>>();
                 Some(value)
             }
         })

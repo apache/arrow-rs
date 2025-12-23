@@ -24,15 +24,18 @@ use arrow::{
     array::ArrayRef,
     buffer::Buffer,
     datatypes::SchemaRef,
-    ipc::{self, reader, writer},
+    ipc::{
+        self, reader,
+        writer::{self, CompressionContext},
+    },
     record_batch::RecordBatch,
 };
 use arrow_flight::{
-    flight_descriptor::DescriptorType, flight_service_client::FlightServiceClient,
-    utils::flight_data_to_arrow_batch, FlightData, FlightDescriptor, IpcMessage, Location, Ticket,
+    FlightData, FlightDescriptor, IpcMessage, Location, Ticket, flight_descriptor::DescriptorType,
+    flight_service_client::FlightServiceClient, utils::flight_data_to_arrow_batch,
 };
-use futures::{channel::mpsc, sink::SinkExt, stream, StreamExt};
-use tonic::{Request, Streaming};
+use futures::{StreamExt, channel::mpsc, sink::SinkExt, stream};
+use tonic::{Request, Streaming, transport::Endpoint};
 
 use arrow::datatypes::Schema;
 use std::sync::Arc;
@@ -46,7 +49,9 @@ type Client = FlightServiceClient<tonic::transport::Channel>;
 pub async fn run_scenario(host: &str, port: u16, path: &str) -> Result {
     let url = format!("http://{host}:{port}");
 
-    let client = FlightServiceClient::connect(url).await?;
+    let endpoint = Endpoint::new(url)?;
+    let channel = endpoint.connect().await?;
+    let client = FlightServiceClient::new(channel);
 
     let json_file = open_json_file(path)?;
 
@@ -72,9 +77,7 @@ async fn upload_data(
     let (mut upload_tx, upload_rx) = mpsc::channel(10);
 
     let options = arrow::ipc::writer::IpcWriteOptions::default();
-    #[allow(deprecated)]
-    let mut dict_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    let mut dict_tracker = writer::DictionaryTracker::new(false);
     let data_gen = writer::IpcDataGenerator::default();
     let data = IpcMessage(
         data_gen
@@ -92,6 +95,8 @@ async fn upload_data(
 
     let mut original_data_iter = original_data.iter().enumerate();
 
+    let mut compression_context = CompressionContext::default();
+
     if let Some((counter, first_batch)) = original_data_iter.next() {
         let metadata = counter.to_string().into_bytes();
         // Preload the first batch into the channel before starting the request
@@ -101,6 +106,7 @@ async fn upload_data(
             first_batch,
             &options,
             &mut dict_tracker,
+            &mut compression_context,
         )
         .await?;
 
@@ -123,6 +129,7 @@ async fn upload_data(
                 batch,
                 &options,
                 &mut dict_tracker,
+                &mut compression_context,
             )
             .await?;
 
@@ -152,11 +159,12 @@ async fn send_batch(
     batch: &RecordBatch,
     options: &writer::IpcWriteOptions,
     dictionary_tracker: &mut writer::DictionaryTracker,
+    compression_context: &mut CompressionContext,
 ) -> Result {
     let data_gen = writer::IpcDataGenerator::default();
 
     let (encoded_dictionaries, encoded_batch) = data_gen
-        .encoded_batch(batch, dictionary_tracker, options)
+        .encode(batch, dictionary_tracker, options, compression_context)
         .expect("DictionaryTracker configured above to not error on replacement");
 
     let dictionary_flight_data: Vec<FlightData> =
@@ -213,7 +221,9 @@ async fn consume_flight_location(
     // more details: https://github.com/apache/arrow-rs/issues/1398
     location.uri = location.uri.replace("grpc+tcp://", "http://");
 
-    let mut client = FlightServiceClient::connect(location.uri).await?;
+    let endpoint = Endpoint::new(location.uri)?;
+    let channel = endpoint.connect().await?;
+    let mut client = FlightServiceClient::new(channel);
     let resp = client.do_get(ticket).await?;
     let mut resp = resp.into_inner();
 

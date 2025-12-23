@@ -22,7 +22,7 @@
 use std::sync::Arc;
 
 use arrow_arith::boolean::and;
-use arrow_array::{builder::StringBuilder, ArrayRef, RecordBatch, StringArray};
+use arrow_array::{ArrayRef, RecordBatch, StringArray, builder::StringBuilder};
 use arrow_ord::cmp::eq;
 use arrow_schema::{DataType, Field, Schema, SchemaRef};
 use arrow_select::{filter::filter_record_batch, take::take};
@@ -38,7 +38,7 @@ use crate::sql::CommandGetDbSchemas;
 /// Builds rows like this:
 ///
 /// * catalog_name: utf8,
-/// * db_schema_name: utf8,
+/// * db_schema_name: utf8 not null
 pub struct GetDbSchemasBuilder {
     // Specifies the Catalog to search for the tables.
     // - An empty string retrieves those without a catalog.
@@ -177,7 +177,7 @@ fn get_db_schemas_schema() -> SchemaRef {
 /// The schema for GetDbSchemas
 static GET_DB_SCHEMAS_SCHEMA: Lazy<SchemaRef> = Lazy::new(|| {
     Arc::new(Schema::new(vec![
-        Field::new("catalog_name", DataType::Utf8, false),
+        Field::new("catalog_name", DataType::Utf8, true),
         Field::new("db_schema_name", DataType::Utf8, false),
     ]))
 });

@@ -29,6 +29,8 @@ use arrow::datatypes::*;
 use arrow::util::test_util::seedable_rng;
 use arrow::{array::*, util::bench_util::*};
 use arrow_select::interleave::interleave;
+use std::hint;
+use std::sync::Arc;
 
 fn do_bench(
     c: &mut Criterion,
@@ -61,7 +63,7 @@ fn bench_values(c: &mut Criterion, name: &str, len: usize, values: &[&dyn Array]
         .collect();
 
     c.bench_function(name, |b| {
-        b.iter(|| criterion::black_box(interleave(values, &indices).unwrap()))
+        b.iter(|| hint::black_box(interleave(values, &indices).unwrap()))
     });
 }
 
@@ -73,8 +75,51 @@ fn add_benchmark(c: &mut Criterion) {
     let values = create_string_array_with_len::<i32>(10, 0.0, 20);
     let dict = create_dict_from_values::<Int32Type>(1024, 0.0, &values);
 
+    let struct_i32_no_nulls_i32_no_nulls = StructArray::new(
+        Fields::from(vec![
+            Field::new("a", Int32Type::DATA_TYPE, false),
+            Field::new("b", Int32Type::DATA_TYPE, false),
+        ]),
+        vec![
+            Arc::new(create_primitive_array::<Int32Type>(1024, 0.)),
+            Arc::new(create_primitive_array::<Int32Type>(1024, 0.)),
+        ],
+        None,
+    );
+
+    let struct_string_no_nulls_string_no_nulls = StructArray::new(
+        Fields::from(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Utf8, false),
+        ]),
+        vec![
+            Arc::new(create_string_array_with_len::<i32>(1024, 0., 20)),
+            Arc::new(create_string_array_with_len::<i32>(1024, 0., 20)),
+        ],
+        None,
+    );
+
+    let struct_i32_no_nulls_string_no_nulls = StructArray::new(
+        Fields::from(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Utf8, false),
+        ]),
+        vec![
+            Arc::new(create_primitive_array::<Int32Type>(1024, 0.)),
+            Arc::new(create_string_array_with_len::<i32>(1024, 0., 20)),
+        ],
+        None,
+    );
+
     let values = create_string_array_with_len::<i32>(1024, 0.0, 20);
     let sparse_dict = create_sparse_dict_from_values::<Int32Type>(1024, 0.0, &values, 10..20);
+
+    let string_view = create_string_view_array(1024, 0.0);
+
+    // use 8192 as a standard list size for better coverage
+    let list_i64 = create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.1, 0.1, 20, 42);
+    let list_i64_no_nulls =
+        create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.0, 0.0, 20, 42);
 
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),
@@ -83,6 +128,21 @@ fn add_benchmark(c: &mut Criterion) {
         ("str(20, 0.5)", &string_opt),
         ("dict(20, 0.0)", &dict),
         ("dict_sparse(20, 0.0)", &sparse_dict),
+        ("str_view(0.0)", &string_view),
+        (
+            "struct(i32(0.0), i32(0.0)",
+            &struct_i32_no_nulls_i32_no_nulls,
+        ),
+        (
+            "struct(str(20, 0.0), str(20, 0.0))",
+            &struct_string_no_nulls_string_no_nulls,
+        ),
+        (
+            "struct(i32(0.0), str(20, 0.0)",
+            &struct_i32_no_nulls_string_no_nulls,
+        ),
+        ("list<i64>(0.1,0.1,20)", &list_i64),
+        ("list<i64>(0.0,0.0,20)", &list_i64_no_nulls),
     ];
 
     for (prefix, base) in cases {

@@ -72,7 +72,7 @@ export ARROW_GITHUB_API_TOKEN=<TOKEN>
 # manually edit ./dev/release/update_change_log.sh to reflect the release version
 # create the changelog
 ./dev/release/update_change_log.sh
-# commit the intial changes
+# commit the initial changes
 git commit -a -m 'Create changelog'
 
 # run automated script to copy labels to issues based on referenced PRs
@@ -84,7 +84,7 @@ python dev/release/label_issues.py
 
 # review change log / edit issues and labels if needed, rerun, repeat as necessary
 # note you need to revert changes to CHANGELOG-old.md if you want to rerun the script
-CHANGELOG_GITHUB_TOKEN=<TOKEN> ./dev/release/update_change_log.sh
+./dev/release/update_change_log.sh
 
 # Commit the changes
 git commit -a -m 'Update changelog'
@@ -105,24 +105,24 @@ create a release candidate using the following steps. Note you need to
 be a committer to run these scripts as they upload to the apache `svn`
 distribution servers.
 
+### Pick a Release Candidate (RC) number
+
+Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
+
 ### Create git tag for the release:
 
 While the official release artifact is a signed tarball, we also tag the commit it was created for convenience and code archaeology.
 
 Use a string such as `43.0.0` as the `<version>`.
 
-Create and push the tag thusly:
+Create and push the tag thusly (for example, for version `4.1.0` and `rc2` would be `4.1.0-rc2`):
 
 ```shell
 git fetch apache
-git tag <version> apache/main
+git tag <version>-<rc> apache/main
 # push tag to apache
-git push apache <version>
+git push apache <version>-<rc>
 ```
-
-### Pick an Release Candidate (RC) number
-
-Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 ### Create, sign, and upload tarball
 
@@ -191,9 +191,16 @@ If the release is not approved, fix whatever the problem is and try again with t
 
 ### If the release is approved,
 
-Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-4.1.0/, using the `release-tarball.sh` script:
+Then, create a new release on GitHub using the tag `<version>` (e.g. `4.1.0`).
 
-Rust Arrow Crates:
+Push the release tag to github
+
+```shell
+git tag <version> <version>-<rc>
+git push apache <version>
+```
+
+Move tarball to the release location in SVN, e.g. https://dist.apache.org/repos/dist/release/arrow/arrow-rs-4.1.0/, using the `release-tarball.sh` script:
 
 ```shell
 ./dev/release/release-tarball.sh 4.1.0 2
@@ -237,17 +244,23 @@ Rust Arrow Crates:
 (cd arrow-data && cargo publish)
 (cd arrow-array && cargo publish)
 (cd arrow-select && cargo publish)
+(cd arrow-ord && cargo publish)
 (cd arrow-cast && cargo publish)
 (cd arrow-ipc && cargo publish)
 (cd arrow-csv && cargo publish)
 (cd arrow-json && cargo publish)
 (cd arrow-avro && cargo publish)
-(cd arrow-ord && cargo publish)
 (cd arrow-arith && cargo publish)
 (cd arrow-string && cargo publish)
 (cd arrow-row && cargo publish)
+(cd arrow-pyarrow && cargo publish)
 (cd arrow && cargo publish)
+(cd arrow-avro && cargo publish)
 (cd arrow-flight && cargo publish)
+(cd parquet-variant && cargo publish)
+(cd parquet-variant-json && cargo publish)
+(cd parquet-variant-compute && cargo publish)
+(cd parquet-geospatial && cargo publish)
 (cd parquet && cargo publish)
 (cd parquet_derive && cargo publish)
 (cd arrow-integration-test && cargo publish)

@@ -19,10 +19,10 @@ use arrow::util::pretty::print_batches;
 use bytes::{Buf, Bytes};
 use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, RowGroups, RowSelection};
 use parquet::arrow::async_reader::AsyncFileReader;
-use parquet::arrow::{parquet_to_arrow_field_levels, ProjectionMask};
+use parquet::arrow::{ProjectionMask, parquet_to_arrow_field_levels};
 use parquet::column::page::{PageIterator, PageReader};
 use parquet::errors::{ParquetError, Result};
-use parquet::file::metadata::RowGroupMetaData;
+use parquet::file::metadata::{ParquetMetaData, RowGroupMetaData};
 use parquet::file::reader::{ChunkReader, Length};
 use parquet::file::serialized_reader::SerializedPageReader;
 use std::sync::Arc;
@@ -35,10 +35,11 @@ async fn main() -> Result<()> {
     let mut file = File::open(&path).await.unwrap();
 
     // The metadata could be cached in other places, this example only shows how to read
-    let metadata = file.get_metadata(None).await?;
+    let metadata = Arc::try_unwrap(file.get_metadata(None).await?).unwrap();
 
-    for rg in metadata.row_groups() {
-        let mut rowgroup = InMemoryRowGroup::create(rg.clone(), ProjectionMask::all());
+    for row_group_idx in 0..metadata.row_groups().len() {
+        let mut rowgroup =
+            InMemoryRowGroup::create(metadata.clone(), row_group_idx, ProjectionMask::all());
         rowgroup.async_fetch_data(&mut file, None).await?;
         let reader = rowgroup.build_reader(1024, None)?;
 
@@ -100,14 +101,15 @@ impl ChunkReader for ColumnChunkData {
 
 #[derive(Clone)]
 pub struct InMemoryRowGroup {
-    pub metadata: RowGroupMetaData,
+    metadata: ParquetMetaData,
+    row_group_idx: usize,
     mask: ProjectionMask,
     column_chunks: Vec<Option<Arc<ColumnChunkData>>>,
 }
 
 impl RowGroups for InMemoryRowGroup {
     fn num_rows(&self) -> usize {
-        self.metadata.num_rows() as usize
+        self.row_group_metadata().num_rows() as usize
     }
 
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>> {
@@ -118,7 +120,7 @@ impl RowGroups for InMemoryRowGroup {
             Some(data) => {
                 let page_reader: Box<dyn PageReader> = Box::new(SerializedPageReader::new(
                     data.clone(),
-                    self.metadata.column(i),
+                    self.row_group_metadata().column(i),
                     self.num_rows(),
                     None,
                 )?);
@@ -129,17 +131,35 @@ impl RowGroups for InMemoryRowGroup {
             }
         }
     }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(std::iter::once(self.row_group_metadata()))
+    }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        &self.metadata
+    }
 }
 
 impl InMemoryRowGroup {
-    pub fn create(metadata: RowGroupMetaData, mask: ProjectionMask) -> Self {
-        let column_chunks = metadata.columns().iter().map(|_| None).collect::<Vec<_>>();
+    pub fn create(metadata: ParquetMetaData, row_group_idx: usize, mask: ProjectionMask) -> Self {
+        let column_chunks = metadata
+            .row_group(row_group_idx)
+            .columns()
+            .iter()
+            .map(|_| None)
+            .collect::<Vec<_>>();
 
         Self {
             metadata,
+            row_group_idx,
             mask,
             column_chunks,
         }
+    }
+
+    pub fn row_group_metadata(&self) -> &RowGroupMetaData {
+        self.metadata.row_group(self.row_group_idx)
     }
 
     pub fn build_reader(
@@ -148,7 +168,7 @@ impl InMemoryRowGroup {
         selection: Option<RowSelection>,
     ) -> Result<ParquetRecordBatchReader> {
         let levels = parquet_to_arrow_field_levels(
-            &self.metadata.schema_descr_ptr(),
+            &self.row_group_metadata().schema_descr_ptr(),
             self.mask.clone(),
             None,
         )?;
@@ -163,7 +183,7 @@ impl InMemoryRowGroup {
         _selection: Option<&RowSelection>,
     ) -> Result<()> {
         let mut vs = std::mem::take(&mut self.column_chunks);
-        for (leaf_idx, meta) in self.metadata.columns().iter().enumerate() {
+        for (leaf_idx, meta) in self.row_group_metadata().columns().iter().enumerate() {
             if self.mask.leaf_included(leaf_idx) {
                 let (start, len) = meta.byte_range();
                 let data = reader.get_bytes(start..(start + len)).await?;

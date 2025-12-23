@@ -17,8 +17,8 @@
 
 //! Implements the `nullif` function for Arrow arrays.
 
-use arrow_array::{make_array, Array, ArrayRef, BooleanArray};
-use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
+use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
+use arrow_buffer::buffer::bitwise_bin_op_helper;
 use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
 
@@ -91,11 +91,13 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
-                let t = !b;
-                null_count += t.count_zeros() as usize;
-                t
-            });
+            let buffer =
+                BooleanBuffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| {
+                    let t = !b;
+                    null_count += t.count_zeros() as usize;
+                    t
+                })
+                .into_inner();
             (buffer, null_count)
         }
     };
@@ -120,7 +122,7 @@ mod tests {
     use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields};
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_nullif_int_array() {

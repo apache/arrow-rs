@@ -23,15 +23,18 @@ use crate::delta::{
 use crate::temporal_conversions::as_datetime_with_timezone;
 use crate::timezone::Tz;
 use crate::{ArrowNativeTypeOp, OffsetSizeTrait};
-use arrow_buffer::{i256, Buffer, OffsetBuffer};
+use arrow_buffer::{Buffer, OffsetBuffer, i256};
 use arrow_data::decimal::{
-    is_validate_decimal256_precision, is_validate_decimal_precision, validate_decimal256_precision,
-    validate_decimal_precision,
+    format_decimal_str, is_validate_decimal_precision, is_validate_decimal32_precision,
+    is_validate_decimal64_precision, is_validate_decimal256_precision, validate_decimal_precision,
+    validate_decimal32_precision, validate_decimal64_precision, validate_decimal256_precision,
 };
 use arrow_data::{validate_binary_view, validate_string_view};
 use arrow_schema::{
-    ArrowError, DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE,
-    DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE, DECIMAL_DEFAULT_SCALE,
+    ArrowError, DECIMAL_DEFAULT_SCALE, DECIMAL32_DEFAULT_SCALE, DECIMAL32_MAX_PRECISION,
+    DECIMAL32_MAX_SCALE, DECIMAL64_DEFAULT_SCALE, DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE,
+    DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE, DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE,
+    DataType, IntervalUnit, TimeUnit,
 };
 use chrono::{Duration, NaiveDate, NaiveDateTime};
 use half::f16;
@@ -67,12 +70,6 @@ pub trait ArrowPrimitiveType: primitive::PrimitiveTypeSealed + 'static {
 
     /// the corresponding Arrow data type of this primitive type.
     const DATA_TYPE: DataType;
-
-    /// Returns the byte width of this primitive type.
-    #[deprecated(since = "52.0.0", note = "Use ArrowNativeType::get_byte_width")]
-    fn get_byte_width() -> usize {
-        std::mem::size_of::<Self::Native>()
-    }
 
     /// Returns a default value of this primitive type.
     ///
@@ -1031,9 +1028,25 @@ impl Date64Type {
     /// # Arguments
     ///
     /// * `i` - The Date64Type to convert
+    #[deprecated(since = "56.0.0", note = "Use to_naive_date_opt instead.")]
     pub fn to_naive_date(i: <Date64Type as ArrowPrimitiveType>::Native) -> NaiveDate {
+        Self::to_naive_date_opt(i)
+            .unwrap_or_else(|| panic!("Date64Type::to_naive_date overflowed for date: {i}",))
+    }
+
+    /// Converts an arrow Date64Type into a chrono::NaiveDateTime if it fits in the range that chrono::NaiveDateTime can represent.
+    /// Returns `None` if the calculation would overflow or underflow.
+    ///
+    /// This function is able to handle dates ranging between 1677-09-21 (-9,223,372,800,000) and 2262-04-11 (9,223,286,400,000).
+    ///
+    /// # Arguments
+    ///
+    /// * `i` - The Date64Type to convert
+    ///
+    /// Returns `Some(NaiveDateTime)` if it fits, `None` otherwise.
+    pub fn to_naive_date_opt(i: <Date64Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
         let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
-        epoch.add(Duration::try_milliseconds(i).unwrap())
+        Duration::try_milliseconds(i).and_then(|d| epoch.checked_add_signed(d))
     }
 
     /// Converts a chrono::NaiveDate into an arrow Date64Type
@@ -1052,14 +1065,35 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `add_year_months_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_year_months(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let prior = Date64Type::to_naive_date(date);
+        Self::add_year_months_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date64Type::add_year_months overflowed for date: {date}, delta: {delta}",)
+        })
+    }
+
+    /// Adds the given IntervalYearMonthType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn add_year_months_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
+        let prior = Date64Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(delta);
         let posterior = shift_months(prior, months);
-        Date64Type::from_naive_date(posterior)
+        Some(Date64Type::from_naive_date(posterior))
     }
 
     /// Adds the given IntervalDayTimeType to an arrow Date64Type
@@ -1068,15 +1102,36 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `add_day_time_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_day_time(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::add_day_time_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date64Type::add_day_time overflowed for date: {date}, delta: {delta:?}",)
+        })
+    }
+
+    /// Adds the given IntervalDayTimeType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn add_day_time_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
-        let res = res.add(Duration::try_days(days as i64).unwrap());
-        let res = res.add(Duration::try_milliseconds(ms as i64).unwrap());
-        Date64Type::from_naive_date(res)
+        let res = Date64Type::to_naive_date_opt(date)?;
+        let res = res.checked_add_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_add_signed(Duration::try_milliseconds(ms as i64)?)?;
+        Some(Date64Type::from_naive_date(res))
     }
 
     /// Adds the given IntervalMonthDayNanoType to an arrow Date64Type
@@ -1085,16 +1140,37 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to add
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `add_month_day_nano_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn add_month_day_nano(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::add_month_day_nano_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date64Type::add_month_day_nano overflowed for date: {date}, delta: {delta:?}",)
+        })
+    }
+
+    /// Adds the given IntervalMonthDayNanoType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to add
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn add_month_day_nano_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
+        let res = Date64Type::to_naive_date_opt(date)?;
         let res = shift_months(res, months);
-        let res = res.add(Duration::try_days(days as i64).unwrap());
-        let res = res.add(Duration::nanoseconds(nanos));
-        Date64Type::from_naive_date(res)
+        let res = res.checked_add_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_add_signed(Duration::nanoseconds(nanos))?;
+        Some(Date64Type::from_naive_date(res))
     }
 
     /// Subtract the given IntervalYearMonthType to an arrow Date64Type
@@ -1103,14 +1179,35 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `subtract_year_months_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_year_months(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
-        let prior = Date64Type::to_naive_date(date);
+        Self::subtract_year_months_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date64Type::subtract_year_months overflowed for date: {date}, delta: {delta}",)
+        })
+    }
+
+    /// Subtract the given IntervalYearMonthType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn subtract_year_months_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalYearMonthType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
+        let prior = Date64Type::to_naive_date_opt(date)?;
         let months = IntervalYearMonthType::to_months(-delta);
         let posterior = shift_months(prior, months);
-        Date64Type::from_naive_date(posterior)
+        Some(Date64Type::from_naive_date(posterior))
     }
 
     /// Subtract the given IntervalDayTimeType to an arrow Date64Type
@@ -1119,15 +1216,36 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `subtract_day_time_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_day_time(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::subtract_day_time_opt(date, delta).unwrap_or_else(|| {
+            panic!("Date64Type::subtract_day_time overflowed for date: {date}, delta: {delta:?}",)
+        })
+    }
+
+    /// Subtract the given IntervalDayTimeType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn subtract_day_time_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalDayTimeType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (days, ms) = IntervalDayTimeType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
-        let res = res.sub(Duration::try_days(days as i64).unwrap());
-        let res = res.sub(Duration::try_milliseconds(ms as i64).unwrap());
-        Date64Type::from_naive_date(res)
+        let res = Date64Type::to_naive_date_opt(date)?;
+        let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_sub_signed(Duration::try_milliseconds(ms as i64)?)?;
+        Some(Date64Type::from_naive_date(res))
     }
 
     /// Subtract the given IntervalMonthDayNanoType to an arrow Date64Type
@@ -1136,16 +1254,39 @@ impl Date64Type {
     ///
     /// * `date` - The date on which to perform the operation
     /// * `delta` - The interval to subtract
+    #[deprecated(
+        since = "56.0.0",
+        note = "Use `subtract_month_day_nano_opt` instead, which returns an Option to handle overflow."
+    )]
     pub fn subtract_month_day_nano(
         date: <Date64Type as ArrowPrimitiveType>::Native,
         delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
     ) -> <Date64Type as ArrowPrimitiveType>::Native {
+        Self::subtract_month_day_nano_opt(date, delta).unwrap_or_else(|| {
+            panic!(
+                "Date64Type::subtract_month_day_nano overflowed for date: {date}, delta: {delta:?}",
+            )
+        })
+    }
+
+    /// Subtract the given IntervalMonthDayNanoType to an arrow Date64Type
+    ///
+    /// # Arguments
+    ///
+    /// * `date` - The date on which to perform the operation
+    /// * `delta` - The interval to subtract
+    ///
+    /// Returns `Some(Date64Type)` if it fits, `None` otherwise.
+    pub fn subtract_month_day_nano_opt(
+        date: <Date64Type as ArrowPrimitiveType>::Native,
+        delta: <IntervalMonthDayNanoType as ArrowPrimitiveType>::Native,
+    ) -> Option<<Date64Type as ArrowPrimitiveType>::Native> {
         let (months, days, nanos) = IntervalMonthDayNanoType::to_parts(delta);
-        let res = Date64Type::to_naive_date(date);
+        let res = Date64Type::to_naive_date_opt(date)?;
         let res = shift_months(res, -months);
-        let res = res.sub(Duration::try_days(days as i64).unwrap());
-        let res = res.sub(Duration::nanoseconds(nanos));
-        Date64Type::from_naive_date(res)
+        let res = res.checked_sub_signed(Duration::try_days(days as i64)?)?;
+        let res = res.checked_sub_signed(Duration::nanoseconds(nanos))?;
+        Some(Date64Type::from_naive_date(res))
     }
 }
 
@@ -1156,6 +1297,8 @@ mod decimal {
     use super::*;
 
     pub trait DecimalTypeSealed {}
+    impl DecimalTypeSealed for Decimal32Type {}
+    impl DecimalTypeSealed for Decimal64Type {}
     impl DecimalTypeSealed for Decimal128Type {}
     impl DecimalTypeSealed for Decimal256Type {}
 }
@@ -1163,10 +1306,12 @@ mod decimal {
 /// A trait over the decimal types, used by [`PrimitiveArray`] to provide a generic
 /// implementation across the various decimal types
 ///
-/// Implemented by [`Decimal128Type`] and [`Decimal256Type`] for [`Decimal128Array`]
-/// and [`Decimal256Array`] respectively
+/// Implemented by [`Decimal32Type`], [`Decimal64Type`], [`Decimal128Type`] and [`Decimal256Type`]
+/// for [`Decimal32Array`], [`Decimal64Array`], [`Decimal128Array`] and [`Decimal256Array`] respectively
 ///
 /// [`PrimitiveArray`]: crate::array::PrimitiveArray
+/// [`Decimal32Array`]: crate::array::Decimal32Array
+/// [`Decimal64Array`]: crate::array::Decimal64Array
 /// [`Decimal128Array`]: crate::array::Decimal128Array
 /// [`Decimal256Array`]: crate::array::Decimal256Array
 pub trait DecimalType:
@@ -1178,19 +1323,25 @@ pub trait DecimalType:
     const MAX_PRECISION: u8;
     /// Maximum no of digits after the decimal point (note the scale can be negative)
     const MAX_SCALE: i8;
+    /// The maximum value for each precision in `0..=MAX_PRECISION`: [0, 9, 99, ...]
+    const MAX_FOR_EACH_PRECISION: &'static [Self::Native];
     /// fn to create its [`DataType`]
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType;
     /// Default values for [`DataType`]
     const DEFAULT_TYPE: DataType;
 
-    /// "Decimal128" or "Decimal256", for use in error messages
+    /// "Decimal32", "Decimal64", "Decimal128" or "Decimal256", for use in error messages
     const PREFIX: &'static str;
 
     /// Formats the decimal value with the provided precision and scale
     fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String;
 
     /// Validates that `value` contains no more than `precision` decimal digits
-    fn validate_decimal_precision(value: Self::Native, precision: u8) -> Result<(), ArrowError>;
+    fn validate_decimal_precision(
+        value: Self::Native,
+        precision: u8,
+        scale: i8,
+    ) -> Result<(), ArrowError>;
 
     /// Determines whether `value` contains no more than `precision` decimal digits
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool;
@@ -1236,6 +1387,78 @@ pub fn validate_decimal_precision_and_scale<T: DecimalType>(
     Ok(())
 }
 
+/// The decimal type for a Decimal32Array
+#[derive(Debug)]
+pub struct Decimal32Type {}
+
+impl DecimalType for Decimal32Type {
+    const BYTE_LENGTH: usize = 4;
+    const MAX_PRECISION: u8 = DECIMAL32_MAX_PRECISION;
+    const MAX_SCALE: i8 = DECIMAL32_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i32] =
+        &arrow_data::decimal::MAX_DECIMAL32_FOR_EACH_PRECISION;
+    const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal32;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal32(DECIMAL32_MAX_PRECISION, DECIMAL32_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal32";
+
+    fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale)
+    }
+
+    fn validate_decimal_precision(num: i32, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal32_precision(num, precision, scale)
+    }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal32_precision(value, precision)
+    }
+}
+
+impl ArrowPrimitiveType for Decimal32Type {
+    type Native = i32;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
+}
+
+impl primitive::PrimitiveTypeSealed for Decimal32Type {}
+
+/// The decimal type for a Decimal64Array
+#[derive(Debug)]
+pub struct Decimal64Type {}
+
+impl DecimalType for Decimal64Type {
+    const BYTE_LENGTH: usize = 8;
+    const MAX_PRECISION: u8 = DECIMAL64_MAX_PRECISION;
+    const MAX_SCALE: i8 = DECIMAL64_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i64] =
+        &arrow_data::decimal::MAX_DECIMAL64_FOR_EACH_PRECISION;
+    const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal64;
+    const DEFAULT_TYPE: DataType =
+        DataType::Decimal64(DECIMAL64_MAX_PRECISION, DECIMAL64_DEFAULT_SCALE);
+    const PREFIX: &'static str = "Decimal64";
+
+    fn format_decimal(value: Self::Native, precision: u8, scale: i8) -> String {
+        format_decimal_str(&value.to_string(), precision as usize, scale)
+    }
+
+    fn validate_decimal_precision(num: i64, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal64_precision(num, precision, scale)
+    }
+
+    fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
+        is_validate_decimal64_precision(value, precision)
+    }
+}
+
+impl ArrowPrimitiveType for Decimal64Type {
+    type Native = i64;
+
+    const DATA_TYPE: DataType = <Self as DecimalType>::DEFAULT_TYPE;
+}
+
+impl primitive::PrimitiveTypeSealed for Decimal64Type {}
+
 /// The decimal type for a Decimal128Array
 #[derive(Debug)]
 pub struct Decimal128Type {}
@@ -1244,6 +1467,8 @@ impl DecimalType for Decimal128Type {
     const BYTE_LENGTH: usize = 16;
     const MAX_PRECISION: u8 = DECIMAL128_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL128_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i128] =
+        &arrow_data::decimal::MAX_DECIMAL128_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal128;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal128(DECIMAL128_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
@@ -1253,8 +1478,8 @@ impl DecimalType for Decimal128Type {
         format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
-    fn validate_decimal_precision(num: i128, precision: u8) -> Result<(), ArrowError> {
-        validate_decimal_precision(num, precision)
+    fn validate_decimal_precision(num: i128, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal_precision(num, precision, scale)
     }
 
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
@@ -1278,6 +1503,8 @@ impl DecimalType for Decimal256Type {
     const BYTE_LENGTH: usize = 32;
     const MAX_PRECISION: u8 = DECIMAL256_MAX_PRECISION;
     const MAX_SCALE: i8 = DECIMAL256_MAX_SCALE;
+    const MAX_FOR_EACH_PRECISION: &'static [i256] =
+        &arrow_data::decimal::MAX_DECIMAL256_FOR_EACH_PRECISION;
     const TYPE_CONSTRUCTOR: fn(u8, i8) -> DataType = DataType::Decimal256;
     const DEFAULT_TYPE: DataType =
         DataType::Decimal256(DECIMAL256_MAX_PRECISION, DECIMAL_DEFAULT_SCALE);
@@ -1287,8 +1514,8 @@ impl DecimalType for Decimal256Type {
         format_decimal_str(&value.to_string(), precision as usize, scale)
     }
 
-    fn validate_decimal_precision(num: i256, precision: u8) -> Result<(), ArrowError> {
-        validate_decimal256_precision(num, precision)
+    fn validate_decimal_precision(num: i256, precision: u8, scale: i8) -> Result<(), ArrowError> {
+        validate_decimal256_precision(num, precision, scale)
     }
 
     fn is_valid_decimal_precision(value: Self::Native, precision: u8) -> bool {
@@ -1303,29 +1530,6 @@ impl ArrowPrimitiveType for Decimal256Type {
 }
 
 impl primitive::PrimitiveTypeSealed for Decimal256Type {}
-
-fn format_decimal_str(value_str: &str, precision: usize, scale: i8) -> String {
-    let (sign, rest) = match value_str.strip_prefix('-') {
-        Some(stripped) => ("-", stripped),
-        None => ("", value_str),
-    };
-    let bound = precision.min(rest.len()) + sign.len();
-    let value_str = &value_str[0..bound];
-
-    if scale == 0 {
-        value_str.to_string()
-    } else if scale < 0 {
-        let padding = value_str.len() + scale.unsigned_abs() as usize;
-        format!("{value_str:0<padding$}")
-    } else if rest.len() > scale as usize {
-        // Decimal separator is in the middle of the string
-        let (whole, decimal) = value_str.split_at(value_str.len() - scale as usize);
-        format!("{whole}.{decimal}")
-    } else {
-        // String has to be padded
-        format!("{}0.{:0>width$}", sign, rest, width = scale as usize)
-    }
-}
 
 /// Crate private types for Byte Arrays
 ///
@@ -1366,7 +1570,7 @@ pub(crate) mod bytes {
 
         #[inline]
         unsafe fn from_bytes_unchecked(b: &[u8]) -> &Self {
-            std::str::from_utf8_unchecked(b)
+            unsafe { std::str::from_utf8_unchecked(b) }
         }
     }
 }
@@ -1541,7 +1745,7 @@ impl ByteViewType for BinaryViewType {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_data::{layout, BufferSpec};
+    use arrow_data::{BufferSpec, layout};
 
     #[test]
     fn month_day_nano_should_roundtrip() {
@@ -1607,6 +1811,8 @@ mod tests {
         test_layout::<Float16Type>();
         test_layout::<Float32Type>();
         test_layout::<Float64Type>();
+        test_layout::<Decimal32Type>();
+        test_layout::<Decimal64Type>();
         test_layout::<Decimal128Type>();
         test_layout::<Decimal256Type>();
         test_layout::<TimestampNanosecondType>();

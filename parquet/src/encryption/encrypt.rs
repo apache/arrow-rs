@@ -17,15 +17,17 @@
 
 //! Configuration and utilities for Parquet Modular Encryption
 
-use crate::encryption::ciphers::{BlockEncryptor, RingGcmBlockEncryptor};
+use crate::encryption::ciphers::{
+    BlockEncryptor, NONCE_LEN, RingGcmBlockEncryptor, SIZE_LEN, TAG_LEN,
+};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::{ColumnCryptoMetaData, EncryptionWithColumnKey};
+use crate::parquet_thrift::{ThriftCompactOutputProtocol, WriteThrift};
 use crate::schema::types::{ColumnDescPtr, SchemaDescriptor};
-use crate::thrift::TSerializable;
 use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use thrift::protocol::TCompactOutputProtocol;
+use std::sync::Arc;
 
 #[derive(Debug, Clone, PartialEq)]
 struct EncryptionKey {
@@ -273,27 +275,27 @@ impl EncryptionPropertiesBuilder {
     }
 
     /// Build the encryption properties
-    pub fn build(self) -> Result<FileEncryptionProperties> {
-        Ok(FileEncryptionProperties {
+    pub fn build(self) -> Result<Arc<FileEncryptionProperties>> {
+        Ok(Arc::new(FileEncryptionProperties {
             encrypt_footer: self.encrypt_footer,
             footer_key: self.footer_key,
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
             store_aad_prefix: self.store_aad_prefix,
-        })
+        }))
     }
 }
 
 #[derive(Debug)]
 /// The encryption configuration for a single Parquet file
 pub(crate) struct FileEncryptor {
-    properties: FileEncryptionProperties,
+    properties: Arc<FileEncryptionProperties>,
     aad_file_unique: Vec<u8>,
     file_aad: Vec<u8>,
 }
 
 impl FileEncryptor {
-    pub(crate) fn new(properties: FileEncryptionProperties) -> Result<Self> {
+    pub(crate) fn new(properties: Arc<FileEncryptionProperties>) -> Result<Self> {
         // Generate unique AAD for file
         let rng = SystemRandom::new();
         let mut aad_file_unique = vec![0u8; 8];
@@ -312,7 +314,7 @@ impl FileEncryptor {
     }
 
     /// Get the encryptor's file encryption properties
-    pub fn properties(&self) -> &FileEncryptionProperties {
+    pub fn properties(&self) -> &Arc<FileEncryptionProperties> {
         &self.properties
     }
 
@@ -363,27 +365,50 @@ impl FileEncryptor {
 }
 
 /// Write an encrypted Thrift serializable object
-pub(crate) fn encrypt_object<T: TSerializable, W: Write>(
+pub(crate) fn encrypt_thrift_object<T: WriteThrift, W: Write>(
     object: &T,
     encryptor: &mut Box<dyn BlockEncryptor>,
     sink: &mut W,
     module_aad: &[u8],
 ) -> Result<()> {
-    let encrypted_buffer = encrypt_object_to_vec(object, encryptor, module_aad)?;
+    let encrypted_buffer = encrypt_thrift_object_to_vec(object, encryptor, module_aad)?;
     sink.write_all(&encrypted_buffer)?;
     Ok(())
 }
 
+pub(crate) fn write_signed_plaintext_thrift_object<T: WriteThrift, W: Write>(
+    object: &T,
+    encryptor: &mut Box<dyn BlockEncryptor>,
+    sink: &mut W,
+    module_aad: &[u8],
+) -> Result<()> {
+    let mut buffer: Vec<u8> = vec![];
+    {
+        let mut protocol = ThriftCompactOutputProtocol::new(&mut buffer);
+        object.write_thrift(&mut protocol)?;
+    }
+    sink.write_all(&buffer)?;
+    buffer = encryptor.encrypt(buffer.as_ref(), module_aad)?;
+
+    // Format of encrypted buffer is: [ciphertext size, nonce, ciphertext, authentication tag]
+    let nonce = &buffer[SIZE_LEN..SIZE_LEN + NONCE_LEN];
+    let tag = &buffer[buffer.len() - TAG_LEN..];
+    sink.write_all(nonce)?;
+    sink.write_all(tag)?;
+
+    Ok(())
+}
+
 /// Encrypt a Thrift serializable object to a byte vector
-pub(crate) fn encrypt_object_to_vec<T: TSerializable>(
+pub(crate) fn encrypt_thrift_object_to_vec<T: WriteThrift>(
     object: &T,
     encryptor: &mut Box<dyn BlockEncryptor>,
     module_aad: &[u8],
 ) -> Result<Vec<u8>> {
     let mut buffer: Vec<u8> = vec![];
     {
-        let mut unencrypted_protocol = TCompactOutputProtocol::new(&mut buffer);
-        object.write_to_out_protocol(&mut unencrypted_protocol)?;
+        let mut unencrypted_protocol = ThriftCompactOutputProtocol::new(&mut buffer);
+        object.write_thrift(&mut unencrypted_protocol)?;
     }
 
     encryptor.encrypt(buffer.as_ref(), module_aad)
@@ -391,19 +416,19 @@ pub(crate) fn encrypt_object_to_vec<T: TSerializable>(
 
 /// Get the crypto metadata for a column from the file encryption properties
 pub(crate) fn get_column_crypto_metadata(
-    properties: &FileEncryptionProperties,
+    properties: &Arc<FileEncryptionProperties>,
     column: &ColumnDescPtr,
 ) -> Option<ColumnCryptoMetaData> {
     if properties.column_keys.is_empty() {
         // Uniform encryption
-        Some(ColumnCryptoMetaData::EncryptionWithFooterKey)
+        Some(ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY)
     } else {
         properties
             .column_keys
             .get(&column.path().string())
             .map(|encryption_key| {
                 // Column is encrypted with a column specific key
-                ColumnCryptoMetaData::EncryptionWithColumnKey(EncryptionWithColumnKey {
+                ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(EncryptionWithColumnKey {
                     path_in_schema: column.path().parts().to_vec(),
                     key_metadata: encryption_key.key_metadata.clone(),
                 })

@@ -19,10 +19,10 @@
 
 use crate::take::take;
 use arrow_array::{
-    make_array, new_empty_array, new_null_array, Array, ArrayRef, BooleanArray, Int32Array, Scalar,
-    UnionArray,
+    Array, ArrayRef, BooleanArray, Int32Array, Scalar, UnionArray, make_array, new_empty_array,
+    new_null_array,
 };
-use arrow_buffer::{bit_util, BooleanBuffer, MutableBuffer, NullBuffer, ScalarBuffer};
+use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer, ScalarBuffer, bit_util};
 use arrow_data::layout;
 use arrow_schema::{ArrowError, DataType, UnionFields};
 use std::cmp::Ordering;
@@ -53,13 +53,13 @@ use std::sync::Arc;
 /// # use arrow_schema::{DataType, Field, UnionFields};
 /// # use arrow_array::{UnionArray, StringArray, Int32Array};
 /// # use arrow_select::union_extract::union_extract;
-/// let fields = UnionFields::new(
+/// let fields = UnionFields::try_new(
 ///     [1, 3],
 ///     [
 ///         Field::new("A", DataType::Int32, true),
 ///         Field::new("B", DataType::Utf8, true)
 ///     ]
-/// );
+/// ).unwrap();
 ///
 /// let union = UnionArray::try_new(
 ///     fields,
@@ -257,7 +257,7 @@ fn extract_dense(
                 //case 6: some type_ids matches our target, but not all. For selected values, take the value pointed by the offset. For unselected, use a valid null
                 Ok(take(
                     target,
-                    &Int32Array::new(offsets.clone(), Some(selected.into())),
+                    &Int32Array::try_new(offsets.clone(), Some(selected.into()))?,
                     None,
                 )?)
             }
@@ -399,8 +399,8 @@ fn is_sequential_generic<const N: usize>(offsets: &[i32]) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{eq_scalar_inner, is_sequential_generic, union_extract, BoolValue};
-    use arrow_array::{new_null_array, Array, Int32Array, NullArray, StringArray, UnionArray};
+    use super::{BoolValue, eq_scalar_inner, is_sequential_generic, union_extract};
+    use arrow_array::{Array, Int32Array, NullArray, StringArray, UnionArray, new_null_array};
     use arrow_buffer::{BooleanBuffer, ScalarBuffer};
     use arrow_schema::{ArrowError, DataType, Field, UnionFields, UnionMode};
     use std::sync::Arc;
@@ -543,17 +543,18 @@ mod tests {
     }
 
     fn str1() -> UnionFields {
-        UnionFields::new(vec![1], vec![Field::new("str", DataType::Utf8, true)])
+        UnionFields::try_new(vec![1], vec![Field::new("str", DataType::Utf8, true)]).unwrap()
     }
 
     fn str1_int3() -> UnionFields {
-        UnionFields::new(
+        UnionFields::try_new(
             vec![1, 3],
             vec![
                 Field::new("str", DataType::Utf8, true),
                 Field::new("int", DataType::Int32, true),
             ],
         )
+        .unwrap()
     }
 
     #[test]
@@ -599,13 +600,14 @@ mod tests {
     fn sparse_1_3a_null_target() {
         let union = UnionArray::try_new(
             // multiple fields
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 3],
                 vec![
                     Field::new("str", DataType::Utf8, true),
                     Field::new("null", DataType::Null, true), // target type is Null
                 ],
-            ),
+            )
+            .unwrap(),
             ScalarBuffer::from(vec![1]), //not empty
             None,                        // sparse
             vec![
@@ -682,13 +684,14 @@ mod tests {
     }
 
     fn str1_union3(union3_datatype: DataType) -> UnionFields {
-        UnionFields::new(
+        UnionFields::try_new(
             vec![1, 3],
             vec![
                 Field::new("str", DataType::Utf8, true),
                 Field::new("union", union3_datatype, true),
             ],
         )
+        .unwrap()
     }
 
     #[test]

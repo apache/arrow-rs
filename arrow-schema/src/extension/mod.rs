@@ -16,8 +16,6 @@
 // under the License.
 
 //! Extension types.
-//!
-//! <div class="warning">This module is experimental. There might be breaking changes between minor releases.</div>
 
 #[cfg(feature = "canonical_extension_types")]
 mod canonical;
@@ -247,7 +245,7 @@ pub trait ExtensionType: Sized {
     /// - deserialization of metadata fails
     fn deserialize_metadata(metadata: Option<&str>) -> Result<Self::Metadata, ArrowError>;
 
-    /// Returns `OK())` iff the given data type is supported by this extension
+    /// Returns `Ok(())` iff the given data type is supported by this extension
     /// type.
     fn supports_data_type(&self, data_type: &DataType) -> Result<(), ArrowError>;
 

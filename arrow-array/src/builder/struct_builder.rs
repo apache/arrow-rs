@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::builder::*;
 use crate::StructArray;
+use crate::builder::*;
 use arrow_buffer::NullBufferBuilder;
 use arrow_schema::{Fields, SchemaBuilder};
 use std::sync::Arc;
@@ -62,7 +62,7 @@ use std::sync::Arc;
 ///
 ///   // We can't obtain the ListBuilder<StructBuilder> with the expected generic types, because under the hood
 ///   // the StructBuilder was returned as a Box<dyn ArrayBuilder> and passed as such to the ListBuilder constructor
-///   
+///
 ///   // This panics in runtime, even though we know that the builder is a ListBuilder<StructBuilder>.
 ///   // let sb = col_struct_builder
 ///   //     .field_builder::<ListBuilder<StructBuilder>>(0)
@@ -201,6 +201,11 @@ impl StructBuilder {
         self.field_builders.len()
     }
 
+    /// Returns the fields for the struct this builder is building.
+    pub fn fields(&self) -> &Fields {
+        &self.fields
+    }
+
     /// Appends an element (either null or non-null) to the struct. The actual elements
     /// should be appended for each child sub-array in a consistent way.
     #[inline]
@@ -212,6 +217,12 @@ impl StructBuilder {
     #[inline]
     pub fn append_null(&mut self) {
         self.append(false)
+    }
+
+    /// Appends `n` `null`s into the builder.
+    #[inline]
+    pub fn append_nulls(&mut self, n: usize) {
+        self.null_buffer_builder.append_slice(&vec![false; n]);
     }
 
     /// Builds the `StructArray` and reset this builder.
@@ -261,7 +272,7 @@ impl StructBuilder {
                 let schema = builder.finish();
 
                 panic!("{}", format!(
-                    "StructBuilder ({:?}) and field_builder with index {} ({:?}) are of unequal lengths: ({} != {}).",
+                    "StructBuilder ({}) and field_builder with index {} ({}) are of unequal lengths: ({} != {}).",
                     schema,
                     idx,
                     self.fields[idx].data_type(),
@@ -313,6 +324,8 @@ mod tests {
         string_builder.append_null();
         string_builder.append_null();
         string_builder.append_value("mark");
+        string_builder.append_nulls(2);
+        string_builder.append_value("terry");
 
         let int_builder = builder
             .field_builder::<Int32Builder>(1)
@@ -321,35 +334,43 @@ mod tests {
         int_builder.append_value(2);
         int_builder.append_null();
         int_builder.append_value(4);
+        int_builder.append_nulls(2);
+        int_builder.append_value(3);
 
         builder.append(true);
         builder.append(true);
         builder.append_null();
         builder.append(true);
 
+        builder.append_nulls(2);
+        builder.append(true);
+
         let struct_data = builder.finish().into_data();
 
-        assert_eq!(4, struct_data.len());
-        assert_eq!(1, struct_data.null_count());
-        assert_eq!(&[11_u8], struct_data.nulls().unwrap().validity());
+        assert_eq!(7, struct_data.len());
+        assert_eq!(3, struct_data.null_count());
+        assert_eq!(&[75_u8], struct_data.nulls().unwrap().validity());
 
         let expected_string_data = ArrayData::builder(DataType::Utf8)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from(&[9_u8])))
-            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7]))
-            .add_buffer(Buffer::from_slice_ref(b"joemark"))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from(&[73_u8])))
+            .add_buffer(Buffer::from_slice_ref([0, 3, 3, 3, 7, 7, 7, 12]))
+            .add_buffer(Buffer::from_slice_ref(b"joemarkterry"))
             .build()
             .unwrap();
 
         let expected_int_data = ArrayData::builder(DataType::Int32)
-            .len(4)
-            .null_bit_buffer(Some(Buffer::from_slice_ref([11_u8])))
-            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4]))
+            .len(7)
+            .null_bit_buffer(Some(Buffer::from_slice_ref([75_u8])))
+            .add_buffer(Buffer::from_slice_ref([1, 2, 0, 4, 4, 4, 3]))
             .build()
             .unwrap();
 
         assert_eq!(expected_string_data, struct_data.child_data()[0]);
         assert_eq!(expected_int_data, struct_data.child_data()[1]);
+
+        assert!(struct_data.is_null(4));
+        assert!(struct_data.is_null(5));
     }
 
     #[test]
@@ -424,11 +445,13 @@ mod tests {
         match builder {
             Some(builder) => {
                 assert_eq!(builder.value_length(), LIST_LENGTH);
-                assert!(builder
-                    .values()
-                    .as_any_mut()
-                    .downcast_mut::<Int32Builder>()
-                    .is_some());
+                assert!(
+                    builder
+                        .values()
+                        .as_any_mut()
+                        .downcast_mut::<Int32Builder>()
+                        .is_some()
+                );
             }
             None => panic!("expected FixedSizeListBuilder, got a different builder type"),
         }
@@ -632,7 +655,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "StructBuilder (Schema { fields: [Field { name: \"f1\", data_type: Int32, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }, Field { name: \"f2\", data_type: Boolean, nullable: false, dict_id: 0, dict_is_ordered: false, metadata: {} }], metadata: {} }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
+        expected = "StructBuilder (Field { \"f1\": Int32 }, Field { \"f2\": Boolean }) and field_builder with index 1 (Boolean) are of unequal lengths: (2 != 1)."
     )]
     fn test_struct_array_builder_unequal_field_builders_lengths() {
         let mut int_builder = Int32Builder::with_capacity(10);
@@ -674,7 +697,7 @@ mod tests {
 
     #[test]
     #[should_panic(
-        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(Nanosecond, Some(\\\"UTC\\\")) got Timestamp(Nanosecond, None)"
+        expected = "Incorrect datatype for StructArray field \\\"timestamp\\\", expected Timestamp(ns, \\\"UTC\\\") got Timestamp(ns)"
     )]
     fn test_struct_array_mismatch_builder() {
         let fields = vec![Field::new(

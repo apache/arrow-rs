@@ -16,20 +16,20 @@
 // under the License.
 
 use crate::bit_chunk_iterator::BitChunks;
-use crate::bit_iterator::{BitIndexIterator, BitIterator, BitSliceIterator};
+use crate::bit_iterator::{BitIndexIterator, BitIndexU32Iterator, BitIterator, BitSliceIterator};
 use crate::{
-    bit_util, buffer_bin_and, buffer_bin_or, buffer_bin_xor, buffer_unary_not,
-    BooleanBufferBuilder, Buffer, MutableBuffer,
+    BooleanBufferBuilder, Buffer, MutableBuffer, bit_util, buffer_bin_and, buffer_bin_or,
+    buffer_bin_xor, buffer_unary_not,
 };
 
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
 ///
-/// `BooleanBuffer`s can be creating using [`BooleanBufferBuilder`]
+/// `BooleanBuffer`s can be modified using [`BooleanBufferBuilder`]
+///
 ///
 /// # See Also
-///
 /// * [`NullBuffer`] for representing null values in Arrow arrays
 ///
 /// [`NullBuffer`]: crate::NullBuffer
@@ -96,15 +96,131 @@ impl BooleanBuffer {
         Self::new(buffer.into(), 0, len)
     }
 
+    /// Create a new [`BooleanBuffer`] by copying the relevant bits from an
+    /// input buffer.
+    ///
+    /// # Notes:
+    /// * The new `BooleanBuffer` has zero offset, even if `offset_in_bits` is non-zero
+    ///
+    /// # Example: Create a new [`BooleanBuffer`] copying a bit slice from in input slice
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let input = [0b11001100u8, 0b10111010u8];
+    /// // // Copy bits 4..16 from input
+    /// let result = BooleanBuffer::from_bits(&input, 4, 12);
+    /// assert_eq!(result.values(), &[0b10101100u8, 0b00001011u8]);
+    pub fn from_bits(src: impl AsRef<[u8]>, offset_in_bits: usize, len_in_bits: usize) -> Self {
+        Self::from_bitwise_unary_op(src, offset_in_bits, len_in_bits, |a| a)
+    }
+
+    /// Create a new [`BooleanBuffer`] by applying the bitwise operation to `op`
+    /// to an input buffer.
+    ///
+    /// This function is faster than applying the operation bit by bit as
+    /// it processes input buffers in chunks of 64 bits (8 bytes) at a time
+    ///
+    /// # Notes:
+    /// * `op` takes a single `u64` inputs and produces one `u64` output.
+    /// * `op` must only apply bitwise operations
+    ///   on the relevant bits; the input `u64` may contain irrelevant bits
+    ///   and may be processed differently on different endian architectures.
+    /// * The output always has zero offset
+    ///
+    /// # See Also
+    /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
+    ///
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT` of an input [`Buffer`]
+    /// ```
+    /// # use arrow_buffer::BooleanBuffer;
+    /// let input = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
+    /// // NOT of the first 12 bits
+    /// let result = BooleanBuffer::from_bitwise_unary_op(
+    ///  &input, 0, 12, |a| !a
+    /// );
+    /// assert_eq!(result.values(), &[0b00110011u8, 0b11110101u8]);
+    /// ```
+    pub fn from_bitwise_unary_op<F>(
+        src: impl AsRef<[u8]>,
+        offset_in_bits: usize,
+        len_in_bits: usize,
+        mut op: F,
+    ) -> Self
+    where
+        F: FnMut(u64) -> u64,
+    {
+        // try fast path for aligned input
+        if offset_in_bits & 0x7 == 0 {
+            // align to byte boundary
+            let aligned = &src.as_ref()[offset_in_bits / 8..];
+            if let Some(result) =
+                Self::try_from_aligned_bitwise_unary_op(aligned, len_in_bits, &mut op)
+            {
+                return result;
+            }
+        }
+
+        let chunks = BitChunks::new(src.as_ref(), offset_in_bits, len_in_bits);
+        let mut result = MutableBuffer::with_capacity(chunks.num_u64s() * 8);
+        for chunk in chunks.iter() {
+            // SAFETY: reserved enough capacity above, (exactly num_u64s()
+            // items) and we assume `BitChunks` correctly reports upper bound
+            unsafe {
+                result.push_unchecked(op(chunk));
+            }
+        }
+        if chunks.remainder_len() > 0 {
+            debug_assert!(result.capacity() >= result.len() + 8); // should not reallocate
+            // SAFETY: reserved enough capacity above, (exactly num_u64s()
+            // items) and we assume `BitChunks` correctly reports upper bound
+            unsafe {
+                result.push_unchecked(op(chunks.remainder_bits()));
+            }
+            // Just pushed one u64, which may have trailing zeros
+            result.truncate(chunks.num_bytes());
+        }
+
+        let buffer = Buffer::from(result);
+        BooleanBuffer {
+            buffer,
+            offset: 0,
+            len: len_in_bits,
+        }
+    }
+
+    /// Fast path for [`Self::from_bitwise_unary_op`] when input is aligned to
+    /// 8-byte (64-bit) boundaries
+    ///
+    /// Returns None if the fast path cannot be taken
+    fn try_from_aligned_bitwise_unary_op<F>(
+        src: &[u8],
+        len_in_bits: usize,
+        op: &mut F,
+    ) -> Option<Self>
+    where
+        F: FnMut(u64) -> u64,
+    {
+        // Safety: all valid bytes are valid u64s
+        let (prefix, aligned_u6us, suffix) = unsafe { src.align_to::<u64>() };
+        if !(prefix.is_empty() && suffix.is_empty()) {
+            // Couldn't make this case any faster than the default path, see
+            // https://github.com/apache/arrow-rs/pull/8996/changes#r2620022082
+            return None;
+        }
+        // the buffer is word (64 bit) aligned, so use optimized Vec code.
+        let result_u64s: Vec<u64> = aligned_u6us.iter().map(|l| op(*l)).collect();
+        let buffer = Buffer::from(result_u64s);
+        Some(BooleanBuffer::new(buffer, 0, len_in_bits))
+    }
+
     /// Returns the number of set bits in this buffer
     pub fn count_set_bits(&self) -> usize {
         self.buffer.count_set_bits_offset(self.offset, self.len)
     }
 
-    /// Returns a `BitChunks` instance which can be used to iterate over
+    /// Returns a [`BitChunks`] instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
     #[inline]
-    pub fn bit_chunks(&self) -> BitChunks {
+    pub fn bit_chunks(&self) -> BitChunks<'_> {
         BitChunks::new(self.values(), self.offset, self.len)
     }
 
@@ -206,6 +322,11 @@ impl BooleanBuffer {
     /// Returns an iterator over the set bit positions in this [`BooleanBuffer`]
     pub fn set_indices(&self) -> BitIndexIterator<'_> {
         BitIndexIterator::new(self.values(), self.offset, self.len)
+    }
+
+    /// Returns a `u32` iterator over set bit positions without any usize->u32 conversion
+    pub fn set_indices_u32(&self) -> BitIndexU32Iterator<'_> {
+        BitIndexU32Iterator::new(self.values(), self.offset, self.len)
     }
 
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits
@@ -431,5 +552,43 @@ mod tests {
         assert_eq!(buf.len(), 3);
         assert_eq!(buf.values().len(), 1);
         assert!(buf.value(0));
+    }
+
+    #[test]
+    fn test_from_bitwise_unary_op() {
+        // Use 1024 boolean values so that at least some of the tests cover multiple u64 chunks and
+        // perfect alignment
+        let input_bools = (0..1024)
+            .map(|_| rand::random::<bool>())
+            .collect::<Vec<bool>>();
+        let input_buffer = BooleanBuffer::from(&input_bools[..]);
+
+        // Note ensure we test offsets over 100 to cover multiple u64 chunks
+        for offset in 0..1024 {
+            let result = BooleanBuffer::from_bitwise_unary_op(
+                input_buffer.values(),
+                offset,
+                input_buffer.len() - offset,
+                |a| !a,
+            );
+            let expected = input_bools[offset..]
+                .iter()
+                .map(|b| !*b)
+                .collect::<BooleanBuffer>();
+            assert_eq!(result, expected);
+        }
+
+        // Also test when the input doesn't cover the entire buffer
+        for offset in 0..512 {
+            let len = 512 - offset; // fixed length less than total
+            let result =
+                BooleanBuffer::from_bitwise_unary_op(input_buffer.values(), offset, len, |a| !a);
+            let expected = input_bools[offset..]
+                .iter()
+                .take(len)
+                .map(|b| !*b)
+                .collect::<BooleanBuffer>();
+            assert_eq!(result, expected);
+        }
     }
 }

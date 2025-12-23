@@ -23,7 +23,8 @@
 //! record batch pretty printing.
 //!
 //! [`pretty`]: crate::pretty
-use std::fmt::{Display, Formatter, Write};
+use std::fmt::{Debug, Display, Formatter, Write};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 use arrow_array::cast::*;
@@ -53,7 +54,12 @@ pub enum DurationFormat {
 /// By default nulls are formatted as `""` and temporal types formatted
 /// according to RFC3339
 ///
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// # Equality
+///
+/// Most fields in [`FormatOptions`] are compared by value, except `formatter_factory`. As the trait
+/// does not require an [`Eq`] and [`Hash`] implementation, this struct only compares the pointer of
+/// the factories.
+#[derive(Debug, Clone)]
 pub struct FormatOptions<'a> {
     /// If set to `true` any formatting errors will be written to the output
     /// instead of being converted into a [`std::fmt::Error`]
@@ -74,11 +80,52 @@ pub struct FormatOptions<'a> {
     duration_format: DurationFormat,
     /// Show types in visual representation batches
     types_info: bool,
+    /// Formatter factory used to instantiate custom [`ArrayFormatter`]s. This allows users to
+    /// provide custom formatters.
+    formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
 }
 
 impl Default for FormatOptions<'_> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl PartialEq for FormatOptions<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.safe == other.safe
+            && self.null == other.null
+            && self.date_format == other.date_format
+            && self.datetime_format == other.datetime_format
+            && self.timestamp_format == other.timestamp_format
+            && self.timestamp_tz_format == other.timestamp_tz_format
+            && self.time_format == other.time_format
+            && self.duration_format == other.duration_format
+            && self.types_info == other.types_info
+            && match (self.formatter_factory, other.formatter_factory) {
+                (Some(f1), Some(f2)) => std::ptr::eq(f1, f2),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+}
+
+impl Eq for FormatOptions<'_> {}
+
+impl Hash for FormatOptions<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.safe.hash(state);
+        self.null.hash(state);
+        self.date_format.hash(state);
+        self.datetime_format.hash(state);
+        self.timestamp_format.hash(state);
+        self.timestamp_tz_format.hash(state);
+        self.time_format.hash(state);
+        self.duration_format.hash(state);
+        self.types_info.hash(state);
+        self.formatter_factory
+            .map(|f| f as *const dyn ArrayFormatterFactory)
+            .hash(state);
     }
 }
 
@@ -95,6 +142,7 @@ impl<'a> FormatOptions<'a> {
             time_format: None,
             duration_format: DurationFormat::ISO8601,
             types_info: false,
+            formatter_factory: None,
         }
     }
 
@@ -169,9 +217,171 @@ impl<'a> FormatOptions<'a> {
         Self { types_info, ..self }
     }
 
-    /// Returns true if type info should be included in visual representation of batches
+    /// Overrides the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
+    ///
+    /// Using [`None`] causes pretty-printers to use the default [`ArrayFormatter`]s.
+    pub const fn with_formatter_factory(
+        self,
+        formatter_factory: Option<&'a dyn ArrayFormatterFactory>,
+    ) -> Self {
+        Self {
+            formatter_factory,
+            ..self
+        }
+    }
+
+    /// Returns whether formatting errors should be written to the output instead of being converted
+    /// into a [`std::fmt::Error`].
+    pub const fn safe(&self) -> bool {
+        self.safe
+    }
+
+    /// Returns the string used for displaying nulls.
+    pub const fn null(&self) -> &'a str {
+        self.null
+    }
+
+    /// Returns the format used for [`DataType::Date32`] columns.
+    pub const fn date_format(&self) -> TimeFormat<'a> {
+        self.date_format
+    }
+
+    /// Returns the format used for [`DataType::Date64`] columns.
+    pub const fn datetime_format(&self) -> TimeFormat<'a> {
+        self.datetime_format
+    }
+
+    /// Returns the format used for [`DataType::Timestamp`] columns without a timezone.
+    pub const fn timestamp_format(&self) -> TimeFormat<'a> {
+        self.timestamp_format
+    }
+
+    /// Returns the format used for [`DataType::Timestamp`] columns with a timezone.
+    pub const fn timestamp_tz_format(&self) -> TimeFormat<'a> {
+        self.timestamp_tz_format
+    }
+
+    /// Returns the format used for [`DataType::Time32`] and [`DataType::Time64`] columns.
+    pub const fn time_format(&self) -> TimeFormat<'a> {
+        self.time_format
+    }
+
+    /// Returns the [`DurationFormat`] used for duration columns.
+    pub const fn duration_format(&self) -> DurationFormat {
+        self.duration_format
+    }
+
+    /// Returns true if type info should be included in a visual representation of batches.
     pub const fn types_info(&self) -> bool {
         self.types_info
+    }
+
+    /// Returns the [`ArrayFormatterFactory`] used to instantiate custom [`ArrayFormatter`]s.
+    pub const fn formatter_factory(&self) -> Option<&'a dyn ArrayFormatterFactory> {
+        self.formatter_factory
+    }
+}
+
+/// Allows creating a new [`ArrayFormatter`] for a given [`Array`] and an optional [`Field`].
+///
+/// # Example
+///
+/// The example below shows how to create a custom formatter for a custom type `my_money`. Note that
+/// this example requires the `prettyprint` feature.
+///
+/// ```rust
+/// # #[cfg(feature = "prettyprint")]{
+/// use std::fmt::Write;
+/// use arrow_array::{cast::AsArray, Array, Int32Array};
+/// use arrow_cast::display::{ArrayFormatter, ArrayFormatterFactory, DisplayIndex, FormatOptions, FormatResult};
+/// use arrow_cast::pretty::pretty_format_batches_with_options;
+/// use arrow_schema::{ArrowError, Field};
+///
+/// /// A custom formatter factory that can create a formatter for the special type `my_money`.
+/// ///
+/// /// This struct could have access to some kind of extension type registry that can lookup the
+/// /// correct formatter for an extension type on-demand.
+/// #[derive(Debug)]
+/// struct MyFormatters {}
+///
+/// impl ArrayFormatterFactory for MyFormatters {
+///     fn create_array_formatter<'formatter>(
+///         &self,
+///         array: &'formatter dyn Array,
+///         options: &FormatOptions<'formatter>,
+///         field: Option<&'formatter Field>,
+///     ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError> {
+///         // check if this is the money type
+///         if field
+///             .map(|f| f.extension_type_name() == Some("my_money"))
+///             .unwrap_or(false)
+///         {
+///             // We assume that my_money always is an Int32.
+///             let array = array.as_primitive();
+///             let display_index = Box::new(MyMoneyFormatter { array, options: options.clone() });
+///             return Ok(Some(ArrayFormatter::new(display_index, options.safe())));
+///         }
+///
+///         Ok(None) // None indicates that the default formatter should be used.
+///     }
+/// }
+///
+/// /// A formatter for the type `my_money` that wraps a specific array and has access to the
+/// /// formatting options.
+/// struct MyMoneyFormatter<'a> {
+///     array: &'a Int32Array,
+///     options: FormatOptions<'a>,
+/// }
+///
+/// impl<'a> DisplayIndex for MyMoneyFormatter<'a> {
+///     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
+///         match self.array.is_valid(idx) {
+///             true => write!(f, "{} €", self.array.value(idx))?,
+///             false => write!(f, "{}", self.options.null())?,
+///         }
+///
+///         Ok(())
+///     }
+/// }
+///
+/// // Usually, here you would provide your record batches.
+/// let my_batches = vec![];
+///
+/// // Call the pretty printer with the custom formatter factory.
+/// pretty_format_batches_with_options(
+///        &my_batches,
+///        &FormatOptions::new().with_formatter_factory(Some(&MyFormatters {}))
+/// );
+/// # }
+/// ```
+pub trait ArrayFormatterFactory: Debug + Send + Sync {
+    /// Creates a new [`ArrayFormatter`] for the given [`Array`] and an optional [`Field`]. If the
+    /// default implementation should be used, return [`None`].
+    ///
+    /// The field shall be used to look up metadata about the `array` while `options` provide
+    /// information on formatting, for example, dates and times which should be considered by an
+    /// implementor.
+    fn create_array_formatter<'formatter>(
+        &self,
+        array: &'formatter dyn Array,
+        options: &FormatOptions<'formatter>,
+        field: Option<&'formatter Field>,
+    ) -> Result<Option<ArrayFormatter<'formatter>>, ArrowError>;
+}
+
+/// Used to create a new [`ArrayFormatter`] from the given `array`, while also checking whether
+/// there is an override available in the [`ArrayFormatterFactory`].
+pub(crate) fn make_array_formatter<'a>(
+    array: &'a dyn Array,
+    options: &FormatOptions<'a>,
+    field: Option<&'a Field>,
+) -> Result<ArrayFormatter<'a>, ArrowError> {
+    match options.formatter_factory() {
+        None => ArrayFormatter::try_new(array, options),
+        Some(formatters) => formatters
+            .create_array_formatter(array, options, field)
+            .transpose()
+            .unwrap_or_else(|| ArrayFormatter::try_new(array, options)),
     }
 }
 
@@ -272,14 +482,19 @@ pub struct ArrayFormatter<'a> {
 }
 
 impl<'a> ArrayFormatter<'a> {
+    /// Returns an [`ArrayFormatter`] using the provided formatter.
+    pub fn new(format: Box<dyn DisplayIndex + 'a>, safe: bool) -> Self {
+        Self { format, safe }
+    }
+
     /// Returns an [`ArrayFormatter`] that can be used to format `array`
     ///
     /// This returns an error if an array of the given data type cannot be formatted
     pub fn try_new(array: &'a dyn Array, options: &FormatOptions<'a>) -> Result<Self, ArrowError> {
-        Ok(Self {
-            format: make_formatter(array, options)?,
-            safe: options.safe,
-        })
+        Ok(Self::new(
+            make_default_display_index(array, options)?,
+            options.safe,
+        ))
     }
 
     /// Returns a [`ValueFormatter`] that implements [`Display`] for
@@ -292,7 +507,7 @@ impl<'a> ArrayFormatter<'a> {
     }
 }
 
-fn make_formatter<'a>(
+fn make_default_display_index<'a>(
     array: &'a dyn Array,
     options: &FormatOptions<'a>,
 ) -> Result<Box<dyn DisplayIndex + 'a>, ArrowError> {
@@ -332,12 +547,15 @@ fn make_formatter<'a>(
 }
 
 /// Either an [`ArrowError`] or [`std::fmt::Error`]
-enum FormatError {
+pub enum FormatError {
+    /// An error occurred while formatting the array
     Format(std::fmt::Error),
+    /// An Arrow error occurred while formatting the array.
     Arrow(ArrowError),
 }
 
-type FormatResult = Result<(), FormatError>;
+/// The result of formatting an array element via [`DisplayIndex::write`].
+pub type FormatResult = Result<(), FormatError>;
 
 impl From<std::fmt::Error> for FormatError {
     fn from(value: std::fmt::Error) -> Self {
@@ -352,7 +570,8 @@ impl From<ArrowError> for FormatError {
 }
 
 /// [`Display`] but accepting an index
-trait DisplayIndex {
+pub trait DisplayIndex {
+    /// Write the value of the underlying array at `idx` to `f`.
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult;
 }
 
@@ -489,7 +708,7 @@ macro_rules! decimal_display {
     };
 }
 
-decimal_display!(Decimal128Type, Decimal256Type);
+decimal_display!(Decimal32Type, Decimal64Type, Decimal128Type, Decimal256Type);
 
 fn write_timestamp(
     f: &mut dyn Write,
@@ -590,6 +809,12 @@ temporal_display!(time32ms_to_time, time_format, Time32MillisecondType);
 temporal_display!(time64us_to_time, time_format, Time64MicrosecondType);
 temporal_display!(time64ns_to_time, time_format, Time64NanosecondType);
 
+/// Derive [`DisplayIndexState`] for `PrimitiveArray<$t>`
+///
+/// Arguments
+/// * `$convert` - function to convert the value to an `Duration`
+/// * `$t` - [`ArrowPrimitiveType`] of the array
+/// * `$scale` - scale of the duration (passed to `duration_fmt`)
 macro_rules! duration_display {
     ($convert:ident, $t:ty, $scale:tt) => {
         impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
@@ -604,6 +829,34 @@ macro_rules! duration_display {
                 match fmt {
                     DurationFormat::ISO8601 => write!(f, "{}", $convert(v))?,
                     DurationFormat::Pretty => duration_fmt!(f, v, $scale)?,
+                }
+                Ok(())
+            }
+        }
+    };
+}
+
+/// Similar to [`duration_display`] but `$convert` returns an `Option`
+macro_rules! duration_option_display {
+    ($convert:ident, $t:ty, $scale:tt) => {
+        impl<'a> DisplayIndexState<'a> for &'a PrimitiveArray<$t> {
+            type State = DurationFormat;
+
+            fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+                Ok(options.duration_format)
+            }
+
+            fn write(&self, fmt: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+                let v = self.value(idx);
+                match fmt {
+                    DurationFormat::ISO8601 => match $convert(v) {
+                        Some(td) => write!(f, "{}", td)?,
+                        None => write!(f, "<invalid>")?,
+                    },
+                    DurationFormat::Pretty => match $convert(v) {
+                        Some(_) => duration_fmt!(f, v, $scale)?,
+                        None => write!(f, "<invalid>")?,
+                    },
                 }
                 Ok(())
             }
@@ -657,8 +910,8 @@ macro_rules! duration_fmt {
     }};
 }
 
-duration_display!(duration_s_to_duration, DurationSecondType, 0);
-duration_display!(duration_ms_to_duration, DurationMillisecondType, 3);
+duration_option_display!(try_duration_s_to_duration, DurationSecondType, 0);
+duration_option_display!(try_duration_ms_to_duration, DurationMillisecondType, 3);
 duration_display!(duration_us_to_duration, DurationMicrosecondType, 6);
 duration_display!(duration_ns_to_duration, DurationNanosecondType, 9);
 
@@ -742,12 +995,12 @@ impl Display for NanosecondsFormatter<'_> {
         let nanoseconds = self.nanoseconds % 1_000_000_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 
@@ -785,12 +1038,12 @@ impl Display for MillisecondsFormatter<'_> {
         let milliseconds = self.milliseconds % 1_000;
 
         if hours != 0 {
-            write!(f, "{prefix}{} hours", hours,)?;
+            write!(f, "{prefix}{hours} hours")?;
             prefix = " ";
         }
 
         if mins != 0 {
-            write!(f, "{prefix}{} mins", mins,)?;
+            write!(f, "{prefix}{mins} mins")?;
             prefix = " ";
         }
 
@@ -862,7 +1115,7 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
     type State = Box<dyn DisplayIndex + 'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        make_default_display_index(self.values().as_ref(), options)
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
@@ -872,68 +1125,82 @@ impl<'a, K: ArrowDictionaryKeyType> DisplayIndexState<'a> for &'a DictionaryArra
 }
 
 impl<'a, K: RunEndIndexType> DisplayIndexState<'a> for &'a RunArray<K> {
-    type State = Box<dyn DisplayIndex + 'a>;
+    type State = ArrayFormatter<'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        let field = match (*self).data_type() {
+            DataType::RunEndEncoded(_, values_field) => values_field,
+            _ => unreachable!(),
+        };
+        make_array_formatter(self.values().as_ref(), options, Some(field))
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value_idx = self.get_physical_index(idx);
-        s.as_ref().write(value_idx, f)
+        write!(f, "{}", s.value(value_idx))?;
+        Ok(())
     }
 }
 
 fn write_list(
     f: &mut dyn Write,
     mut range: Range<usize>,
-    values: &dyn DisplayIndex,
+    values: &ArrayFormatter<'_>,
 ) -> FormatResult {
     f.write_char('[')?;
     if let Some(idx) = range.next() {
-        values.write(idx, f)?;
+        write!(f, "{}", values.value(idx))?;
     }
     for idx in range {
-        write!(f, ", ")?;
-        values.write(idx, f)?;
+        write!(f, ", {}", values.value(idx))?;
     }
     f.write_char(']')?;
     Ok(())
 }
 
 impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListArray<O> {
-    type State = Box<dyn DisplayIndex + 'a>;
+    type State = ArrayFormatter<'a>;
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        make_formatter(self.values().as_ref(), options)
+        let field = match (*self).data_type() {
+            DataType::List(f) => f,
+            DataType::LargeList(f) => f,
+            _ => unreachable!(),
+        };
+        make_array_formatter(self.values().as_ref(), options, Some(field.as_ref()))
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let offsets = self.value_offsets();
         let end = offsets[idx + 1].as_usize();
         let start = offsets[idx].as_usize();
-        write_list(f, start..end, s.as_ref())
+        write_list(f, start..end, s)
     }
 }
 
 impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
-    type State = (usize, Box<dyn DisplayIndex + 'a>);
+    type State = (usize, ArrayFormatter<'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let values = make_formatter(self.values().as_ref(), options)?;
+        let field = match (*self).data_type() {
+            DataType::FixedSizeList(f, _) => f,
+            _ => unreachable!(),
+        };
+        let formatter =
+            make_array_formatter(self.values().as_ref(), options, Some(field.as_ref()))?;
         let length = self.value_length();
-        Ok((length as usize, values))
+        Ok((length as usize, formatter))
     }
 
     fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
         let start = idx * s.0;
         let end = start + s.0;
-        write_list(f, start..end, s.1.as_ref())
+        write_list(f, start..end, &s.1)
     }
 }
 
-/// Pairs a boxed [`DisplayIndex`] with its field name
-type FieldDisplay<'a> = (&'a str, Box<dyn DisplayIndex + 'a>);
+/// Pairs an [`ArrayFormatter`] with its field name
+type FieldDisplay<'a> = (&'a str, ArrayFormatter<'a>);
 
 impl<'a> DisplayIndexState<'a> for &'a StructArray {
     type State = Vec<FieldDisplay<'a>>;
@@ -948,7 +1215,7 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
             .iter()
             .zip(fields)
             .map(|(a, f)| {
-                let format = make_formatter(a.as_ref(), options)?;
+                let format = make_array_formatter(a.as_ref(), options, Some(f))?;
                 Ok((f.name().as_str(), format))
             })
             .collect()
@@ -958,12 +1225,10 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
         let mut iter = s.iter();
         f.write_char('{')?;
         if let Some((name, display)) = iter.next() {
-            write!(f, "{name}: ")?;
-            display.as_ref().write(idx, f)?;
+            write!(f, "{name}: {}", display.value(idx))?;
         }
         for (name, display) in iter {
-            write!(f, ", {name}: ")?;
-            display.as_ref().write(idx, f)?;
+            write!(f, ", {name}: {}", display.value(idx))?;
         }
         f.write_char('}')?;
         Ok(())
@@ -971,11 +1236,13 @@ impl<'a> DisplayIndexState<'a> for &'a StructArray {
 }
 
 impl<'a> DisplayIndexState<'a> for &'a MapArray {
-    type State = (Box<dyn DisplayIndex + 'a>, Box<dyn DisplayIndex + 'a>);
+    type State = (ArrayFormatter<'a>, ArrayFormatter<'a>);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
-        let keys = make_formatter(self.keys().as_ref(), options)?;
-        let values = make_formatter(self.values().as_ref(), options)?;
+        let (key_field, value_field) = (*self).entries_fields();
+
+        let keys = make_array_formatter(self.keys().as_ref(), options, Some(key_field))?;
+        let values = make_array_formatter(self.values().as_ref(), options, Some(value_field))?;
         Ok((keys, values))
     }
 
@@ -987,16 +1254,12 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
 
         f.write_char('{')?;
         if let Some(idx) = iter.next() {
-            s.0.write(idx, f)?;
-            write!(f, ": ")?;
-            s.1.write(idx, f)?;
+            write!(f, "{}: {}", s.0.value(idx), s.1.value(idx))?;
         }
 
         for idx in iter {
-            write!(f, ", ")?;
-            s.0.write(idx, f)?;
-            write!(f, ": ")?;
-            s.1.write(idx, f)?;
+            write!(f, ", {}", s.0.value(idx))?;
+            write!(f, ": {}", s.1.value(idx))?;
         }
 
         f.write_char('}')?;
@@ -1005,10 +1268,7 @@ impl<'a> DisplayIndexState<'a> for &'a MapArray {
 }
 
 impl<'a> DisplayIndexState<'a> for &'a UnionArray {
-    type State = (
-        Vec<Option<(&'a str, Box<dyn DisplayIndex + 'a>)>>,
-        UnionMode,
-    );
+    type State = (Vec<Option<FieldDisplay<'a>>>, UnionMode);
 
     fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
         let (fields, mode) = match (*self).data_type() {
@@ -1019,7 +1279,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
         let max_id = fields.iter().map(|(id, _)| id).max().unwrap_or_default() as usize;
         let mut out: Vec<Option<FieldDisplay>> = (0..max_id + 1).map(|_| None).collect();
         for (i, field) in fields.iter() {
-            let formatter = make_formatter(self.child(i).as_ref(), options)?;
+            let formatter = make_array_formatter(self.child(i).as_ref(), options, Some(field))?;
             out[i as usize] = Some((field.name().as_str(), formatter))
         }
         Ok((out, *mode))
@@ -1033,9 +1293,7 @@ impl<'a> DisplayIndexState<'a> for &'a UnionArray {
         };
         let (name, field) = s.0[id as usize].as_ref().unwrap();
 
-        write!(f, "{{{name}=")?;
-        field.write(idx, f)?;
-        f.write_char('}')?;
+        write!(f, "{{{name}={}}}", field.value(idx))?;
         Ok(())
     }
 }
@@ -1071,9 +1329,8 @@ pub fn lexical_to_string<N: lexical_core::ToLexical>(n: N) -> String {
 
 #[cfg(test)]
 mod tests {
-    use arrow_array::builder::StringRunBuilder;
-
     use super::*;
+    use arrow_array::builder::StringRunBuilder;
 
     /// Test to verify options can be constant. See #4580
     const TEST_CONST_OPTIONS: FormatOptions<'static> = FormatOptions::new()
@@ -1083,6 +1340,19 @@ mod tests {
     #[test]
     fn test_const_options() {
         assert_eq!(TEST_CONST_OPTIONS.date_format, Some("foo"));
+    }
+
+    /// See https://github.com/apache/arrow-rs/issues/8875
+    #[test]
+    fn test_options_send_sync() {
+        fn assert_send_sync<T>()
+        where
+            T: Send + Sync,
+        {
+            // nothing – the compiler does the work
+        }
+
+        assert_send_sync::<FormatOptions<'static>>();
     }
 
     #[test]

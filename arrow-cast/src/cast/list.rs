@@ -24,8 +24,8 @@ pub(crate) fn cast_values_to_list<O: OffsetSizeTrait>(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let values = cast_with_options(array, to.data_type(), cast_options)?;
-    let offsets = OffsetBuffer::from_lengths(std::iter::repeat(1).take(values.len()));
-    let list = GenericListArray::<O>::new(to.clone(), offsets, values, None);
+    let offsets = OffsetBuffer::from_repeated_length(1, values.len());
+    let list = GenericListArray::<O>::try_new(to.clone(), offsets, values, None)?;
     Ok(Arc::new(list))
 }
 
@@ -37,7 +37,7 @@ pub(crate) fn cast_values_to_fixed_size_list(
     cast_options: &CastOptions,
 ) -> Result<ArrayRef, ArrowError> {
     let values = cast_with_options(array, to.data_type(), cast_options)?;
-    let list = FixedSizeListArray::new(to.clone(), size, values, None);
+    let list = FixedSizeListArray::try_new(to.clone(), size, values, None)?;
     Ok(Arc::new(list))
 }
 
@@ -140,7 +140,7 @@ where
 
     // Construct the FixedSizeListArray
     let nulls = nulls.map(|mut x| x.finish().into());
-    let array = FixedSizeListArray::new(field.clone(), size, values, nulls);
+    let array = FixedSizeListArray::try_new(field.clone(), size, values, nulls)?;
     Ok(Arc::new(array))
 }
 
@@ -152,12 +152,12 @@ pub(crate) fn cast_list_values<O: OffsetSizeTrait>(
 ) -> Result<ArrayRef, ArrowError> {
     let list = array.as_list::<O>();
     let values = cast_with_options(list.values(), to.data_type(), cast_options)?;
-    Ok(Arc::new(GenericListArray::<O>::new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         to.clone(),
         list.offsets().clone(),
         values,
         list.nulls().cloned(),
-    )))
+    )?))
 }
 
 /// Cast the container type of List/Largelist array along with the inner datatype
@@ -184,10 +184,10 @@ pub(crate) fn cast_list<I: OffsetSizeTrait, O: OffsetSizeTrait>(
     // Safety: valid offsets and checked for overflow
     let offsets = unsafe { OffsetBuffer::new_unchecked(offsets.into()) };
 
-    Ok(Arc::new(GenericListArray::<O>::new(
+    Ok(Arc::new(GenericListArray::<O>::try_new(
         field.clone(),
         offsets,
         values,
         nulls,
-    )))
+    )?))
 }

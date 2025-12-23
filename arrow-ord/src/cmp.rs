@@ -26,13 +26,14 @@
 use arrow_array::cast::AsArray;
 use arrow_array::types::{ByteArrayType, ByteViewType};
 use arrow_array::{
-    downcast_primitive_array, AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum,
-    FixedSizeBinaryArray, GenericByteArray, GenericByteViewArray,
+    AnyDictionaryArray, Array, ArrowNativeTypeOp, BooleanArray, Datum, FixedSizeBinaryArray,
+    GenericByteArray, GenericByteViewArray, downcast_primitive_array,
 };
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{BooleanBuffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::ArrowError;
 use arrow_select::take::take;
+use std::cmp::Ordering;
 use std::ops::Not;
 
 #[derive(Debug, Copy, Clone)]
@@ -272,7 +273,7 @@ fn compare_op(op: Op, lhs: &dyn Datum, rhs: &dyn Datum) -> Result<BooleanArray, 
                     let r = r.inner().bit_chunks().iter_padded();
                     let ne = values.bit_chunks().iter_padded();
 
-                    let c = |((l, r), n)| ((l ^ r) | (l & r & n));
+                    let c = |((l, r), n)| (l ^ r) | (l & r & n);
                     let buffer = l.zip(r).zip(ne).map(c).collect();
                     BooleanBuffer::new(buffer, 0, len).into()
                 }
@@ -389,14 +390,14 @@ fn take_bits(v: &dyn AnyDictionaryArray, buffer: BooleanBuffer) -> BooleanBuffer
 
 /// Invokes `f` with values `0..len` collecting the boolean results into a new `BooleanBuffer`
 ///
-/// This is similar to [`MutableBuffer::collect_bool`] but with
+/// This is similar to [`arrow_buffer::MutableBuffer::collect_bool`] but with
 /// the option to efficiently negate the result
 fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuffer {
-    let mut buffer = MutableBuffer::new(ceil(len, 64) * 8);
+    let mut buffer = Vec::with_capacity(ceil(len, 64));
 
     let chunks = len / 64;
     let remainder = len % 64;
-    for chunk in 0..chunks {
+    buffer.extend((0..chunks).map(|chunk| {
         let mut packed = 0;
         for bit_idx in 0..64 {
             let i = bit_idx + chunk * 64;
@@ -406,9 +407,8 @@ fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuff
             packed = !packed
         }
 
-        // SAFETY: Already allocated sufficient capacity
-        unsafe { buffer.push_unchecked(packed) }
-    }
+        packed
+    }));
 
     if remainder != 0 {
         let mut packed = 0;
@@ -420,8 +420,7 @@ fn collect_bool(len: usize, neg: bool, f: impl Fn(usize) -> bool) -> BooleanBuff
             packed = !packed
         }
 
-        // SAFETY: Already allocated sufficient capacity
-        unsafe { buffer.push_unchecked(packed) }
+        buffer.push(packed);
     }
     BooleanBuffer::new(buffer.into(), 0, len)
 }
@@ -508,7 +507,7 @@ impl ArrayOrd for &BooleanArray {
     }
 
     unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
-        BooleanArray::value_unchecked(self, idx)
+        unsafe { BooleanArray::value_unchecked(self, idx) }
     }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
@@ -528,7 +527,7 @@ impl<T: ArrowNativeTypeOp> ArrayOrd for &[T] {
     }
 
     unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
-        *self.get_unchecked(idx)
+        unsafe { *self.get_unchecked(idx) }
     }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
@@ -548,7 +547,7 @@ impl<'a, T: ByteArrayType> ArrayOrd for &'a GenericByteArray<T> {
     }
 
     unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
-        GenericByteArray::value_unchecked(self, idx).as_ref()
+        unsafe { GenericByteArray::value_unchecked(self, idx).as_ref() }
     }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
@@ -565,24 +564,42 @@ impl<'a, T: ByteViewType> ArrayOrd for &'a GenericByteViewArray<T> {
     /// Item.0 is the array, Item.1 is the index
     type Item = (&'a GenericByteViewArray<T>, usize);
 
+    #[inline(always)]
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
-        // # Safety
-        // The index is within bounds as it is checked in value()
         let l_view = unsafe { l.0.views().get_unchecked(l.1) };
-        let l_len = *l_view as u32;
-
         let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            // For eq case, we can directly compare the inlined bytes
+            return l_view == r_view;
+        }
+
+        let l_len = *l_view as u32;
         let r_len = *r_view as u32;
         // This is a fast path for equality check.
         // We don't need to look at the actual bytes to determine if they are equal.
         if l_len != r_len {
             return false;
         }
+        if l_len == 0 && r_len == 0 {
+            return true;
+        }
 
+        // # Safety
+        // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_eq() }
     }
 
+    #[inline(always)]
     fn is_lt(l: Self::Item, r: Self::Item) -> bool {
+        // If both arrays use only the inline buffer
+        if l.0.data_buffers().is_empty() && r.0.data_buffers().is_empty() {
+            let l_view = unsafe { l.0.views().get_unchecked(l.1) };
+            let r_view = unsafe { r.0.views().get_unchecked(r.1) };
+            return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+                < GenericByteViewArray::<T>::inline_key_fast(*r_view);
+        }
+
+        // Fallback to the generic, unchecked comparison for non-inline cases
         // # Safety
         // The index is within bounds as it is checked in value()
         unsafe { GenericByteViewArray::compare_unchecked(l.0, l.1, r.0, r.1).is_lt() }
@@ -605,7 +622,7 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
     }
 
     unsafe fn value_unchecked(&self, idx: usize) -> Self::Item {
-        FixedSizeBinaryArray::value_unchecked(self, idx)
+        unsafe { FixedSizeBinaryArray::value_unchecked(self, idx) }
     }
 
     fn is_eq(l: Self::Item, r: Self::Item) -> bool {
@@ -618,79 +635,22 @@ impl<'a> ArrayOrd for &'a FixedSizeBinaryArray {
 }
 
 /// Compares two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
+#[inline(always)]
 pub fn compare_byte_view<T: ByteViewType>(
     left: &GenericByteViewArray<T>,
     left_idx: usize,
     right: &GenericByteViewArray<T>,
     right_idx: usize,
-) -> std::cmp::Ordering {
+) -> Ordering {
     assert!(left_idx < left.len());
     assert!(right_idx < right.len());
+    if left.data_buffers().is_empty() && right.data_buffers().is_empty() {
+        let l_view = unsafe { left.views().get_unchecked(left_idx) };
+        let r_view = unsafe { right.views().get_unchecked(right_idx) };
+        return GenericByteViewArray::<T>::inline_key_fast(*l_view)
+            .cmp(&GenericByteViewArray::<T>::inline_key_fast(*r_view));
+    }
     unsafe { GenericByteViewArray::compare_unchecked(left, left_idx, right, right_idx) }
-}
-
-/// Comparing two [`GenericByteViewArray`] at index `left_idx` and `right_idx`
-///
-/// Comparing two ByteView types are non-trivial.
-/// It takes a bit of patience to understand why we don't just compare two &[u8] directly.
-///
-/// ByteView types give us the following two advantages, and we need to be careful not to lose them:
-/// (1) For string/byte smaller than 12 bytes, the entire data is inlined in the view.
-///     Meaning that reading one array element requires only one memory access
-///     (two memory access required for StringArray, one for offset buffer, the other for value buffer).
-///
-/// (2) For string/byte larger than 12 bytes, we can still be faster than (for certain operations) StringArray/ByteArray,
-///     thanks to the inlined 4 bytes.
-///     Consider equality check:
-///     If the first four bytes of the two strings are different, we can return false immediately (with just one memory access).
-///
-/// If we directly compare two &[u8], we materialize the entire string (i.e., make multiple memory accesses), which might be unnecessary.
-/// - Most of the time (eq, ord), we only need to look at the first 4 bytes to know the answer,
-///   e.g., if the inlined 4 bytes are different, we can directly return unequal without looking at the full string.
-///
-/// # Order check flow
-/// (1) if both string are smaller than 12 bytes, we can directly compare the data inlined to the view.
-/// (2) if any of the string is larger than 12 bytes, we need to compare the full string.
-///     (2.1) if the inlined 4 bytes are different, we can return the result immediately.
-///     (2.2) o.w., we need to compare the full string.
-///
-/// # Safety
-/// The left/right_idx must within range of each array
-#[deprecated(
-    since = "52.2.0",
-    note = "Use `GenericByteViewArray::compare_unchecked` instead"
-)]
-pub unsafe fn compare_byte_view_unchecked<T: ByteViewType>(
-    left: &GenericByteViewArray<T>,
-    left_idx: usize,
-    right: &GenericByteViewArray<T>,
-    right_idx: usize,
-) -> std::cmp::Ordering {
-    let l_view = left.views().get_unchecked(left_idx);
-    let l_len = *l_view as u32;
-
-    let r_view = right.views().get_unchecked(right_idx);
-    let r_len = *r_view as u32;
-
-    if l_len <= 12 && r_len <= 12 {
-        let l_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, l_len as usize) };
-        let r_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, r_len as usize) };
-        return l_data.cmp(r_data);
-    }
-
-    // one of the string is larger than 12 bytes,
-    // we then try to compare the inlined data first
-    let l_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(l_view, 4) };
-    let r_inlined_data = unsafe { GenericByteViewArray::<T>::inline_value(r_view, 4) };
-    if r_inlined_data != l_inlined_data {
-        return l_inlined_data.cmp(r_inlined_data);
-    }
-
-    // unfortunately, we need to compare the full data
-    let l_full_data: &[u8] = unsafe { left.value_unchecked(left_idx).as_ref() };
-    let r_full_data: &[u8] = unsafe { right.value_unchecked(right_idx).as_ref() };
-
-    l_full_data.cmp(r_full_data)
 }
 
 #[cfg(test)]

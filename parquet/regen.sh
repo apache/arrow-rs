@@ -17,7 +17,8 @@
 # specific language governing permissions and limitations
 # under the License.
 
-REVISION=5b564f3c47679526cf72e54f207013f28f53acc4
+# using commit for parquet-format 2.11.0
+REVISION=848302e179d7bb52a64caea6a058b3c08212787c
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 

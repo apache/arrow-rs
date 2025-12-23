@@ -19,13 +19,13 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_array::{Array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{Array, ArrayRef, OffsetSizeTrait, new_empty_array};
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::DataType as ArrowType;
 use bytes::Bytes;
 
 use crate::arrow::array_reader::byte_array::{ByteArrayDecoder, ByteArrayDecoderPlain};
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::{dictionary_buffer::DictionaryBuffer, offset_buffer::OffsetBuffer};
 use crate::arrow::record_reader::GenericRecordReader;
 use crate::arrow::schema::parquet_to_arrow_field;
@@ -90,21 +90,21 @@ pub fn make_byte_array_dictionary_reader(
         ArrowType::Dictionary(key_type, value_type) => {
             make_reader! {
                 (pages, column_desc, data_type) => match (key_type.as_ref(), value_type.as_ref()) {
-                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8) => (u8, i32),
+                    (ArrowType::UInt8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u8, i32),
                     (ArrowType::UInt8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u8, i64),
-                    (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8) => (i8, i32),
+                    (ArrowType::Int8, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i8, i32),
                     (ArrowType::Int8, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i8, i64),
-                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::Utf8) => (u16, i32),
+                    (ArrowType::UInt16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u16, i32),
                     (ArrowType::UInt16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u16, i64),
-                    (ArrowType::Int16, ArrowType::Binary | ArrowType::Utf8) => (i16, i32),
+                    (ArrowType::Int16, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i16, i32),
                     (ArrowType::Int16, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i16, i64),
-                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::Utf8) => (u32, i32),
+                    (ArrowType::UInt32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u32, i32),
                     (ArrowType::UInt32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u32, i64),
-                    (ArrowType::Int32, ArrowType::Binary | ArrowType::Utf8) => (i32, i32),
+                    (ArrowType::Int32, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i32, i32),
                     (ArrowType::Int32, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i32, i64),
-                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::Utf8) => (u64, i32),
+                    (ArrowType::UInt64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (u64, i32),
                     (ArrowType::UInt64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (u64, i64),
-                    (ArrowType::Int64, ArrowType::Binary | ArrowType::Utf8) => (i64, i32),
+                    (ArrowType::Int64, ArrowType::Binary | ArrowType::Utf8 | ArrowType::FixedSizeBinary(_)) => (i64, i32),
                     (ArrowType::Int64, ArrowType::LargeBinary | ArrowType::LargeUtf8) => (i64, i64),
                 }
             }
@@ -165,12 +165,20 @@ where
     }
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
+        // advance the def & rep level buffers
+        self.def_levels_buffer = self.record_reader.consume_def_levels();
+        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
+
+        if self.record_reader.num_values() == 0 {
+            // once the record_reader has been consumed, we've replaced its values with the default
+            // variant of DictionaryBuffer (Offset). If `consume_batch` then gets called again, we
+            // avoid using the wrong variant of the buffer by returning empty array.
+            return Ok(new_empty_array(&self.data_type));
+        }
+
         let buffer = self.record_reader.consume_record_data();
         let null_buffer = self.record_reader.consume_bitmap_buffer();
         let array = buffer.into_array(null_buffer, &self.data_type)?;
-
-        self.def_levels_buffer = self.record_reader.consume_def_levels();
-        self.rep_levels_buffer = self.record_reader.consume_rep_levels();
         self.record_reader.reset();
 
         Ok(array)
@@ -285,7 +293,7 @@ where
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 let bit_width = data[0];
                 let mut decoder = RleDecoder::new(bit_width);
-                decoder.set_data(data.slice(1..));
+                decoder.set_data(data.slice(1..))?;
                 MaybeDictionaryDecoder::Dict {
                     decoder,
                     max_remaining_values: num_values.unwrap_or(num_levels),

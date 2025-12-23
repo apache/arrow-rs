@@ -43,13 +43,15 @@ arrow-data = { workspace = true }
 arrow-schema = { workspace = true }
 half = { version = "2.1", default-features = false }
 indexmap = { version = "2.0", default-features = false, features = ["std"] }
-num = { version = "0.4", default-features = false, features = ["std"] }
-serde = { version = "1.0", default-features = false }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
+serde_core = { version = "1.0", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 chrono = { workspace = true }
 lexical-core = { version = "1.0", default-features = false}
 memchr = "2.7.4"
-simdutf8 = "0.1.5"
+simdutf8 = { workspace = true }
+ryu = "1.0"
+itoa = "1.0"
 
 [dev-dependencies]
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
@@ -57,7 +59,7 @@ serde = { version = "1.0", default-features = false, features = ["derive"] }
 futures = "0.3"
 tokio = { version = "1.27", default-features = false, features = ["io-util"] }
 bytes = "1.4"
-criterion = { version = "0.5", default-features = false }
+criterion = { workspace = true, default-features = false }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 
 [[bench]]

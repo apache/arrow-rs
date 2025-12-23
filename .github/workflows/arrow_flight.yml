@@ -47,7 +47,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -60,7 +60,7 @@ jobs:
           cargo test -p arrow-flight --all-features
       - name: Test --examples
         run: |
-          cargo test -p arrow-flight  --features=flight-sql-experimental,tls --examples
+          cargo test -p arrow-flight  --features=flight-sql,tls-ring --examples
 
   vendor:
     name: Verify Vendored Code
@@ -68,7 +68,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Run gen
@@ -82,7 +82,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy

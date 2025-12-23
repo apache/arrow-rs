@@ -250,6 +250,15 @@ pub fn infer_json_schema_from_seekable<R: BufRead + Seek>(
 /// original file's cursor. This function is useful when the `reader`'s cursor is not available
 /// (does not implement [`Seek`]), such is the case for compressed streams decoders.
 ///
+///
+/// Note that JSON is not able to represent all Arrow data types exactly. So the inferred schema
+/// might be different from the schema of the original data that was encoded as JSON. For example,
+/// JSON does not have different integer types, so all integers are inferred as `Int64`. Another
+/// example is binary data, which is encoded as a [Base16] string in JSON and therefore inferred
+/// as String type by this function.
+///
+/// [Base16]: https://en.wikipedia.org/wiki/Base16#Base16
+///
 /// # Examples
 /// ```
 /// use std::fs::File;
@@ -655,8 +664,7 @@ mod tests {
         let bigger_than_i64_max = (i64::MAX as i128) + 1;
         let smaller_than_i64_min = (i64::MIN as i128) - 1;
         let json = format!(
-            "{{ \"bigger_than_i64_max\": {}, \"smaller_than_i64_min\": {} }}",
-            bigger_than_i64_max, smaller_than_i64_min
+            "{{ \"bigger_than_i64_max\": {bigger_than_i64_max}, \"smaller_than_i64_min\": {smaller_than_i64_min} }}",
         );
         let mut buf_reader = BufReader::new(json.as_bytes());
         let (inferred_schema, _) = infer_json_schema(&mut buf_reader, Some(1)).unwrap();

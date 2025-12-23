@@ -25,7 +25,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
-use num::Zero;
+use num_traits::Zero;
 use std::cmp::Ordering;
 use std::sync::Arc;
 
@@ -915,11 +915,7 @@ mod tests {
         let data: Vec<Option<&str>> = (0..TOTAL)
             .map(|n| {
                 let i = n % 5;
-                if i == 3 {
-                    None
-                } else {
-                    Some(v[i as usize])
-                }
+                if i == 3 { None } else { Some(v[i as usize]) }
             })
             .collect();
 

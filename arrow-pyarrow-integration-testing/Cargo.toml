@@ -23,9 +23,9 @@ homepage = "https://github.com/apache/arrow-rs"
 repository = "https://github.com/apache/arrow-rs"
 authors = ["Apache Arrow <dev@arrow.apache.org>"]
 license = "Apache-2.0"
-keywords = [ "arrow" ]
-edition = "2021"
-rust-version = "1.81"
+keywords = ["arrow"]
+edition = "2024"
+rust-version = "1.85"
 publish = false
 
 [lib]
@@ -34,4 +34,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 arrow = { path = "../arrow", features = ["pyarrow"] }
-pyo3 = { version = "0.24.1", features = ["extension-module"] }
+pyo3 = { version = "0.26.0", features = ["extension-module"] }

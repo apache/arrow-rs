@@ -198,7 +198,7 @@ pub fn create_codec(codec: CodecType, _options: &CodecOptions) -> Result<Option<
 
 #[cfg(any(feature = "snap", test))]
 mod snappy_codec {
-    use snap::raw::{decompress_len, max_compress_len, Decoder, Encoder};
+    use snap::raw::{Decoder, Encoder, decompress_len, max_compress_len};
 
     use crate::compression::Codec;
     use crate::errors::Result;
@@ -257,7 +257,7 @@ mod gzip_codec {
 
     use std::io::{Read, Write};
 
-    use flate2::{read, write, Compression};
+    use flate2::{Compression, read, write};
 
     use crate::compression::Codec;
     use crate::errors::Result;
@@ -607,7 +607,7 @@ mod lz4_raw_codec {
                 None => {
                     return Err(ParquetError::General(
                         "LZ4RawCodec unsupported without uncompress_size".into(),
-                    ))
+                    ));
                 }
             };
             output_buf.resize(offset + required_len, 0);
@@ -643,9 +643,9 @@ pub use lz4_raw_codec::*;
 
 #[cfg(any(feature = "lz4", test))]
 mod lz4_hadoop_codec {
+    use crate::compression::Codec;
     use crate::compression::lz4_codec::LZ4Codec;
     use crate::compression::lz4_raw_codec::LZ4RawCodec;
-    use crate::compression::Codec;
     use crate::errors::{ParquetError, Result};
     use std::io;
 
@@ -702,15 +702,11 @@ mod lz4_hadoop_codec {
             input_len -= PREFIX_LEN;
 
             if input_len < expected_compressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Not enough bytes for Hadoop frame",
-                ));
+                return Err(io::Error::other("Not enough bytes for Hadoop frame"));
             }
 
             if output_len < expected_decompressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
+                return Err(io::Error::other(
                     "Not enough bytes to hold advertised output",
                 ));
             }
@@ -718,10 +714,7 @@ mod lz4_hadoop_codec {
                 lz4_flex::decompress_into(&input[..expected_compressed_size as usize], output)
                     .map_err(|e| ParquetError::External(Box::new(e)))?;
             if decompressed_size != expected_decompressed_size as usize {
-                return Err(io::Error::new(
-                    io::ErrorKind::Other,
-                    "Unexpected decompressed size",
-                ));
+                return Err(io::Error::other("Unexpected decompressed size"));
             }
             input_len -= expected_compressed_size as usize;
             output_len -= expected_decompressed_size as usize;
@@ -736,10 +729,7 @@ mod lz4_hadoop_codec {
         if input_len == 0 {
             Ok(read_bytes)
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Not all input are consumed",
-            ))
+            Err(io::Error::other("Not all input are consumed"))
         }
     }
 
@@ -756,7 +746,7 @@ mod lz4_hadoop_codec {
                 None => {
                     return Err(ParquetError::General(
                         "LZ4HadoopCodec unsupported without uncompress_size".into(),
-                    ))
+                    ));
                 }
             };
             output_buf.resize(output_len + required_len, 0);
