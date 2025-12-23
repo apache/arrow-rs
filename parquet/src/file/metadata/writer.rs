@@ -857,6 +857,9 @@ impl MetadataObjectWriter {
             }
             let ciphertext = encryptor.encrypt(&buffer, &aad)?;
             column_chunk.encrypted_column_metadata = Some(ciphertext);
+            // Track whether the footer is plaintext, which affects how we serialize
+            // the column metadata (we need to write stripped metadata for backward compatibility)
+            column_chunk.plaintext_footer_mode = !file_encryptor.properties().encrypt_footer();
         }
 
         Ok(column_chunk)

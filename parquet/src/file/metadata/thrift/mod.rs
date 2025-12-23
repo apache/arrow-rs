@@ -1390,6 +1390,7 @@ pub(super) fn serialize_column_meta_data<W: Write>(
             geo_stats.write_thrift_field(w, 17, last_field_id)?;
         }
     }
+
     w.write_struct_end()
 }
 
@@ -1607,14 +1608,15 @@ impl WriteThrift for ColumnChunkMetaData {
             .write_thrift_field(writer, 2, last_field_id)?;
 
         #[cfg(feature = "encryption")]
-        let write_meta_data = self.encrypted_column_metadata.is_none();
+        let write_meta_data = self.encrypted_column_metadata.is_none() || self.plaintext_footer_mode;
         #[cfg(not(feature = "encryption"))]
         let write_meta_data = true;
 
-        // Skip writing the plaintext meta_data field to reduce footer size if
-        // encrypted_column_metadata is present. The encrypted version should contain
-        // all column information. The reader handles this case by checking for
-        // encrypted_column_metadata.
+        // When the footer is encrypted and encrypted_column_metadata is present,
+        // skip writing the plaintext meta_data field to reduce footer size.
+        // When the footer is plaintext (plaintext_footer_mode=true), we still write
+        // meta_data for backward compatibility with readers that expect it, but with
+        // sensitive fields (statistics, bloom filter info, etc.) stripped out.
         if write_meta_data {
             writer.write_field_begin(FieldType::Struct, 3, last_field_id)?;
             serialize_column_meta_data(self, writer)?;
