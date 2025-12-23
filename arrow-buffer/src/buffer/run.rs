@@ -189,6 +189,39 @@ where
         &self.run_ends
     }
 
+    /// Similar to [`values`] but accounts for logical slicing, returning only the values
+    /// that are part of the logical slice of this buffer.
+    ///
+    /// > [!WARNING]
+    /// > The returned values are the raw physical run ends and do not account for logical
+    /// > truncation at the slice boundaries. For example, if a run of length 10 is sliced
+    /// > to only include the last 3 elements, the returned run end will still be the original
+    /// > physical end. Use [`logical_run_ends`] for un-truncated, relative run ends.
+    ///
+    /// [`values`]: Self::values
+    /// [`logical_run_ends`]: Self::logical_run_ends
+    pub fn values_slice(&self) -> &[E] {
+        let start = self.get_start_physical_index();
+        let end = self.get_end_physical_index();
+        &self.run_ends[start..=end]
+    }
+
+    /// Returns an iterator yielding run ends adjusted for the logical slice.
+    ///
+    /// Each yielded value is subtracted by the [`logical_offset`] and capped
+    /// at the [`logical_length`].
+    ///
+    /// [`logical_offset`]: Self::offset
+    /// [`logical_length`]: Self::len
+    pub fn logical_run_ends(&self) -> impl Iterator<Item = E> + '_ {
+        let offset = self.logical_offset;
+        let len = self.logical_length;
+        self.values_slice().iter().map(move |&val| {
+            let val = val.as_usize().saturating_sub(offset).min(len);
+            E::from_usize(val).unwrap()
+        })
+    }
+
     /// Returns the maximum run-end encoded in the underlying buffer; that is, the
     /// last physical run of the buffer. This does not take into account any logical
     /// slicing that may have occurred.
@@ -367,5 +400,66 @@ mod tests {
         let buffer = RunEndBuffer::new(Vec::<i32>::new().into(), 0, 0);
         assert_eq!(buffer.get_start_physical_index(), 0);
         assert_eq!(buffer.get_end_physical_index(), 0);
+    }
+    #[test]
+    fn test_sliced_buffer_access() {
+        // [0, 0, 1, 2, 2, 2]
+        let buffer = RunEndBuffer::new(vec![2i32, 3, 6].into(), 0, 6);
+
+        // Slice: [0, 1, 2, 2] start: 1, len: 4
+        // Logical indices: 1, 2, 3, 4
+        // Physical indices: 0, 1, 2, 2
+        let sliced = buffer.slice(1, 4);
+        assert_eq!(sliced.get_start_physical_index(), 0);
+        assert_eq!(sliced.get_end_physical_index(), 2);
+
+        assert_eq!(sliced.values_slice(), &[2, 3, 6]);
+
+        // Slice: [2, 2] start: 3, len: 2 (relative to original)
+        // Original indices: 4, 5
+        // Physical indices: 2, 2
+        let sliced2 = buffer.slice(4, 2);
+        assert_eq!(sliced2.get_start_physical_index(), 2);
+        assert_eq!(sliced2.get_end_physical_index(), 2);
+        assert_eq!(sliced2.values_slice(), &[6]);
+
+        // Test with offset slice
+        // buffer: [2, 3, 6] (logical length 6)
+        // slice(1, 4) -> [0, 1, 2, 2] (logical length 4). Offset 1.
+        // Indices: 0 (orig 1) -> phys 0
+        // Indices: 1 (orig 2) -> phys 1
+        // Indices: 2 (orig 3) -> phys 2
+        // Indices: 3 (orig 4) -> phys 2
+
+        // slice(3, 1) on sliced buffer.
+        // indices 3 (orig 4). phys 2.
+        let sliced3 = sliced.slice(3, 1);
+        assert_eq!(sliced3.get_start_physical_index(), 2);
+        assert_eq!(sliced3.get_end_physical_index(), 2);
+        assert_eq!(sliced3.values_slice(), &[6]);
+    }
+
+    #[test]
+    fn test_logical_run_ends() {
+        // [0, 0, 1, 2, 2, 2]
+        let buffer = RunEndBuffer::new(vec![2i32, 3, 6].into(), 0, 6);
+
+        // Slice: [0, 1, 2, 2] start: 1, len: 4
+        // Logical indices: 1, 2, 3, 4
+        // Original run ends: [2, 3, 6]
+        // Adjusted: [2-1, 3-1, 6-1] capped at 4 -> [1, 2, 4]
+        let sliced = buffer.slice(1, 4);
+        let logical_run_ends: Vec<i32> = sliced.logical_run_ends().collect();
+        assert_eq!(logical_run_ends, &[1, 2, 4]);
+        assert_eq!(sliced.values_slice(), &[2, 3, 6]); //This shows how values_slice are different than logical run ends
+
+        // Slice: [2, 2] start: 4, len: 2
+        // Original run ends: [2, 3, 6]
+        // Slicing at 4 means we only have the last run (physical index 2, which ends at 6)
+        // Adjusted: [6-4] capped at 2 -> [2]
+        let sliced = buffer.slice(4, 2);
+        let logical_run_ends: Vec<i32> = sliced.logical_run_ends().collect();
+        assert_eq!(logical_run_ends, &[2]);
+        assert_eq!(sliced.values_slice(), &[6]); // This shows how values_slice are different than logical run ends
     }
 }
