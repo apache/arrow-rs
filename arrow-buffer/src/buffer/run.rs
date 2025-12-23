@@ -189,6 +189,16 @@ where
         &self.run_ends
     }
 
+    /// Similar to [`values`] but accounts for logical slicing, returning only the values
+    /// that are part of the logical slice of this buffer.
+    ///
+    /// [`values`]: Self::values
+    pub fn values_slice(&self) -> &[E] {
+        let start = self.get_start_physical_index();
+        let end = self.get_end_physical_index();
+        &self.run_ends[start..=end]
+    }
+
     /// Returns the maximum run-end encoded in the underlying buffer; that is, the
     /// last physical run of the buffer. This does not take into account any logical
     /// slicing that may have occurred.
@@ -367,5 +377,42 @@ mod tests {
         let buffer = RunEndBuffer::new(Vec::<i32>::new().into(), 0, 0);
         assert_eq!(buffer.get_start_physical_index(), 0);
         assert_eq!(buffer.get_end_physical_index(), 0);
+    }
+    #[test]
+    fn test_sliced_buffer_access() {
+        // [0, 0, 1, 2, 2, 2]
+        let buffer = RunEndBuffer::new(vec![2i32, 3, 6].into(), 0, 6);
+
+        // Slice: [0, 1, 2, 2] start: 1, len: 4
+        // Logical indices: 1, 2, 3, 4
+        // Physical indices: 0, 1, 2, 2
+        let sliced = buffer.slice(1, 4);
+        assert_eq!(sliced.get_start_physical_index(), 0);
+        assert_eq!(sliced.get_end_physical_index(), 2);
+
+        assert_eq!(sliced.values_slice(), &[2, 3, 6]);
+
+        // Slice: [2, 2] start: 3, len: 2 (relative to original)
+        // Original indices: 4, 5
+        // Physical indices: 2, 2
+        let sliced2 = buffer.slice(4, 2);
+        assert_eq!(sliced2.get_start_physical_index(), 2);
+        assert_eq!(sliced2.get_end_physical_index(), 2);
+        assert_eq!(sliced2.values_slice(), &[6]);
+
+        // Test with offset slice
+        // buffer: [2, 3, 6] (logical length 6)
+        // slice(1, 4) -> [0, 1, 2, 2] (logical length 4). Offset 1.
+        // Indices: 0 (orig 1) -> phys 0
+        // Indices: 1 (orig 2) -> phys 1
+        // Indices: 2 (orig 3) -> phys 2
+        // Indices: 3 (orig 4) -> phys 2
+
+        // slice(3, 1) on sliced buffer.
+        // indices 3 (orig 4). phys 2.
+        let sliced3 = sliced.slice(3, 1);
+        assert_eq!(sliced3.get_start_physical_index(), 2);
+        assert_eq!(sliced3.get_end_physical_index(), 2);
+        assert_eq!(sliced3.values_slice(), &[6]);
     }
 }

@@ -1172,9 +1172,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "assertion `left == right` failed\n  left: [1, 4, 2, 5, 6]\n right: [2, 5, 2, 5, 6]"]
-    // TODO: fix interleave of RunArrays to account for sliced RunArray's
-    // https://github.com/apache/arrow-rs/issues/9018
     fn test_interleave_run_end_encoded_sliced() {
         let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
         builder.extend([1, 1, 2, 2, 2, 3].into_iter().map(Some));
@@ -1186,7 +1183,7 @@ mod tests {
         let b = builder.finish();
         let b = b.slice(1, 3); // [5, 5, 6]
 
-        let indices = &[(0, 1), (1, 0), (0, 3), (1, 2), (1, 3)];
+        let indices = &[(0, 1), (1, 0), (0, 2), (1, 1), (1, 2)];
         let result = interleave(&[&a, &b], indices).unwrap();
 
         let result = result.as_run::<Int32Type>();
