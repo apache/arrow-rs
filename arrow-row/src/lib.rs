@@ -1908,8 +1908,6 @@ unsafe fn decode_column(
             let mut child_arrays: Vec<ArrayRef> = Vec::with_capacity(converters.len());
             let mut offsets = (*mode == UnionMode::Dense).then(|| Vec::with_capacity(len));
 
-            let mut bytes_consumed = vec![0usize; len];
-
             for (field_idx, converter) in converters.iter().enumerate() {
                 let field_rows = &rows_by_field[field_idx];
 
@@ -1929,10 +1927,13 @@ unsafe fn decode_column(
                         let child_array =
                             unsafe { converter.convert_raw(&mut child_data, validate_utf8) }?;
 
-                        // track bytes consumed by comparing original and remaining lengths
-                        for (i, (row_idx, child_row)) in field_rows.iter().enumerate() {
-                            let remaining_len = child_data[i].len();
-                            bytes_consumed[*row_idx] = 1 + child_row.len() - remaining_len;
+                        // advance row slices by the bytes consumed
+                        for ((row_idx, original_bytes), remaining_bytes) in
+                            field_rows.iter().zip(child_data)
+                        {
+                            let consumed_length =
+                                1 + original_bytes.len() - remaining_bytes.len();
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
 
                         child_arrays.push(child_array.into_iter().next().unwrap());
@@ -1957,23 +1958,16 @@ unsafe fn decode_column(
                         let child_array =
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
 
-                        // track bytes consumed for rows that belong to this field
+                        // advance row slices by the bytes consumed for rows that belong to this field
                         for (row_idx, child_row) in field_rows.iter() {
                             let remaining_len = sparse_data[*row_idx].len();
-                            bytes_consumed[*row_idx] = 1 + child_row.len() - remaining_len;
+                            let consumed_length = 1 + child_row.len() - remaining_len;
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
 
                         child_arrays.push(child_array.into_iter().next().unwrap());
                     }
                 }
-            }
-
-            // advance all row slices by the bytes consumed
-            // this is necessary when multiple columns exist, since each decoder needs to
-            // advance the row slice by the bytes it consumed so the next column's decoder
-            // can read its data
-            for (i, row) in rows.iter_mut().enumerate() {
-                *row = &row[bytes_consumed[i]..];
             }
 
             // build offsets for dense unions
