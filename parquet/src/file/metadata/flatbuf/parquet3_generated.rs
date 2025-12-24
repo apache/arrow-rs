@@ -843,6 +843,188 @@ impl ::flatbuffers::SimpleToVerifyInSlice for ColumnOrder {}
 pub struct ColumnOrderUnionTableOffset {}
 
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MIN_ENCRYPTION_ALGORITHM: u8 = 0;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MAX_ENCRYPTION_ALGORITHM: u8 = 2;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+#[allow(non_camel_case_types)]
+pub const ENUM_VALUES_ENCRYPTION_ALGORITHM: [EncryptionAlgorithm; 3] = [
+  EncryptionAlgorithm::NONE,
+  EncryptionAlgorithm::AesGcmV1,
+  EncryptionAlgorithm::AesGcmCtrV1,
+];
+
+/// Encryption algorithm used for the file
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct EncryptionAlgorithm(pub u8);
+#[allow(non_upper_case_globals)]
+impl EncryptionAlgorithm {
+  pub const NONE: Self = Self(0);
+  pub const AesGcmV1: Self = Self(1);
+  pub const AesGcmCtrV1: Self = Self(2);
+
+  pub const ENUM_MIN: u8 = 0;
+  pub const ENUM_MAX: u8 = 2;
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::NONE,
+    Self::AesGcmV1,
+    Self::AesGcmCtrV1,
+  ];
+  /// Returns the variant's name or "" if unknown.
+  pub fn variant_name(self) -> Option<&'static str> {
+    match self {
+      Self::NONE => Some("NONE"),
+      Self::AesGcmV1 => Some("AesGcmV1"),
+      Self::AesGcmCtrV1 => Some("AesGcmCtrV1"),
+      _ => None,
+    }
+  }
+}
+impl ::core::fmt::Debug for EncryptionAlgorithm {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+    if let Some(name) = self.variant_name() {
+      f.write_str(name)
+    } else {
+      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+    }
+  }
+}
+impl<'a> ::flatbuffers::Follow<'a> for EncryptionAlgorithm {
+  type Inner = Self;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    let b = unsafe { ::flatbuffers::read_scalar_at::<u8>(buf, loc) };
+    Self(b)
+  }
+}
+
+impl ::flatbuffers::Push for EncryptionAlgorithm {
+    type Output = EncryptionAlgorithm;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe { ::flatbuffers::emplace_scalar::<u8>(dst, self.0) };
+    }
+}
+
+impl ::flatbuffers::EndianScalar for EncryptionAlgorithm {
+  type Scalar = u8;
+  #[inline]
+  fn to_little_endian(self) -> u8 {
+    self.0.to_le()
+  }
+  #[inline]
+  #[allow(clippy::wrong_self_convention)]
+  fn from_little_endian(v: u8) -> Self {
+    let b = u8::from_le(v);
+    Self(b)
+  }
+}
+
+impl<'a> ::flatbuffers::Verifiable for EncryptionAlgorithm {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    u8::run_verifier(v, pos)
+  }
+}
+
+impl ::flatbuffers::SimpleToVerifyInSlice for EncryptionAlgorithm {}
+pub struct EncryptionAlgorithmUnionTableOffset {}
+
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MIN_COLUMN_CRYPTO_META_DATA: u8 = 0;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+pub const ENUM_MAX_COLUMN_CRYPTO_META_DATA: u8 = 2;
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
+#[allow(non_camel_case_types)]
+pub const ENUM_VALUES_COLUMN_CRYPTO_META_DATA: [ColumnCryptoMetaData; 3] = [
+  ColumnCryptoMetaData::NONE,
+  ColumnCryptoMetaData::EncryptionWithFooterKey,
+  ColumnCryptoMetaData::EncryptionWithColumnKey,
+];
+
+/// Crypto metadata for a column chunk
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct ColumnCryptoMetaData(pub u8);
+#[allow(non_upper_case_globals)]
+impl ColumnCryptoMetaData {
+  pub const NONE: Self = Self(0);
+  pub const EncryptionWithFooterKey: Self = Self(1);
+  pub const EncryptionWithColumnKey: Self = Self(2);
+
+  pub const ENUM_MIN: u8 = 0;
+  pub const ENUM_MAX: u8 = 2;
+  pub const ENUM_VALUES: &'static [Self] = &[
+    Self::NONE,
+    Self::EncryptionWithFooterKey,
+    Self::EncryptionWithColumnKey,
+  ];
+  /// Returns the variant's name or "" if unknown.
+  pub fn variant_name(self) -> Option<&'static str> {
+    match self {
+      Self::NONE => Some("NONE"),
+      Self::EncryptionWithFooterKey => Some("EncryptionWithFooterKey"),
+      Self::EncryptionWithColumnKey => Some("EncryptionWithColumnKey"),
+      _ => None,
+    }
+  }
+}
+impl ::core::fmt::Debug for ColumnCryptoMetaData {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+    if let Some(name) = self.variant_name() {
+      f.write_str(name)
+    } else {
+      f.write_fmt(format_args!("<UNKNOWN {:?}>", self.0))
+    }
+  }
+}
+impl<'a> ::flatbuffers::Follow<'a> for ColumnCryptoMetaData {
+  type Inner = Self;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    let b = unsafe { ::flatbuffers::read_scalar_at::<u8>(buf, loc) };
+    Self(b)
+  }
+}
+
+impl ::flatbuffers::Push for ColumnCryptoMetaData {
+    type Output = ColumnCryptoMetaData;
+    #[inline]
+    unsafe fn push(&self, dst: &mut [u8], _written_len: usize) {
+        unsafe { ::flatbuffers::emplace_scalar::<u8>(dst, self.0) };
+    }
+}
+
+impl ::flatbuffers::EndianScalar for ColumnCryptoMetaData {
+  type Scalar = u8;
+  #[inline]
+  fn to_little_endian(self) -> u8 {
+    self.0.to_le()
+  }
+  #[inline]
+  #[allow(clippy::wrong_self_convention)]
+  fn from_little_endian(v: u8) -> Self {
+    let b = u8::from_le(v);
+    Self(b)
+  }
+}
+
+impl<'a> ::flatbuffers::Verifiable for ColumnCryptoMetaData {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    u8::run_verifier(v, pos)
+  }
+}
+
+impl ::flatbuffers::SimpleToVerifyInSlice for ColumnCryptoMetaData {}
+pub struct ColumnCryptoMetaDataUnionTableOffset {}
+
+#[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MIN_PAGE_TYPE: i8 = 0;
 #[deprecated(since = "2.0.0", note = "Use associated constants instead. This will no longer be generated in 2021.")]
 pub const ENUM_MAX_PAGE_TYPE: i8 = 3;
@@ -1808,6 +1990,659 @@ impl ::core::fmt::Debug for Statistics<'_> {
       ds.field("max_hi8", &self.max_hi8());
       ds.field("max_len", &self.max_len());
       ds.field("prefix", &self.prefix());
+      ds.finish()
+  }
+}
+pub enum AesGcmV1Offset {}
+#[derive(Copy, Clone, PartialEq)]
+
+///////////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////////
+/// AES-GCM encryption algorithm parameters (AES-GCM with random nonces)
+pub struct AesGcmV1<'a> {
+  pub _tab: ::flatbuffers::Table<'a>,
+}
+
+impl<'a> ::flatbuffers::Follow<'a> for AesGcmV1<'a> {
+  type Inner = AesGcmV1<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> AesGcmV1<'a> {
+  pub const VT_AAD_PREFIX: ::flatbuffers::VOffsetT = 4;
+  pub const VT_AAD_FILE_UNIQUE: ::flatbuffers::VOffsetT = 6;
+  pub const VT_SUPPLY_AAD_PREFIX: ::flatbuffers::VOffsetT = 8;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
+    AesGcmV1 { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args AesGcmV1Args<'args>
+  ) -> ::flatbuffers::WIPOffset<AesGcmV1<'bldr>> {
+    let mut builder = AesGcmV1Builder::new(_fbb);
+    if let Some(x) = args.aad_file_unique { builder.add_aad_file_unique(x); }
+    if let Some(x) = args.aad_prefix { builder.add_aad_prefix(x); }
+    builder.add_supply_aad_prefix(args.supply_aad_prefix);
+    builder.finish()
+  }
+
+
+  /// AAD prefix (may be stored in file or supplied externally by reader)
+  #[inline]
+  pub fn aad_prefix(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(AesGcmV1::VT_AAD_PREFIX, None)}
+  }
+  /// Unique file identifier, used as part of AAD suffix
+  #[inline]
+  pub fn aad_file_unique(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(AesGcmV1::VT_AAD_FILE_UNIQUE, None)}
+  }
+  /// If true, readers must supply the AAD prefix (it is not stored in the file)
+  #[inline]
+  pub fn supply_aad_prefix(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(AesGcmV1::VT_SUPPLY_AAD_PREFIX, Some(false)).unwrap()}
+  }
+}
+
+impl ::flatbuffers::Verifiable for AesGcmV1<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    v.visit_table(pos)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("aad_prefix", Self::VT_AAD_PREFIX, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("aad_file_unique", Self::VT_AAD_FILE_UNIQUE, false)?
+     .visit_field::<bool>("supply_aad_prefix", Self::VT_SUPPLY_AAD_PREFIX, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct AesGcmV1Args<'a> {
+    pub aad_prefix: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
+    pub aad_file_unique: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
+    pub supply_aad_prefix: bool,
+}
+impl<'a> Default for AesGcmV1Args<'a> {
+  #[inline]
+  fn default() -> Self {
+    AesGcmV1Args {
+      aad_prefix: None,
+      aad_file_unique: None,
+      supply_aad_prefix: false,
+    }
+  }
+}
+
+pub struct AesGcmV1Builder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> AesGcmV1Builder<'a, 'b, A> {
+  #[inline]
+  pub fn add_aad_prefix(&mut self, aad_prefix: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(AesGcmV1::VT_AAD_PREFIX, aad_prefix);
+  }
+  #[inline]
+  pub fn add_aad_file_unique(&mut self, aad_file_unique: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(AesGcmV1::VT_AAD_FILE_UNIQUE, aad_file_unique);
+  }
+  #[inline]
+  pub fn add_supply_aad_prefix(&mut self, supply_aad_prefix: bool) {
+    self.fbb_.push_slot::<bool>(AesGcmV1::VT_SUPPLY_AAD_PREFIX, supply_aad_prefix, false);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> AesGcmV1Builder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    AesGcmV1Builder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<AesGcmV1<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    ::flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl ::core::fmt::Debug for AesGcmV1<'_> {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+    let mut ds = f.debug_struct("AesGcmV1");
+      ds.field("aad_prefix", &self.aad_prefix());
+      ds.field("aad_file_unique", &self.aad_file_unique());
+      ds.field("supply_aad_prefix", &self.supply_aad_prefix());
+      ds.finish()
+  }
+}
+pub enum AesGcmCtrV1Offset {}
+#[derive(Copy, Clone, PartialEq)]
+
+/// AES-GCM-CTR encryption algorithm parameters (AES-CTR for data, AES-GCM for integrity)
+pub struct AesGcmCtrV1<'a> {
+  pub _tab: ::flatbuffers::Table<'a>,
+}
+
+impl<'a> ::flatbuffers::Follow<'a> for AesGcmCtrV1<'a> {
+  type Inner = AesGcmCtrV1<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> AesGcmCtrV1<'a> {
+  pub const VT_AAD_PREFIX: ::flatbuffers::VOffsetT = 4;
+  pub const VT_AAD_FILE_UNIQUE: ::flatbuffers::VOffsetT = 6;
+  pub const VT_SUPPLY_AAD_PREFIX: ::flatbuffers::VOffsetT = 8;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
+    AesGcmCtrV1 { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args AesGcmCtrV1Args<'args>
+  ) -> ::flatbuffers::WIPOffset<AesGcmCtrV1<'bldr>> {
+    let mut builder = AesGcmCtrV1Builder::new(_fbb);
+    if let Some(x) = args.aad_file_unique { builder.add_aad_file_unique(x); }
+    if let Some(x) = args.aad_prefix { builder.add_aad_prefix(x); }
+    builder.add_supply_aad_prefix(args.supply_aad_prefix);
+    builder.finish()
+  }
+
+
+  /// AAD prefix (may be stored in file or supplied externally by reader)
+  #[inline]
+  pub fn aad_prefix(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(AesGcmCtrV1::VT_AAD_PREFIX, None)}
+  }
+  /// Unique file identifier, used as part of AAD suffix
+  #[inline]
+  pub fn aad_file_unique(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(AesGcmCtrV1::VT_AAD_FILE_UNIQUE, None)}
+  }
+  /// If true, readers must supply the AAD prefix (it is not stored in the file)
+  #[inline]
+  pub fn supply_aad_prefix(&self) -> bool {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<bool>(AesGcmCtrV1::VT_SUPPLY_AAD_PREFIX, Some(false)).unwrap()}
+  }
+}
+
+impl ::flatbuffers::Verifiable for AesGcmCtrV1<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    v.visit_table(pos)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("aad_prefix", Self::VT_AAD_PREFIX, false)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("aad_file_unique", Self::VT_AAD_FILE_UNIQUE, false)?
+     .visit_field::<bool>("supply_aad_prefix", Self::VT_SUPPLY_AAD_PREFIX, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct AesGcmCtrV1Args<'a> {
+    pub aad_prefix: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
+    pub aad_file_unique: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
+    pub supply_aad_prefix: bool,
+}
+impl<'a> Default for AesGcmCtrV1Args<'a> {
+  #[inline]
+  fn default() -> Self {
+    AesGcmCtrV1Args {
+      aad_prefix: None,
+      aad_file_unique: None,
+      supply_aad_prefix: false,
+    }
+  }
+}
+
+pub struct AesGcmCtrV1Builder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> AesGcmCtrV1Builder<'a, 'b, A> {
+  #[inline]
+  pub fn add_aad_prefix(&mut self, aad_prefix: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(AesGcmCtrV1::VT_AAD_PREFIX, aad_prefix);
+  }
+  #[inline]
+  pub fn add_aad_file_unique(&mut self, aad_file_unique: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(AesGcmCtrV1::VT_AAD_FILE_UNIQUE, aad_file_unique);
+  }
+  #[inline]
+  pub fn add_supply_aad_prefix(&mut self, supply_aad_prefix: bool) {
+    self.fbb_.push_slot::<bool>(AesGcmCtrV1::VT_SUPPLY_AAD_PREFIX, supply_aad_prefix, false);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> AesGcmCtrV1Builder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    AesGcmCtrV1Builder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<AesGcmCtrV1<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    ::flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl ::core::fmt::Debug for AesGcmCtrV1<'_> {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+    let mut ds = f.debug_struct("AesGcmCtrV1");
+      ds.field("aad_prefix", &self.aad_prefix());
+      ds.field("aad_file_unique", &self.aad_file_unique());
+      ds.field("supply_aad_prefix", &self.supply_aad_prefix());
+      ds.finish()
+  }
+}
+pub enum EncryptionWithFooterKeyOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+/// Column encrypted with the footer key (uniform encryption)
+pub struct EncryptionWithFooterKey<'a> {
+  pub _tab: ::flatbuffers::Table<'a>,
+}
+
+impl<'a> ::flatbuffers::Follow<'a> for EncryptionWithFooterKey<'a> {
+  type Inner = EncryptionWithFooterKey<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> EncryptionWithFooterKey<'a> {
+
+  #[inline]
+  pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
+    EncryptionWithFooterKey { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
+    _args: &'args EncryptionWithFooterKeyArgs
+  ) -> ::flatbuffers::WIPOffset<EncryptionWithFooterKey<'bldr>> {
+    let mut builder = EncryptionWithFooterKeyBuilder::new(_fbb);
+    builder.finish()
+  }
+
+}
+
+impl ::flatbuffers::Verifiable for EncryptionWithFooterKey<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    v.visit_table(pos)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct EncryptionWithFooterKeyArgs {
+}
+impl<'a> Default for EncryptionWithFooterKeyArgs {
+  #[inline]
+  fn default() -> Self {
+    EncryptionWithFooterKeyArgs {
+    }
+  }
+}
+
+pub struct EncryptionWithFooterKeyBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> EncryptionWithFooterKeyBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> EncryptionWithFooterKeyBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    EncryptionWithFooterKeyBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<EncryptionWithFooterKey<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    ::flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl ::core::fmt::Debug for EncryptionWithFooterKey<'_> {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+    let mut ds = f.debug_struct("EncryptionWithFooterKey");
+      ds.finish()
+  }
+}
+pub enum EncryptionWithColumnKeyOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+/// Column encrypted with a column-specific key
+pub struct EncryptionWithColumnKey<'a> {
+  pub _tab: ::flatbuffers::Table<'a>,
+}
+
+impl<'a> ::flatbuffers::Follow<'a> for EncryptionWithColumnKey<'a> {
+  type Inner = EncryptionWithColumnKey<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> EncryptionWithColumnKey<'a> {
+  pub const VT_PATH_IN_SCHEMA: ::flatbuffers::VOffsetT = 4;
+  pub const VT_KEY_METADATA: ::flatbuffers::VOffsetT = 6;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
+    EncryptionWithColumnKey { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args EncryptionWithColumnKeyArgs<'args>
+  ) -> ::flatbuffers::WIPOffset<EncryptionWithColumnKey<'bldr>> {
+    let mut builder = EncryptionWithColumnKeyBuilder::new(_fbb);
+    if let Some(x) = args.key_metadata { builder.add_key_metadata(x); }
+    if let Some(x) = args.path_in_schema { builder.add_path_in_schema(x); }
+    builder.finish()
+  }
+
+
+  /// Path to the column in the schema (e.g., ["parent", "child"])
+  #[inline]
+  pub fn path_in_schema(&self) -> ::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>>>(EncryptionWithColumnKey::VT_PATH_IN_SCHEMA, None).unwrap()}
+  }
+  /// Opaque key retrieval metadata (application-specific)
+  #[inline]
+  pub fn key_metadata(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(EncryptionWithColumnKey::VT_KEY_METADATA, None)}
+  }
+}
+
+impl ::flatbuffers::Verifiable for EncryptionWithColumnKey<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    v.visit_table(pos)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<&'_ str>>>>("path_in_schema", Self::VT_PATH_IN_SCHEMA, true)?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("key_metadata", Self::VT_KEY_METADATA, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct EncryptionWithColumnKeyArgs<'a> {
+    pub path_in_schema: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<&'a str>>>>,
+    pub key_metadata: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
+}
+impl<'a> Default for EncryptionWithColumnKeyArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    EncryptionWithColumnKeyArgs {
+      path_in_schema: None, // required field
+      key_metadata: None,
+    }
+  }
+}
+
+pub struct EncryptionWithColumnKeyBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> EncryptionWithColumnKeyBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_path_in_schema(&mut self, path_in_schema: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , ::flatbuffers::ForwardsUOffset<&'b  str>>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(EncryptionWithColumnKey::VT_PATH_IN_SCHEMA, path_in_schema);
+  }
+  #[inline]
+  pub fn add_key_metadata(&mut self, key_metadata: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(EncryptionWithColumnKey::VT_KEY_METADATA, key_metadata);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> EncryptionWithColumnKeyBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    EncryptionWithColumnKeyBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<EncryptionWithColumnKey<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, EncryptionWithColumnKey::VT_PATH_IN_SCHEMA,"path_in_schema");
+    ::flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl ::core::fmt::Debug for EncryptionWithColumnKey<'_> {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+    let mut ds = f.debug_struct("EncryptionWithColumnKey");
+      ds.field("path_in_schema", &self.path_in_schema());
+      ds.field("key_metadata", &self.key_metadata());
+      ds.finish()
+  }
+}
+pub enum FileCryptoMetaDataOffset {}
+#[derive(Copy, Clone, PartialEq)]
+
+/// Crypto metadata for files with encrypted footer.
+/// This is written before the encrypted FileMetaData when the footer is encrypted.
+pub struct FileCryptoMetaData<'a> {
+  pub _tab: ::flatbuffers::Table<'a>,
+}
+
+impl<'a> ::flatbuffers::Follow<'a> for FileCryptoMetaData<'a> {
+  type Inner = FileCryptoMetaData<'a>;
+  #[inline]
+  unsafe fn follow(buf: &'a [u8], loc: usize) -> Self::Inner {
+    Self { _tab: unsafe { ::flatbuffers::Table::new(buf, loc) } }
+  }
+}
+
+impl<'a> FileCryptoMetaData<'a> {
+  pub const VT_ENCRYPTION_ALGORITHM_TYPE: ::flatbuffers::VOffsetT = 4;
+  pub const VT_ENCRYPTION_ALGORITHM: ::flatbuffers::VOffsetT = 6;
+  pub const VT_KEY_METADATA: ::flatbuffers::VOffsetT = 8;
+
+  #[inline]
+  pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
+    FileCryptoMetaData { _tab: table }
+  }
+  #[allow(unused_mut)]
+  pub fn create<'bldr: 'args, 'args: 'mut_bldr, 'mut_bldr, A: ::flatbuffers::Allocator + 'bldr>(
+    _fbb: &'mut_bldr mut ::flatbuffers::FlatBufferBuilder<'bldr, A>,
+    args: &'args FileCryptoMetaDataArgs<'args>
+  ) -> ::flatbuffers::WIPOffset<FileCryptoMetaData<'bldr>> {
+    let mut builder = FileCryptoMetaDataBuilder::new(_fbb);
+    if let Some(x) = args.key_metadata { builder.add_key_metadata(x); }
+    if let Some(x) = args.encryption_algorithm { builder.add_encryption_algorithm(x); }
+    builder.add_encryption_algorithm_type(args.encryption_algorithm_type);
+    builder.finish()
+  }
+
+
+  #[inline]
+  pub fn encryption_algorithm_type(&self) -> EncryptionAlgorithm {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<EncryptionAlgorithm>(FileCryptoMetaData::VT_ENCRYPTION_ALGORITHM_TYPE, Some(EncryptionAlgorithm::NONE)).unwrap()}
+  }
+  /// Encryption algorithm used for the file
+  #[inline]
+  pub fn encryption_algorithm(&self) -> ::flatbuffers::Table<'a> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Table<'a>>>(FileCryptoMetaData::VT_ENCRYPTION_ALGORITHM, None).unwrap()}
+  }
+  /// Opaque key retrieval metadata for the footer encryption key
+  #[inline]
+  pub fn key_metadata(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(FileCryptoMetaData::VT_KEY_METADATA, None)}
+  }
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn encryption_algorithm_as_aes_gcm_v1(&self) -> Option<AesGcmV1<'a>> {
+    if self.encryption_algorithm_type() == EncryptionAlgorithm::AesGcmV1 {
+      let u = self.encryption_algorithm();
+      // Safety:
+      // Created from a valid Table for this object
+      // Which contains a valid union in this slot
+      Some(unsafe { AesGcmV1::init_from_table(u) })
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn encryption_algorithm_as_aes_gcm_ctr_v1(&self) -> Option<AesGcmCtrV1<'a>> {
+    if self.encryption_algorithm_type() == EncryptionAlgorithm::AesGcmCtrV1 {
+      let u = self.encryption_algorithm();
+      // Safety:
+      // Created from a valid Table for this object
+      // Which contains a valid union in this slot
+      Some(unsafe { AesGcmCtrV1::init_from_table(u) })
+    } else {
+      None
+    }
+  }
+
+}
+
+impl ::flatbuffers::Verifiable for FileCryptoMetaData<'_> {
+  #[inline]
+  fn run_verifier(
+    v: &mut ::flatbuffers::Verifier, pos: usize
+  ) -> Result<(), ::flatbuffers::InvalidFlatbuffer> {
+    v.visit_table(pos)?
+     .visit_union::<EncryptionAlgorithm, _>("encryption_algorithm_type", Self::VT_ENCRYPTION_ALGORITHM_TYPE, "encryption_algorithm", Self::VT_ENCRYPTION_ALGORITHM, true, |key, v, pos| {
+        match key {
+          EncryptionAlgorithm::AesGcmV1 => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<AesGcmV1>>("EncryptionAlgorithm::AesGcmV1", pos),
+          EncryptionAlgorithm::AesGcmCtrV1 => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<AesGcmCtrV1>>("EncryptionAlgorithm::AesGcmCtrV1", pos),
+          _ => Ok(()),
+        }
+     })?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("key_metadata", Self::VT_KEY_METADATA, false)?
+     .finish();
+    Ok(())
+  }
+}
+pub struct FileCryptoMetaDataArgs<'a> {
+    pub encryption_algorithm_type: EncryptionAlgorithm,
+    pub encryption_algorithm: Option<::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>>,
+    pub key_metadata: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
+}
+impl<'a> Default for FileCryptoMetaDataArgs<'a> {
+  #[inline]
+  fn default() -> Self {
+    FileCryptoMetaDataArgs {
+      encryption_algorithm_type: EncryptionAlgorithm::NONE,
+      encryption_algorithm: None, // required field
+      key_metadata: None,
+    }
+  }
+}
+
+pub struct FileCryptoMetaDataBuilder<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> {
+  fbb_: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>,
+  start_: ::flatbuffers::WIPOffset<::flatbuffers::TableUnfinishedWIPOffset>,
+}
+impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FileCryptoMetaDataBuilder<'a, 'b, A> {
+  #[inline]
+  pub fn add_encryption_algorithm_type(&mut self, encryption_algorithm_type: EncryptionAlgorithm) {
+    self.fbb_.push_slot::<EncryptionAlgorithm>(FileCryptoMetaData::VT_ENCRYPTION_ALGORITHM_TYPE, encryption_algorithm_type, EncryptionAlgorithm::NONE);
+  }
+  #[inline]
+  pub fn add_encryption_algorithm(&mut self, encryption_algorithm: ::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(FileCryptoMetaData::VT_ENCRYPTION_ALGORITHM, encryption_algorithm);
+  }
+  #[inline]
+  pub fn add_key_metadata(&mut self, key_metadata: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(FileCryptoMetaData::VT_KEY_METADATA, key_metadata);
+  }
+  #[inline]
+  pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> FileCryptoMetaDataBuilder<'a, 'b, A> {
+    let start = _fbb.start_table();
+    FileCryptoMetaDataBuilder {
+      fbb_: _fbb,
+      start_: start,
+    }
+  }
+  #[inline]
+  pub fn finish(self) -> ::flatbuffers::WIPOffset<FileCryptoMetaData<'a>> {
+    let o = self.fbb_.end_table(self.start_);
+    self.fbb_.required(o, FileCryptoMetaData::VT_ENCRYPTION_ALGORITHM,"encryption_algorithm");
+    ::flatbuffers::WIPOffset::new(o.value())
+  }
+}
+
+impl ::core::fmt::Debug for FileCryptoMetaData<'_> {
+  fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+    let mut ds = f.debug_struct("FileCryptoMetaData");
+      ds.field("encryption_algorithm_type", &self.encryption_algorithm_type());
+      match self.encryption_algorithm_type() {
+        EncryptionAlgorithm::AesGcmV1 => {
+          if let Some(x) = self.encryption_algorithm_as_aes_gcm_v1() {
+            ds.field("encryption_algorithm", &x)
+          } else {
+            ds.field("encryption_algorithm", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        EncryptionAlgorithm::AesGcmCtrV1 => {
+          if let Some(x) = self.encryption_algorithm_as_aes_gcm_ctr_v1() {
+            ds.field("encryption_algorithm", &x)
+          } else {
+            ds.field("encryption_algorithm", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        _ => {
+          let x: Option<()> = None;
+          ds.field("encryption_algorithm", &x)
+        },
+      };
+      ds.field("key_metadata", &self.key_metadata());
       ds.finish()
   }
 }
@@ -2904,6 +3739,9 @@ impl<'a> ::flatbuffers::Follow<'a> for ColumnChunk<'a> {
 impl<'a> ColumnChunk<'a> {
   pub const VT_FILE_PATH: ::flatbuffers::VOffsetT = 4;
   pub const VT_META_DATA: ::flatbuffers::VOffsetT = 6;
+  pub const VT_CRYPTO_METADATA_TYPE: ::flatbuffers::VOffsetT = 8;
+  pub const VT_CRYPTO_METADATA: ::flatbuffers::VOffsetT = 10;
+  pub const VT_ENCRYPTED_COLUMN_METADATA: ::flatbuffers::VOffsetT = 12;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -2915,8 +3753,11 @@ impl<'a> ColumnChunk<'a> {
     args: &'args ColumnChunkArgs<'args>
   ) -> ::flatbuffers::WIPOffset<ColumnChunk<'bldr>> {
     let mut builder = ColumnChunkBuilder::new(_fbb);
+    if let Some(x) = args.encrypted_column_metadata { builder.add_encrypted_column_metadata(x); }
+    if let Some(x) = args.crypto_metadata { builder.add_crypto_metadata(x); }
     if let Some(x) = args.meta_data { builder.add_meta_data(x); }
     if let Some(x) = args.file_path { builder.add_file_path(x); }
+    builder.add_crypto_metadata_type(args.crypto_metadata_type);
     builder.finish()
   }
 
@@ -2935,6 +3776,59 @@ impl<'a> ColumnChunk<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<ColumnMetadata>>(ColumnChunk::VT_META_DATA, None)}
   }
+  #[inline]
+  pub fn crypto_metadata_type(&self) -> ColumnCryptoMetaData {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<ColumnCryptoMetaData>(ColumnChunk::VT_CRYPTO_METADATA_TYPE, Some(ColumnCryptoMetaData::NONE)).unwrap()}
+  }
+  /// Crypto metadata for this column chunk (for encrypted files)
+  #[inline]
+  pub fn crypto_metadata(&self) -> Option<::flatbuffers::Table<'a>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Table<'a>>>(ColumnChunk::VT_CRYPTO_METADATA, None)}
+  }
+  /// Encrypted column metadata blob (when using column-specific encryption)
+  #[inline]
+  pub fn encrypted_column_metadata(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(ColumnChunk::VT_ENCRYPTED_COLUMN_METADATA, None)}
+  }
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn crypto_metadata_as_encryption_with_footer_key(&self) -> Option<EncryptionWithFooterKey<'a>> {
+    if self.crypto_metadata_type() == ColumnCryptoMetaData::EncryptionWithFooterKey {
+      self.crypto_metadata().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { EncryptionWithFooterKey::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn crypto_metadata_as_encryption_with_column_key(&self) -> Option<EncryptionWithColumnKey<'a>> {
+    if self.crypto_metadata_type() == ColumnCryptoMetaData::EncryptionWithColumnKey {
+      self.crypto_metadata().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { EncryptionWithColumnKey::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
 }
 
 impl ::flatbuffers::Verifiable for ColumnChunk<'_> {
@@ -2945,6 +3839,14 @@ impl ::flatbuffers::Verifiable for ColumnChunk<'_> {
     v.visit_table(pos)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("file_path", Self::VT_FILE_PATH, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<ColumnMetadata>>("meta_data", Self::VT_META_DATA, false)?
+     .visit_union::<ColumnCryptoMetaData, _>("crypto_metadata_type", Self::VT_CRYPTO_METADATA_TYPE, "crypto_metadata", Self::VT_CRYPTO_METADATA, false, |key, v, pos| {
+        match key {
+          ColumnCryptoMetaData::EncryptionWithFooterKey => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<EncryptionWithFooterKey>>("ColumnCryptoMetaData::EncryptionWithFooterKey", pos),
+          ColumnCryptoMetaData::EncryptionWithColumnKey => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<EncryptionWithColumnKey>>("ColumnCryptoMetaData::EncryptionWithColumnKey", pos),
+          _ => Ok(()),
+        }
+     })?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("encrypted_column_metadata", Self::VT_ENCRYPTED_COLUMN_METADATA, false)?
      .finish();
     Ok(())
   }
@@ -2952,6 +3854,9 @@ impl ::flatbuffers::Verifiable for ColumnChunk<'_> {
 pub struct ColumnChunkArgs<'a> {
     pub file_path: Option<::flatbuffers::WIPOffset<&'a str>>,
     pub meta_data: Option<::flatbuffers::WIPOffset<ColumnMetadata<'a>>>,
+    pub crypto_metadata_type: ColumnCryptoMetaData,
+    pub crypto_metadata: Option<::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>>,
+    pub encrypted_column_metadata: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
 }
 impl<'a> Default for ColumnChunkArgs<'a> {
   #[inline]
@@ -2959,6 +3864,9 @@ impl<'a> Default for ColumnChunkArgs<'a> {
     ColumnChunkArgs {
       file_path: None,
       meta_data: None,
+      crypto_metadata_type: ColumnCryptoMetaData::NONE,
+      crypto_metadata: None,
+      encrypted_column_metadata: None,
     }
   }
 }
@@ -2975,6 +3883,18 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> ColumnChunkBuilder<'a, 'b, A>
   #[inline]
   pub fn add_meta_data(&mut self, meta_data: ::flatbuffers::WIPOffset<ColumnMetadata<'b >>) {
     self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<ColumnMetadata>>(ColumnChunk::VT_META_DATA, meta_data);
+  }
+  #[inline]
+  pub fn add_crypto_metadata_type(&mut self, crypto_metadata_type: ColumnCryptoMetaData) {
+    self.fbb_.push_slot::<ColumnCryptoMetaData>(ColumnChunk::VT_CRYPTO_METADATA_TYPE, crypto_metadata_type, ColumnCryptoMetaData::NONE);
+  }
+  #[inline]
+  pub fn add_crypto_metadata(&mut self, crypto_metadata: ::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(ColumnChunk::VT_CRYPTO_METADATA, crypto_metadata);
+  }
+  #[inline]
+  pub fn add_encrypted_column_metadata(&mut self, encrypted_column_metadata: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(ColumnChunk::VT_ENCRYPTED_COLUMN_METADATA, encrypted_column_metadata);
   }
   #[inline]
   pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> ColumnChunkBuilder<'a, 'b, A> {
@@ -2996,6 +3916,28 @@ impl ::core::fmt::Debug for ColumnChunk<'_> {
     let mut ds = f.debug_struct("ColumnChunk");
       ds.field("file_path", &self.file_path());
       ds.field("meta_data", &self.meta_data());
+      ds.field("crypto_metadata_type", &self.crypto_metadata_type());
+      match self.crypto_metadata_type() {
+        ColumnCryptoMetaData::EncryptionWithFooterKey => {
+          if let Some(x) = self.crypto_metadata_as_encryption_with_footer_key() {
+            ds.field("crypto_metadata", &x)
+          } else {
+            ds.field("crypto_metadata", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        ColumnCryptoMetaData::EncryptionWithColumnKey => {
+          if let Some(x) = self.crypto_metadata_as_encryption_with_column_key() {
+            ds.field("crypto_metadata", &x)
+          } else {
+            ds.field("crypto_metadata", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        _ => {
+          let x: Option<()> = None;
+          ds.field("crypto_metadata", &x)
+        },
+      };
+      ds.field("encrypted_column_metadata", &self.encrypted_column_metadata());
       ds.finish()
   }
 }
@@ -3349,6 +4291,9 @@ impl<'a> FileMetaData<'a> {
   pub const VT_ROW_GROUPS: ::flatbuffers::VOffsetT = 10;
   pub const VT_KV: ::flatbuffers::VOffsetT = 12;
   pub const VT_CREATED_BY: ::flatbuffers::VOffsetT = 14;
+  pub const VT_ENCRYPTION_ALGORITHM_TYPE: ::flatbuffers::VOffsetT = 16;
+  pub const VT_ENCRYPTION_ALGORITHM: ::flatbuffers::VOffsetT = 18;
+  pub const VT_FOOTER_SIGNING_KEY_METADATA: ::flatbuffers::VOffsetT = 20;
 
   #[inline]
   pub unsafe fn init_from_table(table: ::flatbuffers::Table<'a>) -> Self {
@@ -3361,11 +4306,14 @@ impl<'a> FileMetaData<'a> {
   ) -> ::flatbuffers::WIPOffset<FileMetaData<'bldr>> {
     let mut builder = FileMetaDataBuilder::new(_fbb);
     builder.add_num_rows(args.num_rows);
+    if let Some(x) = args.footer_signing_key_metadata { builder.add_footer_signing_key_metadata(x); }
+    if let Some(x) = args.encryption_algorithm { builder.add_encryption_algorithm(x); }
     if let Some(x) = args.created_by { builder.add_created_by(x); }
     if let Some(x) = args.kv { builder.add_kv(x); }
     if let Some(x) = args.row_groups { builder.add_row_groups(x); }
     if let Some(x) = args.schema { builder.add_schema(x); }
     builder.add_version(args.version);
+    builder.add_encryption_algorithm_type(args.encryption_algorithm_type);
     builder.finish()
   }
 
@@ -3412,6 +4360,59 @@ impl<'a> FileMetaData<'a> {
     // which contains a valid value in this slot
     unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<&str>>(FileMetaData::VT_CREATED_BY, None)}
   }
+  #[inline]
+  pub fn encryption_algorithm_type(&self) -> EncryptionAlgorithm {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<EncryptionAlgorithm>(FileMetaData::VT_ENCRYPTION_ALGORITHM_TYPE, Some(EncryptionAlgorithm::NONE)).unwrap()}
+  }
+  /// Encryption algorithm (only set for plaintext footer with encrypted columns)
+  #[inline]
+  pub fn encryption_algorithm(&self) -> Option<::flatbuffers::Table<'a>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Table<'a>>>(FileMetaData::VT_ENCRYPTION_ALGORITHM, None)}
+  }
+  /// Opaque key metadata for footer signing verification
+  #[inline]
+  pub fn footer_signing_key_metadata(&self) -> Option<::flatbuffers::Vector<'a, i8>> {
+    // Safety:
+    // Created from valid Table for this object
+    // which contains a valid value in this slot
+    unsafe { self._tab.get::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'a, i8>>>(FileMetaData::VT_FOOTER_SIGNING_KEY_METADATA, None)}
+  }
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn encryption_algorithm_as_aes_gcm_v1(&self) -> Option<AesGcmV1<'a>> {
+    if self.encryption_algorithm_type() == EncryptionAlgorithm::AesGcmV1 {
+      self.encryption_algorithm().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { AesGcmV1::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
+  #[inline]
+  #[allow(non_snake_case)]
+  pub fn encryption_algorithm_as_aes_gcm_ctr_v1(&self) -> Option<AesGcmCtrV1<'a>> {
+    if self.encryption_algorithm_type() == EncryptionAlgorithm::AesGcmCtrV1 {
+      self.encryption_algorithm().map(|t| {
+       // Safety:
+       // Created from a valid Table for this object
+       // Which contains a valid union in this slot
+       unsafe { AesGcmCtrV1::init_from_table(t) }
+     })
+    } else {
+      None
+    }
+  }
+
 }
 
 impl ::flatbuffers::Verifiable for FileMetaData<'_> {
@@ -3426,6 +4427,14 @@ impl ::flatbuffers::Verifiable for FileMetaData<'_> {
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<RowGroup>>>>("row_groups", Self::VT_ROW_GROUPS, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, ::flatbuffers::ForwardsUOffset<KV>>>>("kv", Self::VT_KV, false)?
      .visit_field::<::flatbuffers::ForwardsUOffset<&str>>("created_by", Self::VT_CREATED_BY, false)?
+     .visit_union::<EncryptionAlgorithm, _>("encryption_algorithm_type", Self::VT_ENCRYPTION_ALGORITHM_TYPE, "encryption_algorithm", Self::VT_ENCRYPTION_ALGORITHM, false, |key, v, pos| {
+        match key {
+          EncryptionAlgorithm::AesGcmV1 => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<AesGcmV1>>("EncryptionAlgorithm::AesGcmV1", pos),
+          EncryptionAlgorithm::AesGcmCtrV1 => v.verify_union_variant::<::flatbuffers::ForwardsUOffset<AesGcmCtrV1>>("EncryptionAlgorithm::AesGcmCtrV1", pos),
+          _ => Ok(()),
+        }
+     })?
+     .visit_field::<::flatbuffers::ForwardsUOffset<::flatbuffers::Vector<'_, i8>>>("footer_signing_key_metadata", Self::VT_FOOTER_SIGNING_KEY_METADATA, false)?
      .finish();
     Ok(())
   }
@@ -3437,6 +4446,9 @@ pub struct FileMetaDataArgs<'a> {
     pub row_groups: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<RowGroup<'a>>>>>,
     pub kv: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, ::flatbuffers::ForwardsUOffset<KV<'a>>>>>,
     pub created_by: Option<::flatbuffers::WIPOffset<&'a str>>,
+    pub encryption_algorithm_type: EncryptionAlgorithm,
+    pub encryption_algorithm: Option<::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>>,
+    pub footer_signing_key_metadata: Option<::flatbuffers::WIPOffset<::flatbuffers::Vector<'a, i8>>>,
 }
 impl<'a> Default for FileMetaDataArgs<'a> {
   #[inline]
@@ -3448,6 +4460,9 @@ impl<'a> Default for FileMetaDataArgs<'a> {
       row_groups: None,
       kv: None,
       created_by: None,
+      encryption_algorithm_type: EncryptionAlgorithm::NONE,
+      encryption_algorithm: None,
+      footer_signing_key_metadata: None,
     }
   }
 }
@@ -3482,6 +4497,18 @@ impl<'a: 'b, 'b, A: ::flatbuffers::Allocator + 'a> FileMetaDataBuilder<'a, 'b, A
     self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(FileMetaData::VT_CREATED_BY, created_by);
   }
   #[inline]
+  pub fn add_encryption_algorithm_type(&mut self, encryption_algorithm_type: EncryptionAlgorithm) {
+    self.fbb_.push_slot::<EncryptionAlgorithm>(FileMetaData::VT_ENCRYPTION_ALGORITHM_TYPE, encryption_algorithm_type, EncryptionAlgorithm::NONE);
+  }
+  #[inline]
+  pub fn add_encryption_algorithm(&mut self, encryption_algorithm: ::flatbuffers::WIPOffset<::flatbuffers::UnionWIPOffset>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(FileMetaData::VT_ENCRYPTION_ALGORITHM, encryption_algorithm);
+  }
+  #[inline]
+  pub fn add_footer_signing_key_metadata(&mut self, footer_signing_key_metadata: ::flatbuffers::WIPOffset<::flatbuffers::Vector<'b , i8>>) {
+    self.fbb_.push_slot_always::<::flatbuffers::WIPOffset<_>>(FileMetaData::VT_FOOTER_SIGNING_KEY_METADATA, footer_signing_key_metadata);
+  }
+  #[inline]
   pub fn new(_fbb: &'b mut ::flatbuffers::FlatBufferBuilder<'a, A>) -> FileMetaDataBuilder<'a, 'b, A> {
     let start = _fbb.start_table();
     FileMetaDataBuilder {
@@ -3505,6 +4532,28 @@ impl ::core::fmt::Debug for FileMetaData<'_> {
       ds.field("row_groups", &self.row_groups());
       ds.field("kv", &self.kv());
       ds.field("created_by", &self.created_by());
+      ds.field("encryption_algorithm_type", &self.encryption_algorithm_type());
+      match self.encryption_algorithm_type() {
+        EncryptionAlgorithm::AesGcmV1 => {
+          if let Some(x) = self.encryption_algorithm_as_aes_gcm_v1() {
+            ds.field("encryption_algorithm", &x)
+          } else {
+            ds.field("encryption_algorithm", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        EncryptionAlgorithm::AesGcmCtrV1 => {
+          if let Some(x) = self.encryption_algorithm_as_aes_gcm_ctr_v1() {
+            ds.field("encryption_algorithm", &x)
+          } else {
+            ds.field("encryption_algorithm", &"InvalidFlatbuffer: Union discriminant does not match value.")
+          }
+        },
+        _ => {
+          let x: Option<()> = None;
+          ds.field("encryption_algorithm", &x)
+        },
+      };
+      ds.field("footer_signing_key_metadata", &self.footer_signing_key_metadata());
       ds.finish()
   }
 }
