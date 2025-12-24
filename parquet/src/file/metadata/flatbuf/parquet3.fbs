@@ -165,6 +165,62 @@ union ColumnOrder {
   TypeDefinedOrder:Empty,
 }
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Encryption types.
+///////////////////////////////////////////////////////////////////////////////////////////////////
+
+/// AES-GCM encryption algorithm parameters (AES-GCM with random nonces)
+table AesGcmV1 {
+  /// AAD prefix (may be stored in file or supplied externally by reader)
+  aad_prefix: [byte];
+  /// Unique file identifier, used as part of AAD suffix
+  aad_file_unique: [byte];
+  /// If true, readers must supply the AAD prefix (it is not stored in the file)
+  supply_aad_prefix: bool;
+}
+
+/// AES-GCM-CTR encryption algorithm parameters (AES-CTR for data, AES-GCM for integrity)
+table AesGcmCtrV1 {
+  /// AAD prefix (may be stored in file or supplied externally by reader)
+  aad_prefix: [byte];
+  /// Unique file identifier, used as part of AAD suffix
+  aad_file_unique: [byte];
+  /// If true, readers must supply the AAD prefix (it is not stored in the file)
+  supply_aad_prefix: bool;
+}
+
+/// Encryption algorithm used for the file
+union EncryptionAlgorithm {
+  AesGcmV1,
+  AesGcmCtrV1,
+}
+
+/// Column encrypted with the footer key (uniform encryption)
+table EncryptionWithFooterKey {}
+
+/// Column encrypted with a column-specific key
+table EncryptionWithColumnKey {
+  /// Path to the column in the schema (e.g., ["parent", "child"])
+  path_in_schema: [string] (required);
+  /// Opaque key retrieval metadata (application-specific)
+  key_metadata: [byte];
+}
+
+/// Crypto metadata for a column chunk
+union ColumnCryptoMetaData {
+  EncryptionWithFooterKey,
+  EncryptionWithColumnKey,
+}
+
+/// Crypto metadata for files with encrypted footer.
+/// This is written before the encrypted FileMetaData when the footer is encrypted.
+table FileCryptoMetaData {
+  /// Encryption algorithm used for the file
+  encryption_algorithm: EncryptionAlgorithm (required);
+  /// Opaque key retrieval metadata for the footer encryption key
+  key_metadata: [byte];
+}
+
 table SchemaElement {
   name: string;
   type: Type = null;
@@ -206,8 +262,10 @@ table ColumnMetadata {
 table ColumnChunk {
   file_path: string;
   meta_data: ColumnMetadata;
-  // crypto_metadata: ColumnCryptoMetadata;  // TODO
-  // encrypted_column_metadata: [byte];  // TODO
+  /// Crypto metadata for this column chunk (for encrypted files)
+  crypto_metadata: ColumnCryptoMetaData;
+  /// Encrypted column metadata blob (when using column-specific encryption)
+  encrypted_column_metadata: [byte];
 }
 
 table SortingColumn {
@@ -234,8 +292,10 @@ table FileMetaData {
   kv: [KV];
   created_by: string;
   // column_orders: [ColumnOrder];  // moved to SchemaElement
-  // encryption_algorithm: [EncryptionAlgorithm];  // TODO
-  // footer_signing_key_metadata: binary;  // TODO
+  /// Encryption algorithm (only set for plaintext footer with encrypted columns)
+  encryption_algorithm: EncryptionAlgorithm;
+  /// Opaque key metadata for footer signing verification
+  footer_signing_key_metadata: [byte];
 }
 
 root_type FileMetaData;
