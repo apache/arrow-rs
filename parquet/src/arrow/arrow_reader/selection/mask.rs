@@ -1,0 +1,393 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use crate::arrow::arrow_reader::selection::and_then::boolean_buffer_and_then;
+use crate::arrow::arrow_reader::selection::conversion::{
+    boolean_array_to_row_selectors, row_selectors_to_boolean_buffer,
+};
+use crate::arrow::arrow_reader::selection::page_location_range;
+use crate::arrow::arrow_reader::{RowSelection, RowSelector};
+use crate::file::page_index::offset_index::PageLocation;
+use arrow_array::{Array, BooleanArray};
+use arrow_buffer::bit_iterator::BitIndexIterator;
+use arrow_buffer::{BooleanBuffer, BooleanBufferBuilder};
+use std::fmt::Debug;
+use std::ops::Range;
+
+/// [`RowSelection`] based on a [`BooleanArray`]
+///
+/// This represents the result of a filter evaluation as a bitmap. It is
+/// more efficient for sparse filter results with many small skips or selections.
+///
+/// It is similar to the "Bitmap Index" described in [Predicate Caching:
+/// Query-Driven Secondary Indexing for Cloud Data
+/// Warehouses](https://dl.acm.org/doi/10.1145/3626246.3653395)
+///
+/// [`RowSelection`]: super::RowSelection
+///
+/// Based on code from Xiangpeng Hao in <https://github.com/apache/arrow-rs/pull/6624> and
+/// [LiquidCache's implementation](https://github.com/XiangpengHao/liquid-cache/blob/60323cdb5f17f88af633ad9acbc7d74f684f9912/src/parquet/src/utils.rs#L17)
+#[derive(Clone, Eq, PartialEq)]
+pub(super) struct BitmaskSelection {
+    pub(super) mask: BooleanBuffer,
+}
+
+/// Prints out the BitMaskSelection as boolean byts
+impl Debug for BitmaskSelection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "BitmaskSelection {{ len={}, mask: [", self.mask.len())?;
+        // print each byte as binary digits
+        for bit in self.mask.iter() {
+            write!(f, "{}", if bit { "1" } else { "0" })?;
+        }
+        write!(f, "] }}")?;
+        Ok(())
+    }
+}
+
+impl BitmaskSelection {
+    /// Create a new [`BooleanRowSelection] from a list of [`BooleanArray`].
+    ///
+    /// Note this ignores the null bits in the input arrays
+    /// TODO: should it call prepnull_mask directly?
+    pub fn from_filters(filters: &[BooleanArray]) -> Self {
+        for filter in filters {
+            assert!(
+                filter.null_count() == 0,
+                "Nulls are not supported in BitmaskSelection"
+            );
+        }
+        let total_len = filters.iter().map(|x| x.len()).sum();
+        let mut builder = BooleanBufferBuilder::new(total_len);
+        for filter in filters {
+            builder.append_buffer(filter.values());
+        }
+
+        BitmaskSelection {
+            mask: builder.finish(),
+        }
+    }
+
+    pub fn from_row_selectors(selection: &[RowSelector]) -> Self {
+        BitmaskSelection {
+            mask: row_selectors_to_boolean_buffer(selection),
+        }
+    }
+
+    /// Convert this [`BitmaskSelection`] into a [`BooleanArray`]
+    pub fn into_filter(self) -> BooleanArray {
+        BooleanArray::new(self.mask, None)
+    }
+
+    /// Convert this [`BitmaskSelection`] into a vector of [`RowSelector`]
+    pub fn into_row_selectors(self) -> Vec<RowSelector> {
+        boolean_array_to_row_selectors(&self.into_filter())
+    }
+
+    /// Create a new [`BitmaskSelection`] with all rows unselected
+    pub fn new_unselected(row_count: usize) -> Self {
+        let buffer = BooleanBuffer::new_unset(row_count);
+        Self { mask: buffer }
+    }
+
+    /// Create a new [`BitmaskSelection`] with all rows selected
+    pub fn new_selected(row_count: usize) -> Self {
+        let buffer = BooleanBuffer::new_set(row_count);
+        Self { mask: buffer }
+    }
+
+    /// Returns a new [`BitmaskSelection`] that selects the inverse of this [`BitmaskSelection`].
+    pub fn inverted(&self) -> Self {
+        let buffer = !&self.mask;
+        Self { mask: buffer }
+    }
+
+    /// Returns the number of rows selected by this [`BitmaskSelection`].
+    pub fn row_count(&self) -> usize {
+        self.mask.count_set_bits()
+    }
+
+    /// Create a new [`BitmaskSelection`] from a list of consecutive ranges.
+    pub fn from_consecutive_ranges(
+        ranges: impl Iterator<Item = Range<usize>>,
+        total_rows: usize,
+    ) -> Self {
+        let mut buffer = BooleanBufferBuilder::new(total_rows);
+        let mut last_end = 0;
+
+        for range in ranges {
+            let len = range.end - range.start;
+            if len == 0 {
+                continue;
+            }
+
+            if range.start > last_end {
+                buffer.append_n(range.start - last_end, false);
+            }
+            buffer.append_n(len, true);
+            last_end = range.end;
+        }
+
+        if last_end != total_rows {
+            buffer.append_n(total_rows - last_end, false);
+        }
+
+        BitmaskSelection {
+            mask: buffer.finish(),
+        }
+    }
+
+    /// Given an offset index, return the byte ranges for all data pages selected by `self`
+    ///
+    /// See [`RowSelection::scan_ranges`] for more details
+    pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
+        if page_locations.is_empty() {
+            return vec![];
+        }
+        let len = page_locations.len();
+
+        // if only one page, check if any rows are selected at all
+        if len == 1 {
+            if self.mask.count_set_bits() > 0 {
+                return vec![page_location_range(&page_locations[0])];
+            } else {
+                return vec![];
+            }
+        }
+
+        // Check all pages except the last one
+        let mut ranges = Vec::with_capacity(page_locations.len());
+        ranges.extend(
+            page_locations
+                .iter()
+                .zip(page_locations[1..len].iter())
+                .filter_map(|(current_page, next_page)| {
+                    let start_row: usize = current_page.first_row_index.try_into().unwrap();
+                    let next_start_row: usize = next_page.first_row_index.try_into().unwrap();
+                    let num_rows_in_page = next_start_row.checked_sub(start_row).unwrap();
+                    if self.contains_range(start_row, num_rows_in_page) {
+                        Some(page_location_range(current_page))
+                    } else {
+                        None
+                    }
+                }),
+        );
+
+        // check the  last page
+        let last_page = &page_locations[len - 1];
+        let start_row: usize = last_page.first_row_index.try_into().unwrap();
+        if self.contains_range(start_row, len) {
+            ranges.push(page_location_range(&last_page));
+        }
+        ranges
+    }
+
+    /// returns true if this [`BitmaskSelection`] contains any rows in the given range
+    ///
+    /// Note the range may exceed the bounds of this selection
+    fn contains_range(&self, start: usize, len: usize) -> bool {
+        if start >= self.mask.len() {
+            return false;
+        }
+        let len = len.min(self.mask.len() - start);
+        self.mask.slice(start, len).count_set_bits() > 0
+    }
+
+    /// Expands the selection to align with batch boundaries.
+    /// This is needed when using cached array readers to ensure that
+    /// the cached data covers full batches.
+    pub(crate) fn expand_to_batch_boundaries(&self, batch_size: usize, total_rows: usize) -> Self {
+        if batch_size == 0 {
+            return self.clone();
+        }
+
+        let mask_len = self.mask.len();
+        assert!(mask_len <= total_rows);
+        let mut builder = BooleanBufferBuilder::new(total_rows);
+        let mut current_index = 0;
+        while current_index < mask_len {
+            let batch_end = (current_index + batch_size).min(total_rows);
+            // the mask might be shorter than total_rows, so slice only up to mask_len
+            let mask_end = batch_end.min(mask_len);
+            let batch_slice = self.mask.slice(current_index, mask_end - current_index);
+            let select_batch = batch_slice.count_set_bits() > 0;
+            builder.append_n(batch_end - current_index, select_batch);
+            current_index = batch_end;
+        }
+        // fill remaining rows with false
+        if current_index < total_rows {
+            builder.append_n(total_rows - current_index, false);
+        }
+        BitmaskSelection {
+            mask: builder.finish(),
+        }
+    }
+
+    /// Compute the union of two [`BitmaskSelection`]
+    /// For example:
+    /// self:      NNYYYYNNYYNYN
+    /// other:     NYNNNNNNN
+    ///
+    /// returned:  NYYYYYNNYYNYN
+    #[must_use]
+    pub fn union(&self, other: &Self) -> Self {
+        // use arrow::compute::kernels::boolean::or;
+
+        let union_selectors = &self.mask | &other.mask;
+
+        BitmaskSelection {
+            mask: union_selectors,
+        }
+    }
+
+    /// Compute the intersection of two [`BitmaskSelection`]
+    /// For example:
+    /// self:      NNYYYYNNYYNYN
+    /// other:     NYNNNNNNY
+    ///
+    /// returned:  NNNNNNNNYYNYN
+    #[must_use]
+    pub fn intersection(&self, other: &Self) -> Self {
+        let intersection_selectors = &self.mask & &other.mask;
+
+        BitmaskSelection {
+            mask: intersection_selectors,
+        }
+    }
+
+    /// Combines this [`BitmaskSelection`] with another using logical AND on the selected bits.
+    ///
+    /// Unlike intersection, the `other` [`BitmaskSelection`] must have exactly as many set bits as `self`.
+    /// This method will keep only the bits in `self` that are also set in `other`
+    /// at the positions corresponding to `self`'s set bits.
+    pub fn and_then(&self, other: &Self) -> Self {
+        // Ensure that 'other' has exactly as many set bits as 'self'
+        debug_assert_eq!(
+            self.row_count(),
+            other.mask.len(),
+            "The 'other' selection must have exactly as many set bits as 'self'."
+        );
+
+        BitmaskSelection {
+            mask: boolean_buffer_and_then(&self.mask, &other.mask),
+        }
+    }
+
+    /// Returns an iterator over the indices of the set bits in this [`BitmaskSelection`]
+    pub fn true_iter(&self) -> BitIndexIterator<'_> {
+        self.mask.set_indices()
+    }
+
+    /// Returns `true` if this [`BitmaskSelection`] selects any rows
+    pub fn selects_any(&self) -> bool {
+        self.true_iter().next().is_some()
+    }
+
+    /// Returns a new [`BitmaskSelection`] that selects the rows in this [`BitmaskSelection`] from `offset` to `offset + len`
+    pub fn slice(&self, offset: usize, len: usize) -> BooleanArray {
+        BooleanArray::new(self.mask.slice(offset, len), None)
+    }
+
+    /// Splits off the first `row_count` rows
+    pub fn split_off(&mut self, row_count: usize) -> Self {
+        if row_count >= self.mask.len() {
+            let split_mask = self.mask.clone();
+            self.mask = BooleanBuffer::new_unset(0);
+            BitmaskSelection { mask: split_mask }
+        } else {
+            let split_mask = self.mask.slice(0, row_count);
+            self.mask = self.mask.slice(row_count, self.mask.len() - row_count);
+            BitmaskSelection { mask: split_mask }
+        }
+    }
+
+    /// Applies an offset to this [`RowSelection`], skipping the first `offset` selected rows
+    ///
+    /// Sets the fist `offset` selected rows to false
+    pub fn offset(self, offset: usize) -> Self {
+        let mut total_num_set = 0;
+
+        // iterator:
+        // * first value is the start of the range (inclusive)
+        // * second value is the end of the range (exclusive)
+        for (start, end) in self.mask.set_slices() {
+            let num_set = end - start;
+            // the offset is within this range,
+            if offset <= total_num_set + num_set {
+                let num_in_range = offset - total_num_set;
+                let slice_offset = start + num_in_range;
+                // Set all bits to false before slice_offset
+                // TODO try and avoid this allocation and update in place
+                let remaining_len = self.mask.len() - slice_offset;
+                let new_mask = {
+                    let mut builder = BooleanBufferBuilder::new(self.mask.len());
+                    builder.append_n(slice_offset, false);
+                    builder.append_buffer(&self.mask.slice(slice_offset, remaining_len));
+                    builder.finish()
+                };
+                return BitmaskSelection { mask: new_mask };
+            } else {
+                total_num_set += num_set;
+            }
+        }
+
+        // if we reach here, the offset is beyond the number of selected rows,
+        // so return an empty selection
+        BitmaskSelection {
+            mask: BooleanBuffer::new_unset(self.mask.len()),
+        }
+    }
+
+    /// Trims the selection so it contains no trailing unselected rows
+    pub fn trim(self) -> Self {
+        let mut new_len = self.mask.len();
+        // SAFETY: new_len is > 0 and less than len
+        unsafe {
+            while new_len > 0 && !self.mask.value_unchecked(new_len - 1) {
+                new_len -= 1;
+            }
+        }
+
+        BitmaskSelection {
+            mask: self.mask.slice(0, new_len),
+        }
+    }
+}
+
+impl From<Vec<RowSelector>> for BitmaskSelection {
+    fn from(selectors: Vec<RowSelector>) -> Self {
+        Self::from_row_selectors(&selectors)
+    }
+}
+
+impl From<BitmaskSelection> for Vec<RowSelector> {
+    fn from(selection: BitmaskSelection) -> Self {
+        selection.into_row_selectors()
+    }
+}
+
+impl From<BooleanArray> for BitmaskSelection {
+    fn from(filter: BooleanArray) -> Self {
+        Self::from_filters(&[filter])
+    }
+}
+
+impl From<BitmaskSelection> for BooleanArray {
+    fn from(selection: BitmaskSelection) -> Self {
+        selection.into_filter()
+    }
+}
