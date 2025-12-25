@@ -208,6 +208,39 @@ pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSize
         })
         .collect()
 }
+/// Creates a string view array of a given range, null density and length
+///
+/// Arguments:
+/// - `size`: number of  string view array
+/// - `null_density`: density of nulls in the string view array
+/// - `min_str_len`: minimum size of each string in the string view array
+/// - `max_str_len`: maximum size of each string in the string view array
+/// - `seed`: seed for the random number generator
+pub fn create_string_view_array_with_len_range_and_seed(
+    size: usize,
+    null_density: f32,
+    min_str_len: usize,
+    max_str_len: usize,
+    seed: u64,
+) -> StringViewArray {
+    assert!(
+        min_str_len <= max_str_len,
+        "min_str_len must be <= max_str_len"
+    );
+    let rng = &mut StdRng::seed_from_u64(seed);
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let str_len = rng.random_range(min_str_len..max_str_len);
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect()
+}
 
 fn create_string_view_array_with_len_range_and_prefix(
     size: usize,
@@ -319,58 +352,12 @@ pub fn create_string_view_array_with_max_len(
 }
 
 /// Creates a random (but fixed-seeded) array of a given size, null density and length
-///
-/// Arguments:
-/// - `size`: number of  string view array
-/// - `null_density`: density of nulls in the string view array
-/// - `str_len`: size of each string in the string view array
 pub fn create_string_view_array_with_fixed_len(
     size: usize,
     null_density: f32,
     str_len: usize,
 ) -> StringViewArray {
-    create_string_view_array_with_fixed_len_with_rng(
-        size,
-        null_density,
-        str_len,
-        &mut seedable_rng(),
-    )
-}
-
-/// Creates a string view array of a given size, null density and length
-///
-/// Arguments:
-/// - `size`: number of  string view array
-/// - `null_density`: density of nulls in the string view array
-/// - `str_len`: size of each string in the string view array
-/// - `seed`: seed for the random number generator
-pub fn create_string_view_array_with_fixed_len_with_seed(
-    size: usize,
-    null_density: f32,
-    str_len: usize,
-    seed: u64,
-) -> StringViewArray {
-    create_string_view_array_with_fixed_len_with_rng(
-        size,
-        null_density,
-        str_len,
-        &mut StdRng::seed_from_u64(seed),
-    )
-}
-
-/// Creates a string view array of a given size, null density and length
-///
-/// Arguments:
-/// - `size`: number of  string view array
-/// - `null_density`: density of nulls in the string view array
-/// - `str_len`: size of each string in the string view array
-/// - `rng` random number generator
-fn create_string_view_array_with_fixed_len_with_rng(
-    size: usize,
-    null_density: f32,
-    str_len: usize,
-    rng: &mut StdRng,
-) -> StringViewArray {
+    let rng = &mut seedable_rng();
     (0..size)
         .map(|_| {
             if rng.random::<f32>() < null_density {

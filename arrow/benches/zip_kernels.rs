@@ -134,7 +134,7 @@ where
 }
 
 struct GenerateStringView {
-    str_len: usize,
+    range_length: std::ops::Range<usize>,
     description: String,
     _marker: std::marker::PhantomData<StringViewType>,
 }
@@ -153,10 +153,11 @@ impl InputGenerator for GenerateStringView {
     }
 
     fn generate_array(&self, seed: u64, array_length: usize, null_percentage: f32) -> ArrayRef {
-        Arc::new(create_string_view_array_with_fixed_len_with_seed(
+        Arc::new(create_string_view_array_with_len_range_and_seed(
             array_length,
             null_percentage,
-            self.str_len,
+            self.range_length.start,
+            self.range_length.end - 1,
             seed,
         ))
     }
@@ -306,8 +307,8 @@ fn add_benchmark(c: &mut Criterion) {
     bench_zip_on_input_generator(
         c,
         &GenerateStringView {
-            description: "string_views size 3".to_string(),
-            str_len: 3,
+            description: "string_views size (3..10)".to_string(),
+            range_length: 3..10,
             _marker: std::marker::PhantomData,
         },
     );
@@ -315,17 +316,8 @@ fn add_benchmark(c: &mut Criterion) {
     bench_zip_on_input_generator(
         c,
         &GenerateStringView {
-            description: "string_views size 10".to_string(),
-            str_len: 10,
-            _marker: std::marker::PhantomData,
-        },
-    );
-
-    bench_zip_on_input_generator(
-        c,
-        &GenerateStringView {
-            description: "string_views size 100".to_string(),
-            str_len: 100,
+            description: "string_views size (10..100)".to_string(),
+            range_length: 10..100,
             _marker: std::marker::PhantomData,
         },
     );
