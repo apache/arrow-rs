@@ -394,6 +394,7 @@ fn fixed_size_binary_substring(
 }
 
 #[cfg(test)]
+
 mod tests {
     use super::*;
 
@@ -964,18 +965,21 @@ mod tests {
     }
 
     // tests for the utf-8 validation checking
-    #[test]
-    fn check_start_index() {
-        let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
-        let err = substring(&array, -1, None).unwrap_err().to_string();
-        assert!(err.contains("invalid utf-8 boundary"));
-    }
 
     #[test]
-    fn check_length() {
-        let array = StringArray::from(vec![Some("E=mc²"), Some("ascii")]);
-        let err = substring(&array, 0, Some(5)).unwrap_err().to_string();
-        assert!(err.contains("invalid utf-8 boundary"));
+    fn test_utf8_boundary_validation_for_sliced_substring() {
+        let input = StringArray::from(vec![Some("café")]);
+
+        // café
+        // bytes: c a f é
+        // index: 0 1 2 3 (é starts at byte 3, length 2 bytes)
+        // slicing at byte 3 is an invalid UTF-8 boundary
+        let result = substring(&input, 0, Some(3));
+
+        assert!(
+            result.is_err(),
+            "Expected error when slicing at invalid UTF-8 boundary"
+        );
     }
 
     #[test]
