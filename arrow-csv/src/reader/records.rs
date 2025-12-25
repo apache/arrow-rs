@@ -129,9 +129,7 @@ impl RecordDecoder {
                     ReadRecordResult::OutputEndsFull => {
                         return Err(ArrowError::CsvError(format!(
                             "incorrect number of fields for line {}, expected {} got more than {}",
-                            self.line_number, 
-                            self.num_columns, 
-                            self.current_field
+                            self.line_number, self.num_columns, self.current_field
                         )));
                     }
                     ReadRecordResult::Record => {
@@ -146,10 +144,9 @@ impl RecordDecoder {
                             } else {
                                 let missing = self.num_columns - self.current_field;
                                 return Err(ArrowError::CsvError(format!(
-                                "incorrect number of fields for line {}, expected {} got {} (missing {})",
-                                self.line_number, self.num_columns, self.current_field, missing
-                            )));
-
+                                    "incorrect number of fields for line {}, expected {} got {} (missing {})",
+                                    self.line_number, self.num_columns, self.current_field, missing
+                                )));
                             }
                         }
                         read += 1;
@@ -371,7 +368,8 @@ mod tests {
         let mut decoder = RecordDecoder::new(Reader::new(), 2, false);
         let err = decoder.decode(csv.as_bytes(), 4).unwrap_err().to_string();
 
-        let expected = "Csv error: incorrect number of fields for line 3, expected 2 got 1 (missing 1)";
+        let expected =
+            "Csv error: incorrect number of fields for line 3, expected 2 got 1 (missing 1)";
 
         assert_eq!(err, expected);
 
