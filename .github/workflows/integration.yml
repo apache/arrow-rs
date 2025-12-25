@@ -125,8 +125,106 @@ jobs:
         with:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
+      - name: Monitor resources - Before build
+        run: |
+          echo "=== INITIAL RESOURCE USAGE ==="
+          echo "--- Memory ---"
+          free -h
+          echo "--- Disk ---"
+          df -h
+          echo "--- Process count ---"
+          ps aux | wc -l
+          echo "--- Top memory consumers ---"
+          ps aux --sort=-%mem | head -10
+      - name: Patch build script to monitor JS copy
+        run: |
+          # Create a monitoring wrapper for the cp command
+          cat > /tmp/monitored_cp.sh << 'EOF'
+          #!/bin/bash
+          echo "=== BEFORE CP: Memory and Disk ==="
+          free -h
+          df -h /
+          echo "=== JS directory size ==="
+          du -sh "$1" 2>/dev/null || echo "Source not found: $1"
+          if [ -d "$1/node_modules" ]; then
+            echo "=== node_modules size ==="
+            du -sh "$1/node_modules"
+            echo "=== node_modules file count ==="
+            find "$1/node_modules" -type f | wc -l
+          fi
+
+          echo "=== Starting cp -a at $(date) ==="
+          # Run the actual cp with progress monitoring
+          (
+            while kill -0 $$ 2>/dev/null; do
+              echo "--- Resources during cp at $(date) ---"
+              free -h | grep "Mem:"
+              df -h / | tail -1
+              sleep 5
+            done
+          ) &
+          MONITOR_PID=$!
+
+          # Run the copy
+          /bin/cp -a "$@"
+          CP_EXIT=$?
+
+          # Stop monitoring
+          kill $MONITOR_PID 2>/dev/null || true
+
+          echo "=== AFTER CP: Memory and Disk ==="
+          free -h
+          df -h /
+
+          exit $CP_EXIT
+          EOF
+          chmod +x /tmp/monitored_cp.sh
+
+          # Backup and patch the build script to use monitored cp
+          cp ci/scripts/integration_arrow_build.sh ci/scripts/integration_arrow_build.sh.orig
+          sed -i 's|cp -a "${arrow_dir}/js" "${build_dir}/js"|/tmp/monitored_cp.sh "${arrow_dir}/js" "${build_dir}/js"|g' ci/scripts/integration_arrow_build.sh
+          sed -i 's|cp -a "${arrow_dir}/dotnet" "${build_dir}/dotnet"|/tmp/monitored_cp.sh "${arrow_dir}/dotnet" "${build_dir}/dotnet"|g' ci/scripts/integration_arrow_build.sh
+
+          echo "=== Build script patched to monitor cp commands ==="
+          diff ci/scripts/integration_arrow_build.sh.orig ci/scripts/integration_arrow_build.sh || true
       - name: Build
-        run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
+        run: |
+          # Create a wrapper script to monitor during build
+          cat > /tmp/monitor_build.sh << 'EOF'
+          #!/bin/bash
+          set -e
+
+          # Start background monitoring
+          (
+            while true; do
+              echo "=== Resource snapshot at $(date) ==="
+              free -h | grep -E "Mem:|Swap:"
+              df -h / | tail -1
+              sleep 30
+            done
+          ) &
+          MONITOR_PID=$!
+
+          # Run the actual build
+          conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
+
+          # Stop monitoring
+          kill $MONITOR_PID 2>/dev/null || true
+          EOF
+          chmod +x /tmp/monitor_build.sh
+          /tmp/monitor_build.sh
+      - name: Monitor resources - After build
+        if: always()
+        run: |
+          echo "=== FINAL RESOURCE USAGE ==="
+          echo "--- Memory ---"
+          free -h
+          echo "--- Disk ---"
+          df -h
+          echo "--- Build directory size ---"
+          du -sh /build/* 2>/dev/null || echo "No /build directory"
+          echo "--- Top 20 largest directories ---"
+          du -h /build 2>/dev/null | sort -rh | head -20 || echo "Cannot analyze /build"
       - name: Run
         run: conda run --no-capture-output ci/scripts/integration_arrow.sh $PWD /build
 
