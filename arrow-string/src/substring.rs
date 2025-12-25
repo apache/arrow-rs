@@ -963,24 +963,6 @@ mod tests {
         assert!(err.contains("substring does not support type"));
     }
 
-    // tests for the utf-8 validation checking
-
-    #[test]
-    fn test_utf8_boundary_validation_for_sliced_substring() {
-        let input = StringArray::from(vec![Some("café")]);
-
-        // café
-        // bytes: c a f é
-        // index: 0 1 2 3 (é starts at byte 3, length 2 bytes)
-        // slicing at byte 3 is an invalid UTF-8 boundary
-        let result = substring(&input, 0, Some(3));
-
-        assert!(
-            result.is_err(),
-            "Expected error when slicing at invalid UTF-8 boundary"
-        );
-    }
-
     #[test]
     fn non_utf8_bytes() {
         // non-utf8 bytes
