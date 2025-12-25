@@ -76,14 +76,14 @@ pub struct BooleanBuffer {
     /// Underlying buffer (byte aligned)
     buffer: Buffer,
     /// Offset in bits (not bytes)
-    offset: usize,
+    bit_offset: usize,
     /// Length in bits (not bytes)
-    len: usize,
+    bit_len: usize,
 }
 
 impl PartialEq for BooleanBuffer {
     fn eq(&self, other: &Self) -> bool {
-        if self.len != other.len {
+        if self.bit_len != other.bit_len {
             return false;
         }
 
@@ -94,40 +94,40 @@ impl PartialEq for BooleanBuffer {
 }
 
 impl BooleanBuffer {
-    /// Create a new [`BooleanBuffer`] from a [`Buffer`], an `offset` and `length` in bits
+    /// Create a new [`BooleanBuffer`] from a [`Buffer`], `bit_offset` offset and `bit_len` length
     ///
     /// # Panics
     ///
     /// This method will panic if `buffer` is not large enough
-    pub fn new(buffer: Buffer, offset: usize, len: usize) -> Self {
-        let total_len = offset.saturating_add(len);
+    pub fn new(buffer: Buffer, bit_offset: usize, bit_len: usize) -> Self {
+        let total_len = bit_offset.saturating_add(bit_len);
         let buffer_len = buffer.len();
-        let bit_len = buffer_len.saturating_mul(8);
+        let buffer_bit_len = buffer_len.saturating_mul(8);
         assert!(
-            total_len <= bit_len,
-            "buffer not large enough (offset: {offset}, len: {len}, buffer_len: {buffer_len})"
+            total_len <= buffer_bit_len,
+            "buffer not large enough (bit_offset: {bit_offset}, bit_len: {bit_len}, buffer_len: {buffer_len})"
         );
         Self {
             buffer,
-            offset,
-            len,
+            bit_offset,
+            bit_len,
         }
     }
 
-    /// Create a new [`BooleanBuffer`] of `length` where all values are `true`
+    /// Create a new [`BooleanBuffer`] of `length` bits (not bytes) where all values are `true`
     pub fn new_set(length: usize) -> Self {
         let mut builder = BooleanBufferBuilder::new(length);
         builder.append_n(length, true);
         builder.finish()
     }
 
-    /// Create a new [`BooleanBuffer`] of `length` where all values are `false`
+    /// Create a new [`BooleanBuffer`] of `length` bits (not bytes) where all values are `false`
     pub fn new_unset(length: usize) -> Self {
         let buffer = MutableBuffer::new_null(length).into_buffer();
         Self {
             buffer,
-            offset: 0,
-            len: length,
+            bit_offset: 0,
+            bit_len: length,
         }
     }
 
@@ -223,8 +223,8 @@ impl BooleanBuffer {
         let buffer = Buffer::from(result);
         BooleanBuffer {
             buffer,
-            offset: 0,
-            len: len_in_bits,
+            bit_offset: 0,
+            bit_len: len_in_bits,
         }
     }
 
@@ -255,32 +255,33 @@ impl BooleanBuffer {
 
     /// Returns the number of set bits in this buffer
     pub fn count_set_bits(&self) -> usize {
-        self.buffer.count_set_bits_offset(self.offset, self.len)
+        self.buffer
+            .count_set_bits_offset(self.bit_offset, self.bit_len)
     }
 
     /// Returns a [`BitChunks`] instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
     #[inline]
     pub fn bit_chunks(&self) -> BitChunks<'_> {
-        BitChunks::new(self.values(), self.offset, self.len)
+        BitChunks::new(self.values(), self.bit_offset, self.bit_len)
     }
 
-    /// Returns the offset of this [`BooleanBuffer`] in bits
+    /// Returns the offset of this [`BooleanBuffer`] in bits (not bytes)
     #[inline]
     pub fn offset(&self) -> usize {
-        self.offset
+        self.bit_offset
     }
 
-    /// Returns the length of this [`BooleanBuffer`] in bits
+    /// Returns the length of this [`BooleanBuffer`] in bits (not bytes)
     #[inline]
     pub fn len(&self) -> usize {
-        self.len
+        self.bit_len
     }
 
     /// Returns true if this [`BooleanBuffer`] is empty
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.bit_len == 0
     }
 
     /// Free up unused memory.
@@ -296,7 +297,7 @@ impl BooleanBuffer {
     /// Panics if `i >= self.len()`
     #[inline]
     pub fn value(&self, idx: usize) -> bool {
-        assert!(idx < self.len);
+        assert!(idx < self.bit_len);
         unsafe { self.value_unchecked(idx) }
     }
 
@@ -306,7 +307,7 @@ impl BooleanBuffer {
     /// This doesn't check bounds, the caller must ensure that index < self.len()
     #[inline]
     pub unsafe fn value_unchecked(&self, i: usize) -> bool {
-        unsafe { bit_util::get_bit_raw(self.buffer.as_ptr(), i + self.offset) }
+        unsafe { bit_util::get_bit_raw(self.buffer.as_ptr(), i + self.bit_offset) }
     }
 
     /// Returns the packed values of this [`BooleanBuffer`] not including any offset
@@ -318,13 +319,13 @@ impl BooleanBuffer {
     /// Slices this [`BooleanBuffer`] by the provided `offset` and `length`
     pub fn slice(&self, offset: usize, len: usize) -> Self {
         assert!(
-            offset.saturating_add(len) <= self.len,
+            offset.saturating_add(len) <= self.bit_len,
             "the length + offset of the sliced BooleanBuffer cannot exceed the existing length"
         );
         Self {
             buffer: self.buffer.clone(),
-            offset: self.offset + offset,
-            len,
+            bit_offset: self.bit_offset + offset,
+            bit_len: len,
         }
     }
 
@@ -332,7 +333,7 @@ impl BooleanBuffer {
     ///
     /// Equivalent to `self.buffer.bit_slice(self.offset, self.len)`
     pub fn sliced(&self) -> Buffer {
-        self.buffer.bit_slice(self.offset, self.len)
+        self.buffer.bit_slice(self.bit_offset, self.bit_len)
     }
 
     /// Returns true if this [`BooleanBuffer`] is equal to `other`, using pointer comparisons
@@ -340,8 +341,8 @@ impl BooleanBuffer {
     /// return false when the arrays are logically equal
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.buffer.as_ptr() == other.buffer.as_ptr()
-            && self.offset == other.offset
-            && self.len == other.len
+            && self.bit_offset == other.bit_offset
+            && self.bit_len == other.bit_len
     }
 
     /// Returns the inner [`Buffer`]
@@ -366,17 +367,17 @@ impl BooleanBuffer {
 
     /// Returns an iterator over the set bit positions in this [`BooleanBuffer`]
     pub fn set_indices(&self) -> BitIndexIterator<'_> {
-        BitIndexIterator::new(self.values(), self.offset, self.len)
+        BitIndexIterator::new(self.values(), self.bit_offset, self.bit_len)
     }
 
     /// Returns a `u32` iterator over set bit positions without any usize->u32 conversion
     pub fn set_indices_u32(&self) -> BitIndexU32Iterator<'_> {
-        BitIndexU32Iterator::new(self.values(), self.offset, self.len)
+        BitIndexU32Iterator::new(self.values(), self.bit_offset, self.bit_len)
     }
 
     /// Returns a [`BitSliceIterator`] yielding contiguous ranges of set bits
     pub fn set_slices(&self) -> BitSliceIterator<'_> {
-        BitSliceIterator::new(self.values(), self.offset, self.len)
+        BitSliceIterator::new(self.values(), self.bit_offset, self.bit_len)
     }
 }
 
@@ -385,9 +386,9 @@ impl Not for &BooleanBuffer {
 
     fn not(self) -> Self::Output {
         BooleanBuffer {
-            buffer: buffer_unary_not(&self.buffer, self.offset, self.len),
-            offset: 0,
-            len: self.len,
+            buffer: buffer_unary_not(&self.buffer, self.bit_offset, self.bit_len),
+            bit_offset: 0,
+            bit_len: self.bit_len,
         }
     }
 }
@@ -396,11 +397,17 @@ impl BitAnd<&BooleanBuffer> for &BooleanBuffer {
     type Output = BooleanBuffer;
 
     fn bitand(self, rhs: &BooleanBuffer) -> Self::Output {
-        assert_eq!(self.len, rhs.len);
+        assert_eq!(self.bit_len, rhs.bit_len);
         BooleanBuffer {
-            buffer: buffer_bin_and(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
-            offset: 0,
-            len: self.len,
+            buffer: buffer_bin_and(
+                &self.buffer,
+                self.bit_offset,
+                &rhs.buffer,
+                rhs.bit_offset,
+                self.bit_len,
+            ),
+            bit_offset: 0,
+            bit_len: self.bit_len,
         }
     }
 }
@@ -409,11 +416,17 @@ impl BitOr<&BooleanBuffer> for &BooleanBuffer {
     type Output = BooleanBuffer;
 
     fn bitor(self, rhs: &BooleanBuffer) -> Self::Output {
-        assert_eq!(self.len, rhs.len);
+        assert_eq!(self.bit_len, rhs.bit_len);
         BooleanBuffer {
-            buffer: buffer_bin_or(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
-            offset: 0,
-            len: self.len,
+            buffer: buffer_bin_or(
+                &self.buffer,
+                self.bit_offset,
+                &rhs.buffer,
+                rhs.bit_offset,
+                self.bit_len,
+            ),
+            bit_offset: 0,
+            bit_len: self.bit_len,
         }
     }
 }
@@ -422,11 +435,17 @@ impl BitXor<&BooleanBuffer> for &BooleanBuffer {
     type Output = BooleanBuffer;
 
     fn bitxor(self, rhs: &BooleanBuffer) -> Self::Output {
-        assert_eq!(self.len, rhs.len);
+        assert_eq!(self.bit_len, rhs.bit_len);
         BooleanBuffer {
-            buffer: buffer_bin_xor(&self.buffer, self.offset, &rhs.buffer, rhs.offset, self.len),
-            offset: 0,
-            len: self.len,
+            buffer: buffer_bin_xor(
+                &self.buffer,
+                self.bit_offset,
+                &rhs.buffer,
+                rhs.bit_offset,
+                self.bit_len,
+            ),
+            bit_offset: 0,
+            bit_len: self.bit_len,
         }
     }
 }
@@ -436,7 +455,7 @@ impl<'a> IntoIterator for &'a BooleanBuffer {
     type IntoIter = BitIterator<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        BitIterator::new(self.values(), self.offset, self.len)
+        BitIterator::new(self.values(), self.bit_offset, self.bit_len)
     }
 }
 
@@ -524,12 +543,12 @@ mod tests {
         assert_eq!(boolean_slice1.values(), boolean_slice2.values());
 
         assert_eq!(bytes, boolean_slice1.values());
-        assert_eq!(16, boolean_slice1.offset);
-        assert_eq!(16, boolean_slice1.len);
+        assert_eq!(16, boolean_slice1.bit_offset);
+        assert_eq!(16, boolean_slice1.bit_len);
 
         assert_eq!(bytes, boolean_slice2.values());
-        assert_eq!(0, boolean_slice2.offset);
-        assert_eq!(16, boolean_slice2.len);
+        assert_eq!(0, boolean_slice2.bit_offset);
+        assert_eq!(16, boolean_slice2.bit_len);
     }
 
     #[test]
