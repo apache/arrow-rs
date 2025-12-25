@@ -394,7 +394,6 @@ fn fixed_size_binary_substring(
 }
 
 #[cfg(test)]
-
 mod tests {
     use super::*;
 
@@ -993,5 +992,18 @@ mod tests {
         let expected_bytes: &[u8] = &[0xE4, 0xBD, 0xA0, 0xE5, 0xA5];
         let expected = BinaryArray::from(vec![Some(expected_bytes)]);
         assert_eq!(expected, *actual);
+    }
+
+    #[test]
+    fn test_utf8_boundary_validation_for_sliced_substring() {
+        let input = StringArray::from(vec![Some("café")]);
+
+        // é is a 2-byte UTF-8 char, starting inside it is invalid
+        let result = substring(&input, 3, Some(1));
+
+        assert!(
+            result.is_err(),
+            "Expected error when slicing at invalid UTF-8 boundary"
+        );
     }
 }
