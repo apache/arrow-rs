@@ -37,6 +37,96 @@ use arrow_schema::{FieldRef, TimeUnit};
 use parquet_variant::{Variant, VariantList, VariantPath};
 use std::sync::Arc;
 
+/// Builder for converting variant values into strongly typed Arrow arrays.
+///
+/// Useful for variant_get kernels that need to extract specific paths from variant values, possibly
+/// with casting of leaf values to specific types.
+pub(crate) enum VariantToArrowRowBuilder<'a> {
+    Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
+    BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
+
+    // Path extraction wrapper - contains a boxed enum for any of the above
+    WithPath(VariantPathRowBuilder<'a>),
+}
+
+impl<'a> VariantToArrowRowBuilder<'a> {
+    pub fn append_null(&mut self) -> Result<()> {
+        use VariantToArrowRowBuilder::*;
+        match self {
+            Primitive(b) => b.append_null(),
+            BinaryVariant(b) => b.append_null(),
+            WithPath(path_builder) => path_builder.append_null(),
+        }
+    }
+
+    pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        use VariantToArrowRowBuilder::*;
+        match self {
+            Primitive(b) => b.append_value(&value),
+            BinaryVariant(b) => b.append_value(value),
+            WithPath(path_builder) => path_builder.append_value(value),
+        }
+    }
+
+    pub fn finish(self) -> Result<ArrayRef> {
+        use VariantToArrowRowBuilder::*;
+        match self {
+            Primitive(b) => b.finish(),
+            BinaryVariant(b) => b.finish(),
+            WithPath(path_builder) => path_builder.finish(),
+        }
+    }
+}
+
+pub(crate) fn make_variant_to_arrow_row_builder<'a>(
+    metadata: &BinaryViewArray,
+    path: VariantPath<'a>,
+    data_type: Option<&'a DataType>,
+    cast_options: &'a CastOptions,
+    capacity: usize,
+) -> Result<VariantToArrowRowBuilder<'a>> {
+    use VariantToArrowRowBuilder::*;
+
+    let mut builder = match data_type {
+        // If no data type was requested, build an unshredded VariantArray.
+        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(
+            metadata.clone(),
+            capacity,
+        )),
+        Some(DataType::Struct(_)) => {
+            return Err(ArrowError::NotYetImplemented(
+                "Converting unshredded variant objects to arrow structs".to_string(),
+            ));
+        }
+        Some(
+            DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::ListView(_)
+            | DataType::LargeListView(_)
+            | DataType::FixedSizeList(..),
+        ) => {
+            return Err(ArrowError::NotYetImplemented(
+                "Converting unshredded variant arrays to arrow lists".to_string(),
+            ));
+        }
+        Some(data_type) => {
+            let builder =
+                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
+            Primitive(builder)
+        }
+    };
+
+    // Wrap with path extraction if needed
+    if !path.is_empty() {
+        builder = WithPath(VariantPathRowBuilder {
+            builder: Box::new(builder),
+            path,
+        })
+    };
+
+    Ok(builder)
+}
+
 /// Builder for converting primitive variant values to Arrow arrays. It is used by both
 /// `VariantToArrowRowBuilder` (below) and `VariantToShreddedPrimitiveVariantRowBuilder` (in
 /// `shred_variant.rs`).
@@ -83,18 +173,6 @@ pub(crate) enum PrimitiveVariantToArrowRowBuilder<'a> {
     Binary(VariantToBinaryArrowRowBuilder<'a, BinaryBuilder>),
     LargeBinary(VariantToBinaryArrowRowBuilder<'a, LargeBinaryBuilder>),
     BinaryView(VariantToBinaryArrowRowBuilder<'a, BinaryViewBuilder>),
-}
-
-/// Builder for converting variant values into strongly typed Arrow arrays.
-///
-/// Useful for variant_get kernels that need to extract specific paths from variant values, possibly
-/// with casting of leaf values to specific types.
-pub(crate) enum VariantToArrowRowBuilder<'a> {
-    Primitive(PrimitiveVariantToArrowRowBuilder<'a>),
-    BinaryVariant(VariantToBinaryVariantArrowRowBuilder),
-
-    // Path extraction wrapper - contains a boxed enum for any of the above
-    WithPath(VariantPathRowBuilder<'a>),
 }
 
 impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
@@ -227,35 +305,6 @@ impl<'a> PrimitiveVariantToArrowRowBuilder<'a> {
             Binary(b) => b.finish(),
             LargeBinary(b) => b.finish(),
             BinaryView(b) => b.finish(),
-        }
-    }
-}
-
-impl<'a> VariantToArrowRowBuilder<'a> {
-    pub fn append_null(&mut self) -> Result<()> {
-        use VariantToArrowRowBuilder::*;
-        match self {
-            Primitive(b) => b.append_null(),
-            BinaryVariant(b) => b.append_null(),
-            WithPath(path_builder) => path_builder.append_null(),
-        }
-    }
-
-    pub fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
-        use VariantToArrowRowBuilder::*;
-        match self {
-            Primitive(b) => b.append_value(&value),
-            BinaryVariant(b) => b.append_value(value),
-            WithPath(path_builder) => path_builder.append_value(value),
-        }
-    }
-
-    pub fn finish(self) -> Result<ArrayRef> {
-        use VariantToArrowRowBuilder::*;
-        match self {
-            Primitive(b) => b.finish(),
-            BinaryVariant(b) => b.finish(),
-            WithPath(path_builder) => path_builder.finish(),
         }
     }
 }
@@ -503,55 +552,6 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
             Self::LargeListView(builder) => builder.finish(),
         }
     }
-}
-
-pub(crate) fn make_variant_to_arrow_row_builder<'a>(
-    metadata: &BinaryViewArray,
-    path: VariantPath<'a>,
-    data_type: Option<&'a DataType>,
-    cast_options: &'a CastOptions,
-    capacity: usize,
-) -> Result<VariantToArrowRowBuilder<'a>> {
-    use VariantToArrowRowBuilder::*;
-
-    let mut builder = match data_type {
-        // If no data type was requested, build an unshredded VariantArray.
-        None => BinaryVariant(VariantToBinaryVariantArrowRowBuilder::new(
-            metadata.clone(),
-            capacity,
-        )),
-        Some(DataType::Struct(_)) => {
-            return Err(ArrowError::NotYetImplemented(
-                "Converting unshredded variant objects to arrow structs".to_string(),
-            ));
-        }
-        Some(
-            DataType::List(_)
-            | DataType::LargeList(_)
-            | DataType::ListView(_)
-            | DataType::LargeListView(_)
-            | DataType::FixedSizeList(..),
-        ) => {
-            return Err(ArrowError::NotYetImplemented(
-                "Converting unshredded variant arrays to arrow lists".to_string(),
-            ));
-        }
-        Some(data_type) => {
-            let builder =
-                make_primitive_variant_to_arrow_row_builder(data_type, cast_options, capacity)?;
-            Primitive(builder)
-        }
-    };
-
-    // Wrap with path extraction if needed
-    if !path.is_empty() {
-        builder = WithPath(VariantPathRowBuilder {
-            builder: Box::new(builder),
-            path,
-        })
-    };
-
-    Ok(builder)
 }
 
 /// A thin wrapper whose only job is to extract a specific path from a variant value and pass the
