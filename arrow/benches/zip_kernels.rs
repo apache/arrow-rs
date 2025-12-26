@@ -21,6 +21,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::prelude::StdRng;
 use rand::{Rng, SeedableRng};
 use std::hint;
+use std::ops::Range;
 use std::sync::Arc;
 
 use arrow::array::*;
@@ -134,7 +135,7 @@ where
 }
 
 struct GenerateStringView {
-    range: std::ops::Range<usize>,
+    range: Range<usize>,
     description: String,
     _marker: std::marker::PhantomData<StringViewType>,
 }
