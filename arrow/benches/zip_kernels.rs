@@ -134,7 +134,7 @@ where
 }
 
 struct GenerateStringView {
-    range_length: std::ops::Range<usize>,
+    range: std::ops::Range<usize>,
     description: String,
     _marker: std::marker::PhantomData<StringViewType>,
 }
@@ -156,8 +156,7 @@ impl InputGenerator for GenerateStringView {
         Arc::new(create_string_view_array_with_len_range_and_seed(
             array_length,
             null_percentage,
-            self.range_length.start,
-            self.range_length.end - 1,
+            self.range.clone(),
             seed,
         ))
     }
@@ -308,7 +307,7 @@ fn add_benchmark(c: &mut Criterion) {
         c,
         &GenerateStringView {
             description: "string_views size (3..10)".to_string(),
-            range_length: 3..10,
+            range: 3..10,
             _marker: std::marker::PhantomData,
         },
     );
@@ -317,7 +316,7 @@ fn add_benchmark(c: &mut Criterion) {
         c,
         &GenerateStringView {
             description: "string_views size (10..100)".to_string(),
-            range_length: 10..100,
+            range: 10..100,
             _marker: std::marker::PhantomData,
         },
     );

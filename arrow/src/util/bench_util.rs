@@ -213,27 +213,21 @@ pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSize
 /// Arguments:
 /// - `size`: number of  string view array
 /// - `null_density`: density of nulls in the string view array
-/// - `min_str_len`: minimum size of each string in the string view array
-/// - `max_str_len`: maximum size of each string in the string view array
+/// - `range`: range size of each string in the string view array
 /// - `seed`: seed for the random number generator
 pub fn create_string_view_array_with_len_range_and_seed(
     size: usize,
     null_density: f32,
-    min_str_len: usize,
-    max_str_len: usize,
+    range: Range<usize>,
     seed: u64,
 ) -> StringViewArray {
-    assert!(
-        min_str_len <= max_str_len,
-        "min_str_len must be <= max_str_len"
-    );
     let rng = &mut StdRng::seed_from_u64(seed);
     (0..size)
         .map(|_| {
             if rng.random::<f32>() < null_density {
                 None
             } else {
-                let str_len = rng.random_range(min_str_len..max_str_len);
+                let str_len = rng.random_range(range.clone());
                 let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
                 let value = String::from_utf8(value).unwrap();
                 Some(value)
