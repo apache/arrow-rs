@@ -19,6 +19,7 @@
 
 use std::sync::Arc;
 
+use half::f16;
 use rand::{
     Rng,
     distr::uniform::{SampleRange, SampleUniform},
@@ -115,11 +116,7 @@ pub fn create_random_array(
             size,
             primitive_null_density,
         )),
-        Float16 => {
-            return Err(ArrowError::NotYetImplemented(
-                "Float16 is not implemented".to_string(),
-            ));
-        }
+        Float16 => Arc::new(create_random_float16_array(size, primitive_null_density)),
         Float32 => Arc::new(create_primitive_array::<Float32Type>(
             size,
             primitive_null_density,
@@ -573,6 +570,20 @@ where
         .collect()
 }
 
+fn create_random_float16_array(size: usize, null_density: f32) -> PrimitiveArray<Float16Type> {
+    let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                Some(f16::from_f32(rng.random()))
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -582,6 +593,7 @@ mod tests {
         let size = 32;
         let fields = vec![
             Field::new("a", DataType::Int32, true),
+            Field::new("f16", DataType::Float16, true),
             Field::new(
                 "timestamp_without_timezone",
                 DataType::Timestamp(TimeUnit::Nanosecond, None),
