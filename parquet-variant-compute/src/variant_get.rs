@@ -339,10 +339,11 @@ mod test {
         Array, ArrayRef, AsArray, BinaryArray, BinaryViewArray, BooleanArray, Date32Array,
         Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
         Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
-        LargeBinaryArray, LargeStringArray, NullBuilder, StringArray, StringViewArray, StructArray,
+        LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
+        ListViewArray, NullBuilder, StringArray, StringViewArray, StructArray,
         Time32MillisecondArray, Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     };
-    use arrow::buffer::NullBuffer;
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
@@ -351,8 +352,8 @@ mod test {
     use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
     use parquet_variant::{
-        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16,
-        VariantDecimalType, VariantPath,
+        EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder, VariantDecimal4, VariantDecimal8,
+        VariantDecimal16, VariantDecimalType, VariantPath,
     };
 
     fn single_variant_get_test(input_json: &str, path: VariantPath, expected_json: &str) {
@@ -4157,5 +4158,183 @@ mod test {
         assert_eq!(inner_values_result.value(0), 111);
         assert!(inner_values_result.is_null(1));
         assert_eq!(inner_values_result.value(2), 333);
+    }
+
+    #[test]
+    fn test_variant_get_list_like_safe_cast() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec![
+            r#"[1, "two", 3]"#,
+            "\"not a list\"",
+        ]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+
+        let value_array: ArrayRef = {
+            let mut builder = VariantBuilder::new();
+            builder.append_value("two");
+            let (_, value_bytes) = builder.finish();
+            Arc::new(BinaryViewArray::from(vec![
+                None,
+                Some(value_bytes.as_slice()),
+                None,
+            ]))
+        };
+        let typed_value_array: ArrayRef = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
+        let struct_fields = Fields::from(vec![
+            Field::new("value", DataType::BinaryView, true),
+            Field::new("typed_value", DataType::Int64, true),
+        ]);
+        let struct_array: ArrayRef = Arc::new(
+            StructArray::try_new(
+                struct_fields.clone(),
+                vec![value_array.clone(), typed_value_array.clone()],
+                None,
+            )
+            .unwrap(),
+        );
+
+        let request_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let result_field = Arc::new(Field::new("item", DataType::Struct(struct_fields), true));
+
+        let expectations = vec![
+            (
+                DataType::List(request_field.clone()),
+                Arc::new(ListArray::new(
+                    result_field.clone(),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 3])),
+                    struct_array.clone(),
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::LargeList(request_field.clone()),
+                Arc::new(LargeListArray::new(
+                    result_field.clone(),
+                    OffsetBuffer::new(ScalarBuffer::from(vec![0, 3, 3])),
+                    struct_array.clone(),
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::ListView(request_field.clone()),
+                Arc::new(ListViewArray::new(
+                    result_field.clone(),
+                    ScalarBuffer::from(vec![0, 3]),
+                    ScalarBuffer::from(vec![3, 0]),
+                    struct_array.clone(),
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+            (
+                DataType::LargeListView(request_field),
+                Arc::new(LargeListViewArray::new(
+                    result_field,
+                    ScalarBuffer::from(vec![0, 3]),
+                    ScalarBuffer::from(vec![3, 0]),
+                    struct_array,
+                    Some(NullBuffer::from(vec![true, false])),
+                )) as ArrayRef,
+            ),
+        ];
+
+        for (request_type, expected) in expectations {
+            let options = GetOptions::new().with_as_type(Some(FieldRef::from(Field::new(
+                "result",
+                request_type.clone(),
+                true,
+            ))));
+
+            let result = variant_get(&variant_array, options).unwrap();
+            assert_eq!(result.data_type(), expected.data_type());
+            assert_eq!(&result, &expected);
+        }
+    }
+
+    #[test]
+    fn test_variant_get_list_like_unsafe_cast_errors_on_element_mismatch() {
+        let string_array: ArrayRef =
+            Arc::new(StringArray::from(vec![r#"[1, "two", 3]"#, "[4, 5]"]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+
+        let item_field = Arc::new(Field::new("item", DataType::Int64, true));
+        let request_types = vec![
+            DataType::List(item_field.clone()),
+            DataType::LargeList(item_field.clone()),
+            DataType::ListView(item_field.clone()),
+            DataType::LargeListView(item_field),
+        ];
+
+        for request_type in request_types {
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    request_type.clone(),
+                    true,
+                ))))
+                .with_cast_options(cast_options.clone());
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Failed to extract primitive of type Int64")
+            );
+        }
+    }
+
+    #[test]
+    fn test_variant_get_list_like_unsafe_cast_errors_on_non_list() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let cast_options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
+        let item_field = Arc::new(Field::new("item", Int64, true));
+        let data_types = vec![
+            DataType::List(item_field.clone()),
+            DataType::LargeList(item_field.clone()),
+            DataType::ListView(item_field.clone()),
+            DataType::LargeListView(item_field),
+        ];
+
+        for data_type in data_types {
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(Field::new("result", data_type, true))))
+                .with_cast_options(cast_options.clone());
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Failed to extract list from variant"),
+            );
+        }
+    }
+
+    #[test]
+    fn test_variant_get_fixed_size_list_not_implemented() {
+        let string_array: ArrayRef = Arc::new(StringArray::from(vec!["[1, 2]", "\"not a list\""]));
+        let variant_array = ArrayRef::from(json_to_variant(&string_array).unwrap());
+        let item_field = Arc::new(Field::new("item", Int64, true));
+        for safe in [true, false] {
+            let options = GetOptions::new()
+                .with_as_type(Some(FieldRef::from(Field::new(
+                    "result",
+                    DataType::FixedSizeList(item_field.clone(), 2),
+                    true,
+                ))))
+                .with_cast_options(CastOptions {
+                    safe,
+                    ..Default::default()
+                });
+
+            let err = variant_get(&variant_array, options).unwrap_err();
+            assert!(
+                err.to_string()
+                    .contains("Converting unshredded variant arrays to arrow fixed-size lists")
+            );
+        }
     }
 }

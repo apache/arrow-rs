@@ -274,7 +274,7 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
 
     fn append_null(&mut self) -> Result<()> {
         self.value_builder.append_value(Variant::Null);
-        self.typed_value_builder.append_null();
+        self.typed_value_builder.append_null()?;
         Ok(())
     }
 
@@ -284,12 +284,13 @@ impl<'a> VariantToShreddedArrayVariantRowBuilder<'a> {
         match variant {
             Variant::List(list) => {
                 self.value_builder.append_null();
-                self.typed_value_builder.append_value(list)?;
+                self.typed_value_builder
+                    .append_value(&Variant::List(list))?;
                 Ok(true)
             }
             other => {
                 self.value_builder.append_value(other);
-                self.typed_value_builder.append_null();
+                self.typed_value_builder.append_null()?;
                 Ok(false)
             }
         }
