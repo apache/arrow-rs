@@ -512,12 +512,14 @@ mod test {
 
         // read the metadata from the file WITHOUT the page index structures
         let original_metadata = ParquetMetaDataReader::new()
+            .with_encoding_stats_as_mask(false)
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
         // this should error because the page indexes are not present, but have offsets specified
         let metadata_bytes = metadata_to_bytes(&original_metadata);
         let err = ParquetMetaDataReader::new()
+            .with_encoding_stats_as_mask(false)
             .with_page_indexes(true) // there are no page indexes in the metadata
             .parse_and_finish(&metadata_bytes)
             .err()
@@ -534,6 +536,7 @@ mod test {
 
         // read the metadata from the file
         let original_metadata = ParquetMetaDataReader::new()
+            .with_encoding_stats_as_mask(false)
             .parse_and_finish(&parquet_bytes)
             .unwrap();
 
@@ -546,6 +549,7 @@ mod test {
         );
 
         let roundtrip_metadata = ParquetMetaDataReader::new()
+            .with_encoding_stats_as_mask(false)
             .parse_and_finish(&metadata_bytes)
             .unwrap();
 
@@ -560,6 +564,7 @@ mod test {
         // read the metadata from the file including the page index structures
         // (which are stored elsewhere in the footer)
         let original_metadata = ParquetMetaDataReader::new()
+            .with_encoding_stats_as_mask(false)
             .with_page_indexes(true)
             .parse_and_finish(&parquet_bytes)
             .unwrap();
@@ -567,6 +572,7 @@ mod test {
         // read metadata back from the serialized bytes and ensure it is the same
         let metadata_bytes = metadata_to_bytes(&original_metadata);
         let roundtrip_metadata = ParquetMetaDataReader::new()
+            .with_encoding_stats_as_mask(false)
             .with_page_indexes(true)
             .parse_and_finish(&metadata_bytes)
             .unwrap();
