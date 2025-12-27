@@ -488,6 +488,7 @@ where
 {
     let run_ends: &RunEndBuffer<R::Native> = array.run_ends();
     let mut new_run_ends = vec![R::default_value(); run_ends.len()];
+    let offset = run_ends.offset() as u64;
 
     let mut start = 0u64;
     let mut j = 0;
@@ -497,7 +498,7 @@ where
 
     let pred: BooleanArray = BooleanBuffer::collect_bool(run_ends.len(), |i| {
         let mut keep = false;
-        let mut end = run_ends[i].into() as u64;
+        let mut end = (run_ends[i].into() as u64).saturating_sub(offset);
         let difference = end.saturating_sub(filter_values.len() as u64);
         end -= difference;
 
@@ -1355,9 +1356,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "assertion `left == right` failed\n  left: [-2, 9]\n right: [7, -2]"]
-    // TODO: fix filter of RunArrays to account for sliced RunArray's
-    // https://github.com/apache/arrow-rs/issues/9018
     fn test_filter_run_end_encoding_array_sliced() {
         let run_ends = Int64Array::from(vec![2, 3, 8]);
         let values = Int64Array::from(vec![7, -2, 9]);
