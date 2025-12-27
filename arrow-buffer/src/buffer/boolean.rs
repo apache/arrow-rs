@@ -22,7 +22,6 @@ use crate::{
     buffer_bin_xor, buffer_unary_not, util,
 };
 
-use crate::bit_util::ceil;
 use std::ops::{BitAnd, BitOr, BitXor, Not};
 
 /// A slice-able [`Buffer`] containing bit-packed booleans
@@ -235,7 +234,7 @@ impl BooleanBuffer {
     /// let result = BooleanBuffer::from_bitwise_binary_op(
     ///   &left, 0, &right, 0, 12, |a, b| a & b
     /// );
-    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b10011000u8]);
+    /// assert_eq!(result.inner().as_slice(), &[0b10001000u8, 0b00001000u8]);
     /// ```
     ///
     /// # Example: Create new [`BooleanBuffer`] from bitwise `OR` of two byte slices
@@ -260,14 +259,16 @@ impl BooleanBuffer {
     where
         F: FnMut(u64, u64) -> u64,
     {
-        // fast path for aligned input
+        // try fast path for aligned input
         if left_offset_in_bits & 0x7 == 0 && right_offset_in_bits & 0x7 == 0 {
-            return Self::from_aligned_bitwise_binary_op(
+            if let Some(result) = Self::try_from_aligned_bitwise_binary_op(
                 &left.as_ref()[left_offset_in_bits / 8..], // aligned to byte boundary
                 &right.as_ref()[right_offset_in_bits / 8..],
                 len_in_bits,
                 &mut op,
-            );
+            ) {
+                return result;
+            }
         }
         let left_chunks = BitChunks::new(left.as_ref(), left_offset_in_bits, len_in_bits);
         let right_chunks = BitChunks::new(right.as_ref(), right_offset_in_bits, len_in_bits);
@@ -297,68 +298,38 @@ impl BooleanBuffer {
     /// inputs are aligned to byte boundaries
     ///
     /// Returns `None` if the inputs are not fully u64 aligned
-    fn from_aligned_bitwise_binary_op<F>(
+    fn try_from_aligned_bitwise_binary_op<F>(
         left: &[u8],
         right: &[u8],
         len_in_bits: usize,
         op: &mut F,
-    ) -> Self
+    ) -> Option<Self>
     where
         F: FnMut(u64, u64) -> u64,
     {
-        // trim to length
-        let len_in_bytes = ceil(len_in_bits, 8);
-        let left = &left[0..len_in_bytes];
-        let right = &right[0..len_in_bytes];
         // Safety: all valid bytes are valid u64s
         let (left_prefix, left_u64s, left_suffix) = unsafe { left.align_to::<u64>() };
         let (right_prefix, right_u64s, right_suffix) = unsafe { right.align_to::<u64>() };
-        if left_prefix.is_empty()
+        if !(left_prefix.is_empty()
             && right_prefix.is_empty()
             && left_suffix.is_empty()
-            && right_suffix.is_empty()
+            && right_suffix.is_empty())
         {
-            // the buffers are word (64 bit) aligned, so use optimized Vec code.
-            let result_u64s = left_u64s
-                .iter()
-                .zip(right_u64s.iter())
-                .map(|(l, r)| op(*l, *r))
-                .collect::<Vec<u64>>();
-            BooleanBuffer::new(Buffer::from(result_u64s), 0, len_in_bits)
-        } else {
-            let (left_slices, left_remainder) = left.as_chunks::<8>();
-            let (right_slices, right_remainder) = right.as_chunks::<8>();
-            debug_assert_eq!(left_slices.len(), right_slices.len());
-            debug_assert_eq!(left_remainder.len(), right_remainder.len());
-            let mut mutable_result =
-                MutableBuffer::with_capacity(left_slices.len() * 8 + left_remainder.len());
-            mutable_result.extend_from_iter(
-                left_slices
-                    .iter()
-                    .zip(right_slices.iter())
-                    .map(|(l, r)| op(u64::from_le_bytes(*l), u64::from_le_bytes(*r))),
-            );
-            if !left_remainder.is_empty() {
-                let rem = op(
-                    u64::from_le_bytes({
-                        let mut bytes = [0u8; 8];
-                        bytes[..left_remainder.len()].copy_from_slice(left_remainder);
-                        bytes
-                    }),
-                    u64::from_le_bytes({
-                        let mut bytes = [0u8; 8];
-                        bytes[..right_remainder.len()].copy_from_slice(right_remainder);
-                        bytes
-                    }),
-                );
-                mutable_result.extend_from_slice(&rem.to_le_bytes()[..left_remainder.len()]);
-            }
-            BooleanBuffer {
-                buffer: Buffer::from(mutable_result),
-                offset: 0,
-                len: len_in_bits,
-            }
+            // Couldn't make this case any faster than the default path
+            // would be cool to handle non empty prefixes/suffixes too,
+            return None;
         }
+        // the buffers are word (64 bit) aligned, so use optimized Vec code.
+        let result_u64s = left_u64s
+            .iter()
+            .zip(right_u64s.iter())
+            .map(|(l, r)| op(*l, *r))
+            .collect::<Vec<u64>>();
+        Some(BooleanBuffer::new(
+            Buffer::from(result_u64s),
+            0,
+            len_in_bits,
+        ))
     }
 
     /// Returns the number of set bits in this buffer
