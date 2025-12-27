@@ -23,7 +23,7 @@
 //! [here](https://doc.rust-lang.org/stable/core/arch/) for more information.
 
 use arrow_array::*;
-use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_quaternary_op_helper};
+use arrow_buffer::buffer::bitwise_quaternary_op_helper;
 use arrow_buffer::{BooleanBuffer, NullBuffer, buffer_bin_and_not};
 use arrow_schema::ArrowError;
 
@@ -74,7 +74,7 @@ pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanAr
             // The final null bit is set only if:
             // 1. left null bit is set, or
             // 2. right data bit is false (because null AND false = false).
-            Some(bitwise_bin_op_helper(
+            Some(BooleanBuffer::from_bitwise_binary_op(
                 left_null_buffer.buffer(),
                 left_null_buffer.offset(),
                 right_values.inner(),
@@ -85,7 +85,7 @@ pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanAr
         }
         (None, Some(right_null_buffer)) => {
             // Same as above
-            Some(bitwise_bin_op_helper(
+            Some(BooleanBuffer::from_bitwise_binary_op(
                 right_null_buffer.buffer(),
                 right_null_buffer.offset(),
                 left_values.inner(),
@@ -100,7 +100,7 @@ pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanAr
             // d is right data bits.
             // The final null bits are:
             // (a | (c & !d)) & (c | (a & !b))
-            Some(bitwise_quaternary_op_helper(
+            let buffer = bitwise_quaternary_op_helper(
                 [
                     left_null_buffer.buffer(),
                     left_values.inner(),
@@ -115,10 +115,11 @@ pub fn and_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanAr
                 ],
                 left.len(),
                 |a, b, c, d| (a | (c & !d)) & (c | (a & !b)),
-            ))
+            );
+            Some(BooleanBuffer::new(buffer, 0, left.len()))
         }
     };
-    let nulls = buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, left.len())));
+    let nulls = buffer.map(NullBuffer::new);
     Ok(BooleanArray::new(left_values & right_values, nulls))
 }
 
@@ -169,7 +170,7 @@ pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArr
             // The final null bit is set only if:
             // 1. left null bit is set, or
             // 2. right data bit is true (because null OR true = true).
-            Some(bitwise_bin_op_helper(
+            Some(BooleanBuffer::from_bitwise_binary_op(
                 left_nulls.buffer(),
                 left_nulls.offset(),
                 right_values.inner(),
@@ -180,7 +181,7 @@ pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArr
         }
         (None, Some(right_nulls)) => {
             // Same as above
-            Some(bitwise_bin_op_helper(
+            Some(BooleanBuffer::from_bitwise_binary_op(
                 right_nulls.buffer(),
                 right_nulls.offset(),
                 left_values.inner(),
@@ -195,7 +196,7 @@ pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArr
             // d is right data bits.
             // The final null bits are:
             // (a | (c & d)) & (c | (a & b))
-            Some(bitwise_quaternary_op_helper(
+            let buffer = bitwise_quaternary_op_helper(
                 [
                     left_nulls.buffer(),
                     left_values.inner(),
@@ -210,11 +211,12 @@ pub fn or_kleene(left: &BooleanArray, right: &BooleanArray) -> Result<BooleanArr
                 ],
                 left.len(),
                 |a, b, c, d| (a | (c & d)) & (c | (a & b)),
-            ))
+            );
+            Some(BooleanBuffer::new(buffer, 0, left.len()))
         }
     };
 
-    let nulls = buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, left.len())));
+    let nulls = buffer.map(NullBuffer::new);
     Ok(BooleanArray::new(left_values | right_values, nulls))
 }
 
