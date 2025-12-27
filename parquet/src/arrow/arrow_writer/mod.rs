@@ -4433,7 +4433,10 @@ mod tests {
             .unwrap();
 
         // check that the read metadata is also correct
-        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let options = ReadOptionsBuilder::new()
+            .with_page_index()
+            .with_encoding_stats_as_mask(false)
+            .build();
         let reader = SerializedFileReader::new_with_options(file, options).unwrap();
 
         let rowgroup = reader.get_row_group(0).expect("row group missing");

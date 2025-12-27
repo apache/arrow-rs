@@ -410,7 +410,7 @@ fn read_column_metadata<'a>(
     let mut seen_mask = 0u16;
 
     let mut skip_pes = false;
-    let mut pes_mask = false;
+    let mut pes_mask = true;
 
     if let Some(opts) = options {
         skip_pes = opts.skip_encoding_stats(col_index);
@@ -1704,7 +1704,7 @@ write_thrift_field!(RustBoundingBox, FieldType::Struct);
 pub(crate) mod tests {
     use crate::errors::Result;
     use crate::file::metadata::thrift::{BoundingBox, SchemaElement, write_schema};
-    use crate::file::metadata::{ColumnChunkMetaData, RowGroupMetaData};
+    use crate::file::metadata::{ColumnChunkMetaData, ParquetMetaDataOptions, RowGroupMetaData};
     use crate::parquet_thrift::tests::test_roundtrip;
     use crate::parquet_thrift::{
         ElementType, ThriftCompactOutputProtocol, ThriftSliceInputProtocol, read_thrift_vec,
@@ -1727,8 +1727,16 @@ pub(crate) mod tests {
         buf: &mut [u8],
         column_descr: Arc<ColumnDescriptor>,
     ) -> Result<ColumnChunkMetaData> {
+        read_column_chunk_with_options(buf, column_descr, None)
+    }
+
+    pub(crate) fn read_column_chunk_with_options(
+        buf: &mut [u8],
+        column_descr: Arc<ColumnDescriptor>,
+        options: Option<&ParquetMetaDataOptions>,
+    ) -> Result<ColumnChunkMetaData> {
         let mut reader = ThriftSliceInputProtocol::new(buf);
-        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, 0, None)
+        crate::file::metadata::thrift::read_column_chunk(&mut reader, &column_descr, 0, options)
     }
 
     pub(crate) fn roundtrip_schema(schema: TypePtr) -> Result<TypePtr> {
