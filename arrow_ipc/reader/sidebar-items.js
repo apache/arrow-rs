@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["IpcMessage"],"fn":["get_dictionary_values","parse_message","read_block","read_buffer","read_dictionary","read_dictionary_impl","read_footer_length","read_record_batch","update_dictionaries"],"mod":["stream"],"struct":["FileDecoder","FileReader","FileReaderBuilder","MessageReader","RecordBatchDecoder","StreamDecoder","StreamReader"]};
