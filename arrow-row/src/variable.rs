@@ -17,9 +17,10 @@
 
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
+use arrow_array::types::ByteArrayType;
 use arrow_array::*;
-use arrow_buffer::MutableBuffer;
 use arrow_buffer::bit_util::ceil;
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
@@ -81,6 +82,40 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
 ) {
     for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(i) {
         *offset += encode_one(&mut data[*offset..], maybe_val, opts);
+    }
+}
+
+/// Calls [`encode`] with optimized iterator for generic byte arrays
+pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    input_array: &GenericByteArray<T>,
+    opts: SortOptions,
+) {
+    let input_offsets = input_array.value_offsets();
+    let bytes = input_array.values().as_slice();
+
+    if let Some(null_buffer) = input_array.nulls().filter(|x| x.null_count() > 0) {
+        let input_iter =
+            input_offsets
+                .windows(2)
+                .zip(null_buffer.iter())
+                .map(|(start_end, is_null)| {
+                    if is_null {
+                        None
+                    } else {
+                        Some(&bytes[start_end[0].as_usize()..start_end[1].as_usize()])
+                    }
+                });
+
+        encode(data, offsets, input_iter, opts);
+    } else {
+        // Skip null checks
+        let input_iter = input_offsets
+            .windows(2)
+            .map(|start_end| Some(&bytes[start_end[0].as_usize()..start_end[1].as_usize()]));
+
+        encode(data, offsets, input_iter, opts);
     }
 }
 
