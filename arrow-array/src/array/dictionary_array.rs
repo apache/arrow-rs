@@ -26,7 +26,7 @@ use crate::{
 use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, BooleanBufferBuilder};
-use arrow_data::ArrayData;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -583,18 +583,21 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
 /// Constructs a `DictionaryArray` from an array data reference.
 impl<T: ArrowDictionaryKeyType> From<ArrayData> for DictionaryArray<T> {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, offset, buffers, mut child_data) = data.into_parts();
+
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             1,
             "DictionaryArray data should contain a single buffer only (keys)."
         );
         assert_eq!(
-            data.child_data().len(),
+            child_data.len(),
             1,
             "DictionaryArray should contain a single child array (values)."
         );
+        let cd = child_data.pop().expect("checked above");
 
-        if let DataType::Dictionary(key_data_type, _) = data.data_type() {
+        if let DataType::Dictionary(key_data_type, _) = &data_type {
             assert_eq!(
                 &T::DATA_TYPE,
                 key_data_type.as_ref(),
@@ -603,17 +606,17 @@ impl<T: ArrowDictionaryKeyType> From<ArrayData> for DictionaryArray<T> {
                 key_data_type
             );
 
-            let values = make_array(data.child_data()[0].clone());
-            let data_type = data.data_type().clone();
+            let values = make_array(cd);
 
             // create a zero-copy of the keys' data
             // SAFETY:
             // ArrayData is valid and verified type above
-
             let keys = PrimitiveArray::<T>::from(unsafe {
-                data.into_builder()
-                    .data_type(T::DATA_TYPE)
-                    .child_data(vec![])
+                ArrayDataBuilder::new(T::DATA_TYPE)
+                    .buffers(buffers)
+                    .nulls(nulls)
+                    .offset(offset)
+                    .len(len)
                     .build_unchecked()
             });
 

@@ -213,27 +213,39 @@ impl<R: RunEndIndexType> RunArray<R> {
 impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
     // The method assumes the caller already validated the data using `ArrayData::validate_data()`
     fn from(data: ArrayData) -> Self {
-        match data.data_type() {
+        let (data_type, len, _nulls, offset, _buffers, mut child_data) = data.into_parts();
+
+        match &data_type {
             DataType::RunEndEncoded(_, _) => {}
             _ => {
                 panic!(
-                    "Invalid data type for RunArray. The data type should be DataType::RunEndEncoded"
+                    "Invalid data type {data_type:?} for RunArray. Should be DataType::RunEndEncoded"
                 );
             }
         }
 
         // Safety
         // ArrayData is valid
-        let child = &data.child_data()[0];
-        assert_eq!(child.data_type(), &R::DATA_TYPE, "Incorrect run ends type");
+        // child[0] is run ends , child[1] is values
+        let values_child = child_data
+            .pop()
+            .expect("RunArray data should have two child arrays");
+        let run_end_child = child_data
+            .pop()
+            .expect("RunArray data should have two child arrays");
+        assert_eq!(
+            run_end_child.data_type(),
+            &R::DATA_TYPE,
+            "Incorrect run ends type"
+        );
         let run_ends = unsafe {
-            let scalar = child.buffers()[0].clone().into();
-            RunEndBuffer::new_unchecked(scalar, data.offset(), data.len())
+            let scalar = run_end_child.buffers()[0].clone().into();
+            RunEndBuffer::new_unchecked(scalar, offset, len)
         };
 
-        let values = make_array(data.child_data()[1].clone());
+        let values = make_array(values_child);
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             run_ends,
             values,
         }
