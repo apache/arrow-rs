@@ -134,7 +134,11 @@ pub unsafe fn decode<R: RunEndIndexType>(
                 run_ends.push(R::Native::usize_as(idx));
             }
             unique_row_indices.push(decoded_values.len());
-            decoded_values.push(decoded_data.clone());
+            let capacity = decoded_data.capacity();
+            decoded_values.push(std::mem::replace(
+                &mut decoded_data,
+                Vec::with_capacity(capacity),
+            ));
         }
     }
     // Add the final run end
