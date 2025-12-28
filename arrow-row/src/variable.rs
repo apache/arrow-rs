@@ -100,11 +100,11 @@ pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
             input_offsets
                 .windows(2)
                 .zip(null_buffer.iter())
-                .map(|(start_end, is_null)| {
-                    if is_null {
-                        None
-                    } else {
+                .map(|(start_end, is_valid)| {
+                    if is_valid {
                         Some(&bytes[start_end[0].as_usize()..start_end[1].as_usize()])
+                    } else {
+                        None
                     }
                 });
 
