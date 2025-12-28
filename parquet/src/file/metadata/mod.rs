@@ -95,6 +95,9 @@ pub(crate) mod reader;
 pub(crate) mod thrift;
 mod writer;
 
+#[cfg(feature = "arrow")]
+pub(crate) mod dictionary;
+
 use crate::basic::{EncodingMask, PageType};
 #[cfg(feature = "encryption")]
 use crate::encryption::decrypt::FileDecryptor;

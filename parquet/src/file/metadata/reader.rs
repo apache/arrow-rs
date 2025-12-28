@@ -829,6 +829,184 @@ impl ParquetMetaDataReader {
     pub fn decode_schema(buf: &[u8]) -> Result<Arc<SchemaDescriptor>> {
         Ok(Arc::new(parquet_schema_from_bytes(buf)?))
     }
+
+    /// Read dictionary for a column in a row group using a synchronous reader.
+    ///
+    /// Returns `None` if the column does not have a dictionary page.
+    /// Currently only supports BYTE_ARRAY columns (String/Binary).
+    ///
+    /// # Arguments
+    ///
+    /// * `reader` - A [`ChunkReader`] providing access to the file data
+    /// * `metadata` - The Parquet file metadata
+    /// * `row_group_idx` - Index of the row group to read from
+    /// * `column_idx` - Index of the column within the row group
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The row group index or column index is out of bounds
+    /// - The column type is not BYTE_ARRAY
+    /// - The dictionary page cannot be read or decoded
+    /// - Decompression fails
+    /// - UTF-8 validation fails (for String columns)
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use parquet::file::reader::ChunkReader;
+    /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
+    /// # fn get_metadata() -> parquet::file::metadata::ParquetMetaData { unimplemented!(); }
+    /// let file = open_parquet_file("some_path.parquet");
+    /// let metadata = get_metadata();
+    /// let dict = ParquetMetaDataReader::read_column_dictionary(
+    ///     &file,
+    ///     &metadata,
+    ///     0,  // row group 0
+    ///     0,  // column 0
+    /// ).unwrap();
+    /// ```
+    #[cfg(feature = "arrow")]
+    pub fn read_column_dictionary<R: ChunkReader>(
+        reader: &R,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<arrow_array::ArrayRef>> {
+        use crate::basic::Type as PhysicalType;
+
+        // Get row group and column metadata
+        let row_group_metadata = metadata.row_group(row_group_idx);
+        let column_metadata = row_group_metadata.column(column_idx);
+
+        // Check if dictionary page exists
+        let dict_offset: u64 = match column_metadata.dictionary_page_offset() {
+            Some(offset) => offset.try_into().map_err(|_| {
+                ParquetError::General("Dictionary page offset is invalid".to_string())
+            })?,
+            None => return Ok(None),
+        };
+
+        // Validate column type - only support BYTE_ARRAY
+        let physical_type = column_metadata.column_type();
+        if physical_type != PhysicalType::BYTE_ARRAY {
+            return Err(ParquetError::General(format!(
+                "read_column_dictionary only supports BYTE_ARRAY columns, got {:?}",
+                physical_type
+            )));
+        }
+
+        // Calculate dictionary page length
+        let data_page_offset: u64 = column_metadata
+            .data_page_offset()
+            .try_into()
+            .map_err(|_| ParquetError::General("Data page offset is invalid".to_string()))?;
+
+        let dict_length = data_page_offset - dict_offset;
+
+        // Fetch dictionary page bytes
+        let buffer = reader.get_bytes(dict_offset, dict_length as usize)?;
+
+        // Decode the dictionary page
+        let schema = metadata.file_metadata().schema_descr();
+        let column_descriptor = schema.column(column_idx);
+
+        let array = super::dictionary::decode_dictionary_page(
+            buffer,
+            column_metadata,
+            &column_descriptor,
+        )?;
+
+        Ok(Some(array))
+    }
+
+    /// Read dictionary for a column in a row group using an asynchronous reader.
+    ///
+    /// Returns `None` if the column does not have a dictionary page.
+    /// Currently only supports BYTE_ARRAY columns (String/Binary).
+    ///
+    /// # Arguments
+    ///
+    /// * `fetch` - A [`MetadataFetch`] trait implementation for async data access
+    /// * `metadata` - The Parquet file metadata
+    /// * `row_group_idx` - Index of the row group to read from
+    /// * `column_idx` - Index of the column within the row group
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The row group index or column index is out of bounds
+    /// - The column type is not BYTE_ARRAY
+    /// - The dictionary page cannot be read or decoded
+    /// - Decompression fails
+    /// - UTF-8 validation fails (for String columns)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let dict = ParquetMetaDataReader::load_column_dictionary(
+    ///     &mut fetch,
+    ///     &metadata,
+    ///     0,  // row group 0
+    ///     0,  // column 0
+    /// ).await?;
+    /// ```
+    #[cfg(all(feature = "async", feature = "arrow"))]
+    pub async fn load_column_dictionary<F: MetadataFetch>(
+        mut fetch: F,
+        metadata: &ParquetMetaData,
+        row_group_idx: usize,
+        column_idx: usize,
+    ) -> Result<Option<arrow_array::ArrayRef>> {
+        use crate::basic::Type as PhysicalType;
+
+        // Get row group and column metadata
+        let row_group_metadata = metadata.row_group(row_group_idx);
+        let column_metadata = row_group_metadata.column(column_idx);
+
+        // Check if dictionary page exists
+        let dict_offset: u64 = match column_metadata.dictionary_page_offset() {
+            Some(offset) => offset.try_into().map_err(|_| {
+                ParquetError::General("Dictionary page offset is invalid".to_string())
+            })?,
+            None => return Ok(None),
+        };
+
+        // Validate column type - only support BYTE_ARRAY
+        let physical_type = column_metadata.column_type();
+        if physical_type != PhysicalType::BYTE_ARRAY {
+            return Err(ParquetError::General(format!(
+                "load_column_dictionary only supports BYTE_ARRAY columns, got {:?}",
+                physical_type
+            )));
+        }
+
+        // Calculate dictionary page length
+        let data_page_offset: u64 = column_metadata
+            .data_page_offset()
+            .try_into()
+            .map_err(|_| ParquetError::General("Data page offset is invalid".to_string()))?;
+
+        let dict_length = data_page_offset - dict_offset;
+
+        // Fetch dictionary page bytes asynchronously
+        let buffer = fetch
+            .fetch(dict_offset..dict_offset + dict_length)
+            .await?;
+
+        // Decode the dictionary page
+        let schema = metadata.file_metadata().schema_descr();
+        let column_descriptor = schema.column(column_idx);
+
+        let array = super::dictionary::decode_dictionary_page(
+            buffer,
+            column_metadata,
+            &column_descriptor,
+        )?;
+
+        Ok(Some(array))
+    }
 }
 
 /// The bounds needed to read page indexes

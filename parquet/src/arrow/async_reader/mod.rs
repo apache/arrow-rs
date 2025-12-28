@@ -33,22 +33,19 @@ use futures::future::{BoxFuture, FutureExt};
 use futures::stream::Stream;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
-use arrow_array::{ArrayRef, RecordBatch};
-use arrow_schema::{DataType as ArrowType, Schema, SchemaRef};
+use arrow_array::RecordBatch;
+use arrow_schema::{Schema, SchemaRef};
 
 use crate::arrow::arrow_reader::{
     ArrowReaderBuilder, ArrowReaderMetadata, ArrowReaderOptions, ParquetRecordBatchReader,
 };
 
-use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash, Compression, PageType, Type as PhysicalType};
+use crate::basic::{BloomFilterAlgorithm, BloomFilterCompression, BloomFilterHash};
 use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
-use crate::compression::{create_codec, CodecOptions};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
-use crate::file::metadata::thrift::PageHeader;
-use crate::parquet_thrift::{ReadThrift, ThriftSliceInputProtocol};
 
 mod metadata;
 pub use metadata::*;
@@ -478,162 +475,6 @@ impl<T: AsyncFileReader + Send + 'static> ParquetRecordBatchStreamBuilder<T> {
         Ok(Some(Sbbf::new(&bitset)))
     }
 
-    /// Read dictionary for a column in a row group
-    ///
-    /// Returns `None` if the column does not have a dictionary page.
-    /// Supports BYTE_ARRAY columns (String/Binary).
-    ///
-    /// # Arguments
-    /// * `row_group_idx` - Index of the row group
-    /// * `column_idx` - Index of the column within the row group
-    ///
-    /// # Errors
-    /// Returns an error if:
-    /// - The column type is not BYTE_ARRAY
-    /// - The dictionary page cannot be read or decoded
-    /// - Decompression fails
-    /// - UTF-8 validation fails (for String columns)
-    pub async fn get_row_group_column_dictionary(
-        &mut self,
-        row_group_idx: usize,
-        column_idx: usize,
-    ) -> Result<Option<ArrayRef>> {
-        // 1. Get metadata for the row group and column
-        let row_group_metadata = self.metadata.row_group(row_group_idx);
-        let column_metadata = row_group_metadata.column(column_idx);
-
-        // 2. Check if dictionary page exists
-        let dict_offset: u64 = match column_metadata.dictionary_page_offset() {
-            Some(offset) => offset
-                .try_into()
-                .map_err(|_| ParquetError::General("Dictionary page offset is invalid".to_string()))?,
-            None => return Ok(None),
-        };
-
-        // 3. Validate column type - only support BYTE_ARRAY
-        let physical_type = column_metadata.column_type();
-        if physical_type != PhysicalType::BYTE_ARRAY {
-            return Err(ParquetError::General(format!(
-                "get_row_group_column_dictionary only supports BYTE_ARRAY columns, got {:?}",
-                physical_type
-            )));
-        }
-
-        // 4. Calculate dictionary page length
-        // Dictionary page length = data_page_offset - dictionary_page_offset
-        let data_page_offset: u64 = column_metadata
-            .data_page_offset()
-            .try_into()
-            .map_err(|_| ParquetError::General("Data page offset is invalid".to_string()))?;
-
-        let dict_length = data_page_offset - dict_offset;
-
-        // 5. Fetch dictionary page bytes
-        let buffer = self
-            .input
-            .0
-            .get_bytes(dict_offset..dict_offset + dict_length)
-            .await?;
-
-        // 6. Parse page header (Thrift encoded)
-        let mut prot = ThriftSliceInputProtocol::new(&buffer);
-        let page_header = PageHeader::read_thrift(&mut prot)
-            .map_err(|e| ParquetError::General(format!("Failed to read page header: {}", e)))?;
-        let header_len = prot.as_slice().as_ptr() as usize - buffer.as_ptr() as usize;
-
-        // 7. Validate it's a dictionary page
-        if page_header.r#type != PageType::DICTIONARY_PAGE {
-            return Err(ParquetError::General(format!(
-                "Expected DICTIONARY_PAGE, got {:?}",
-                page_header.r#type
-            )));
-        }
-
-        let dict_header = page_header
-            .dictionary_page_header
-            .ok_or_else(|| ParquetError::General("Missing dictionary page header".to_string()))?;
-
-        let num_values = dict_header.num_values as usize;
-
-        // 8. Extract page data (after header)
-        let compressed_page_size = page_header.compressed_page_size as usize;
-        let uncompressed_page_size = page_header.uncompressed_page_size as usize;
-        let page_data = buffer.slice(header_len..header_len + compressed_page_size);
-
-        // 9. Handle decompression if needed
-        let decompressed_data = if column_metadata.compression() != Compression::UNCOMPRESSED {
-            let codec_options = CodecOptions::default();
-            let mut decompressor = create_codec(column_metadata.compression(), &codec_options)?
-                .ok_or_else(|| {
-                    ParquetError::General("Failed to create decompressor".to_string())
-                })?;
-
-            let mut decompressed = Vec::with_capacity(uncompressed_page_size);
-            decompressor.decompress(&page_data, &mut decompressed, Some(uncompressed_page_size))?;
-            Bytes::from(decompressed)
-        } else {
-            page_data
-        };
-
-        // 10. Determine if this is String (Utf8) or Binary based on schema
-        let parquet_schema = self.metadata.file_metadata().schema_descr();
-        let column_descr = parquet_schema.column(column_idx);
-        let validate_utf8 = is_utf8_column(&column_descr);
-
-        // 11. Decode dictionary values from PLAIN encoding
-        // PLAIN encoding: each value is 4-byte little-endian length + bytes
-        let mut offsets = vec![0_i32];
-        let mut values = Vec::new();
-        let mut offset = 0;
-
-        for _ in 0..num_values {
-            if offset + 4 > decompressed_data.len() {
-                return Err(ParquetError::EOF("Unexpected end of dictionary page".into()));
-            }
-
-            let len_bytes: [u8; 4] = decompressed_data[offset..offset + 4]
-                .try_into()
-                .map_err(|_| ParquetError::EOF("Failed to read length".into()))?;
-            let len = u32::from_le_bytes(len_bytes) as usize;
-            offset += 4;
-
-            if offset + len > decompressed_data.len() {
-                return Err(ParquetError::EOF("Unexpected end of dictionary page".into()));
-            }
-
-            let value_bytes = &decompressed_data[offset..offset + len];
-
-            // Validate UTF-8 if needed
-            if validate_utf8 && std::str::from_utf8(value_bytes).is_err() {
-                return Err(ParquetError::General("Invalid UTF-8 in dictionary".to_string()));
-            }
-
-            values.extend_from_slice(value_bytes);
-            offsets.push(values.len() as i32);
-            offset += len;
-        }
-
-        // 12. Convert to Arrow array
-        let data_type = if validate_utf8 {
-            ArrowType::Utf8
-        } else {
-            ArrowType::Binary
-        };
-
-        use arrow_array::make_array;
-        use arrow_buffer::Buffer;
-        use arrow_data::ArrayDataBuilder;
-
-        let array_data = ArrayDataBuilder::new(data_type)
-            .len(num_values)
-            .add_buffer(Buffer::from_vec(offsets))
-            .add_buffer(Buffer::from_vec(values))
-            .build()
-            .map_err(|e| ParquetError::General(format!("Failed to build array: {}", e)))?;
-
-        Ok(Some(make_array(array_data)))
-    }
-
     /// Build a new [`ParquetRecordBatchStream`]
     ///
     /// See examples on [`ParquetRecordBatchStreamBuilder::new`]
@@ -923,24 +764,6 @@ where
     }
 }
 
-/// Determines if a column should be treated as UTF-8 based on its logical/converted type
-fn is_utf8_column(column_descr: &crate::schema::types::ColumnDescriptor) -> bool {
-    use crate::basic::{ConvertedType, LogicalType};
-
-    let basic_info = column_descr.self_type().get_basic_info();
-
-    // Check logical type first (preferred)
-    if let Some(logical_type) = basic_info.logical_type_ref() {
-        return matches!(logical_type, LogicalType::String);
-    }
-
-    // Fall back to converted type
-    matches!(
-        basic_info.converted_type(),
-        ConvertedType::UTF8 | ConvertedType::JSON
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -961,7 +784,7 @@ mod tests {
     use arrow_array::cast::AsArray;
     use arrow_array::types::Int32Type;
     use arrow_array::{
-        Array, ArrayRef, BinaryArray, BooleanArray, Int8Array, Int32Array, Int64Array, RecordBatchReader,
+        Array, ArrayRef, BooleanArray, Int8Array, Int32Array, Int64Array, RecordBatchReader,
         Scalar, StringArray, StructArray, UInt64Array,
     };
     use arrow_schema::{DataType, Field, Schema};
@@ -2484,213 +2307,5 @@ mod tests {
         }
 
         Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_get_row_group_column_dictionary_string() {
-        // Create a parquet file with dictionary-encoded string column
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "dict_col",
-            DataType::Utf8,
-            false,
-        )]));
-
-        let mut parquet_data = Vec::new();
-        let props = WriterProperties::builder()
-            .set_dictionary_enabled(true)
-            .build();
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(StringArray::from(vec![
-                "apple", "banana", "apple", "cherry", "banana",
-            ]))],
-        )
-        .unwrap();
-
-        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Test reading dictionary
-        let async_reader = TestReader::new(Bytes::from(parquet_data));
-        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-
-        let dict = builder
-            .get_row_group_column_dictionary(0, 0)
-            .await
-            .unwrap()
-            .expect("Should have dictionary");
-
-        let strings = dict.as_any().downcast_ref::<StringArray>().unwrap();
-        // Dictionary should contain unique values: apple, banana, cherry
-        assert_eq!(strings.len(), 3);
-        let mut values: Vec<_> = (0..strings.len()).map(|i| strings.value(i)).collect();
-        values.sort();
-        assert_eq!(values, vec!["apple", "banana", "cherry"]);
-    }
-
-    #[tokio::test]
-    async fn test_get_row_group_column_dictionary_binary() {
-        // Test with binary column
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "binary_col",
-            DataType::Binary,
-            false,
-        )]));
-
-        let mut parquet_data = Vec::new();
-        let props = WriterProperties::builder()
-            .set_dictionary_enabled(true)
-            .build();
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(BinaryArray::from(vec![
-                b"data1".as_slice(),
-                b"data2".as_slice(),
-                b"data1".as_slice(),
-                b"data3".as_slice(),
-            ]))],
-        )
-        .unwrap();
-
-        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let async_reader = TestReader::new(Bytes::from(parquet_data));
-        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-
-        let dict = builder
-            .get_row_group_column_dictionary(0, 0)
-            .await
-            .unwrap()
-            .expect("Should have dictionary");
-
-        let binary = dict.as_any().downcast_ref::<BinaryArray>().unwrap();
-        assert_eq!(binary.len(), 3); // unique values: data1, data2, data3
-    }
-
-    #[tokio::test]
-    async fn test_get_row_group_column_dictionary_none() {
-        // Create a parquet file without dictionary encoding
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "plain_col",
-            DataType::Utf8,
-            false,
-        )]));
-
-        let mut parquet_data = Vec::new();
-        let props = WriterProperties::builder()
-            .set_dictionary_enabled(false)
-            .build();
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(StringArray::from(vec!["hello", "world"]))],
-        )
-        .unwrap();
-
-        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        // Test reading - should return None
-        let async_reader = TestReader::new(Bytes::from(parquet_data));
-        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-
-        let dict = builder
-            .get_row_group_column_dictionary(0, 0)
-            .await
-            .unwrap();
-
-        assert!(dict.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_get_row_group_column_dictionary_compressed() {
-        // Test with compressed dictionary
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "dict_col",
-            DataType::Utf8,
-            false,
-        )]));
-
-        let mut parquet_data = Vec::new();
-        let props = WriterProperties::builder()
-            .set_dictionary_enabled(true)
-            .set_compression(crate::basic::Compression::SNAPPY)
-            .build();
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(StringArray::from(vec![
-                "hello", "world", "hello", "parquet",
-            ]))],
-        )
-        .unwrap();
-
-        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let async_reader = TestReader::new(Bytes::from(parquet_data));
-        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-
-        let dict = builder
-            .get_row_group_column_dictionary(0, 0)
-            .await
-            .unwrap()
-            .expect("Should have dictionary");
-
-        let strings = dict.as_any().downcast_ref::<StringArray>().unwrap();
-        assert_eq!(strings.len(), 3); // unique values: hello, world, parquet
-    }
-
-    #[tokio::test]
-    async fn test_get_row_group_column_dictionary_wrong_type() {
-        // Test with non-BYTE_ARRAY column
-        let schema = Arc::new(Schema::new(vec![Field::new(
-            "int_col",
-            DataType::Int32,
-            false,
-        )]));
-
-        let mut parquet_data = Vec::new();
-        let props = WriterProperties::builder()
-            .set_dictionary_enabled(true)
-            .build();
-
-        let batch = RecordBatch::try_new(
-            schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 1, 3]))],
-        )
-        .unwrap();
-
-        let mut writer = ArrowWriter::try_new(&mut parquet_data, schema, Some(props)).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let async_reader = TestReader::new(Bytes::from(parquet_data));
-        let mut builder = ParquetRecordBatchStreamBuilder::new(async_reader)
-            .await
-            .unwrap();
-
-        // Should return error for non-BYTE_ARRAY type
-        let result = builder.get_row_group_column_dictionary(0, 0).await;
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("only supports BYTE_ARRAY"));
     }
 }
