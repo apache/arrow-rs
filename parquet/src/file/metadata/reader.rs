@@ -1196,6 +1196,129 @@ mod tests {
             "EOF: Parquet file too small. Size is 1728 but need 1729"
         );
     }
+
+    /// Helper to read a test file into bytes
+    fn read_test_file(file_name: &str) -> Bytes {
+        use std::io::Read;
+        let mut file = get_test_file(file_name);
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).unwrap();
+        Bytes::from(buffer)
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_read_column_dictionary_uncompressed() {
+        use arrow_array::{Array, BinaryArray};
+
+        // plain-dict-uncompressed-checksum.parquet: col 1 = binary_field (BYTE_ARRAY dict, uncompressed)
+        // Note: No STRING annotation, so returns BinaryArray
+        let file_data = read_test_file("plain-dict-uncompressed-checksum.parquet");
+        let reader = ParquetMetaDataReader::new();
+        let metadata = reader.parse_and_finish(&file_data).unwrap();
+
+        let dict = ParquetMetaDataReader::read_column_dictionary(&file_data, &metadata, 0, 1).unwrap();
+
+        assert!(dict.is_some());
+        let dict_array = dict.unwrap();
+        let binary_array = dict_array
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("Expected BinaryArray");
+
+        // Verify dictionary contents
+        assert_eq!(binary_array.len(), 1);
+        assert_eq!(
+            binary_array.value(0),
+            b"a655fd0e-9949-4059-bcae-fd6a002a4652"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_read_column_dictionary_binary() {
+        use arrow_array::{Array, BinaryArray};
+
+        // alltypes_dictionary.parquet: col 8 = date_string_col (BYTE_ARRAY with dict, NO STRING annotation)
+        let file_data = read_test_file("alltypes_dictionary.parquet");
+        let reader = ParquetMetaDataReader::new();
+        let metadata = reader.parse_and_finish(&file_data).unwrap();
+
+        let dict = ParquetMetaDataReader::read_column_dictionary(&file_data, &metadata, 0, 8).unwrap();
+
+        assert!(dict.is_some());
+        let dict_array = dict.unwrap();
+        let binary_array = dict_array
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("Expected BinaryArray for pure BYTE_ARRAY column");
+
+        // Verify dictionary contents
+        assert_eq!(binary_array.len(), 1);
+        assert_eq!(binary_array.value(0), b"01/01/09");
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_read_column_dictionary_none() {
+        // alltypes_tiny_pages_plain.parquet: col 9 = string_col (PLAIN encoding, NO dictionary)
+        let file_data = read_test_file("alltypes_tiny_pages_plain.parquet");
+        let reader = ParquetMetaDataReader::new();
+        let metadata = reader.parse_and_finish(&file_data).unwrap();
+
+        let dict = ParquetMetaDataReader::read_column_dictionary(&file_data, &metadata, 0, 9).unwrap();
+
+        assert!(dict.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_read_column_dictionary_compressed() {
+        use arrow_array::{Array, BinaryArray};
+
+        // rle-dict-snappy-checksum.parquet: col 1 = binary_field (BYTE_ARRAY with Snappy-compressed dict)
+        let file_data = read_test_file("rle-dict-snappy-checksum.parquet");
+        let reader = ParquetMetaDataReader::new();
+        let metadata = reader.parse_and_finish(&file_data).unwrap();
+
+        // Verify compression
+        assert_eq!(
+            metadata.row_group(0).column(1).compression(),
+            crate::basic::Compression::SNAPPY
+        );
+
+        let dict = ParquetMetaDataReader::read_column_dictionary(&file_data, &metadata, 0, 1).unwrap();
+
+        assert!(dict.is_some());
+        let dict_array = dict.unwrap();
+        // binary_field has no STRING annotation, so expect BinaryArray
+        let binary_array = dict_array
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("Expected BinaryArray");
+
+        // Verify dictionary contents
+        assert_eq!(binary_array.len(), 1);
+        assert_eq!(
+            binary_array.value(0),
+            b"c95e263a-f5d4-401f-8107-5ca7146a1f98"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "arrow")]
+    fn test_read_column_dictionary_wrong_type() {
+        // plain-dict-uncompressed-checksum.parquet: col 0 = long_field (INT32 with dict)
+        let file_data = read_test_file("plain-dict-uncompressed-checksum.parquet");
+        let reader = ParquetMetaDataReader::new();
+        let metadata = reader.parse_and_finish(&file_data).unwrap();
+
+        // INT32 column should fail
+        let result = ParquetMetaDataReader::read_column_dictionary(&file_data, &metadata, 0, 0);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("BYTE_ARRAY"));
+    }
 }
 
 #[cfg(all(feature = "async", feature = "arrow", test))]
@@ -1203,7 +1326,7 @@ mod async_tests {
     use super::*;
 
     use arrow::{array::Int32Array, datatypes::DataType};
-    use arrow_array::RecordBatch;
+    use arrow_array::{Array, BinaryArray, RecordBatch};
     use arrow_schema::{Field, Schema};
     use bytes::Bytes;
     use futures::FutureExt;
@@ -1601,5 +1724,174 @@ mod async_tests {
         ));
         read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
         read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_load_column_dictionary_uncompressed() {
+        // plain-dict-uncompressed-checksum.parquet: col 1 = binary_field (BYTE_ARRAY dict, uncompressed)
+        // Note: No STRING annotation, so returns BinaryArray
+        let mut file = get_test_file("plain-dict-uncompressed-checksum.parquet");
+
+        // Parse metadata to get schema info
+        let file_for_parse = file.try_clone().unwrap();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&file_for_parse)
+            .unwrap();
+
+        let mut fetch = |range| {
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let input = MetadataFetchFn(&mut fetch);
+
+        let dict = ParquetMetaDataReader::load_column_dictionary(
+            input,
+            &metadata,
+            0,  // row_group_idx
+            1,  // column_idx
+        ).await.unwrap();
+
+        assert!(dict.is_some());
+        let dict_array = dict.unwrap();
+        let binary_array = dict_array
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("Expected BinaryArray");
+
+        // Verify dictionary contents
+        assert_eq!(binary_array.len(), 1);
+        assert_eq!(
+            binary_array.value(0),
+            b"a655fd0e-9949-4059-bcae-fd6a002a4652"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_column_dictionary_binary() {
+        // alltypes_dictionary.parquet: col 8 = date_string_col (BYTE_ARRAY with dict, NO STRING annotation)
+        let mut file = get_test_file("alltypes_dictionary.parquet");
+
+        let file_for_parse = file.try_clone().unwrap();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&file_for_parse)
+            .unwrap();
+
+        let mut fetch = |range| {
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let input = MetadataFetchFn(&mut fetch);
+
+        let dict = ParquetMetaDataReader::load_column_dictionary(
+            input,
+            &metadata,
+            0,  // row_group_idx
+            8,  // column_idx
+        ).await.unwrap();
+
+        assert!(dict.is_some());
+        let dict_array = dict.unwrap();
+        let binary_array = dict_array
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("Expected BinaryArray for pure BYTE_ARRAY column");
+
+        // Verify dictionary contents
+        assert_eq!(binary_array.len(), 1);
+        assert_eq!(binary_array.value(0), b"01/01/09");
+    }
+
+    #[tokio::test]
+    async fn test_load_column_dictionary_none() {
+        // alltypes_tiny_pages_plain.parquet: col 9 = string_col (PLAIN encoding, NO dictionary)
+        let mut file = get_test_file("alltypes_tiny_pages_plain.parquet");
+
+        let file_for_parse = file.try_clone().unwrap();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&file_for_parse)
+            .unwrap();
+
+        let mut fetch = |range| {
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let input = MetadataFetchFn(&mut fetch);
+
+        let dict = ParquetMetaDataReader::load_column_dictionary(
+            input,
+            &metadata,
+            0,  // row_group_idx
+            9,  // column_idx
+        ).await.unwrap();
+
+        assert!(dict.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_load_column_dictionary_compressed() {
+        // rle-dict-snappy-checksum.parquet: col 1 = binary_field (BYTE_ARRAY with Snappy-compressed dict)
+        let mut file = get_test_file("rle-dict-snappy-checksum.parquet");
+
+        let file_for_parse = file.try_clone().unwrap();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&file_for_parse)
+            .unwrap();
+
+        // Verify compression
+        assert_eq!(
+            metadata.row_group(0).column(1).compression(),
+            crate::basic::Compression::SNAPPY
+        );
+
+        let mut fetch = |range| {
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let input = MetadataFetchFn(&mut fetch);
+
+        let dict = ParquetMetaDataReader::load_column_dictionary(
+            input,
+            &metadata,
+            0,  // row_group_idx
+            1,  // column_idx
+        ).await.unwrap();
+
+        assert!(dict.is_some());
+        let dict_array = dict.unwrap();
+        // binary_field has no STRING annotation, so expect BinaryArray
+        let binary_array = dict_array
+            .as_any()
+            .downcast_ref::<BinaryArray>()
+            .expect("Expected BinaryArray");
+
+        // Verify dictionary contents
+        assert_eq!(binary_array.len(), 1);
+        assert_eq!(
+            binary_array.value(0),
+            b"c95e263a-f5d4-401f-8107-5ca7146a1f98"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_column_dictionary_wrong_type() {
+        // plain-dict-uncompressed-checksum.parquet: col 0 = long_field (INT32 with dict)
+        let mut file = get_test_file("plain-dict-uncompressed-checksum.parquet");
+
+        let file_for_parse = file.try_clone().unwrap();
+        let metadata = ParquetMetaDataReader::new()
+            .parse_and_finish(&file_for_parse)
+            .unwrap();
+
+        let mut fetch = |range| {
+            futures::future::ready(read_range(&mut file, range))
+        };
+        let input = MetadataFetchFn(&mut fetch);
+
+        // INT32 column should fail
+        let result = ParquetMetaDataReader::load_column_dictionary(
+            input,
+            &metadata,
+            0,  // row_group_idx
+            0,  // column_idx
+        ).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("BYTE_ARRAY"));
     }
 }
