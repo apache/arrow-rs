@@ -576,23 +576,25 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
 
 impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
-        if data.buffers().len() != 2 {
+        let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
+
+        if buffers.len() != 2 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "ListViewArray data should contain two buffers (value offsets & value sizes), had {}",
-                data.buffers().len()
+                buffers.len()
             )));
         }
 
-        if data.child_data().len() != 1 {
+        if child_data.len() != 1 {
             return Err(ArrowError::InvalidArgumentError(format!(
                 "ListViewArray should contain a single child array (values array), had {}",
-                data.child_data().len()
+                child_data.len()
             )));
         }
 
-        let values = data.child_data()[0].clone();
+        let values = child_data.pop().expect("checked above");
 
-        if let Some(child_data_type) = Self::get_type(data.data_type()) {
+        if let Some(child_data_type) = Self::get_type(&data_type) {
             if values.data_type() != child_data_type {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "{}ListViewArray's child datatype {:?} does not \
@@ -607,18 +609,21 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
                 "{}ListViewArray's datatype must be {}ListViewArray(). It is {:?}",
                 OffsetSize::PREFIX,
                 OffsetSize::PREFIX,
-                data.data_type()
+                data_type
             )));
         }
 
         let values = make_array(values);
         // ArrayData is valid, and verified type above
-        let value_offsets = ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
-        let value_sizes = ScalarBuffer::new(data.buffers()[1].clone(), data.offset(), data.len());
+        // buffer[0] is offsets, buffer[1] is sizes
+        let sizes_buffer = buffers.pop().expect("checked above");
+        let offsets_buffer = buffers.pop().expect("checked above");
+        let value_offsets = ScalarBuffer::new(offsets_buffer, offset, len);
+        let value_sizes = ScalarBuffer::new(sizes_buffer, offset, len);
 
         Ok(Self {
-            data_type: data.data_type().clone(),
-            nulls: data.nulls().cloned(),
+            data_type,
+            nulls,
             values,
             value_offsets,
             value_sizes,
