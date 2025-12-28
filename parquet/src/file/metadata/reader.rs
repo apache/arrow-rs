@@ -152,20 +152,6 @@ impl ParquetMetaDataReader {
             .with_offset_index_policy(policy)
     }
 
-    /// Sets whether to read [`PageEncodingStats`] as a bitmask.
-    ///
-    /// See [`ParquetMetaDataOptions::with_encoding_stats_as_mask`] for more details.
-    pub fn with_encoding_stats_as_mask(mut self, val: bool) -> Self {
-        let mut options = self
-            .metadata_options
-            .as_deref()
-            .cloned()
-            .unwrap_or_default();
-        options = options.with_encoding_stats_as_mask(val);
-        self.metadata_options = Some(Arc::new(options));
-        self
-    }
-
     /// Sets the [`PageIndexPolicy`] for the column index
     pub fn with_column_index_policy(mut self, policy: PageIndexPolicy) -> Self {
         self.column_index = policy;
