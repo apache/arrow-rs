@@ -666,25 +666,33 @@ fn maybe_prep_null_mask_filter(predicate: &BooleanArray) -> BooleanBuffer {
 }
 
 struct ByteViewScalarImpl<T: ByteViewType> {
-    truthy: Option<GenericByteViewArray<T>>,
-    falsy: Option<GenericByteViewArray<T>>,
+    truthy_view: Option<u128>,
+    truthy_buffers:Vec<Buffer>,
+    falsy_view: Option<u128>,
+    falsy_buffers: Vec<Buffer>,
     phantom: PhantomData<T>,
 }
 
 impl<T: ByteViewType> ByteViewScalarImpl<T> {
     fn new(truthy: &dyn Array, falsy: &dyn Array) -> Self {
+        let (truthy_view, truthy_buffers) = Self::get_value_from_scalar(truthy);
+        let (falsy_view, falsy_buffers) = Self::get_value_from_scalar(falsy);
         Self {
-            truthy: Self::get_value_from_scalar(truthy),
-            falsy: Self::get_value_from_scalar(falsy),
+            truthy_view,
+            truthy_buffers,
+            falsy_view,
+            falsy_buffers,
             phantom: PhantomData,
         }
     }
 
-    fn get_value_from_scalar(scalar: &dyn Array) -> Option<GenericByteViewArray<T>> {
+    fn get_value_from_scalar(scalar: &dyn Array) -> (Option<u128>, Vec<Buffer>) {
         if scalar.is_null(0) {
-            None
+            (None, vec![])
         } else {
-            Some(scalar.as_byte_view().clone())
+            let byte_view: &GenericByteViewArray<T> = scalar.as_byte_view();
+            let (views, buffers, _) = byte_view.clone().into_parts();
+            (views.first().copied(), buffers)
         }
     }
 
@@ -699,7 +707,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
 
     fn get_scalar_buffers_and_nulls_for_single_non_nullable(
         predicate: BooleanBuffer,
-        value: &GenericByteViewArray<T>,
+        value: u128, 
+        buffers: Vec<Buffer>,
     ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
         let number_of_true = predicate.count_set_bits();
         let number_of_values = predicate.len();
@@ -709,42 +718,41 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
             // All values are null
             return Self::get_scalar_buffers_and_nulls_for_all_values_null(number_of_values);
         }
-        let view = value.views()[0].to_byte_slice();
+        let view = value.to_byte_slice();
         let mut bytes = MutableBuffer::with_capacity(0);
         bytes.repeat_slice_n_times(view, number_of_values);
 
         let bytes = Buffer::from(bytes);
 
-        // If a value is true we need the TRUTHY and the null buffer will have 1 (meaning not null)
-        // If a value is false we need the FALSY and the null buffer will have 0 (meaning null)
+        // If value is true and we want to handle the TRUTHY case, the null buffer will have 1 (meaning not null)
+        // If value is false and we want to handle the FALSY case, the null buffer will have 0 (meaning null)
         let nulls = NullBuffer::new(predicate);
-        (bytes.into(), value.data_buffers().into(), Some(nulls))
+        (bytes.into(), buffers, Some(nulls))
     }
 
     fn get_scalar_buffers_and_nulls_non_nullable(
         predicate: BooleanBuffer,
-        truthy: &GenericByteViewArray<T>,
-        falsy: &GenericByteViewArray<T>,
+        truthy_view: u128,
+        truthy_buffers: Vec<Buffer>,
+        falsy_view: u128,
+        falsy_buffers: Vec<Buffer>,
     ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
         let true_count = predicate.count_set_bits();
-        let view_truthy = truthy.views()[0].to_byte_slice();
-        let mut buffers: Vec<Buffer> = truthy.data_buffers().to_vec();
-
-        // if falsy has non-inlined values in the buffer,
+        let mut buffers: Vec<Buffer> = truthy_buffers.to_vec();
+        // If falsy has non-inlined values in the buffer,
         // include the buffers and recalculate the view,
-        // otherwise, we simply use the view.
-        let view_falsy = if falsy.total_buffer_bytes_used() > 0 {
-            let byte_view_falsy = ByteView::from(falsy.views()[0]);
+        // otherwise, we use the view.
+        let view_falsy = if falsy_buffers.len() > 0 {
+            let byte_view_falsy = ByteView::from(falsy_view);
             let new_index_falsy_buffers = buffers.len() as u32;
-            buffers.extend(falsy.data_buffers().to_vec());
+            buffers.extend(falsy_buffers);
             let byte_view_falsy = byte_view_falsy.with_buffer_index(new_index_falsy_buffers);
             byte_view_falsy.as_u128()
         } else {
-            falsy.views()[0]
+            falsy_view
         };
 
-        let total_number_of_bytes = true_count * view_truthy.len()
-            + (predicate.len() - true_count) * view_falsy.to_byte_slice().len();
+        let total_number_of_bytes = true_count * 16 + (predicate.len() - true_count) * 16;
         let mut mutable = MutableBuffer::new(total_number_of_bytes);
         let mut filled = 0;
 
@@ -754,7 +762,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 mutable.repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count);
             }
             let true_repeat_count = end - start;
-            mutable.repeat_slice_n_times(view_truthy, true_repeat_count);
+            mutable.repeat_slice_n_times(truthy_view.to_byte_slice(), true_repeat_count);
             filled = end;
         });
 
@@ -774,11 +782,11 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
 
     fn get_scalar_buffers_and_nulls_for_all_same_value(
         length: usize,
-        value: &GenericByteViewArray<T>,
+        view: u128,
+        buffers: Vec<Buffer>,
     ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
-        let (views, buffers, _) = value.clone().into_parts();
         let mut mutable = MutableBuffer::with_capacity(0);
-        mutable.repeat_slice_n_times(views[0].to_byte_slice(), length);
+        mutable.repeat_slice_n_times(view.to_byte_slice(), length);
 
         let bytes = Buffer::from(mutable);
 
@@ -788,20 +796,22 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
     fn get_scalar_buffers_and_nulls_for_non_nullable(
         predicate: BooleanBuffer,
         result_len: usize,
-        truthy: &GenericByteViewArray<T>,
-        falsy: &GenericByteViewArray<T>,
+        truthy_view: u128,
+        truthy_buffers: Vec<Buffer>,
+        falsy_view:u128,
+        falsy_buffers: Vec<Buffer>,
     ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
         let true_count = predicate.count_set_bits();
         match true_count {
             0 => {
                 // all values are falsy
-                Self::get_scalar_buffers_and_nulls_for_all_same_value(result_len, falsy)
+                Self::get_scalar_buffers_and_nulls_for_all_same_value(result_len, falsy_view, falsy_buffers)
             }
             n if n == predicate.len() => {
                 // all values are truthy
-                Self::get_scalar_buffers_and_nulls_for_all_same_value(result_len, truthy)
+                Self::get_scalar_buffers_and_nulls_for_all_same_value(result_len, truthy_view, truthy_buffers)
             }
-            _ => Self::get_scalar_buffers_and_nulls_non_nullable(predicate, truthy, falsy),
+            _ => Self::get_scalar_buffers_and_nulls_non_nullable(predicate, truthy_view, truthy_buffers, falsy_view, falsy_buffers),
         }
     }
 }
@@ -809,8 +819,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
 impl<T: ByteViewType> Debug for ByteViewScalarImpl<T> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ByteViewScalarImpl")
-            .field("truthy", &self.truthy)
-            .field("falsy", &self.falsy)
+            .field("truthy", &self.truthy_view)
+            .field("falsy", &self.falsy_view)
             .finish()
     }
 }
@@ -821,16 +831,16 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
         // Nulls are treated as false
         let predicate = maybe_prep_null_mask_filter(predicate);
 
-        let (views, buffers, nulls) = match (self.truthy.as_ref(), self.falsy.as_ref()) {
+        let (views, buffers, nulls) = match (self.truthy_view, self.falsy_view) {
             (Some(truthy), Some(falsy)) => Self::get_scalar_buffers_and_nulls_for_non_nullable(
-                predicate, result_len, truthy, falsy,
+                predicate, result_len, truthy, self.truthy_buffers.clone(), falsy, self.falsy_buffers.clone()
             ),
             (Some(truthy), None) => {
-                Self::get_scalar_buffers_and_nulls_for_single_non_nullable(predicate, truthy)
+                Self::get_scalar_buffers_and_nulls_for_single_non_nullable(predicate, truthy, self.truthy_buffers.clone())
             }
             (None, Some(falsy)) => {
                 let predicate = predicate.not();
-                Self::get_scalar_buffers_and_nulls_for_single_non_nullable(predicate, falsy)
+                Self::get_scalar_buffers_and_nulls_for_single_non_nullable(predicate, falsy, self.falsy_buffers.clone())
             }
             (None, None) => Self::get_scalar_buffers_and_nulls_for_all_values_null(result_len),
         };
