@@ -102,7 +102,11 @@ pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
                 .zip(null_buffer.iter())
                 .map(|(start_end, is_valid)| {
                     if is_valid {
-                        Some(&bytes[start_end[0].as_usize()..start_end[1].as_usize()])
+                        let item_range = start_end[0].as_usize()..start_end[1].as_usize();
+                        // SAFETY: the offsets of the input are valid by construction
+                        // so it is ok to use unsafe here
+                        let item = unsafe { bytes.get_unchecked(item_range) };
+                        Some(item)
                     } else {
                         None
                     }
@@ -111,9 +115,13 @@ pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
         encode(data, offsets, input_iter, opts);
     } else {
         // Skip null checks
-        let input_iter = input_offsets
-            .windows(2)
-            .map(|start_end| Some(&bytes[start_end[0].as_usize()..start_end[1].as_usize()]));
+        let input_iter = input_offsets.windows(2).map(|start_end| {
+            let item_range = start_end[0].as_usize()..start_end[1].as_usize();
+            // SAFETY: the offsets of the input are valid by construction
+            // so it is ok to use unsafe here
+            let item = unsafe { bytes.get_unchecked(item_range) };
+            Some(item)
+        });
 
         encode(data, offsets, input_iter, opts);
     }
@@ -132,6 +140,7 @@ pub fn encode_empty(out: &mut [u8], opts: SortOptions) -> usize {
     1
 }
 
+#[inline]
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usize {
     match val {
         None => encode_null(out, opts),
