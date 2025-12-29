@@ -715,11 +715,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
             // All values are null
             return Self::get_scalar_buffers_and_nulls_for_all_values_null(number_of_values);
         }
-        let view = value.to_byte_slice();
-        let mut bytes = MutableBuffer::with_capacity(0);
-        bytes.repeat_slice_n_times(view, number_of_values);
-
-        let bytes = Buffer::from(bytes);
+        let bytes = vec![value; number_of_values];
 
         // If value is true and we want to handle the TRUTHY case, the null buffer will have 1 (meaning not null)
         // If value is false and we want to handle the FALSY case, the null buffer will have 0 (meaning null)
