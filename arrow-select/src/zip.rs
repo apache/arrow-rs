@@ -737,7 +737,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         // otherwise, we use the view.
         let view_falsy = if falsy_buffers.len() > 0 {
             let byte_view_falsy = ByteView::from(falsy_view);
-            let new_index_falsy_buffers = buffers.len() as u32;
+            let new_index_falsy_buffers = buffers.len() as u32 + byte_view_falsy.buffer_index;
             buffers.extend(falsy_buffers);
             let byte_view_falsy = byte_view_falsy.with_buffer_index(new_index_falsy_buffers);
             byte_view_falsy.as_u128()
