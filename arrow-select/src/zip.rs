@@ -699,10 +699,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
     fn get_scalar_buffers_and_nulls_for_all_values_null(
         len: usize,
     ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
-        let mut mutable = MutableBuffer::with_capacity(0);
-        mutable.repeat_slice_n_times((0u128).to_byte_slice(), len);
-
-        (mutable.into(), vec![], Some(NullBuffer::new_null(len)))
+        (vec![0; len].into(), vec![], Some(NullBuffer::new_null(len)))
     }
 
     fn get_scalar_buffers_and_nulls_for_single_non_nullable(
