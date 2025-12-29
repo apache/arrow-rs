@@ -690,8 +690,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         if scalar.is_null(0) {
             (None, vec![])
         } else {
-            let byte_view: &GenericByteViewArray<T> = scalar.as_byte_view();
-            let (views, buffers, _) = byte_view.clone().into_parts();
+            let byte_view: GenericByteViewArray<T> = scalar.as_byte_view().clone();
+            let (views, buffers, _) = byte_view.into_parts();
             (views.first().copied(), buffers)
         }
     }
@@ -730,17 +730,17 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
     ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
         let true_count = predicate.count_set_bits();
         let mut buffers: Vec<Buffer> = truthy_buffers.to_vec();
-        // If falsy has non-inlined values in the buffer,
-        // include the buffers and recalculate the view,
-        // otherwise, we use the view.
-        let view_falsy = if falsy_buffers.len() > 0 {
+
+        // if the falsy buffers are empty, we can use the falsy view as it is,
+        // other we have non-inlined values in the buffer and we need to recalculate the falsy view
+        let view_falsy = if falsy_buffers.is_empty() {
+            falsy_view
+        } else {
             let byte_view_falsy = ByteView::from(falsy_view);
             let new_index_falsy_buffers = buffers.len() as u32 + byte_view_falsy.buffer_index;
             buffers.extend(falsy_buffers);
             let byte_view_falsy = byte_view_falsy.with_buffer_index(new_index_falsy_buffers);
             byte_view_falsy.as_u128()
-        } else {
-            falsy_view
         };
 
         let total_number_of_bytes = true_count * 16 + (predicate.len() - true_count) * 16;
@@ -763,16 +763,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         }
 
         let bytes = Buffer::from(mutable);
-
         (bytes.into(), buffers, None)
-    }
-
-    fn get_scalar_buffers_and_nulls_for_all_same_value(
-        length: usize,
-        view: u128,
-        buffers: Vec<Buffer>,
-    ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
-        (vec![view; length].into(), buffers, None)
     }
 
     fn get_scalar_buffers_and_nulls_for_non_nullable(
@@ -787,19 +778,11 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         match true_count {
             0 => {
                 // all values are falsy
-                Self::get_scalar_buffers_and_nulls_for_all_same_value(
-                    result_len,
-                    falsy_view,
-                    falsy_buffers,
-                )
+                (vec![falsy_view; result_len].into(), falsy_buffers, None)
             }
             n if n == predicate.len() => {
                 // all values are truthy
-                Self::get_scalar_buffers_and_nulls_for_all_same_value(
-                    result_len,
-                    truthy_view,
-                    truthy_buffers,
-                )
+                (vec![truthy_view; result_len].into(), truthy_buffers, None)
             }
             _ => Self::get_scalar_buffers_and_nulls_non_nullable(
                 predicate,
