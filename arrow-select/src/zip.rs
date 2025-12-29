@@ -769,7 +769,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         (
             bytes.into(),
             buffers,
-            Some(NullBuffer::new_valid(predicate.len())),
+            None,
         )
     }
 
@@ -778,12 +778,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         view: u128,
         buffers: Vec<Buffer>,
     ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
-        let mut mutable = MutableBuffer::with_capacity(0);
-        mutable.repeat_slice_n_times(view.to_byte_slice(), length);
-
-        let bytes = Buffer::from(mutable);
-
-        (bytes.into(), buffers, Some(NullBuffer::new_valid(length)))
+        (vec![view; length].into(), buffers, None)
     }
 
     fn get_scalar_buffers_and_nulls_for_non_nullable(
