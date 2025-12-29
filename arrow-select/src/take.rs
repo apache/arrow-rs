@@ -1006,12 +1006,11 @@ to_indices_reinterpret!(Int64Type, UInt64Type);
 /// This function will call [`take`] on each array of the [`RecordBatch`] and assemble a new [`RecordBatch`].
 ///
 /// # Example
-/// ```
+/// ```rust
 /// # use std::sync::Arc;
 /// # use arrow_array::{StringArray, Int32Array, UInt32Array, RecordBatch};
 /// # use arrow_schema::{DataType, Field, Schema};
 /// # use arrow_select::take::take_record_batch;
-///
 /// let schema = Arc::new(Schema::new(vec![
 ///     Field::new("a", DataType::Int32, true),
 ///     Field::new("b", DataType::Utf8, true),

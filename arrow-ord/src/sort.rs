@@ -846,16 +846,15 @@ pub struct SortColumn {
 /// Returns an `ArrowError::ComputeError(String)` if any of the array type is either unsupported by
 /// `lexsort_to_indices` or `take`.
 ///
-/// Example:
+/// # Example:
 ///
-/// ```
+/// ```rust
 /// # use std::convert::From;
 /// # use std::sync::Arc;
 /// # use arrow_array::{ArrayRef, StringArray, PrimitiveArray};
 /// # use arrow_array::types::Int64Type;
 /// # use arrow_array::cast::AsArray;
 /// # use arrow_ord::sort::{SortColumn, SortOptions, lexsort};
-///
 /// let sorted_columns = lexsort(&vec![
 ///     SortColumn {
 ///         values: Arc::new(PrimitiveArray::<Int64Type>::from(vec![
