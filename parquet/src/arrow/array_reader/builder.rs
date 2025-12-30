@@ -152,12 +152,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                     return Ok(Some(reader));
                 };
 
-                // Skip caching for columns with nullable ancestors (def_level > 0)
-                // because CachedArrayReader doesn't support get_def_levels() yet.
-                // See: https://github.com/apache/arrow-rs/issues/XXXX
-                if cache_options.projection_mask.leaf_included(col_idx)
-                    && field.def_level == 0
-                {
+                if cache_options.projection_mask.leaf_included(col_idx) {
                     Ok(Some(Box::new(CachedArrayReader::new(
                         reader,
                         Arc::clone(cache_options.cache),
