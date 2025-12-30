@@ -814,9 +814,9 @@ where
 /// ```rust
 /// # use arrow_array::Int32Array;
 /// # use arrow_arith::aggregate::min;
-/// let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
+/// let array = Int32Array::from(vec![8, 2, 4]);
 /// let result = min(&array);
-/// assert_eq!(result, Some(5));
+/// assert_eq!(result, Some(2));
 /// ```
 pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
@@ -832,9 +832,9 @@ where
 /// ```rust
 /// # use arrow_array::Int32Array;
 /// # use arrow_arith::aggregate::max;
-/// let array = Int32Array::from(vec![5, 6, 7, 8, 9]);
+/// let array = Int32Array::from(vec![4, 8, 2]);
 /// let result = max(&array);
-/// assert_eq!(result, Some(9));
+/// assert_eq!(result, Some(8));
 /// ```
 pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
