@@ -168,9 +168,10 @@ impl BooleanBuffer {
     /// * The output always has zero offset
     ///
     /// # See Also
+    /// - [`BooleanBuffer::from_bitwise_binary_op`] to create a new buffer from a binary operation
     /// - [`apply_bitwise_unary_op`](bit_util::apply_bitwise_unary_op) for in-place unary bitwise operations
     ///
-    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT` of an input [`Buffer`]
+    /// # Example: Create new [`BooleanBuffer`] from bitwise `NOT` of a byte slice
     /// ```
     /// # use arrow_buffer::BooleanBuffer;
     /// let input = [0b11001100u8, 0b10111010u8]; // 2 bytes = 16 bits
@@ -220,9 +221,8 @@ impl BooleanBuffer {
             result.truncate(chunks.num_bytes());
         }
 
-        let buffer = Buffer::from(result);
         BooleanBuffer {
-            buffer,
+            buffer: Buffer::from(result),
             bit_offset: 0,
             bit_len: len_in_bits,
         }
@@ -305,7 +305,7 @@ impl BooleanBuffer {
         // try fast path for aligned input
         // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
         // to improve performance.
-        if left_offset_in_bits == 0 && right_offset_in_bits == 0 {
+        if left_offset_in_bits & 0x7 == 0 && right_offset_in_bits & 0x7 == 0 {
             unsafe {
                 let (left_prefix, left_u64s, left_suffix) = left.align_to::<u64>();
                 let (right_prefix, right_u64s, right_suffix) = right.align_to::<u64>();

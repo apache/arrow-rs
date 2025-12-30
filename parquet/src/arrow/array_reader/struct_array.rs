@@ -129,8 +129,8 @@ impl ArrayReader for StructArrayReader {
             .len(children_array_len)
             .child_data(
                 children_array
-                    .into_iter()
-                    .map(|x| x.into_data())
+                    .iter()
+                    .map(|x| x.to_data())
                     .collect::<Vec<ArrayData>>(),
             );
 

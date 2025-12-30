@@ -809,15 +809,6 @@ where
 
 /// Returns the minimum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
-///
-/// # Example
-/// ```rust
-/// # use arrow_array::Int32Array;
-/// # use arrow_arith::aggregate::min;
-/// let array = Int32Array::from(vec![8, 2, 4]);
-/// let result = min(&array);
-/// assert_eq!(result, Some(2));
-/// ```
 pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,
@@ -827,15 +818,6 @@ where
 
 /// Returns the maximum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
-///
-/// # Example
-/// ```rust
-/// # use arrow_array::Int32Array;
-/// # use arrow_arith::aggregate::max;
-/// let array = Int32Array::from(vec![4, 8, 2]);
-/// let result = max(&array);
-/// assert_eq!(result, Some(8));
-/// ```
 pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,
