@@ -85,13 +85,11 @@ async fn test_cache_disabled_with_filters() {
 }
 
 #[tokio::test]
-async fn test_cache_projection_excludes_nested_columns() {
-    let test = ParquetPredicateCacheTest::new_nested().with_expected_records_read_from_cache(0);
-
-    let sync_builder = test.sync_builder().add_nested_filter();
-    test.run_sync(sync_builder);
-
-    let async_builder = test.async_builder().await.add_nested_filter();
+async fn test_async_cache_with_nested_columns() {
+    // Nested columns now work with cache - expect records from cache
+    // 100 rows × 2 leaf columns (b.aa, b.bb) = 200 records
+    let test = ParquetPredicateCacheTest::new_nested().with_expected_records_read_from_cache(200);
+    let async_builder = test.async_builder().await.add_nested_root_filter();
     test.run_async(async_builder).await;
 }
 
@@ -282,9 +280,9 @@ trait ArrowReaderBuilderExt {
     /// 2. a row_filter applied to "b": 575 < "b" < 625 (select 1 data page from each row group)
     fn add_project_ab_and_filter_b(self) -> Self;
 
-    /// Adds a row filter that projects the nested leaf column "b.aa" and
+    /// Adds a row filter that projects the nested ROOT column "b" and
     /// returns true for all rows.
-    fn add_nested_filter(self) -> Self;
+    fn add_nested_root_filter(self) -> Self;
 }
 
 impl<T> ArrowReaderBuilderExt for ArrowReaderBuilder<T> {
@@ -306,14 +304,13 @@ impl<T> ArrowReaderBuilderExt for ArrowReaderBuilder<T> {
             .with_row_filter(RowFilter::new(vec![Box::new(row_filter)]))
     }
 
-    fn add_nested_filter(self) -> Self {
+    fn add_nested_root_filter(self) -> Self {
         let schema_descr = self.metadata().file_metadata().schema_descr_ptr();
 
-        // Build a RowFilter whose predicate projects a leaf under the nested root `b`
-        // Leaf indices are depth-first; with schema [a, b.aa, b.bb] we pick index 1 (b.aa)
-        let nested_leaf_mask = ProjectionMask::leaves(&schema_descr, vec![1]);
+        // Project the ROOT struct column "b", not just leaf "b.aa"
+        let root_mask = ProjectionMask::roots(&schema_descr, [1]); // column index 1 = "b"
 
-        let always_true = ArrowPredicateFn::new(nested_leaf_mask.clone(), |batch: RecordBatch| {
+        let always_true = ArrowPredicateFn::new(root_mask.clone(), |batch: RecordBatch| {
             Ok(arrow_array::BooleanArray::from(vec![
                 true;
                 batch.num_rows()
@@ -321,8 +318,7 @@ impl<T> ArrowReaderBuilderExt for ArrowReaderBuilder<T> {
         });
         let row_filter = RowFilter::new(vec![Box::new(always_true)]);
 
-        self.with_projection(nested_leaf_mask)
-            .with_row_filter(row_filter)
+        self.with_projection(root_mask).with_row_filter(row_filter)
     }
 }
 
