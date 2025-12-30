@@ -281,8 +281,15 @@ impl ArrayReader for CachedArrayReader {
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let row_count = self.selections.len();
         if row_count == 0 {
-            self.def_levels_buffer = None;
-            self.rep_levels_buffer = None;
+            // When there's no data to consume, set empty level buffers if we
+            // previously had levels. This ensures the levels match the empty array.
+            // We keep Some([]) rather than None to indicate this reader provides levels.
+            if self.def_levels_buffer.is_some() {
+                self.def_levels_buffer = Some(Vec::new());
+            }
+            if self.rep_levels_buffer.is_some() {
+                self.rep_levels_buffer = Some(Vec::new());
+            }
             return Ok(new_empty_array(self.inner.get_data_type()));
         }
 
