@@ -69,53 +69,20 @@ pub fn bitwise_bin_op_helper<F>(
     right: &Buffer,
     right_offset_in_bits: usize,
     len_in_bits: usize,
-    mut op: F,
+    op: F,
 ) -> Buffer
 where
     F: FnMut(u64, u64) -> u64,
 {
-    // If the underlying buffers are aligned to u64 we can apply the operation directly on the u64 slices
-    // to improve performance.
-    if left_offset_in_bits == 0 && right_offset_in_bits == 0 {
-        unsafe {
-            let (left_prefix, left_u64s, left_suffix) = left.as_slice().align_to::<u64>();
-            let (right_prefix, right_u64s, right_suffix) = right.as_slice().align_to::<u64>();
-            // if there is no prefix or suffix, both buffers are aligned and we can do the operation directly
-            // on u64s
-            // TODO also handle non empty suffixes by processing them separately
-            if left_prefix.is_empty()
-                && right_prefix.is_empty()
-                && left_suffix.is_empty()
-                && right_suffix.is_empty()
-            {
-                let result_u64s = left_u64s
-                    .iter()
-                    .zip(right_u64s.iter())
-                    .map(|(l, r)| op(*l, *r))
-                    .collect::<Vec<u64>>();
-                return result_u64s.into();
-            }
-        }
-    }
-
-    let left_chunks = left.bit_chunks(left_offset_in_bits, len_in_bits);
-    let right_chunks = right.bit_chunks(right_offset_in_bits, len_in_bits);
-
-    let chunks = left_chunks
-        .iter()
-        .zip(right_chunks.iter())
-        .map(|(left, right)| op(left, right));
-    // Soundness: `BitChunks` is a `BitChunks` iterator which
-    // correctly reports its upper bound
-    let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
-
-    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
-    let rem = op(left_chunks.remainder_bits(), right_chunks.remainder_bits());
-    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
-    let rem = &rem.to_le_bytes()[0..remainder_bytes];
-    buffer.extend_from_slice(rem);
-
-    buffer.into()
+    BooleanBuffer::from_bitwise_binary_op(
+        left,
+        left_offset_in_bits,
+        right,
+        right_offset_in_bits,
+        len_in_bits,
+        op,
+    )
+    .into_inner()
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
