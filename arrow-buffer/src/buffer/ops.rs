@@ -61,6 +61,8 @@ where
 
 /// Apply a bitwise operation `op` to two inputs and return the result as a Buffer.
 /// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// This is a comment for testing purposes
 pub fn bitwise_bin_op_helper<F>(
     left: &Buffer,
     left_offset_in_bits: usize,
