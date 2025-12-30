@@ -333,7 +333,7 @@ fn aggregate<T: ArrowNativeTypeOp, P: ArrowPrimitiveType<Native = T>, A: Numeric
 /// Returns the minimum value in the boolean array.
 ///
 /// # Example
-/// ```rust
+/// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::min_boolean;
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
@@ -391,7 +391,7 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
 /// Returns the maximum value in the boolean array
 ///
 /// # Example
-/// ```rust
+/// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::max_boolean;
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);

@@ -848,7 +848,7 @@ pub struct SortColumn {
 ///
 /// # Example:
 ///
-/// ```rust
+/// ```
 /// # use std::convert::From;
 /// # use std::sync::Arc;
 /// # use arrow_array::{ArrayRef, StringArray, PrimitiveArray};

@@ -26,7 +26,7 @@ use num_traits::abs;
 /// A positive value for `offset` shifts the array to the right
 /// a negative value shifts the array to the left.
 /// # Examples
-/// ```rust
+/// ```
 /// # use arrow_array::Int32Array;
 /// # use arrow_select::window::shift;
 /// let a: Int32Array = vec![Some(1), None, Some(4)].into();
