@@ -419,51 +419,6 @@ impl ProjectionMask {
             }
         }
     }
-
-    /// Return a new [`ProjectionMask`] that excludes any leaf columns that are
-    /// part of a nested type, such as struct, list, or map
-    ///
-    /// If there are no non-nested columns in the mask, returns `None`
-    pub(crate) fn without_nested_types(&self, schema: &SchemaDescriptor) -> Option<Self> {
-        let num_leaves = schema.num_columns();
-
-        // Count how many leaves each root column has
-        let num_roots = schema.root_schema().get_fields().len();
-        let mut root_leaf_counts = vec![0usize; num_roots];
-        for leaf_idx in 0..num_leaves {
-            let root_idx = schema.get_column_root_idx(leaf_idx);
-            root_leaf_counts[root_idx] += 1;
-        }
-
-        // Keep only leaves whose root has exactly one leaf (non-nested) and is not a
-        // LIST. LIST is encoded as a wrapped logical type with a single leaf, e.g.
-        // https://github.com/apache/parquet-format/blob/master/LogicalTypes.md#lists
-        //
-        // ```text
-        // // List<String> (list non-null, elements nullable)
-        // required group my_list (LIST) {
-        //   repeated group list {
-        //     optional binary element (STRING);
-        //   }
-        // }
-        // ```
-        let mut included_leaves = Vec::new();
-        for leaf_idx in 0..num_leaves {
-            if self.leaf_included(leaf_idx) {
-                let root = schema.get_column_root(leaf_idx);
-                let root_idx = schema.get_column_root_idx(leaf_idx);
-                if root_leaf_counts[root_idx] == 1 && !root.is_list() {
-                    included_leaves.push(leaf_idx);
-                }
-            }
-        }
-
-        if included_leaves.is_empty() {
-            None
-        } else {
-            Some(ProjectionMask::leaves(schema, included_leaves))
-        }
-    }
 }
 
 /// Lookups up the parquet column by name
