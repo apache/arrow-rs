@@ -17,7 +17,7 @@
 
 //! [`CachedArrayReader`] wrapper around [`ArrayReader`]
 
-use crate::arrow::array_reader::row_group_cache::BatchID;
+use crate::arrow::array_reader::row_group_cache::{BatchID, CachedBatch};
 use crate::arrow::array_reader::{ArrayReader, row_group_cache::RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::errors::Result;
@@ -84,9 +84,13 @@ pub struct CachedArrayReader {
     role: CacheRole,
     /// Local cache to store batches between read_records and consume_batch calls
     /// This ensures data is available even if the shared cache evicts items
-    local_cache: HashMap<BatchID, ArrayRef>,
+    local_cache: HashMap<BatchID, CachedBatch>,
     /// Statistics to report on the Cache behavior
     metrics: ArrowReaderMetrics,
+    /// Definition levels for the last consume_batch() output
+    def_levels_buffer: Option<Vec<i16>>,
+    /// Repetition levels for the last consume_batch() output
+    rep_levels_buffer: Option<Vec<i16>>,
 }
 
 impl CachedArrayReader {
@@ -111,6 +115,8 @@ impl CachedArrayReader {
             role,
             local_cache: HashMap::new(),
             metrics,
+            def_levels_buffer: None,
+            rep_levels_buffer: None,
         }
     }
 
@@ -146,6 +152,11 @@ impl CachedArrayReader {
 
         let array = self.inner.consume_batch()?;
 
+        // Capture definition and repetition levels from inner reader before they are cleared
+        let def_levels = self.inner.get_def_levels().map(|l| l.to_vec());
+        let rep_levels = self.inner.get_rep_levels().map(|l| l.to_vec());
+        let cached_batch = CachedBatch::with_levels(array, def_levels, rep_levels);
+
         // Store in both shared cache and local cache
         // The shared cache is used to reuse results between readers
         // The local cache ensures data is available for our consume_batch call
@@ -153,11 +164,11 @@ impl CachedArrayReader {
             self.shared_cache
                 .lock()
                 .unwrap()
-                .insert(self.column_idx, batch_id, array.clone());
+                .insert(self.column_idx, batch_id, cached_batch.clone());
         // Note: if the shared cache is full (_cached == false), we continue without caching
         // The local cache will still store the data for this reader's use
 
-        self.local_cache.insert(batch_id, array);
+        self.local_cache.insert(batch_id, cached_batch);
 
         self.inner_position += read;
         Ok(read)
@@ -200,8 +211,8 @@ impl ArrayReader for CachedArrayReader {
             let batch_id = self.get_batch_id_from_position(self.outer_position);
 
             // Check local cache first
-            let cached = if let Some(array) = self.local_cache.get(&batch_id) {
-                Some(array.clone())
+            let cached = if let Some(batch) = self.local_cache.get(&batch_id) {
+                Some(batch.clone())
             } else {
                 // If not in local cache, i.e., we are consumer, check shared cache
                 let cache_content = self
@@ -209,16 +220,16 @@ impl ArrayReader for CachedArrayReader {
                     .lock()
                     .unwrap()
                     .get(self.column_idx, batch_id);
-                if let Some(array) = cache_content.as_ref() {
+                if let Some(batch) = cache_content.as_ref() {
                     // Store in local cache for later use in consume_batch
-                    self.local_cache.insert(batch_id, array.clone());
+                    self.local_cache.insert(batch_id, batch.clone());
                 }
                 cache_content
             };
 
             match cached {
-                Some(array) => {
-                    let array_len = array.len();
+                Some(batch) => {
+                    let array_len = batch.array.len();
                     if array_len + batch_id.val * self.batch_size > self.outer_position {
                         // the cache batch has some records that we can select
                         let v = array_len + batch_id.val * self.batch_size - self.outer_position;
@@ -270,6 +281,8 @@ impl ArrayReader for CachedArrayReader {
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let row_count = self.selections.len();
         if row_count == 0 {
+            self.def_levels_buffer = None;
+            self.rep_levels_buffer = None;
             return Ok(new_empty_array(self.inner.get_data_type()));
         }
 
@@ -281,6 +294,11 @@ impl ArrayReader for CachedArrayReader {
         let end_batch = (start_position + row_count - 1) / self.batch_size;
 
         let mut selected_arrays = Vec::new();
+        let mut selected_def_levels: Vec<i16> = Vec::new();
+        let mut selected_rep_levels: Vec<i16> = Vec::new();
+        let mut has_def_levels = false;
+        let mut has_rep_levels = false;
+
         for batch_id in start_batch..=end_batch {
             let batch_start = batch_id * self.batch_size;
             let batch_end = batch_start + self.batch_size - 1;
@@ -302,18 +320,55 @@ impl ArrayReader for CachedArrayReader {
                 continue;
             }
 
-            let mask_array = BooleanArray::from(mask);
+            let mask_array = BooleanArray::from(mask.clone());
             // Read from local cache instead of shared cache to avoid cache eviction issues
-            let cached = self
+            let cached_batch = self
                 .local_cache
                 .get(&batch_id)
                 .expect("data must be already cached in the read_records call, this is a bug");
-            let cached = cached.slice(overlap_start - batch_start, selection_length);
-            let filtered = arrow_select::filter::filter(&cached, &mask_array)?;
+
+            // Slice and filter the array
+            let slice_start = overlap_start - batch_start;
+            let cached_array = cached_batch.array.slice(slice_start, selection_length);
+            let filtered = arrow_select::filter::filter(&cached_array, &mask_array)?;
             selected_arrays.push(filtered);
+
+            // Slice and filter definition levels if present
+            if let Some(ref def_levels) = cached_batch.def_levels {
+                has_def_levels = true;
+                let sliced = &def_levels[slice_start..slice_start + selection_length];
+                for (level, selected) in sliced.iter().zip(mask.iter()) {
+                    if selected {
+                        selected_def_levels.push(*level);
+                    }
+                }
+            }
+
+            // Slice and filter repetition levels if present
+            if let Some(ref rep_levels) = cached_batch.rep_levels {
+                has_rep_levels = true;
+                let sliced = &rep_levels[slice_start..slice_start + selection_length];
+                for (level, selected) in sliced.iter().zip(mask.iter()) {
+                    if selected {
+                        selected_rep_levels.push(*level);
+                    }
+                }
+            }
         }
 
         self.selections = BooleanBufferBuilder::new(0);
+
+        // Store the filtered levels
+        self.def_levels_buffer = if has_def_levels {
+            Some(selected_def_levels)
+        } else {
+            None
+        };
+        self.rep_levels_buffer = if has_rep_levels {
+            Some(selected_rep_levels)
+        } else {
+            None
+        };
 
         // Only remove batches from local buffer that are completely behind current position
         // Keep the current batch and any future batches as they might still be needed
@@ -340,11 +395,11 @@ impl ArrayReader for CachedArrayReader {
     }
 
     fn get_def_levels(&self) -> Option<&[i16]> {
-        None // we don't allow nullable parent for now.
+        self.def_levels_buffer.as_deref()
     }
 
     fn get_rep_levels(&self) -> Option<&[i16]> {
-        None
+        self.rep_levels_buffer.as_deref()
     }
 }
 
@@ -758,5 +813,273 @@ mod tests {
 
         let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(int32_array.values(), &[1, 2, 3, 4]);
+    }
+
+    // Mock ArrayReader that returns definition and repetition levels
+    struct MockArrayReaderWithLevels {
+        data: Vec<i32>,
+        def_levels: Vec<i16>,
+        rep_levels: Vec<i16>,
+        position: usize,
+        records_to_consume: usize,
+        data_type: ArrowType,
+        // Buffers to hold levels after consume_batch
+        def_levels_buffer: Option<Vec<i16>>,
+        rep_levels_buffer: Option<Vec<i16>>,
+    }
+
+    impl MockArrayReaderWithLevels {
+        fn new(data: Vec<i32>, def_levels: Vec<i16>, rep_levels: Vec<i16>) -> Self {
+            assert_eq!(data.len(), def_levels.len());
+            assert_eq!(data.len(), rep_levels.len());
+            Self {
+                data,
+                def_levels,
+                rep_levels,
+                position: 0,
+                records_to_consume: 0,
+                data_type: ArrowType::Int32,
+                def_levels_buffer: None,
+                rep_levels_buffer: None,
+            }
+        }
+    }
+
+    impl ArrayReader for MockArrayReaderWithLevels {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn get_data_type(&self) -> &ArrowType {
+            &self.data_type
+        }
+
+        fn read_records(&mut self, batch_size: usize) -> Result<usize> {
+            let remaining = self.data.len() - self.position;
+            let to_read = std::cmp::min(batch_size, remaining);
+            self.records_to_consume += to_read;
+            Ok(to_read)
+        }
+
+        fn consume_batch(&mut self) -> Result<ArrayRef> {
+            let start = self.position;
+            let end = start + self.records_to_consume;
+            let slice = &self.data[start..end];
+            self.def_levels_buffer = Some(self.def_levels[start..end].to_vec());
+            self.rep_levels_buffer = Some(self.rep_levels[start..end].to_vec());
+            self.position = end;
+            self.records_to_consume = 0;
+            Ok(Arc::new(Int32Array::from(slice.to_vec())))
+        }
+
+        fn skip_records(&mut self, num_records: usize) -> Result<usize> {
+            let remaining = self.data.len() - self.position;
+            let to_skip = std::cmp::min(num_records, remaining);
+            self.position += to_skip;
+            Ok(to_skip)
+        }
+
+        fn get_def_levels(&self) -> Option<&[i16]> {
+            self.def_levels_buffer.as_deref()
+        }
+
+        fn get_rep_levels(&self) -> Option<&[i16]> {
+            self.rep_levels_buffer.as_deref()
+        }
+    }
+
+    #[test]
+    fn test_level_propagation_basic() {
+        let metrics = ArrowReaderMetrics::disabled();
+        // Data with corresponding def and rep levels
+        let data = vec![1, 2, 3, 4, 5];
+        let def_levels = vec![1, 1, 0, 1, 1]; // Third value is null
+        let rep_levels = vec![0, 1, 1, 0, 1]; // New list at positions 0 and 3
+
+        let mock_reader = MockArrayReaderWithLevels::new(data, def_levels, rep_levels);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX)));
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Producer,
+            metrics,
+        );
+
+        // Read all 5 records
+        let records_read = cached_reader.read_records(5).unwrap();
+        assert_eq!(records_read, 5);
+
+        let array = cached_reader.consume_batch().unwrap();
+        assert_eq!(array.len(), 5);
+
+        // Verify levels are captured
+        let def_levels = cached_reader.get_def_levels();
+        assert!(def_levels.is_some());
+        assert_eq!(def_levels.unwrap(), &[1, 1, 0, 1, 1]);
+
+        let rep_levels = cached_reader.get_rep_levels();
+        assert!(rep_levels.is_some());
+        assert_eq!(rep_levels.unwrap(), &[0, 1, 1, 0, 1]);
+    }
+
+    #[test]
+    fn test_level_propagation_with_skip() {
+        let metrics = ArrowReaderMetrics::disabled();
+        // Data with corresponding def and rep levels
+        let data = vec![1, 2, 3, 4, 5, 6];
+        let def_levels = vec![1, 1, 0, 1, 1, 0];
+        let rep_levels = vec![0, 1, 1, 0, 1, 1];
+
+        let mock_reader = MockArrayReaderWithLevels::new(data, def_levels, rep_levels);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(6, usize::MAX)));
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Producer,
+            metrics,
+        );
+
+        // Read 2 records
+        let records_read = cached_reader.read_records(2).unwrap();
+        assert_eq!(records_read, 2);
+
+        // Skip 2 records
+        let skipped = cached_reader.skip_records(2).unwrap();
+        assert_eq!(skipped, 2);
+
+        // Read 2 more records
+        let records_read = cached_reader.read_records(2).unwrap();
+        assert_eq!(records_read, 2);
+
+        let array = cached_reader.consume_batch().unwrap();
+        // Should have 4 values: positions 0, 1 (read), positions 4, 5 (read)
+        // Positions 2, 3 were skipped
+        assert_eq!(array.len(), 4);
+
+        let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int32_array.values(), &[1, 2, 5, 6]);
+
+        // Verify levels match the selected values
+        let def_levels = cached_reader.get_def_levels();
+        assert!(def_levels.is_some());
+        assert_eq!(def_levels.unwrap(), &[1, 1, 1, 0]); // def_levels for positions 0, 1, 4, 5
+
+        let rep_levels = cached_reader.get_rep_levels();
+        assert!(rep_levels.is_some());
+        assert_eq!(rep_levels.unwrap(), &[0, 1, 1, 1]); // rep_levels for positions 0, 1, 4, 5
+    }
+
+    #[test]
+    fn test_level_propagation_multi_batch() {
+        let metrics = ArrowReaderMetrics::disabled();
+        // Data spanning multiple batches
+        let data = vec![1, 2, 3, 4, 5, 6];
+        let def_levels = vec![1, 0, 1, 1, 0, 1];
+        let rep_levels = vec![0, 0, 1, 0, 0, 1];
+
+        let mock_reader = MockArrayReaderWithLevels::new(data, def_levels, rep_levels);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX))); // Batch size 3
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Producer,
+            metrics,
+        );
+
+        // Read all 6 records (spanning 2 batches)
+        let records_read = cached_reader.read_records(6).unwrap();
+        assert_eq!(records_read, 6);
+
+        let array = cached_reader.consume_batch().unwrap();
+        assert_eq!(array.len(), 6);
+
+        // Verify levels are correctly concatenated from both batches
+        let def_levels = cached_reader.get_def_levels();
+        assert!(def_levels.is_some());
+        assert_eq!(def_levels.unwrap(), &[1, 0, 1, 1, 0, 1]);
+
+        let rep_levels = cached_reader.get_rep_levels();
+        assert!(rep_levels.is_some());
+        assert_eq!(rep_levels.unwrap(), &[0, 0, 1, 0, 0, 1]);
+    }
+
+    #[test]
+    fn test_no_levels_returns_none() {
+        let metrics = ArrowReaderMetrics::disabled();
+        // Use the original MockArrayReader which returns no levels
+        let mock_reader = MockArrayReader::new(vec![1, 2, 3]);
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(3, usize::MAX)));
+        let mut cached_reader = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache,
+            0,
+            CacheRole::Producer,
+            metrics,
+        );
+
+        let records_read = cached_reader.read_records(3).unwrap();
+        assert_eq!(records_read, 3);
+
+        let _array = cached_reader.consume_batch().unwrap();
+
+        // Should return None since inner reader has no levels
+        assert!(cached_reader.get_def_levels().is_none());
+        assert!(cached_reader.get_rep_levels().is_none());
+    }
+
+    #[test]
+    fn test_level_propagation_cache_sharing() {
+        let metrics = ArrowReaderMetrics::disabled();
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(5, usize::MAX)));
+
+        // Producer populates cache with levels
+        let data = vec![1, 2, 3, 4, 5];
+        let def_levels = vec![1, 0, 1, 1, 0];
+        let rep_levels = vec![0, 1, 0, 1, 1];
+
+        let mock_reader = MockArrayReaderWithLevels::new(
+            data.clone(),
+            def_levels.clone(),
+            rep_levels.clone(),
+        );
+        let mut producer = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache.clone(),
+            0,
+            CacheRole::Producer,
+            metrics.clone(),
+        );
+
+        // Producer reads and populates cache
+        producer.read_records(5).unwrap();
+        producer.consume_batch().unwrap();
+
+        // Consumer reads from cache - should get the same levels
+        let mock_reader2 = MockArrayReaderWithLevels::new(
+            vec![10, 20, 30, 40, 50], // Different data (shouldn't be used)
+            vec![0, 0, 0, 0, 0],
+            vec![0, 0, 0, 0, 0],
+        );
+        let mut consumer = CachedArrayReader::new(
+            Box::new(mock_reader2),
+            cache.clone(),
+            0, // Same column index
+            CacheRole::Consumer,
+            metrics,
+        );
+
+        consumer.read_records(5).unwrap();
+        let array = consumer.consume_batch().unwrap();
+
+        // Should get original data from cache
+        let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
+        assert_eq!(int32_array.values(), &[1, 2, 3, 4, 5]);
+
+        // Should get original levels from cache
+        assert_eq!(consumer.get_def_levels().unwrap(), &[1, 0, 1, 1, 0]);
+        assert_eq!(consumer.get_rep_levels().unwrap(), &[0, 1, 0, 1, 1]);
     }
 }
