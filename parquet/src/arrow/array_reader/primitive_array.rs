@@ -209,7 +209,7 @@ fn coerce_array(array: ArrayRef, target_type: &ArrowType) -> Result<ArrayRef> {
         let any_dictionary = dictionary.as_any_dictionary();
 
         let coerced_values =
-            coerce_array(Arc::clone(&any_dictionary.values()), value_type.as_ref())?;
+            coerce_array(Arc::clone(any_dictionary.values()), value_type.as_ref())?;
 
         return Ok(any_dictionary.with_values(coerced_values));
     }
