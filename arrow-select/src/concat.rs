@@ -107,7 +107,7 @@ fn concat_dictionaries<K: ArrowDictionaryKeyType>(
         .inspect(|d| output_len += d.len())
         .collect();
 
-    if !should_merge_dictionary_values::<K>(&dictionaries, output_len) {
+    if !should_merge_dictionary_values::<K>(&dictionaries, output_len).0 {
         return concat_fallback(arrays, Capacities::Array(output_len));
     }
 
@@ -1713,6 +1713,31 @@ mod tests {
             .unwrap();
         assert_eq!(values.len(), 4);
         assert_eq!(&[10, 20, 30, 40], values.values());
+    }
+
+    #[test]
+    #[should_panic = "assertion `left == right` failed\n  left: [20, 20, 40, 40, 40]\n right: [10, 10, 20, 20, 30, 40, 40, 40]"]
+    // TODO: fix concat of RunArrays to account for sliced RunArray's
+    // https://github.com/apache/arrow-rs/issues/9018
+    fn test_concat_sliced_run_array() {
+        // Slicing away first run in both arrays
+        let run_ends1 = Int32Array::from(vec![2, 4]);
+        let values1 = Int32Array::from(vec![10, 20]);
+        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap(); // [10, 10, 20, 20]
+        let array1 = array1.slice(2, 2); // [20, 20]
+
+        let run_ends2 = Int32Array::from(vec![1, 4]);
+        let values2 = Int32Array::from(vec![30, 40]);
+        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap(); // [30, 40, 40, 40]
+        let array2 = array2.slice(1, 3); // [40, 40, 40]
+
+        let result = concat(&[&array1, &array2]).unwrap();
+        let result = result.as_run::<Int32Type>();
+        let result = result.downcast::<Int32Array>().unwrap();
+
+        let expected = vec![20, 20, 40, 40, 40];
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(expected, actual);
     }
 
     #[test]

@@ -631,6 +631,13 @@ impl DataType {
         matches!(self, Null)
     }
 
+    /// Returns true if this type is a String type
+    #[inline]
+    pub fn is_string(&self) -> bool {
+        use DataType::*;
+        matches!(self, Utf8 | LargeUtf8 | Utf8View)
+    }
+
     /// Compares the datatype with another, ignoring nested field names
     /// and metadata.
     pub fn equals_datatype(&self, other: &DataType) -> bool {
@@ -994,53 +1001,58 @@ mod tests {
         assert!(!list_s.equals_datatype(&list_v));
 
         let union_a = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 2],
                 vec![
                     Field::new("f1", DataType::Utf8, false),
                     Field::new("f2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_b = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 2],
                 vec![
                     Field::new("ff1", DataType::Utf8, false),
                     Field::new("ff2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_c = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![2, 1],
                 vec![
                     Field::new("fff2", DataType::UInt8, false),
                     Field::new("fff1", DataType::Utf8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_d = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![2, 1],
                 vec![
                     Field::new("fff1", DataType::Int8, false),
                     Field::new("fff2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
         let union_e = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![1, 2],
                 vec![
                     Field::new("f1", DataType::Utf8, true),
                     Field::new("f2", DataType::UInt8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Sparse,
         );
 
@@ -1143,6 +1155,14 @@ mod tests {
     }
 
     #[test]
+    fn test_string() {
+        assert!(DataType::is_string(&DataType::Utf8));
+        assert!(DataType::is_string(&DataType::LargeUtf8));
+        assert!(DataType::is_string(&DataType::Utf8View));
+        assert!(!DataType::is_string(&DataType::Int32));
+    }
+
+    #[test]
     fn test_floating() {
         assert!(DataType::is_floating(&DataType::Float16));
         assert!(!DataType::is_floating(&DataType::Int32));
@@ -1164,13 +1184,14 @@ mod tests {
     fn test_union_with_duplicated_type_id() {
         let type_ids = vec![1, 1];
         let _union = DataType::Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 type_ids,
                 vec![
                     Field::new("f1", DataType::Int32, false),
                     Field::new("f2", DataType::Utf8, false),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         );
     }

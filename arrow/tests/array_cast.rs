@@ -552,13 +552,14 @@ fn get_all_types() -> Vec<DataType> {
             Field::new("f2", DataType::Utf8, true),
         ])),
         Union(
-            UnionFields::new(
+            UnionFields::try_new(
                 vec![0, 1],
                 vec![
                     Field::new("f1", DataType::Int32, false),
                     Field::new("f2", DataType::Utf8, true),
                 ],
-            ),
+            )
+            .unwrap(),
             UnionMode::Dense,
         ),
         Decimal128(38, 0),

@@ -620,10 +620,11 @@ impl<'a> StringArrayType<'a> for &'a StringViewArray {
     }
 }
 
-/// A trait for Arrow String Arrays, currently three types are supported:
+/// A trait for Arrow Binary Arrays, currently four types are supported:
 /// - `BinaryArray`
 /// - `LargeBinaryArray`
 /// - `BinaryViewArray`
+/// - `FixedSizeBinaryArray`
 ///
 /// This trait helps to abstract over the different types of binary arrays
 /// so that we don't need to duplicate the implementation for each type.
@@ -640,6 +641,11 @@ impl<'a, O: OffsetSizeTrait> BinaryArrayType<'a> for &'a GenericBinaryArray<O> {
 impl<'a> BinaryArrayType<'a> for &'a BinaryViewArray {
     fn iter(&self) -> ArrayIter<Self> {
         BinaryViewArray::iter(self)
+    }
+}
+impl<'a> BinaryArrayType<'a> for &'a FixedSizeBinaryArray {
+    fn iter(&self) -> ArrayIter<Self> {
+        FixedSizeBinaryArray::iter(self)
     }
 }
 
@@ -824,20 +830,20 @@ pub fn make_array(data: ArrayData) -> ArrayRef {
             DataType::UInt16 => Arc::new(DictionaryArray::<UInt16Type>::from(data)) as ArrayRef,
             DataType::UInt32 => Arc::new(DictionaryArray::<UInt32Type>::from(data)) as ArrayRef,
             DataType::UInt64 => Arc::new(DictionaryArray::<UInt64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected dictionary key type {dt}"),
+            dt => unimplemented!("Unexpected dictionary key type {dt}"),
         },
         DataType::RunEndEncoded(run_ends_type, _) => match run_ends_type.data_type() {
             DataType::Int16 => Arc::new(RunArray::<Int16Type>::from(data)) as ArrayRef,
             DataType::Int32 => Arc::new(RunArray::<Int32Type>::from(data)) as ArrayRef,
             DataType::Int64 => Arc::new(RunArray::<Int64Type>::from(data)) as ArrayRef,
-            dt => panic!("Unexpected data type for run_ends array {dt}"),
+            dt => unimplemented!("Unexpected data type for run_ends array {dt}"),
         },
         DataType::Null => Arc::new(NullArray::from(data)) as ArrayRef,
         DataType::Decimal32(_, _) => Arc::new(Decimal32Array::from(data)) as ArrayRef,
         DataType::Decimal64(_, _) => Arc::new(Decimal64Array::from(data)) as ArrayRef,
         DataType::Decimal128(_, _) => Arc::new(Decimal128Array::from(data)) as ArrayRef,
         DataType::Decimal256(_, _) => Arc::new(Decimal256Array::from(data)) as ArrayRef,
-        dt => panic!("Unexpected data type {dt}"),
+        dt => unimplemented!("Unexpected data type {dt}"),
     }
 }
 
@@ -1067,13 +1073,14 @@ mod tests {
     fn test_null_union() {
         for mode in [UnionMode::Sparse, UnionMode::Dense] {
             let data_type = DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![2, 1],
                     vec![
                         Field::new("foo", DataType::Int32, true),
                         Field::new("bar", DataType::Int64, true),
                     ],
-                ),
+                )
+                .unwrap(),
                 mode,
             );
             let array = new_null_array(&data_type, 4);

@@ -40,8 +40,9 @@ pub mod virtual_type;
 use super::PARQUET_FIELD_ID_META_KEY;
 use crate::arrow::ProjectionMask;
 use crate::arrow::schema::extension::{
-    has_extension_type, logical_type_for_fixed_size_binary, logical_type_for_string,
-    logical_type_for_struct, try_add_extension_type,
+    has_extension_type, logical_type_for_binary, logical_type_for_binary_view,
+    logical_type_for_fixed_size_binary, logical_type_for_string, logical_type_for_struct,
+    try_add_extension_type,
 };
 pub(crate) use complex::{ParquetField, ParquetFieldType, VirtualColumnType};
 
@@ -712,6 +713,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
             Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
                 .with_repetition(repetition)
                 .with_id(id)
+                .with_logical_type(logical_type_for_binary(field))
                 .build()
         }
         DataType::FixedSizeBinary(length) => {
@@ -725,6 +727,7 @@ fn arrow_to_parquet_type(field: &Field, coerce_types: bool) -> Result<Type> {
         DataType::BinaryView => Type::primitive_type_builder(name, PhysicalType::BYTE_ARRAY)
             .with_repetition(repetition)
             .with_id(id)
+            .with_logical_type(logical_type_for_binary_view(field))
             .build(),
         DataType::Decimal32(precision, scale)
         | DataType::Decimal64(precision, scale)

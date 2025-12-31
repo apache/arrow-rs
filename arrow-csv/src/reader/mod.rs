@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! CSV Reader
+//! CSV Reading: [`Reader`] and [`ReaderBuilder`]
 //!
 //! # Basic Usage
 //!
@@ -41,6 +41,46 @@
 //! let mut csv = ReaderBuilder::new(Arc::new(schema)).build(file).unwrap();
 //! let batch = csv.next().unwrap().unwrap();
 //! ```
+//!
+//! # Example: Numeric calculations on CSV
+//! This code finds the maximum value in column 0 of a CSV file containing
+//! ```csv
+//! c1,c2,c3,c4
+//! 1,1.1,"hong kong",true
+//! 3,323.12,"XiAn",false
+//! 10,131323.12,"cheng du",false
+//! ```
+//!
+//! ```
+//! # use arrow_array::cast::AsArray;
+//! # use arrow_array::types::Int16Type;
+//! # use arrow_csv::ReaderBuilder;
+//! # use arrow_schema::{DataType, Field, Schema};
+//! # use std::fs::File;
+//! # use std::sync::Arc;
+//! // Open the example file
+//! let file = File::open("test/data/example.csv").unwrap();
+//! let csv_schema = Schema::new(vec![
+//!     Field::new("c1", DataType::Int16, true),
+//!     Field::new("c2", DataType::Float32, true),
+//!     Field::new("c3", DataType::Utf8, true),
+//!     Field::new("c4", DataType::Boolean, true),
+//! ]);
+//! let mut reader = ReaderBuilder::new(Arc::new(csv_schema))
+//!     .with_header(true)
+//!     .build(file)
+//!     .unwrap();
+//! // find the maximum value in column 0 across all batches
+//! let mut max_c0 = 0;
+//! while let Some(r) = reader.next() {
+//!   let r = r.unwrap(); // handle error
+//!   // get the max value in column(0) for this batch
+//!   let col = r.column(0).as_primitive::<Int16Type>();
+//!   let batch_max = col.iter().max().flatten().unwrap_or_default();
+//!   max_c0 = max_c0.max(batch_max);
+//! }
+//! assert_eq!(max_c0, 10);
+//!```
 //!
 //! # Async Usage
 //!
@@ -441,13 +481,18 @@ pub fn infer_schema_from_files(
 type Bounds = Option<(usize, usize)>;
 
 /// CSV file reader using [`std::io::BufReader`]
+///
+/// See [`ReaderBuilder`] to construct a CSV reader with options and  the
+/// [module-level documentation](crate::reader) for more details and examples
 pub type Reader<R> = BufReader<StdBufReader<R>>;
 
-/// CSV file reader
+/// CSV file reader implementation. See [`Reader`] for usage
+///
+/// Despite having the same name as [`std::io::BufReader`, this structure does
+/// not buffer reads itself
 pub struct BufReader<R> {
     /// File reader
     reader: R,
-
     /// The decoder
     decoder: Decoder,
 }
@@ -1053,7 +1098,7 @@ fn build_boolean_array(
         .map(|e| Arc::new(e) as ArrayRef)
 }
 
-/// CSV file reader builder
+/// Builder for CSV [`Reader`]s
 #[derive(Debug)]
 pub struct ReaderBuilder {
     /// Schema of the CSV file
@@ -1071,9 +1116,10 @@ pub struct ReaderBuilder {
 }
 
 impl ReaderBuilder {
-    /// Create a new builder for configuring CSV parsing options.
+    /// Create a new builder for configuring [`Reader`] CSV parsing options.
     ///
-    /// To convert a builder into a reader, call `ReaderBuilder::build`
+    /// To convert a builder into a reader, call [`ReaderBuilder::build`]. See
+    /// the [module-level documentation](crate::reader) for more details and examples.
     ///
     /// # Example
     ///
