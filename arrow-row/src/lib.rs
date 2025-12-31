@@ -164,7 +164,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow_array::cast::*;
-use arrow_array::types::ArrowDictionaryKeyType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -1508,11 +1508,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                             .iter()
                             .map(|slice| variable::encoded_len(slice))
                     ),
-                    DataType::BinaryView => tracker.push_variable(
-                        array.as_binary_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
+                    DataType::BinaryView => push_byte_view_array_lengths(&mut tracker, array.as_binary_view()),
                     DataType::Utf8 => tracker.push_variable(
                         array.as_string::<i32>()
                             .iter()
@@ -1523,11 +1519,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                             .iter()
                             .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
                     ),
-                    DataType::Utf8View => tracker.push_variable(
-                        array.as_string_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
+                    DataType::Utf8View => push_byte_view_array_lengths(&mut tracker, array.as_string_view()),
                     DataType::FixedSizeBinary(len) => {
                         let len = len.to_usize().unwrap();
                         tracker.push_fixed(1 + len)
@@ -1615,6 +1607,34 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
     }
 
     tracker
+}
+
+/// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteViewArray`]
+fn push_byte_view_array_lengths<T: ByteViewType>(
+    tracker: &mut LengthTracker,
+    array: &GenericByteViewArray<T>,
+) {
+    if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+        tracker.push_variable(
+            array
+                .lengths()
+                .zip(nulls.iter())
+                .map(|(length, is_valid)| {
+                    if is_valid {
+                        Some(length as usize)
+                    } else {
+                        None
+                    }
+                })
+                .map(variable::padded_length),
+        )
+    } else {
+        tracker.push_variable(
+            array
+                .lengths()
+                .map(|len| variable::padded_length(Some(len as usize))),
+        )
+    }
 }
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
