@@ -374,6 +374,36 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         GenericListArrayIter::<'a, OffsetSize>::new(self)
     }
 
+    /// Constructs a new typed iterator that avoids `Arc<dyn Array>` allocations
+    /// by returning concrete array types.
+    ///
+    /// This method downcasts the child values array to the specified type `ValueArray`.
+    /// Returns `None` if the downcast fails (i.e., the child array is not of the expected type).
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::{ListArray, Int64Array, types::Int64Type};
+    /// # use arrow_array::array::typed_list_iter::GenericListTypedIter;
+    /// let list_array = ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+    ///     Some(vec![Some(1), Some(2)]),
+    ///     None,
+    ///     Some(vec![Some(3)]),
+    /// ]);
+    ///
+    /// let typed_iter: Option<GenericListTypedIter<i32, Int64Array>> = list_array.typed_iter();
+    /// let mut iter = typed_iter.unwrap();
+    ///
+    /// assert!(iter.next().unwrap().is_some()); // First element
+    /// assert!(iter.next().unwrap().is_none());  // Null element
+    /// assert!(iter.next().unwrap().is_some()); // Third element
+    /// ```
+    pub fn typed_iter<ValueArray>(&self) -> Option<crate::array::typed_list_iter::GenericListTypedIter<OffsetSize, ValueArray>>
+    where
+        ValueArray: crate::array::typed_list_iter::SliceableArray + Clone + 'static,
+    {
+        crate::array::typed_list_iter::GenericListTypedIter::new(self.clone())
+    }
+
     #[inline]
     fn get_type(data_type: &DataType) -> Option<&DataType> {
         match (OffsetSize::IS_LARGE, data_type) {
