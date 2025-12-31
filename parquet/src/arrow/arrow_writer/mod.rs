@@ -819,7 +819,15 @@ impl ArrowColumnWriter {
     pub fn write(&mut self, col: &ArrowLeafColumn) -> Result<()> {
         match &mut self.writer {
             ArrowColumnWriterImpl::Column(c) => {
-                write_leaf(c, &col.0)?;
+                let leaf = col.0.array();
+                match leaf.as_any_dictionary_opt() {
+                    Some(dictionary) => {
+                        let materialized =
+                            arrow_select::take::take(dictionary.values(), dictionary.keys(), None)?;
+                        write_leaf(c, &materialized, &col.0)?
+                    }
+                    None => write_leaf(c, leaf, &col.0)?,
+                };
             }
             ArrowColumnWriterImpl::ByteArray(c) => {
                 write_primitive(c, col.0.array().as_ref(), &col.0)?;
@@ -1132,9 +1140,13 @@ impl ArrowColumnWriterFactory {
     }
 }
 
-fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usize> {
-    let column = levels.array().as_ref();
+fn write_leaf(
+    writer: &mut ColumnWriter<'_>,
+    column: &dyn arrow_array::Array,
+    levels: &ArrayLevels,
+) -> Result<usize> {
     let indices = levels.non_null_indices();
+
     match writer {
         ColumnWriter::Int32ColumnWriter(typed) => {
             match column.data_type() {
@@ -1181,41 +1193,6 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unary::<_, Int32Type>(|v| v.as_i128() as i32);
                     write_primitive(typed, array.values(), levels)
                 }
-                ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                    ArrowDataType::Decimal32(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal32Type>()
-                            .unary::<_, Int32Type>(|v| v);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal64(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal64Type>()
-                            .unary::<_, Int32Type>(|v| v as i32);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal128(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal128Type>()
-                            .unary::<_, Int32Type>(|v| v as i32);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal256(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal256Type>()
-                            .unary::<_, Int32Type>(|v| v.as_i128() as i32);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    _ => {
-                        let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
-                        let array = array.as_primitive::<Int32Type>();
-                        write_primitive(typed, array.values(), levels)
-                    }
-                },
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
                     let array = array.as_primitive::<Int32Type>();
@@ -1271,34 +1248,6 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         .unary::<_, Int64Type>(|v| v.as_i128() as i64);
                     write_primitive(typed, array.values(), levels)
                 }
-                ArrowDataType::Dictionary(_, value_type) => match value_type.as_ref() {
-                    ArrowDataType::Decimal64(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal64Type>()
-                            .reinterpret_cast::<Int64Type>();
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal128(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal128Type>()
-                            .unary::<_, Int64Type>(|v| v as i64);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    ArrowDataType::Decimal256(_, _) => {
-                        let array = arrow_cast::cast(column, value_type)?;
-                        let array = array
-                            .as_primitive::<Decimal256Type>()
-                            .unary::<_, Int64Type>(|v| v.as_i128() as i64);
-                        write_primitive(typed, array.values(), levels)
-                    }
-                    _ => {
-                        let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
-                        let array = array.as_primitive::<Int64Type>();
-                        write_primitive(typed, array.values(), levels)
-                    }
-                },
                 _ => {
                     let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
                     let array = array.as_primitive::<Int64Type>();
