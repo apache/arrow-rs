@@ -84,3 +84,7 @@ harness = false
 [[bench]]
 name = "record_batch"
 harness = false
+
+[[bench]]
+name = "list_iterator"
+harness = false

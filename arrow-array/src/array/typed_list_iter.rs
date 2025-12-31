@@ -1,6 +1,6 @@
 use arrow_buffer::{NullBuffer, OffsetBuffer};
-use crate::{Array, ArrowPrimitiveType, DictionaryArray, GenericByteArray, GenericListArray, OffsetSizeTrait, PrimitiveArray};
-use crate::types::{ArrowDictionaryKeyType, ByteArrayType};
+use crate::{Array, ArrowPrimitiveType, DictionaryArray, GenericByteArray, GenericByteViewArray, GenericListArray, GenericListViewArray, OffsetSizeTrait, PrimitiveArray};
+use crate::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
 
 /// Arrays that can be sliced in a zero copy, zero allocation way.
 pub trait SliceableArray {
@@ -18,9 +18,29 @@ impl<T: ByteArrayType> SliceableArray for GenericByteArray<T> {
     }
 }
 
+impl<T: ByteViewType + ?Sized> SliceableArray for GenericByteViewArray<T> {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        GenericByteViewArray::slice(self, offset, length)
+    }
+}
+
 impl<K: ArrowDictionaryKeyType> SliceableArray for DictionaryArray<K> {
     fn slice(&self, offset: usize, length: usize) -> Self {
         DictionaryArray::slice(self, offset, length)
+    }
+}
+
+
+impl<T: OffsetSizeTrait> SliceableArray for GenericListArray<T> {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        GenericListArray::slice(self, offset, length)
+    }
+}
+
+
+impl<T: OffsetSizeTrait> SliceableArray for GenericListViewArray<T> {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        GenericListViewArray::slice(self, offset, length)
     }
 }
 

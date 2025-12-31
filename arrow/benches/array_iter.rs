@@ -299,6 +299,20 @@ fn add_benchmark(c: &mut Criterion) {
         // Must use black_box here as this can be optimized away
         |_item| hint::black_box(false),
     );
+
+    benchmark_array_iter(
+        c,
+        "int list array with len 16",
+        &create_primitive_list_array_with_seed::<i64, Int64Type>(BATCH_SIZE, 0.0, 0.0, 16, 0),
+        &create_primitive_list_array_with_seed::<i64, Int64Type>(BATCH_SIZE, 0.5, 0.0, 16, 0),
+        // fold init
+        0_usize,
+        // fold function
+        |acc, item| acc.wrapping_add(item.map(|item| item.len()).unwrap_or_default()),
+        // predicate that will always evaluate to false while allowing us to avoid using hint::black_box and let the compiler optimize more
+        |item| item.is_some_and(|item| item.len() > 100),
+    );
+
 }
 
 criterion_group!(benches, add_benchmark);
