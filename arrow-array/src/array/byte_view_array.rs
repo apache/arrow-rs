@@ -437,7 +437,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
     /// # use arrow_array::Array;
     /// use arrow_data::ByteView;
     ///
-    /// fn lengths_with_zero_for_nulls(view: &StringViewArray) -> impl Iterator<u32> {
+    /// fn lengths_with_zero_for_nulls(view: &StringViewArray) -> impl Iterator<Item = u32> {
     ///     view.lengths()
     ///         .enumerate()
     ///         .map(|(index, length)| if view.is_null(index) { 0 } else { length })
