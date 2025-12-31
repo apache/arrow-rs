@@ -26,8 +26,10 @@ use std::vec::IntoIter;
 
 use arrow_array::cast::AsArray;
 use arrow_array::types::*;
-use arrow_array::{ArrayRef, RecordBatch, RecordBatchWriter};
-use arrow_schema::{ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef};
+use arrow_array::{ArrayRef, Int32Array, RecordBatch, RecordBatchWriter};
+use arrow_schema::{
+    ArrowError, DataType as ArrowDataType, Field, IntervalUnit, SchemaRef, TimeUnit,
+};
 
 use super::schema::{add_encoded_arrow_schema_to_metadata, decimal_length_from_precision};
 
@@ -1148,23 +1150,53 @@ fn write_leaf(
     let indices = levels.non_null_indices();
 
     match writer {
+        // Note: this should match the contents of arrow_to_parquet_type
         ColumnWriter::Int32ColumnWriter(typed) => {
             match column.data_type() {
-                ArrowDataType::Date64 => {
-                    // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
-                    let array = arrow_cast::cast(column, &ArrowDataType::Date32)?;
-                    let array = array
-                        .as_primitive::<Date32Type>()
-                        .reinterpret_cast::<Int32Type>();
-
+                ArrowDataType::Int8 => {
+                    let array: Int32Array = column.as_primitive::<Int8Type>().unary(|x| x as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Int16 => {
+                    let array: Int32Array = column.as_primitive::<Int16Type>().unary(|x| x as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Int32 => {
+                    write_primitive(typed, column.as_primitive::<Int32Type>().values(), levels)
+                }
+                ArrowDataType::UInt8 => {
+                    let array: Int32Array = column.as_primitive::<UInt8Type>().unary(|x| x as i32);
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::UInt16 => {
+                    let array: Int32Array = column.as_primitive::<UInt16Type>().unary(|x| x as i32);
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::UInt32 => {
-                    let values = column.as_primitive::<UInt32Type>().values();
                     // follow C++ implementation and use overflow/reinterpret cast from  u32 to i32 which will map
                     // `(i32::MAX as u32)..u32::MAX` to `i32::MIN..0`
-                    let array = values.inner().typed_data::<i32>();
-                    write_primitive(typed, array, levels)
+                    let array = column.as_primitive::<UInt32Type>();
+                    write_primitive(typed, array.values().inner().typed_data(), levels)
+                }
+                ArrowDataType::Date32 => {
+                    let array = column.as_primitive::<Date32Type>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Time32(TimeUnit::Second) => {
+                    let array = column.as_primitive::<Time32SecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Time32(TimeUnit::Millisecond) => {
+                    let array = column.as_primitive::<Time32MillisecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Date64 => {
+                    // If the column is a Date64, we truncate it
+                    let array: Int32Array = column
+                        .as_primitive::<Date64Type>()
+                        .unary(|x| (x / 86_400_000) as _);
+
+                    write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Decimal32(_, _) => {
                     let array = column
@@ -1193,11 +1225,7 @@ fn write_leaf(
                         .unary::<_, Int32Type>(|v| v.as_i128() as i32);
                     write_primitive(typed, array.values(), levels)
                 }
-                _ => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int32)?;
-                    let array = array.as_primitive::<Int32Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
+                d => Err(ParquetError::General(format!("Cannot coerce {d} to I32"))),
             }
         }
         ColumnWriter::BoolColumnWriter(typed) => {
@@ -1228,6 +1256,50 @@ fn write_leaf(
                     let array = values.inner().typed_data::<i64>();
                     write_primitive(typed, array, levels)
                 }
+                ArrowDataType::Time64(TimeUnit::Microsecond) => {
+                    let array = column.as_primitive::<Time64MicrosecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Time64(TimeUnit::Nanosecond) => {
+                    let array = column.as_primitive::<Time64NanosecondType>();
+                    write_primitive(typed, array.values(), levels)
+                }
+                ArrowDataType::Timestamp(unit, _) => match unit {
+                    TimeUnit::Second => {
+                        let array = column.as_primitive::<TimestampSecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Millisecond => {
+                        let array = column.as_primitive::<TimestampMillisecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Microsecond => {
+                        let array = column.as_primitive::<TimestampMicrosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Nanosecond => {
+                        let array = column.as_primitive::<TimestampNanosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                },
+                ArrowDataType::Duration(unit) => match unit {
+                    TimeUnit::Second => {
+                        let array = column.as_primitive::<DurationSecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Millisecond => {
+                        let array = column.as_primitive::<DurationMillisecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Microsecond => {
+                        let array = column.as_primitive::<DurationMicrosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                    TimeUnit::Nanosecond => {
+                        let array = column.as_primitive::<DurationNanosecondType>();
+                        write_primitive(typed, array.values(), levels)
+                    }
+                },
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column
                         .as_primitive::<Decimal64Type>()
@@ -1248,11 +1320,7 @@ fn write_leaf(
                         .unary::<_, Int64Type>(|v| v.as_i128() as i64);
                     write_primitive(typed, array.values(), levels)
                 }
-                _ => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
-                    let array = array.as_primitive::<Int64Type>();
-                    write_primitive(typed, array.values(), levels)
-                }
+                d => Err(ParquetError::General(format!("Cannot coerce {d} to I64"))),
             }
         }
         ColumnWriter::Int96ColumnWriter(_typed) => {

@@ -200,6 +200,9 @@ where
     }
 }
 
+/// Coerce the parquet physical type array to the target type
+///
+/// This should match the logic in schema::primitive::apply_hint
 fn coerce_array(array: ArrayRef, target_type: &ArrowType) -> Result<ArrayRef> {
     if let ArrowType::Dictionary(key_type, value_type) = target_type {
         let dictionary = pack_dictionary(key_type, array.as_ref())?;
