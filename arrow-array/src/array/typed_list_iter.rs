@@ -7,90 +7,40 @@ pub trait SliceableArray {
     fn slice(&self, offset: usize, length: usize) -> Self;
 }
 
-impl<T: ArrowPrimitiveType> SliceableArray for PrimitiveArray<T> {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        PrimitiveArray::slice(self, offset, length)
-    }
-}
-impl<T: ByteArrayType> SliceableArray for GenericByteArray<T> {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        GenericByteArray::slice(self, offset, length)
-    }
-}
-
-impl<T: ByteViewType + ?Sized> SliceableArray for GenericByteViewArray<T> {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        GenericByteViewArray::slice(self, offset, length)
-    }
-}
-
-impl<K: ArrowDictionaryKeyType> SliceableArray for DictionaryArray<K> {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        DictionaryArray::slice(self, offset, length)
-    }
+/// Macro to implement SliceableArray for array types that have a slice method
+macro_rules! impl_sliceable {
+    // Pattern for types without generic parameters
+    ($array_type:ty) => {
+        impl SliceableArray for $array_type {
+            fn slice(&self, offset: usize, length: usize) -> Self {
+                <$array_type>::slice(self, offset, length)
+            }
+        }
+    };
+    // Pattern for types with generic parameters: impl_sliceable!(ArrayType, TraitBound)
+    ($array_type:ident, $($bounds:tt)+) => {
+        impl<T: $($bounds)+> SliceableArray for $array_type<T> {
+            fn slice(&self, offset: usize, length: usize) -> Self {
+                $array_type::slice(self, offset, length)
+            }
+        }
+    };
 }
 
-
-impl<T: OffsetSizeTrait> SliceableArray for GenericListArray<T> {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        GenericListArray::slice(self, offset, length)
-    }
-}
-
-
-impl<T: OffsetSizeTrait> SliceableArray for GenericListViewArray<T> {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        GenericListViewArray::slice(self, offset, length)
-    }
-}
-
-impl SliceableArray for BooleanArray {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        BooleanArray::slice(self, offset, length)
-    }
-}
-
-impl SliceableArray for FixedSizeBinaryArray {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        FixedSizeBinaryArray::slice(self, offset, length)
-    }
-}
-
-impl SliceableArray for FixedSizeListArray {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        FixedSizeListArray::slice(self, offset, length)
-    }
-}
-
-impl SliceableArray for NullArray {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        NullArray::slice(self, offset, length)
-    }
-}
-
-impl SliceableArray for MapArray {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        MapArray::slice(self, offset, length)
-    }
-}
-
-impl<R: RunEndIndexType> SliceableArray for RunArray<R> {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        RunArray::slice(self, offset, length)
-    }
-}
-
-impl SliceableArray for StructArray {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        StructArray::slice(self, offset, length)
-    }
-}
-
-impl SliceableArray for UnionArray {
-    fn slice(&self, offset: usize, length: usize) -> Self {
-        UnionArray::slice(self, offset, length)
-    }
-}
+impl_sliceable!(BooleanArray);
+impl_sliceable!(DictionaryArray, ArrowDictionaryKeyType);
+impl_sliceable!(FixedSizeBinaryArray);
+impl_sliceable!(FixedSizeListArray);
+impl_sliceable!(GenericByteArray, ByteArrayType);
+impl_sliceable!(GenericByteViewArray, ByteViewType + ?Sized);
+impl_sliceable!(GenericListArray, OffsetSizeTrait);
+impl_sliceable!(GenericListViewArray, OffsetSizeTrait);
+impl_sliceable!(MapArray);
+impl_sliceable!(NullArray);
+impl_sliceable!(PrimitiveArray, ArrowPrimitiveType);
+impl_sliceable!(RunArray, RunEndIndexType);
+impl_sliceable!(StructArray);
+impl_sliceable!(UnionArray);
 
 /// A typed iterator on a GenericListArray.
 ///
