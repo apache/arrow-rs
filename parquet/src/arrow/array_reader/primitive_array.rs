@@ -23,6 +23,7 @@ use crate::column::page::PageIterator;
 use crate::data_type::{DataType, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
+use arrow_array::Date64Array;
 use arrow_array::{
     ArrayRef, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array,
@@ -292,11 +293,10 @@ where
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Date64 if *(array.data_type()) == ArrowType::Int32 => {
-                // this is cheap as it internally reinterprets the data
-                let a = array
+                let array: Date64Array = array
                     .as_primitive::<Int32Type>()
-                    .reinterpret_cast::<Date32Type>();
-                arrow_cast::cast(&a, target_type)?
+                    .unary(|x| x as i64 * 86_400_000);
+                Arc::new(array) as ArrayRef
             }
             ArrowType::Decimal64(p, s) if *(array.data_type()) == ArrowType::Int32 => {
                 // Apply conversion to all elements regardless of null slots as the conversion
