@@ -32,6 +32,8 @@ use arrow_array::{
         TimestampMicrosecondBufferBuilder, TimestampMillisecondBufferBuilder,
         TimestampNanosecondBufferBuilder, TimestampSecondBufferBuilder,
     },
+    cast::AsArray,
+    types::*,
 };
 use arrow_buffer::{BooleanBuffer, Buffer, i256};
 use arrow_data::ArrayDataBuilder;
@@ -274,40 +276,26 @@ where
             // See https://github.com/apache/arrow-rs/issues/7040 for a discussion of this
             // issue.
             ArrowType::UInt8 if *(array.data_type()) == ArrowType::Int32 => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .unary(|i| i as u8) as UInt8Array;
+                let array = array.as_primitive::<Int32Type>().unary(|i| i as u8) as UInt8Array;
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Int8 if *(array.data_type()) == ArrowType::Int32 => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .unary(|i| i as i8) as Int8Array;
+                let array = array.as_primitive::<Int32Type>().unary(|i| i as i8) as Int8Array;
                 Arc::new(array) as ArrayRef
             }
             ArrowType::UInt16 if *(array.data_type()) == ArrowType::Int32 => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .unary(|i| i as u16) as UInt16Array;
+                let array = array.as_primitive::<Int32Type>().unary(|i| i as u16) as UInt16Array;
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Int16 if *(array.data_type()) == ArrowType::Int32 => {
-                let array = array
-                    .as_any()
-                    .downcast_ref::<Int32Array>()
-                    .unwrap()
-                    .unary(|i| i as i16) as Int16Array;
+                let array = array.as_primitive::<Int32Type>().unary(|i| i as i16) as Int16Array;
                 Arc::new(array) as ArrayRef
             }
             ArrowType::Date64 if *(array.data_type()) == ArrowType::Int32 => {
                 // this is cheap as it internally reinterprets the data
-                let a = arrow_cast::cast(&array, &ArrowType::Date32)?;
+                let a = array
+                    .as_primitive::<Int32Type>()
+                    .reinterpret_cast::<Date32Type>();
                 arrow_cast::cast(&a, target_type)?
             }
             ArrowType::Decimal64(p, s) if *(array.data_type()) == ArrowType::Int32 => {
@@ -315,12 +303,9 @@ where
                 // to `i64` is infallible. This improves performance by avoiding a branch in
                 // the inner loop (see docs for `PrimitiveArray::unary`).
                 let array = match array.data_type() {
-                    ArrowType::Int32 => array
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap()
-                        .unary(|i| i as i64)
-                        as Decimal64Array,
+                    ArrowType::Int32 => {
+                        array.as_primitive::<Int32Type>().unary(|i| i as i64) as Decimal64Array
+                    }
                     _ => {
                         return Err(arrow_err!(
                             "Cannot convert {:?} to decimal",
@@ -334,27 +319,20 @@ where
             }
             ArrowType::Decimal128(p, s) => {
                 // See above comment. Conversion to `i128` is likewise infallible.
-                let array = match array.data_type() {
-                    ArrowType::Int32 => array
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap()
-                        .unary(|i| i as i128)
-                        as Decimal128Array,
-                    ArrowType::Int64 => array
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
-                        .unary(|i| i as i128)
-                        as Decimal128Array,
-                    _ => {
-                        return Err(arrow_err!(
-                            "Cannot convert {:?} to decimal",
-                            array.data_type()
-                        ));
+                let array =
+                    match array.data_type() {
+                        ArrowType::Int32 => array.as_primitive::<Int32Type>().unary(|i| i as i128)
+                            as Decimal128Array,
+                        ArrowType::Int64 => array.as_primitive::<Int64Type>().unary(|i| i as i128)
+                            as Decimal128Array,
+                        _ => {
+                            return Err(arrow_err!(
+                                "Cannot convert {:?} to decimal",
+                                array.data_type()
+                            ));
+                        }
                     }
-                }
-                .with_precision_and_scale(*p, *s)?;
+                    .with_precision_and_scale(*p, *s)?;
 
                 Arc::new(array) as ArrayRef
             }
@@ -362,15 +340,11 @@ where
                 // See above comment. Conversion to `i256` is likewise infallible.
                 let array = match array.data_type() {
                     ArrowType::Int32 => array
-                        .as_any()
-                        .downcast_ref::<Int32Array>()
-                        .unwrap()
+                        .as_primitive::<Int32Type>()
                         .unary(|i| i256::from_i128(i as i128))
                         as Decimal256Array,
                     ArrowType::Int64 => array
-                        .as_any()
-                        .downcast_ref::<Int64Array>()
-                        .unwrap()
+                        .as_primitive::<Int64Type>()
                         .unary(|i| i256::from_i128(i as i128))
                         as Decimal256Array,
                     _ => {
@@ -388,11 +362,8 @@ where
                 ArrowType::Decimal32(p, s) => {
                     let array = match array.data_type() {
                         ArrowType::Int32 => array
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap()
-                            .unary(|i| i)
-                            as Decimal32Array,
+                            .as_primitive::<Int32Type>()
+                            .reinterpret_cast::<Decimal32Type>(),
                         _ => {
                             return Err(arrow_err!(
                                 "Cannot convert {:?} to decimal dictionary",
@@ -406,18 +377,12 @@ where
                 }
                 ArrowType::Decimal64(p, s) => {
                     let array = match array.data_type() {
-                        ArrowType::Int32 => array
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap()
-                            .unary(|i| i as i64)
-                            as Decimal64Array,
+                        ArrowType::Int32 => {
+                            array.as_primitive::<Int32Type>().unary(|i| i as i64) as Decimal64Array
+                        }
                         ArrowType::Int64 => array
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .unwrap()
-                            .unary(|i| i)
-                            as Decimal64Array,
+                            .as_primitive::<Int64Type>()
+                            .reinterpret_cast::<Decimal64Type>(),
                         _ => {
                             return Err(arrow_err!(
                                 "Cannot convert {:?} to decimal dictionary",
@@ -431,17 +396,9 @@ where
                 }
                 ArrowType::Decimal128(p, s) => {
                     let array = match array.data_type() {
-                        ArrowType::Int32 => array
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap()
-                            .unary(|i| i as i128)
+                        ArrowType::Int32 => array.as_primitive::<Int32Type>().unary(|i| i as i128)
                             as Decimal128Array,
-                        ArrowType::Int64 => array
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .unwrap()
-                            .unary(|i| i as i128)
+                        ArrowType::Int64 => array.as_primitive::<Int64Type>().unary(|i| i as i128)
                             as Decimal128Array,
                         _ => {
                             return Err(arrow_err!(
@@ -455,27 +412,20 @@ where
                     arrow_cast::cast(&array, target_type)?
                 }
                 ArrowType::Decimal256(p, s) => {
-                    let array = match array.data_type() {
-                        ArrowType::Int32 => array
-                            .as_any()
-                            .downcast_ref::<Int32Array>()
-                            .unwrap()
-                            .unary(i256::from)
-                            as Decimal256Array,
-                        ArrowType::Int64 => array
-                            .as_any()
-                            .downcast_ref::<Int64Array>()
-                            .unwrap()
-                            .unary(i256::from)
-                            as Decimal256Array,
-                        _ => {
-                            return Err(arrow_err!(
-                                "Cannot convert {:?} to decimal dictionary",
-                                array.data_type()
-                            ));
+                    let array =
+                        match array.data_type() {
+                            ArrowType::Int32 => array.as_primitive::<Int32Type>().unary(i256::from)
+                                as Decimal256Array,
+                            ArrowType::Int64 => array.as_primitive::<Int64Type>().unary(i256::from)
+                                as Decimal256Array,
+                            _ => {
+                                return Err(arrow_err!(
+                                    "Cannot convert {:?} to decimal dictionary",
+                                    array.data_type()
+                                ));
+                            }
                         }
-                    }
-                    .with_precision_and_scale(*p, *s)?;
+                        .with_precision_and_scale(*p, *s)?;
 
                     arrow_cast::cast(&array, target_type)?
                 }

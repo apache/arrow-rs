@@ -184,8 +184,7 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 
                 // This will compute a new dictionary
                 let array =
-                    arrow_cast::cast(&values.into_array(null_buffer, value_type), data_type)
-                        .expect("cast should be infallible");
+                    arrow_cast::cast(&values.into_array(null_buffer, value_type), data_type)?;
 
                 Ok(array)
             }

@@ -1141,9 +1141,10 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 ArrowDataType::Date64 => {
                     // If the column is a Date64, we cast it to a Date32, and then interpret that as Int32
                     let array = arrow_cast::cast(column, &ArrowDataType::Date32)?;
-                    let array = arrow_cast::cast(&array, &ArrowDataType::Int32)?;
+                    let array = array
+                        .as_primitive::<Date32Type>()
+                        .reinterpret_cast::<Int32Type>();
 
-                    let array = array.as_primitive::<Int32Type>();
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::UInt32 => {
@@ -1233,9 +1234,10 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
         ColumnWriter::Int64ColumnWriter(typed) => {
             match column.data_type() {
                 ArrowDataType::Date64 => {
-                    let array = arrow_cast::cast(column, &ArrowDataType::Int64)?;
+                    let array = column
+                        .as_primitive::<Date64Type>()
+                        .reinterpret_cast::<Int64Type>();
 
-                    let array = array.as_primitive::<Int64Type>();
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Int64 => {
@@ -1252,7 +1254,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                 ArrowDataType::Decimal64(_, _) => {
                     let array = column
                         .as_primitive::<Decimal64Type>()
-                        .unary::<_, Int64Type>(|v| v);
+                        .reinterpret_cast::<Int64Type>();
                     write_primitive(typed, array.values(), levels)
                 }
                 ArrowDataType::Decimal128(_, _) => {
@@ -1274,7 +1276,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                         let array = arrow_cast::cast(column, value_type)?;
                         let array = array
                             .as_primitive::<Decimal64Type>()
-                            .unary::<_, Int64Type>(|v| v);
+                            .reinterpret_cast::<Int64Type>();
                         write_primitive(typed, array.values(), levels)
                     }
                     ArrowDataType::Decimal128(_, _) => {
@@ -1322,17 +1324,11 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
             let bytes = match column.data_type() {
                 ArrowDataType::Interval(interval_unit) => match interval_unit {
                     IntervalUnit::YearMonth => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow_array::IntervalYearMonthArray>()
-                            .unwrap();
+                        let array = column.as_primitive::<IntervalYearMonthType>();
                         get_interval_ym_array_slice(array, indices)
                     }
                     IntervalUnit::DayTime => {
-                        let array = column
-                            .as_any()
-                            .downcast_ref::<arrow_array::IntervalDayTimeArray>()
-                            .unwrap();
+                        let array = column.as_primitive::<IntervalDayTimeType>();
                         get_interval_dt_array_slice(array, indices)
                     }
                     _ => {
@@ -1342,10 +1338,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     }
                 },
                 ArrowDataType::FixedSizeBinary(_) => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::FixedSizeBinaryArray>()
-                        .unwrap();
+                    let array = column.as_fixed_size_binary();
                     get_fsb_array_slice(array, indices)
                 }
                 ArrowDataType::Decimal32(_, _) => {
@@ -1361,10 +1354,7 @@ fn write_leaf(writer: &mut ColumnWriter<'_>, levels: &ArrayLevels) -> Result<usi
                     get_decimal_128_array_slice(array, indices)
                 }
                 ArrowDataType::Decimal256(_, _) => {
-                    let array = column
-                        .as_any()
-                        .downcast_ref::<arrow_array::Decimal256Array>()
-                        .unwrap();
+                    let array = column.as_primitive::<Decimal256Type>();
                     get_decimal_256_array_slice(array, indices)
                 }
                 ArrowDataType::Float16 => {
