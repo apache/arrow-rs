@@ -1,6 +1,6 @@
 use arrow_buffer::{NullBuffer, OffsetBuffer};
-use crate::{Array, ArrowPrimitiveType, DictionaryArray, GenericByteArray, GenericByteViewArray, GenericListArray, GenericListViewArray, OffsetSizeTrait, PrimitiveArray};
-use crate::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType};
+use crate::{Array, ArrowPrimitiveType, BooleanArray, DictionaryArray, FixedSizeBinaryArray, FixedSizeListArray, GenericByteArray, GenericByteViewArray, GenericListArray, GenericListViewArray, MapArray, NullArray, OffsetSizeTrait, PrimitiveArray, RunArray, StructArray, UnionArray};
+use crate::types::{ArrowDictionaryKeyType, ByteArrayType, ByteViewType, RunEndIndexType};
 
 /// Arrays that can be sliced in a zero copy, zero allocation way.
 pub trait SliceableArray {
@@ -41,6 +41,54 @@ impl<T: OffsetSizeTrait> SliceableArray for GenericListArray<T> {
 impl<T: OffsetSizeTrait> SliceableArray for GenericListViewArray<T> {
     fn slice(&self, offset: usize, length: usize) -> Self {
         GenericListViewArray::slice(self, offset, length)
+    }
+}
+
+impl SliceableArray for BooleanArray {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        BooleanArray::slice(self, offset, length)
+    }
+}
+
+impl SliceableArray for FixedSizeBinaryArray {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        FixedSizeBinaryArray::slice(self, offset, length)
+    }
+}
+
+impl SliceableArray for FixedSizeListArray {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        FixedSizeListArray::slice(self, offset, length)
+    }
+}
+
+impl SliceableArray for NullArray {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        NullArray::slice(self, offset, length)
+    }
+}
+
+impl SliceableArray for MapArray {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        MapArray::slice(self, offset, length)
+    }
+}
+
+impl<R: RunEndIndexType> SliceableArray for RunArray<R> {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        RunArray::slice(self, offset, length)
+    }
+}
+
+impl SliceableArray for StructArray {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        StructArray::slice(self, offset, length)
+    }
+}
+
+impl SliceableArray for UnionArray {
+    fn slice(&self, offset: usize, length: usize) -> Self {
+        UnionArray::slice(self, offset, length)
     }
 }
 
