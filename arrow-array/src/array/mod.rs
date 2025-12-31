@@ -73,6 +73,7 @@ mod byte_view_array;
 pub use byte_view_array::*;
 
 mod list_view_array;
+mod typed_list_iter;
 
 pub use list_view_array::*;
 
