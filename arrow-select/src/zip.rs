@@ -719,7 +719,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         let nulls = NullBuffer::new(predicate);
         (bytes.into(), buffers, Some(nulls))
     }
-    
+
     fn get_views_for_non_nullable(
         predicate: BooleanBuffer,
         result_len: usize,
@@ -749,9 +749,11 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                     falsy_view
                 } else {
                     let byte_view_falsy = ByteView::from(falsy_view);
-                    let new_index_falsy_buffers = buffers.len() as u32 + byte_view_falsy.buffer_index;
+                    let new_index_falsy_buffers =
+                        buffers.len() as u32 + byte_view_falsy.buffer_index;
                     buffers.extend(falsy_buffers);
-                    let byte_view_falsy = byte_view_falsy.with_buffer_index(new_index_falsy_buffers);
+                    let byte_view_falsy =
+                        byte_view_falsy.with_buffer_index(new_index_falsy_buffers);
                     byte_view_falsy.as_u128()
                 };
 
@@ -762,7 +764,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 SlicesIterator::from(&predicate).for_each(|(start, end)| {
                     if start > filled {
                         let false_repeat_count = start - filled;
-                        mutable.repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count);
+                        mutable
+                            .repeat_slice_n_times(view_falsy.to_byte_slice(), false_repeat_count);
                     }
                     let true_repeat_count = end - start;
                     mutable.repeat_slice_n_times(truthy_view.to_byte_slice(), true_repeat_count);
