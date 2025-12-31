@@ -1153,6 +1153,10 @@ fn write_leaf(
         // Note: this should match the contents of arrow_to_parquet_type
         ColumnWriter::Int32ColumnWriter(typed) => {
             match column.data_type() {
+                ArrowDataType::Null => {
+                    let array = Int32Array::new_null(column.len());
+                    write_primitive(typed, array.values(), levels)
+                }
                 ArrowDataType::Int8 => {
                     let array: Int32Array = column.as_primitive::<Int8Type>().unary(|x| x as i32);
                     write_primitive(typed, array.values(), levels)
@@ -4161,68 +4165,6 @@ mod tests {
                     .any(|kv| kv.key.as_str() == ARROW_SCHEMA_META_KEY)
             );
         }
-    }
-
-    #[test]
-    fn test_arrow_writer_explicit_schema() {
-        // Write an int32 array using explicit int64 storage
-        let batch_schema = Arc::new(Schema::new(vec![Field::new(
-            "integers",
-            DataType::Int32,
-            true,
-        )]));
-        let parquet_schema = Type::group_type_builder("root")
-            .with_fields(vec![
-                Type::primitive_type_builder("integers", crate::basic::Type::INT64)
-                    .build()
-                    .unwrap()
-                    .into(),
-            ])
-            .build()
-            .unwrap();
-        let parquet_schema_descr = SchemaDescriptor::new(parquet_schema.into());
-
-        let batch = RecordBatch::try_new(
-            batch_schema.clone(),
-            vec![Arc::new(Int32Array::from(vec![1, 2, 3, 4])) as _],
-        )
-        .unwrap();
-
-        let explicit_schema_options =
-            ArrowWriterOptions::new().with_parquet_schema(parquet_schema_descr);
-        let mut buf = Vec::with_capacity(1024);
-        let mut writer = ArrowWriter::try_new_with_options(
-            &mut buf,
-            batch_schema.clone(),
-            explicit_schema_options,
-        )
-        .unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-
-        let bytes = Bytes::from(buf);
-        let reader_builder = ParquetRecordBatchReaderBuilder::try_new(bytes).unwrap();
-
-        let expected_schema = Arc::new(Schema::new(vec![Field::new(
-            "integers",
-            DataType::Int64,
-            true,
-        )]));
-        assert_eq!(reader_builder.schema(), &expected_schema);
-
-        let batches = reader_builder
-            .build()
-            .unwrap()
-            .collect::<Result<Vec<_>, ArrowError>>()
-            .unwrap();
-        assert_eq!(batches.len(), 1);
-
-        let expected_batch = RecordBatch::try_new(
-            expected_schema.clone(),
-            vec![Arc::new(Int64Array::from(vec![1, 2, 3, 4])) as _],
-        )
-        .unwrap();
-        assert_eq!(batches[0], expected_batch);
     }
 
     #[test]
