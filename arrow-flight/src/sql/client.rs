@@ -17,6 +17,12 @@
 
 //! A FlightSQL Client [`FlightSqlServiceClient`]
 
+use arrow_buffer::Buffer;
+use arrow_ipc::MessageHeader;
+use arrow_ipc::convert::fb_to_schema;
+use arrow_ipc::reader::read_record_batch;
+use arrow_ipc::root_as_message;
+use arrow_schema::SchemaRef;
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
@@ -625,7 +631,7 @@ pub enum ArrowFlightData {
 pub fn arrow_data_from_flight_data(
     flight_data: FlightData,
     arrow_schema_ref: &SchemaRef,
-) -> Result<ArrowFlightData, ArrowError> {
+) -> std::result::Result<ArrowFlightData, ArrowError> {
     let ipc_message = root_as_message(&flight_data.data_header[..])
         .map_err(|err| ArrowError::ParseError(format!("Unable to get root as message: {err:?}")))?;
 
