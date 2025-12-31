@@ -22,7 +22,7 @@ use arrow_buffer::{BooleanBuffer, NullBuffer};
 use arrow_schema::{ArrowError, DataType};
 
 /// Returns a new array with the same values and the validity bit to false where
-/// the corresponding element of`right` is true.
+/// the corresponding element of `right` is true.
 ///
 /// This can be used to implement SQL `NULLIF`
 ///
@@ -71,37 +71,20 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 
     // Compute left null bitmap & !right
 
-    let (combined, null_count) = match left_data.nulls() {
-        Some(left) => {
-            let mut valid_count = 0;
-            let b = BooleanBuffer::from_bitwise_binary_op(
-                left.buffer(),
-                left.offset(),
-                right.inner(),
-                right.offset(),
-                len,
-                |l, r| {
-                    let t = l & !r;
-                    valid_count += t.count_ones() as usize;
-                    t
-                },
-            );
-            (b, len - valid_count)
-        }
-        None => {
-            let mut null_count = 0;
-            let b = BooleanBuffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| {
-                let t = !b;
-                null_count += t.count_zeros() as usize;
-                t
-            });
-            (b, null_count)
-        }
+    let combined = if let Some(left) = left_data.nulls() {
+        BooleanBuffer::from_bitwise_binary_op(
+            left.buffer(),
+            left.offset(),
+            right.inner(),
+            right.offset(),
+            len,
+            |l, r| l & !r,
+        )
+    } else {
+        BooleanBuffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| !b)
     };
 
-    // Safety:
-    // Counted nulls whilst computing
-    let nulls = unsafe { NullBuffer::new_unchecked(combined, null_count) };
+    let nulls = NullBuffer::new(combined);
     let data = left_data.into_builder().nulls(Some(nulls));
 
     // SAFETY:
