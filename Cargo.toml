@@ -118,3 +118,6 @@ criterion = { version = "0.8.0", default-features = false }
 inherits = "release"
 debug = true
 strip = false
+
+[patch.crates-io]
+object_store = {  git = "https://github.com/alamb/arrow-rs-object-store.git", branch="alamb/prepare_0.13.0" }
