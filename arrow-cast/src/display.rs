@@ -929,6 +929,12 @@ impl DisplayIndex for &PrimitiveArray<IntervalYearMonthType> {
 impl DisplayIndex for &PrimitiveArray<IntervalDayTimeType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+
+        if value.is_zero() {
+            write!(f, "0 secs")?;
+            return Ok(());
+        }
+
         let mut prefix = "";
 
         if value.days != 0 {
@@ -952,6 +958,12 @@ impl DisplayIndex for &PrimitiveArray<IntervalDayTimeType> {
 impl DisplayIndex for &PrimitiveArray<IntervalMonthDayNanoType> {
     fn write(&self, idx: usize, f: &mut dyn Write) -> FormatResult {
         let value = self.value(idx);
+
+        if value.is_zero() {
+            write!(f, "0 secs")?;
+            return Ok(());
+        }
+
         let mut prefix = "";
 
         if value.months != 0 {
