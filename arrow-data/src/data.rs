@@ -309,6 +309,9 @@ impl ArrayData {
     ///
     /// Note: This is a low level API and most users of the arrow crate should create
     /// arrays using the builders found in [arrow_array](https://docs.rs/arrow-array)
+    /// or [`ArrayDataBuilder`].
+    ///
+    /// See also [`Self::into_parts`] to recover the fields
     pub fn try_new(
         data_type: DataType,
         len: usize,
@@ -349,6 +352,33 @@ impl ArrayData {
         // a call to `ArrayData::try_new` or created using unsafe
         new_self.validate_data()?;
         Ok(new_self)
+    }
+
+    /// Return the constituent parts of this ArrayData
+    ///
+    /// This is the inverse of [`ArrayData::try_new`].
+    ///
+    /// Returns `(data_type, len, nulls, offset, buffers, child_data)`
+    pub fn into_parts(
+        self,
+    ) -> (
+        DataType,
+        usize,
+        Option<NullBuffer>,
+        usize,
+        Vec<Buffer>,
+        Vec<ArrayData>,
+    ) {
+        let Self {
+            data_type,
+            len,
+            nulls,
+            offset,
+            buffers,
+            child_data,
+        } = self;
+
+        (data_type, len, nulls, offset, buffers, child_data)
     }
 
     /// Returns a builder to construct a [`ArrayData`] instance of the same [`DataType`]
