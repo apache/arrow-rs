@@ -1705,8 +1705,9 @@ mod tests {
             .len(7)
             .buffers(vec![type_ids, value_offsets])
             .child_data(vec![
-                string_array.into_data(),
+                // Child arrays must be in sorted order by type ID: 4, 8, 9
                 int_array.into_data(),
+                string_array.into_data(),
                 float_array.into_data(),
             ])
             .build()
@@ -1817,8 +1818,9 @@ mod tests {
             .len(7)
             .buffers(vec![type_ids, value_offsets])
             .child_data(vec![
-                string_array.into_data(),
+                // Child arrays must be in sorted order by type ID: 4, 8, 9
                 int_array.into_data(),
+                string_array.into_data(),
                 float_array.into_data(),
             ])
             .build()
@@ -1846,9 +1848,10 @@ mod tests {
             ],
         )
         .unwrap();
+        // Child arrays must be in sorted order by type ID: 2, 3
         let children = vec![
-            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
             Arc::new(StringArray::from_iter_values(["c", "d"])) as _,
+            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
         ];
 
         let type_ids = vec![3, 3, 2].into();
@@ -1874,9 +1877,10 @@ mod tests {
             "Invalid argument error: Type Ids values must match one of the field type ids"
         );
 
+        // Child arrays must be in sorted order by type ID: 2, 3
         let children = vec![
-            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
             Arc::new(StringArray::from_iter_values(["c"])) as _,
+            Arc::new(StringArray::from_iter_values(["a", "b"])) as _,
         ];
         let type_ids = ScalarBuffer::from(vec![3_i8, 3, 2]);
         let offsets = Some(vec![0, 1, 0].into());
