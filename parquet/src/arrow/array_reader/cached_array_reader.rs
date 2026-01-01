@@ -201,7 +201,7 @@ impl ArrayReader for CachedArrayReader {
 
             // Check local cache first
             let cached = if let Some(array) = self.local_cache.get(&batch_id) {
-                Some(array.clone())
+                Some(Arc::clone(array))
             } else {
                 // If not in local cache, i.e., we are consumer, check shared cache
                 let cache_content = self
@@ -211,7 +211,7 @@ impl ArrayReader for CachedArrayReader {
                     .get(self.column_idx, batch_id);
                 if let Some(array) = cache_content.as_ref() {
                     // Store in local cache for later use in consume_batch
-                    self.local_cache.insert(batch_id, array.clone());
+                    self.local_cache.insert(batch_id, Arc::clone(array));
                 }
                 cache_content
             };
