@@ -892,7 +892,7 @@ impl RowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        if cfg!(test) {
+        if cfg!(debug_assertions) {
             for (i, row) in rows.iter().enumerate() {
                 if !row.is_empty() {
                     return Err(ArrowError::InvalidArgumentError(format!(
