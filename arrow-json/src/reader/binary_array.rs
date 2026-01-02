@@ -15,30 +15,84 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_array::builder::{
-    BinaryViewBuilder, FixedSizeBinaryBuilder, GenericBinaryBuilder, GenericStringBuilder,
-};
+use arrow_array::builder::{BinaryViewBuilder, FixedSizeBinaryBuilder, GenericBinaryBuilder};
 use arrow_array::{Array, GenericStringArray, OffsetSizeTrait};
 use arrow_data::ArrayData;
 use arrow_schema::ArrowError;
+use std::io::Write;
 use std::marker::PhantomData;
 
 use crate::reader::ArrayDecoder;
 use crate::reader::tape::{Tape, TapeElement};
 
-/// Decode a hex-encoded string into bytes
-fn decode_hex_string(hex_string: &str) -> Result<Vec<u8>, ArrowError> {
-    let mut decoded = Vec::with_capacity(hex_string.len() / 2);
-    for substr in hex_string.as_bytes().chunks(2) {
-        let str = std::str::from_utf8(substr).map_err(|e| {
-            ArrowError::JsonError(format!("invalid utf8 in hex encoded binary data: {e}"))
-        })?;
-        let byte = u8::from_str_radix(str, 16).map_err(|e| {
-            ArrowError::JsonError(format!("invalid hex encoding in binary data: {e}"))
-        })?;
-        decoded.push(byte);
+#[inline]
+fn decode_hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
-    Ok(decoded)
+}
+
+fn invalid_hex_error() -> ArrowError {
+    ArrowError::JsonError("invalid hex encoding in binary data: invalid digit found in string".to_string())
+}
+
+fn decode_hex_to_vec(hex_string: &str, out: &mut Vec<u8>) -> Result<(), ArrowError> {
+    let bytes = hex_string.as_bytes();
+    out.reserve((bytes.len() + 1) / 2);
+
+    let mut iter = bytes.chunks_exact(2);
+    for pair in &mut iter {
+        let high = decode_hex_digit(pair[0]).ok_or_else(invalid_hex_error)?;
+        let low = decode_hex_digit(pair[1]).ok_or_else(invalid_hex_error)?;
+        out.push((high << 4) | low);
+    }
+
+    let remainder = iter.remainder();
+    if !remainder.is_empty() {
+        let low = decode_hex_digit(remainder[0]).ok_or_else(invalid_hex_error)?;
+        out.push(low);
+    }
+
+    Ok(())
+}
+
+fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<(), ArrowError> {
+    let bytes = hex_string.as_bytes();
+    let mut iter = bytes.chunks_exact(2);
+    let mut buffer = [0u8; 64];
+    let mut buffered = 0;
+
+    for pair in &mut iter {
+        let high = decode_hex_digit(pair[0]).ok_or_else(invalid_hex_error)?;
+        let low = decode_hex_digit(pair[1]).ok_or_else(invalid_hex_error)?;
+        buffer[buffered] = (high << 4) | low;
+        buffered += 1;
+
+        if buffered == buffer.len() {
+            writer
+                .write_all(&buffer)
+                .map_err(|e| ArrowError::JsonError(format!("failed to write binary data: {e}")))?;
+            buffered = 0;
+        }
+    }
+
+    let remainder = iter.remainder();
+    if !remainder.is_empty() {
+        let low = decode_hex_digit(remainder[0]).ok_or_else(invalid_hex_error)?;
+        buffer[buffered] = low;
+        buffered += 1;
+    }
+
+    if buffered > 0 {
+        writer
+            .write_all(&buffer[..buffered])
+            .map_err(|e| ArrowError::JsonError(format!("failed to write binary data: {e}")))?;
+    }
+
+    Ok(())
 }
 
 #[derive(Default)]
@@ -59,14 +113,12 @@ impl<O: OffsetSizeTrait> ArrayDecoder for BinaryArrayDecoder<O> {
 
         let mut builder = GenericBinaryBuilder::<O>::with_capacity(pos.len(), data_capacity);
 
-        GenericStringBuilder::<O>::with_capacity(pos.len(), data_capacity);
-
         for p in pos {
             match tape.get(*p) {
                 TapeElement::String(idx) => {
                     let string = tape.get_string(idx);
-                    let decoded = decode_hex_string(string)?;
-                    builder.append_value(&decoded);
+                    decode_hex_to_writer(string, &mut builder)?;
+                    builder.append_value(b"");
                 }
                 TapeElement::Null => builder.append_null(),
                 _ => unreachable!(),
@@ -91,13 +143,15 @@ impl FixedSizeBinaryArrayDecoder {
 impl ArrayDecoder for FixedSizeBinaryArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(pos.len(), self.len);
+        let mut scratch = Vec::with_capacity(self.len as usize);
 
         for p in pos {
             match tape.get(*p) {
                 TapeElement::String(idx) => {
                     let string = tape.get_string(idx);
-                    let decoded = decode_hex_string(string)?;
-                    builder.append_value(&decoded)?;
+                    scratch.clear();
+                    decode_hex_to_vec(string, &mut scratch)?;
+                    builder.append_value(&scratch)?;
                 }
                 TapeElement::Null => builder.append_null(),
                 _ => unreachable!(),
@@ -115,13 +169,15 @@ impl ArrayDecoder for BinaryViewDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let data_capacity = estimate_data_capacity(tape, pos)?;
         let mut builder = BinaryViewBuilder::with_capacity(data_capacity);
+        let mut scratch = Vec::new();
 
         for p in pos {
             match tape.get(*p) {
                 TapeElement::String(idx) => {
                     let string = tape.get_string(idx);
-                    let decoded = decode_hex_string(string)?;
-                    builder.append_value(&decoded);
+                    scratch.clear();
+                    decode_hex_to_vec(string, &mut scratch)?;
+                    builder.append_value(&scratch);
                 }
                 TapeElement::Null => builder.append_null(),
                 _ => unreachable!(),
@@ -139,7 +195,7 @@ fn estimate_data_capacity(tape: &Tape<'_>, pos: &[u32]) -> Result<usize, ArrowEr
             TapeElement::String(idx) => {
                 let string_len = tape.get_string(idx).len();
                 // two hex characters represent one byte
-                let decoded_len = string_len / 2;
+                let decoded_len = (string_len + 1) / 2;
                 data_capacity += decoded_len;
             }
             TapeElement::Null => {}
