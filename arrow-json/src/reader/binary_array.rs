@@ -35,10 +35,10 @@ fn decode_hex_digit(byte: u8) -> Option<u8> {
     }
 }
 
-fn invalid_hex_error() -> ArrowError {
-    ArrowError::JsonError(
-        "invalid hex encoding in binary data: invalid digit found in string".to_string(),
-    )
+fn invalid_hex_error_at(index: usize, byte: u8) -> ArrowError {
+    ArrowError::JsonError(format!(
+        "invalid hex encoding in binary data: invalid digit 0x{byte:02x} at position {index}"
+    ))
 }
 
 fn decode_hex_to_vec(hex_string: &str, out: &mut Vec<u8>) -> Result<(), ArrowError> {
@@ -46,15 +46,19 @@ fn decode_hex_to_vec(hex_string: &str, out: &mut Vec<u8>) -> Result<(), ArrowErr
     out.reserve((bytes.len() + 1) / 2);
 
     let mut iter = bytes.chunks_exact(2);
-    for pair in &mut iter {
-        let high = decode_hex_digit(pair[0]).ok_or_else(invalid_hex_error)?;
-        let low = decode_hex_digit(pair[1]).ok_or_else(invalid_hex_error)?;
+    for (pair_index, pair) in (&mut iter).enumerate() {
+        let base = pair_index * 2;
+        let high = decode_hex_digit(pair[0]).ok_or_else(|| invalid_hex_error_at(base, pair[0]))?;
+        let low =
+            decode_hex_digit(pair[1]).ok_or_else(|| invalid_hex_error_at(base + 1, pair[1]))?;
         out.push((high << 4) | low);
     }
 
     let remainder = iter.remainder();
     if !remainder.is_empty() {
-        let low = decode_hex_digit(remainder[0]).ok_or_else(invalid_hex_error)?;
+        let index = (bytes.len() / 2) * 2;
+        let low = decode_hex_digit(remainder[0])
+            .ok_or_else(|| invalid_hex_error_at(index, remainder[0]))?;
         out.push(low);
     }
 
@@ -67,9 +71,11 @@ fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<()
     let mut buffer = [0u8; 64];
     let mut buffered = 0;
 
-    for pair in &mut iter {
-        let high = decode_hex_digit(pair[0]).ok_or_else(invalid_hex_error)?;
-        let low = decode_hex_digit(pair[1]).ok_or_else(invalid_hex_error)?;
+    for (pair_index, pair) in (&mut iter).enumerate() {
+        let base = pair_index * 2;
+        let high = decode_hex_digit(pair[0]).ok_or_else(|| invalid_hex_error_at(base, pair[0]))?;
+        let low =
+            decode_hex_digit(pair[1]).ok_or_else(|| invalid_hex_error_at(base + 1, pair[1]))?;
         buffer[buffered] = (high << 4) | low;
         buffered += 1;
 
@@ -83,7 +89,9 @@ fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<()
 
     let remainder = iter.remainder();
     if !remainder.is_empty() {
-        let low = decode_hex_digit(remainder[0]).ok_or_else(invalid_hex_error)?;
+        let index = (bytes.len() / 2) * 2;
+        let low = decode_hex_digit(remainder[0])
+            .ok_or_else(|| invalid_hex_error_at(index, remainder[0]))?;
         buffer[buffered] = low;
         buffered += 1;
     }
@@ -207,4 +215,67 @@ fn estimate_data_capacity(tape: &Tape<'_>, pos: &[u32]) -> Result<usize, ArrowEr
         }
     }
     Ok(data_capacity)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_decode_hex_to_vec_empty() {
+        let mut out = Vec::new();
+        decode_hex_to_vec("", &mut out).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_decode_hex_to_vec_odd_length() {
+        let mut out = Vec::new();
+        decode_hex_to_vec("0f0", &mut out).unwrap();
+        assert_eq!(out, vec![0x0f, 0x00]);
+
+        out.clear();
+        decode_hex_to_vec("a", &mut out).unwrap();
+        assert_eq!(out, vec![0x0a]);
+    }
+
+    #[test]
+    fn test_decode_hex_to_vec_invalid() {
+        let mut out = Vec::new();
+        let err = decode_hex_to_vec("0g", &mut out).unwrap_err();
+        match err {
+            ArrowError::JsonError(msg) => {
+                assert!(msg.contains("invalid hex encoding in binary data"));
+                assert!(msg.contains("position 1"));
+            }
+            _ => panic!("expected JsonError"),
+        }
+    }
+
+    #[test]
+    fn test_decode_hex_to_writer_empty() {
+        let mut out = Vec::new();
+        decode_hex_to_writer("", &mut out).unwrap();
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn test_decode_hex_to_writer_odd_length() {
+        let mut out = Vec::new();
+        decode_hex_to_writer("0f0", &mut out).unwrap();
+        assert_eq!(out, vec![0x0f, 0x00]);
+    }
+
+    #[test]
+    fn test_decode_hex_to_writer_invalid() {
+        let mut out = Vec::new();
+        let err = decode_hex_to_writer("g", &mut out).unwrap_err();
+        match err {
+            ArrowError::JsonError(msg) => {
+                assert!(msg.contains("invalid hex encoding in binary data"));
+                assert!(msg.contains("position 0"));
+            }
+            _ => panic!("expected JsonError"),
+        }
+    }
 }
