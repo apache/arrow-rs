@@ -41,24 +41,27 @@ impl StructArrayDecoder {
         is_nullable: bool,
         struct_mode: StructMode,
     ) -> Result<Self, ArrowError> {
-        let binding = data_type.clone();
-        let fields = struct_fields(&binding);
-        let decoders = fields
-            .iter()
-            .map(|f| {
-                // If this struct nullable, need to permit nullability in child array
-                // StructArrayDecoder::decode verifies that if the child is not nullable
-                // it doesn't contain any nulls not masked by its parent
-                let nullable = f.is_nullable() || is_nullable;
-                make_decoder(
-                    f.data_type().clone(),
-                    coerce_primitive,
-                    strict_mode,
-                    nullable,
-                    struct_mode,
-                )
-            })
-            .collect::<Result<Vec<_>, ArrowError>>()?;
+        let (decoders, field_name_to_index) = {
+            let fields = struct_fields(&data_type);
+            let decoders = fields
+                .iter()
+                .map(|f| {
+                    // If this struct nullable, need to permit nullability in child array
+                    // StructArrayDecoder::decode verifies that if the child is not nullable
+                    // it doesn't contain any nulls not masked by its parent
+                    let nullable = f.is_nullable() || is_nullable;
+                    make_decoder(
+                        f.data_type().clone(),
+                        coerce_primitive,
+                        strict_mode,
+                        nullable,
+                        struct_mode,
+                    )
+                })
+                .collect::<Result<Vec<_>, ArrowError>>()?;
+            let field_name_to_index = build_field_index(fields);
+            (decoders, field_name_to_index)
+        };
 
         Ok(Self {
             data_type,
@@ -66,7 +69,7 @@ impl StructArrayDecoder {
             strict_mode,
             is_nullable,
             struct_mode,
-            field_name_to_index: build_field_index(fields),
+            field_name_to_index,
             child_pos: Vec::new(),
         })
     }
