@@ -23,9 +23,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 const BINARY_ROWS: usize = 1 << 15;
-const LIST_ROWS: usize = 1 << 14;
 const BINARY_BYTES: usize = 64;
-const LIST_LEN: usize = 32;
 
 fn bench_decode(c: &mut Criterion, name: &str, data: &[u8], field: Arc<Field>, rows: usize) {
     c.bench_function(name, |b| {
@@ -66,23 +64,6 @@ fn build_hex_lines(rows: usize, bytes_per_row: usize) -> Vec<u8> {
             append_hex_byte(&mut data, byte);
         }
         data.push('"');
-        data.push('\n');
-    }
-    data.into_bytes()
-}
-
-fn build_numeric_list_lines(rows: usize, list_len: usize) -> Vec<u8> {
-    let mut data = String::with_capacity(rows * (list_len * 6 + 3));
-    for row in 0..rows {
-        data.push('[');
-        for i in 0..list_len {
-            let value = (row as i64) * (list_len as i64) + i as i64;
-            let _ = write!(data, "{value}");
-            if i + 1 != list_len {
-                data.push(',');
-            }
-        }
-        data.push(']');
         data.push('\n');
     }
     data.into_bytes()

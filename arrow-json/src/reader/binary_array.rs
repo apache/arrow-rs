@@ -43,7 +43,7 @@ fn invalid_hex_error_at(index: usize, byte: u8) -> ArrowError {
 
 fn decode_hex_to_vec(hex_string: &str, out: &mut Vec<u8>) -> Result<(), ArrowError> {
     let bytes = hex_string.as_bytes();
-    out.reserve((bytes.len() + 1) / 2);
+    out.reserve(bytes.len().div_ceil(2));
 
     let mut iter = bytes.chunks_exact(2);
     for (pair_index, pair) in (&mut iter).enumerate() {
@@ -127,6 +127,8 @@ impl<O: OffsetSizeTrait> ArrayDecoder for BinaryArrayDecoder<O> {
             match tape.get(*p) {
                 TapeElement::String(idx) => {
                     let string = tape.get_string(idx);
+                    // Decode directly into the builder for performance. If decoding fails,
+                    // the error is terminal and the builder is discarded by the caller.
                     decode_hex_to_writer(string, &mut builder)?;
                     builder.append_value(b"");
                 }
@@ -205,7 +207,7 @@ fn estimate_data_capacity(tape: &Tape<'_>, pos: &[u32]) -> Result<usize, ArrowEr
             TapeElement::String(idx) => {
                 let string_len = tape.get_string(idx).len();
                 // two hex characters represent one byte
-                let decoded_len = (string_len + 1) / 2;
+                let decoded_len = string_len.div_ceil(2);
                 data_capacity += decoded_len;
             }
             TapeElement::Null => {}
@@ -220,6 +222,9 @@ fn estimate_data_capacity(tape: &Tape<'_>, pos: &[u32]) -> Result<usize, ArrowEr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ReaderBuilder;
+    use arrow_schema::{DataType, Field};
+    use std::io::Cursor;
 
     #[test]
     fn test_decode_hex_to_vec_empty() {
@@ -269,13 +274,31 @@ mod tests {
     #[test]
     fn test_decode_hex_to_writer_invalid() {
         let mut out = Vec::new();
-        let err = decode_hex_to_writer("g", &mut out).unwrap_err();
+        let err = decode_hex_to_writer("0f0g", &mut out).unwrap_err();
         match err {
             ArrowError::JsonError(msg) => {
                 assert!(msg.contains("invalid hex encoding in binary data"));
-                assert!(msg.contains("position 0"));
+                assert!(msg.contains("position 3"));
             }
             _ => panic!("expected JsonError"),
+        }
+    }
+
+    #[test]
+    fn test_binary_reader_invalid_hex_is_terminal() {
+        let field = Field::new("item", DataType::Binary, false);
+        let data = b"\"0f0g\"\n\"0f00\"\n";
+        let mut reader = ReaderBuilder::new_with_field(field)
+            .build(Cursor::new(data))
+            .unwrap();
+
+        let err = reader.next().unwrap().unwrap_err().to_string();
+        assert!(err.contains("invalid hex encoding in binary data"));
+
+        match reader.next() {
+            None => {}
+            Some(Err(_)) => {}
+            Some(Ok(_)) => panic!("expected terminal error after invalid hex"),
         }
     }
 }
