@@ -19,7 +19,7 @@
 
 use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
 use arrow_buffer::buffer::bitwise_bin_op_helper;
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, NullBuffer, bitwise_unary_op_helper};
 use arrow_schema::{ArrowError, DataType};
 
 /// Returns a new array with the same values and the validity bit to false where
@@ -91,13 +91,11 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
         }
         None => {
             let mut null_count = 0;
-            let buffer =
-                BooleanBuffer::from_bitwise_unary_op(right.inner(), right.offset(), len, |b| {
-                    let t = !b;
-                    null_count += t.count_zeros() as usize;
-                    t
-                })
-                .into_inner();
+            let buffer = bitwise_unary_op_helper(right.inner(), right.offset(), len, |b| {
+                let t = !b;
+                null_count += t.count_zeros() as usize;
+                t
+            });
             (buffer, null_count)
         }
     };
@@ -594,7 +592,7 @@ mod tests {
     /// Returns a new BooleanArray with a null buffer where all values are valid
     fn remove_null_values(array: &BooleanArray) -> BooleanArray {
         let len = array.len();
-        let new_nulls = NullBuffer::from_iter(std::iter::repeat(true).take(len));
+        let new_nulls = NullBuffer::from_iter(std::iter::repeat_n(true, len));
         make_array(
             array
                 .into_data()
