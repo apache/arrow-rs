@@ -71,7 +71,7 @@ pub fn nullif(left: &dyn Array, right: &BooleanArray) -> Result<ArrayRef, ArrowE
 
     // Compute left null bitmap & !right
 
-    let combined = if let Some(left) = left_data.nulls() {
+    let combined = if let Some(left) = left_data.nulls() && left.null_count() > 0 {
         BooleanBuffer::from_bitwise_binary_op(
             left.buffer(),
             left.offset(),
