@@ -17,7 +17,7 @@
 
 use arrow_json::ReaderBuilder;
 use arrow_schema::{DataType, Field};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::fmt::Write;
 use std::hint::black_box;
 use std::sync::Arc;
@@ -120,17 +120,6 @@ fn criterion_benchmark(c: &mut Criterion) {
         &binary_data,
         view_field,
         BINARY_ROWS,
-    );
-
-    let list_data = build_numeric_list_lines(LIST_ROWS, LIST_LEN);
-    let element = Arc::new(Field::new("element", DataType::Int64, false));
-    let list_field = Arc::new(Field::new_list("item", element, false));
-    bench_decode(
-        c,
-        "decode_numeric_dense_list_i64_json",
-        &list_data,
-        list_field,
-        LIST_ROWS,
     );
 }
 

@@ -36,7 +36,9 @@ fn decode_hex_digit(byte: u8) -> Option<u8> {
 }
 
 fn invalid_hex_error() -> ArrowError {
-    ArrowError::JsonError("invalid hex encoding in binary data: invalid digit found in string".to_string())
+    ArrowError::JsonError(
+        "invalid hex encoding in binary data: invalid digit found in string".to_string(),
+    )
 }
 
 fn decode_hex_to_vec(hex_string: &str, out: &mut Vec<u8>) -> Result<(), ArrowError> {
