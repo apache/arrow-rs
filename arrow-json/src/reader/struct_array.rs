@@ -59,7 +59,11 @@ impl StructArrayDecoder {
                     )
                 })
                 .collect::<Result<Vec<_>, ArrowError>>()?;
-            let field_name_to_index = build_field_index(fields);
+            let field_name_to_index = if struct_mode == StructMode::ObjectOnly {
+                build_field_index(fields)
+            } else {
+                None
+            };
             (decoders, field_name_to_index)
         };
 
@@ -80,7 +84,20 @@ impl ArrayDecoder for StructArrayDecoder {
         let fields = struct_fields(&self.data_type);
         let row_count = pos.len();
         let field_count = fields.len();
-        let total_len = field_count * row_count;
+        let total_len = field_count.checked_mul(row_count).ok_or_else(|| {
+            ArrowError::JsonError(format!(
+                "StructArrayDecoder child position buffer size overflow for rows={row_count} fields={field_count}"
+            ))
+        })?;
+        if total_len > self.child_pos.len() {
+            self.child_pos
+                .try_reserve(total_len - self.child_pos.len())
+                .map_err(|_| {
+                    ArrowError::JsonError(format!(
+                        "StructArrayDecoder child position buffer allocation failed for rows={row_count} fields={field_count}"
+                    ))
+                })?;
+        }
         self.child_pos.resize(total_len, 0);
         self.child_pos.fill(0);
         let mut nulls = self
