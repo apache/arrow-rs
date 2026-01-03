@@ -78,8 +78,14 @@ pub use list_view_array::*;
 
 use crate::iterator::ArrayIter;
 
+mod private {
+    pub trait Sealed {}
+
+    impl<T: Sealed> Sealed for &T {}
+}
+
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
-pub trait Array: std::fmt::Debug + Send + Sync {
+pub trait Array: std::fmt::Debug + Send + Sync + private::Sealed {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -340,6 +346,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
 /// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
+
+impl private::Sealed for ArrayRef {}
 
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
 impl Array for ArrayRef {
