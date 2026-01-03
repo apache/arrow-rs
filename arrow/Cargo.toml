@@ -172,7 +172,6 @@ name = "coalesce_kernels"
 harness = false
 required-features = ["test_utils"]
 
-
 [[bench]]
 name = "take_kernels"
 harness = false
@@ -308,6 +307,11 @@ required-features = ["test_utils"]
 
 [[bench]]
 name = "lexsort"
+harness = false
+required-features = ["test_utils"]
+
+[[bench]]
+name = "nullif_kernel"
 harness = false
 required-features = ["test_utils"]
 
