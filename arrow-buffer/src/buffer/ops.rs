@@ -20,7 +20,12 @@ use crate::BooleanBuffer;
 use crate::util::bit_util::ceil;
 
 /// Apply a bitwise operation `op` to four inputs and return the result as a Buffer.
-/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// The inputs are treated as bitmaps, meaning that offsets and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_quaternary_op_helper<F>(
     buffers: [&Buffer; 4],
     offsets: [usize; 4],
@@ -60,7 +65,12 @@ where
 }
 
 /// Apply a bitwise operation `op` to two inputs and return the result as a Buffer.
-/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// The inputs are treated as bitmaps, meaning that offsets and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_bin_op_helper<F>(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -93,21 +103,42 @@ where
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
-/// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
-#[deprecated(
-    since = "57.2.0",
-    note = "use BooleanBuffer::from_bitwise_unary_op instead"
-)]
+///
+/// The input is treated as a bitmap, meaning that offset and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
     len_in_bits: usize,
-    op: F,
+    mut op: F,
 ) -> Buffer
 where
     F: FnMut(u64) -> u64,
 {
-    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, op).into_inner()
+    // reserve capacity and set length so we can get a typed view of u64 chunks
+    let mut result =
+        MutableBuffer::new(ceil(len_in_bits, 8)).with_bitset(len_in_bits / 64 * 8, false);
+
+    let left_chunks = left.bit_chunks(offset_in_bits, len_in_bits);
+
+    let result_chunks = result.typed_data_mut::<u64>().iter_mut();
+
+    result_chunks
+        .zip(left_chunks.iter())
+        .for_each(|(res, left)| {
+            *res = op(left);
+        });
+
+    let remainder_bytes = ceil(left_chunks.remainder_len(), 8);
+    let rem = op(left_chunks.remainder_bits());
+    // we are counting its starting from the least significant bit, to to_le_bytes should be correct
+    let rem = &rem.to_le_bytes()[0..remainder_bytes];
+    result.extend_from_slice(rem);
+
+    result.into()
 }
 
 /// Apply a bitwise and to two inputs and return the result as a Buffer.
@@ -119,7 +150,7 @@ pub fn buffer_bin_and(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
@@ -127,6 +158,7 @@ pub fn buffer_bin_and(
         len_in_bits,
         |a, b| a & b,
     )
+    .into_inner()
 }
 
 /// Apply a bitwise or to two inputs and return the result as a Buffer.
@@ -138,7 +170,7 @@ pub fn buffer_bin_or(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
@@ -146,6 +178,7 @@ pub fn buffer_bin_or(
         len_in_bits,
         |a, b| a | b,
     )
+    .into_inner()
 }
 
 /// Apply a bitwise xor to two inputs and return the result as a Buffer.
@@ -157,7 +190,7 @@ pub fn buffer_bin_xor(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
@@ -165,6 +198,7 @@ pub fn buffer_bin_xor(
         len_in_bits,
         |a, b| a ^ b,
     )
+    .into_inner()
 }
 
 /// Apply a bitwise and_not to two inputs and return the result as a Buffer.
@@ -176,7 +210,7 @@ pub fn buffer_bin_and_not(
     right_offset_in_bits: usize,
     len_in_bits: usize,
 ) -> Buffer {
-    bitwise_bin_op_helper(
+    BooleanBuffer::from_bitwise_binary_op(
         left,
         left_offset_in_bits,
         right,
@@ -184,11 +218,11 @@ pub fn buffer_bin_and_not(
         len_in_bits,
         |a, b| a & !b,
     )
+    .into_inner()
 }
 
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
 pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {
-    // TODO: should we deprecate this function in favor of the Buffer ! impl ?
     BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, |a| !a).into_inner()
 }
