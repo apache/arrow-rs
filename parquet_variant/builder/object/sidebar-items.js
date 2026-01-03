@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["object_header"],"struct":["ObjectBuilder","ObjectFieldBuilder","ObjectState"]};

@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"fn":["decode_hex_string","estimate_data_capacity"],"struct":["BinaryArrayDecoder","BinaryViewDecoder","FixedSizeBinaryArrayDecoder"]};
