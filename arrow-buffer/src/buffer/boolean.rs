@@ -165,6 +165,7 @@ impl BooleanBuffer {
     /// * `op` must only apply bitwise operations
     ///   on the relevant bits; the input `u64` may contain irrelevant bits
     ///   and may be processed differently on different endian architectures.
+    /// * `op` may be called with input bits outside the requested range
     /// * The output always has zero offset
     ///
     /// # See Also
