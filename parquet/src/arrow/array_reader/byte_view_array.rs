@@ -162,13 +162,10 @@ impl ColumnValueDecoder for ByteViewArrayColumnValueDecoder {
             ));
         }
 
-        let mut buffer = ViewBuffer::default();
-        let mut decoder = ByteViewArrayDecoderPlain::new(
-            buf,
-            num_values as usize,
-            Some(num_values as usize),
-            self.validate_utf8,
-        );
+        let num_values = num_values as usize;
+        let mut buffer = ViewBuffer::with_capacity(num_values);
+        let mut decoder =
+            ByteViewArrayDecoderPlain::new(buf, num_values, Some(num_values), self.validate_utf8);
         decoder.read(&mut buffer, usize::MAX)?;
         self.dict = Some(buffer);
         Ok(())
