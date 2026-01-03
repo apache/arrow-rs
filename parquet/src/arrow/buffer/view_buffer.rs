@@ -33,6 +33,14 @@ pub struct ViewBuffer {
 }
 
 impl ViewBuffer {
+    /// Create a new ViewBuffer with capacity for the specified number of views
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            views: Vec::with_capacity(capacity),
+            buffers: Vec::new(),
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.views.is_empty()
     }
