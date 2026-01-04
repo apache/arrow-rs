@@ -22,17 +22,16 @@ extern crate core;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
 use arrow::row::{RowConverter, SortField};
-use arrow::util::bench_util::{
-    create_boolean_array, create_dict_from_values, create_primitive_array,
-    create_string_array_with_len, create_string_dict_array, create_string_view_array_with_len,
-    create_string_view_array_with_max_len,
-};
+use arrow::util::bench_util::{create_boolean_array, create_dict_from_values, create_primitive_array, create_primitive_array_with_seed, create_string_array_with_len, create_string_array_with_len_range_and_prefix_and_seed, create_string_dict_array, create_string_view_array_with_len, create_string_view_array_with_max_len};
 use arrow::util::data_gen::create_random_array;
-use arrow_array::Array;
-use arrow_array::types::Int32Type;
+use arrow_array::{Array, BooleanArray, Float64Array};
+use arrow_array::types::{Int32Type, Int8Type};
 use arrow_schema::{DataType, Field, Fields};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
+use rand::distr::{Distribution, StandardUniform};
+use rand::prelude::StdRng;
+use rand::{Rng, SeedableRng};
 use arrow_row::unordered_row::UnorderedRowConverter;
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
@@ -135,6 +134,102 @@ fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     }
 }
 
+
+/// A single benchmark with a medium number of columns (around 50) without nested columns for real-world use cases
+/// This also makes sure there is a large gap between each value in the column and how it is laid out in the row format.
+/// and it is on the edge of not fitting in L3 on some machines
+fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
+    batch_size: usize,
+    c: &mut Criterion,
+) {
+    let mut seed = 0;
+
+    let mut cols: Vec<ArrayRef> = vec![];
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int8Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int32Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
+
+    for _ in 0..10 {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, 0.0, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, nulls, 0, 50, "", seed,
+            ),
+        ));
+    }
+
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 0, 10, "", seed,
+            ),
+        ));
+    }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 10, 20, "", seed,
+            ),
+        ));
+    }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 20, 30, "", seed,
+            ),
+        ));
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_boolean_array_with_seed(
+            batch_size, nulls, 0.5, seed,
+        )));
+    }
+
+    for _ in 0..10 {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, 0.0, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_f64_array_with_seed(batch_size, nulls, seed)) as ArrayRef);
+    }
+
+    do_bench(c, format!("{batch_size} lot of columns").as_str(), cols);
+}
+
 fn bench_iter(c: &mut Criterion) {
     let col = create_string_view_array_with_len(4096, 0., 100, false);
     let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
@@ -151,7 +246,50 @@ fn bench_iter(c: &mut Criterion) {
     });
 }
 
+/// Creates a random array of a given size and null density based on the provided seed
+pub fn create_boolean_array_with_seed(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+    seed: u64,
+) -> BooleanArray
+where
+  StandardUniform: Distribution<bool>,
+{
+    let mut rng = StdRng::seed_from_u64(seed);
+    (0..size)
+      .map(|_| {
+          if rng.random::<f32>() < null_density {
+              None
+          } else {
+              let value = rng.random::<f32>() < true_density;
+              Some(value)
+          }
+      })
+      .collect()
+}
+
+
+/// Creates a random f64 array of a given size and nan-value density based on a given seed
+pub fn create_f64_array_with_seed(size: usize, nan_density: f32, seed: u64) -> Float64Array {
+    let mut rng = StdRng::seed_from_u64(seed);
+
+    (0..size)
+      .map(|_| {
+          if rng.random::<f32>() < nan_density {
+              Some(f64::NAN)
+          } else {
+              Some(rng.random())
+          }
+      })
+      .collect()
+}
+
 fn row_bench(c: &mut Criterion) {
+
+    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
+    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(8192, c);
+
     let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 u64(0)", cols);
 

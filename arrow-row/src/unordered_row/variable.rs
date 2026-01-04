@@ -153,28 +153,26 @@ pub fn encode_one(out: &mut [u8], val: Option<&[u8]>) -> usize {
     }
 }
 
+#[inline]
 pub(crate) fn encode_len(out: &mut [u8], len: usize) -> usize {
-    // Write `2_u8` to demarcate as non-empty, non-null string
-    out[0] = NON_EMPTY_SENTINEL;
-
-    // TODO - in desc should do max minus the length so the order will be different (longer strings sort before shorter ones)
     let start_data_offset = {
         match get_number_of_bits_needed_to_encode(len) {
+            // It is more common to have short strings than empty strings than long strings
+            1 => {
+                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U8;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u8>();
+                out[1] = len as u8;
+
+                start_data_offset
+            }
             0 => {
                 out[0] = EMPTY_SENTINEL;
                 return 1;
             }
-            1 => {
-                out[0] |= LENGTH_TYPE_U8;
-
-                // encode length
-                let start_data_offset = 1 + size_of::<u8>();
-                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u8).to_be_bytes());
-
-                start_data_offset
-            }
             2 => {
-                out[0] |= LENGTH_TYPE_U16;
+                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U16;
 
                 // encode length
                 let start_data_offset = 1 + size_of::<u16>();
@@ -183,7 +181,7 @@ pub(crate) fn encode_len(out: &mut [u8], len: usize) -> usize {
                 start_data_offset
             }
             4 => {
-                out[0] |= LENGTH_TYPE_U32;
+                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U32;
 
                 // encode length
                 let start_data_offset = 1 + size_of::<u32>();
@@ -192,7 +190,7 @@ pub(crate) fn encode_len(out: &mut [u8], len: usize) -> usize {
                 start_data_offset
             }
             8 => {
-                out[0] |= LENGTH_TYPE_U64;
+                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U64;
 
                 // encode length
                 let start_data_offset = 1 + size_of::<u64>();
