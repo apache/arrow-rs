@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::PrimitiveArray;
 use super::null_sentinel;
+use crate::array::PrimitiveArray;
 use arrow_array::builder::BufferBuilder;
 use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
@@ -24,7 +24,7 @@ use arrow_buffer::{
     NullBuffer, bit_util, i256,
 };
 use arrow_data::{ArrayData, ArrayDataBuilder};
-use arrow_schema::{DataType};
+use arrow_schema::DataType;
 use half::f16;
 
 pub trait FromSlice {
@@ -243,6 +243,87 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
     }
 }
 
+/// Encoding for non-nullable primitive arrays.
+/// Iterates directly over the `values`, and skips NULLs-checking.
+pub fn encode_not_null_double<T: FixedLengthEncoding>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values_1: impl Iterator<Item = T>,
+    values_2: impl Iterator<Item = T>,
+) {
+    for (value_idx, (val1, val2)) in values_1.zip(values_2).enumerate() {
+        let offset = &mut offsets[value_idx + 1];
+        let end_offset = *offset + T::ENCODED_LEN * 2;
+
+        let to_write = &mut data[*offset..end_offset];
+        to_write[0] = 1;
+        to_write[T::ENCODED_LEN] = 1;
+
+        {
+            let mut encoded = val1.encode();
+            to_write[1..T::ENCODED_LEN].copy_from_slice(encoded.as_ref());
+        }
+
+        {
+            let mut encoded = val2.encode();
+            to_write[T::ENCODED_LEN + 1..].copy_from_slice(encoded.as_ref());
+        }
+
+        *offset = end_offset;
+    }
+}
+
+/// Encoding for non-nullable primitive arrays.
+/// Iterates directly over the `values`, and skips NULLs-checking.
+pub fn encode_not_null_four<T: FixedLengthEncoding>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    values_1: impl Iterator<Item = T>,
+    values_2: impl Iterator<Item = T>,
+    values_3: impl Iterator<Item = T>,
+    values_4: impl Iterator<Item = T>,
+) {
+    for (value_idx, (((val1, val2), val3), val4)) in values_1
+        .zip(values_2)
+        .zip(values_3)
+        .zip(values_4)
+        .enumerate()
+    {
+        let offset = &mut offsets[value_idx + 1];
+        let end_offset = *offset + T::ENCODED_LEN * 4;
+
+        let to_write = &mut data[*offset..end_offset];
+
+        let size = std::mem::size_of::<T::Encoded>();
+
+        // all valid
+        let valid_bits = 0b0000_1111;
+        to_write[0] = valid_bits;
+
+        {
+            let mut encoded = val1.encode();
+            to_write[1 + size * 0..1 + size * 1].copy_from_slice(encoded.as_ref());
+        }
+
+        {
+            let mut encoded = val2.encode();
+            to_write[1 + size * 1..1 + size * 2].copy_from_slice(encoded.as_ref());
+        }
+
+        {
+            let mut encoded = val3.encode();
+            to_write[1 + size * 2..1 + size * 3].copy_from_slice(encoded.as_ref());
+        }
+
+        {
+            let mut encoded = val4.encode();
+            to_write[1 + size * 3..1 + size * 4].copy_from_slice(encoded.as_ref());
+        }
+
+        *offset = end_offset;
+    }
+}
+
 pub fn encode_fixed_size_binary(
     data: &mut [u8],
     offsets: &mut [usize],
@@ -315,6 +396,117 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
     unsafe { builder.build_unchecked() }
 }
 
+/// Decodes a `ArrayData` from rows based on the provided `FixedLengthEncoding` `T`
+///
+/// # Safety
+///
+/// `data_type` must be appropriate native type for `T`
+unsafe fn decode_fixed_four<T: FixedLengthEncoding + ArrowNativeType>(
+    rows: &mut [&[u8]],
+    data_type1: DataType,
+    data_type2: DataType,
+    data_type3: DataType,
+    data_type4: DataType,
+) -> (ArrayData, ArrayData, ArrayData, ArrayData) {
+    let len = rows.len();
+
+    let mut values1 = BufferBuilder::<T>::new(len);
+    let mut values2 = BufferBuilder::<T>::new(len);
+    let mut values3 = BufferBuilder::<T>::new(len);
+    let mut values4 = BufferBuilder::<T>::new(len);
+    // let (null_count, nulls) = decode_nulls(rows);
+
+    let mut null_count1 = 0;
+    let mut null_count2 = 0;
+    let mut null_count3 = 0;
+    let mut null_count4 = 0;
+    let nulls_buffer1 = MutableBuffer::collect_bool(rows.len(), |idx| {
+        let valid = rows[idx][0] & 0b00000001 != 0;
+        null_count1 += !valid as usize;
+        valid
+    })
+    .into();
+    let nulls_buffer2 = MutableBuffer::collect_bool(rows.len(), |idx| {
+        let valid = rows[idx][0] & 0b00000010 != 0;
+        null_count2 += !valid as usize;
+        valid
+    })
+    .into();
+    let nulls_buffer3 = MutableBuffer::collect_bool(rows.len(), |idx| {
+        let valid = rows[idx][0] & 0b00000100 != 0;
+        null_count3 += !valid as usize;
+        valid
+    })
+    .into();
+    let nulls_buffer4 = MutableBuffer::collect_bool(rows.len(), |idx| {
+        let valid = rows[idx][0] & 0b00001000 != 0;
+        null_count4 += !valid as usize;
+        valid
+    })
+    .into();
+    // (null_count, buffer)
+
+    for row in rows {
+        let size = std::mem::size_of::<T::Encoded>();
+        let i = split_off(row, size * 4 + 1);
+
+        {
+            let value = T::Encoded::from_slice(&i[1 + size * 0..1 + size * 1]);
+            values1.append(T::decode(value));
+        }
+
+        {
+            let value = T::Encoded::from_slice(&i[1 + size * 1..1 + size * 2]);
+            values2.append(T::decode(value));
+        }
+
+        {
+            let value = T::Encoded::from_slice(&i[1 + size * 2..1 + size * 3]);
+            values3.append(T::decode(value));
+        }
+
+        {
+            let value = T::Encoded::from_slice(&i[1 + size * 3..1 + size * 4]);
+            values4.append(T::decode(value));
+        }
+    }
+
+    let builder1 = ArrayDataBuilder::new(data_type1)
+        .len(len)
+        .null_count(null_count1)
+        .add_buffer(values1.finish())
+        .null_bit_buffer(Some(nulls_buffer1));
+
+    let builder2 = ArrayDataBuilder::new(data_type2)
+        .len(len)
+        .null_count(null_count2)
+        .add_buffer(values2.finish())
+        .null_bit_buffer(Some(nulls_buffer2));
+
+    let builder3 = ArrayDataBuilder::new(data_type3)
+        .len(len)
+        .null_count(null_count3)
+        .add_buffer(values3.finish())
+        .null_bit_buffer(Some(nulls_buffer3));
+
+    let builder4 = ArrayDataBuilder::new(data_type4)
+        .len(len)
+        .null_count(null_count4)
+        .add_buffer(values4.finish())
+        .null_bit_buffer(Some(nulls_buffer4));
+
+    // SAFETY: Buffers correct length
+    let array1 = unsafe { builder1.build_unchecked() };
+    // SAFETY: Buffers correct length
+    let array2 = unsafe { builder2.build_unchecked() };
+    // SAFETY: Buffers correct length
+    let array3 = unsafe { builder3.build_unchecked() };
+    // SAFETY: Buffers correct length
+    let array4 = unsafe { builder4.build_unchecked() };
+
+    (array1, array2, array3, array4)
+}
+
 /// Decodes a `PrimitiveArray` from rows
 pub fn decode_primitive<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
@@ -329,11 +521,35 @@ where
     unsafe { decode_fixed::<T::Native>(rows, data_type).into() }
 }
 
-/// Decodes a `FixedLengthBinary` from rows
-pub fn decode_fixed_size_binary(
+/// Decodes a `PrimitiveArray` from rows
+pub fn decode_primitive4<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
-    size: i32,
-) -> FixedSizeBinaryArray {
+    data_type1: DataType,
+    data_type2: DataType,
+    data_type3: DataType,
+    data_type4: DataType,
+) -> (
+    PrimitiveArray<T>,
+    PrimitiveArray<T>,
+    PrimitiveArray<T>,
+    PrimitiveArray<T>,
+)
+where
+    T::Native: FixedLengthEncoding,
+{
+    assert!(PrimitiveArray::<T>::is_compatible(&data_type1));
+    assert!(PrimitiveArray::<T>::is_compatible(&data_type2));
+    assert!(PrimitiveArray::<T>::is_compatible(&data_type3));
+    assert!(PrimitiveArray::<T>::is_compatible(&data_type4));
+    // SAFETY:
+    // Validated data type above
+    let (data1, data2, data3, data4) = unsafe { decode_fixed_four::<T::Native>(rows, data_type1, data_type2, data_type3, data_type4) };
+
+    (data1.into(), data2.into(), data3.into(), data4.into())
+}
+
+/// Decodes a `FixedLengthBinary` from rows
+pub fn decode_fixed_size_binary(rows: &mut [&[u8]], size: i32) -> FixedSizeBinaryArray {
     let len = rows.len();
 
     let mut values = MutableBuffer::new(size as usize * rows.len());

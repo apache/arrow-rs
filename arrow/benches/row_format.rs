@@ -286,6 +286,19 @@ pub fn create_f64_array_with_seed(size: usize, nan_density: f32, seed: u64) -> F
 }
 
 fn row_bench(c: &mut Criterion) {
+    // let cols = vec![
+    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 1)) as ArrayRef,
+    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 2)) as ArrayRef,
+    // ];
+    // do_bench(c, "4096 u64(0) u64(0)", cols);
+
+    let cols = vec![
+        Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 1)) as ArrayRef,
+        Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 2)) as ArrayRef,
+        Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 3)) as ArrayRef,
+        Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 4)) as ArrayRef,
+    ];
+    do_bench(c, "4096 u64(0) u64(0) u64(0) u64(0)", cols);
 
     run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
     run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(8192, c);

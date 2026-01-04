@@ -165,16 +165,17 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
+use crate::unordered_row::fixed::{FixedLengthEncoding, decode_primitive4};
+use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use fixed::{decode_fixed_size_binary, decode_primitive};
 use list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
 use variable::{decode_binary, decode_string};
-use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
+mod boolean;
 mod fixed;
 mod list;
 mod run;
 mod variable;
-mod boolean;
 
 /// Converts [`ArrayRef`] columns into a [row-oriented](self) format.
 ///
@@ -466,7 +467,14 @@ impl Codec {
                 //     SortField::new_with_options(values.as_ref().clone(), sort_field.options);
 
                 // Should take the nullable from the field
-                let converter = UnorderedRowConverter::new(vec![Field::new("col_1", values.as_ref().clone(), sort_field.is_nullable())].into())?;
+                let converter = UnorderedRowConverter::new(
+                    vec![Field::new(
+                        "col_1",
+                        values.as_ref().clone(),
+                        sort_field.is_nullable(),
+                    )]
+                    .into(),
+                )?;
                 let null_array = new_null_array(values.as_ref(), 1);
                 let nulls = converter.convert_columns(&[null_array])?;
 
@@ -684,7 +692,6 @@ enum Encoder<'a> {
     },
 }
 
-
 impl UnorderedRowConverter {
     /// Create a new [`UnorderedRowConverter`] with the provided schema
     pub fn new(fields: Fields) -> Result<Self, ArrowError> {
@@ -703,7 +710,9 @@ impl UnorderedRowConverter {
 
     /// Check if the given fields are supported by the row format.
     pub fn supports_fields(fields: &Fields) -> bool {
-        fields.iter().all(|x| Self::supports_datatype(&x.data_type()))
+        fields
+            .iter()
+            .all(|x| Self::supports_datatype(&x.data_type()))
     }
 
     fn supports_datatype(d: &DataType) -> bool {
@@ -812,14 +821,64 @@ impl UnorderedRowConverter {
         let total = lengths.extend_offsets(rows.offsets[write_offset], &mut rows.offsets);
         rows.buffer.resize(total, 0);
 
-        for ((column, field), encoder) in columns.iter().zip(self.fields.iter()).zip(encoders) {
-            // We encode a column at a time to minimise dispatch overheads
-            encode_column(
-                &mut rows.buffer,
-                &mut rows.offsets[write_offset..],
-                column.as_ref(),
-                &encoder,
-            )
+        if columns.len() == 2
+            && self.fields.len() == 2
+            && self.fields[0].data_type() == self.fields[1].data_type()
+            && columns[0].null_count() == 0
+            && columns[1].null_count() == 0
+            && self.fields[0].data_type().is_primitive()
+        {
+            let column1 = &columns[0];
+            let column2 = &columns[1];
+
+            downcast_primitive_array! {
+                column1 => {
+                    encode_column_double(
+                        &mut rows.buffer,
+                        &mut rows.offsets[write_offset..],
+                        column1,
+                        column2,
+                    );
+                }
+                _ => unreachable!("unsupported data type: {}", column1.data_type()),
+            }
+        } else if columns.len() == 4
+            && self.fields.len() == 4
+            && self.fields[0].data_type().is_primitive()
+            && self
+                .fields
+                .iter()
+                .all(|item| item.data_type() == self.fields[0].data_type())
+            && columns.iter().all(|col| col.null_count() == 0)
+        {
+            let column1 = &columns[0];
+            let column2 = &columns[1];
+            let column3 = &columns[2];
+            let column4 = &columns[3];
+
+            downcast_primitive_array! {
+                column1 => {
+                    encode_column_four(
+                        &mut rows.buffer,
+                        &mut rows.offsets[write_offset..],
+                        column1,
+                        column2,
+                        column3,
+                        column4,
+                    );
+                }
+                _ => unreachable!("unsupported data type: {}", column1.data_type()),
+            }
+        } else {
+            for ((column, field), encoder) in columns.iter().zip(self.fields.iter()).zip(encoders) {
+                // We encode a column at a time to minimise dispatch overheads
+                encode_column(
+                    &mut rows.buffer,
+                    &mut rows.offsets[write_offset..],
+                    column.as_ref(),
+                    &encoder,
+                )
+            }
         }
 
         if cfg!(debug_assertions) {
@@ -974,11 +1033,33 @@ impl UnorderedRowConverter {
         rows: &mut [&[u8]],
         validate_utf8: bool,
     ) -> Result<Vec<ArrayRef>, ArrowError> {
-        self.fields
-            .iter()
-            .zip(&self.codecs)
-            .map(|(field, codec)| unsafe { decode_column(field, rows, codec, validate_utf8) })
-            .collect()
+        if self.fields.len() == 4
+            && self.fields[0].data_type().is_primitive()
+            && self
+                .fields
+                .iter()
+                .all(|item| item.data_type() == self.fields[0].data_type())
+        {
+            let data_type = self.fields[0].data_type();
+
+            macro_rules! decode_primitive_helper {
+                ($t:ty, $rows:ident) => {
+                    decode_column_four::<$t>(&self.fields, $rows)
+                };
+            }
+
+            downcast_primitive! {
+                data_type => (decode_primitive_helper, rows),
+
+                _ => unreachable!("unsupported data type: {data_type}"),
+            }
+        } else {
+            self.fields
+                .iter()
+                .zip(&self.codecs)
+                .map(|(field, codec)| unsafe { decode_column(field, rows, codec, validate_utf8) })
+                .collect()
+        }
     }
 
     /// Returns a [`UnorderedRowParser`] that can be used to parse [`UnorderedRow`] from bytes
@@ -1088,7 +1169,6 @@ impl UnorderedRows {
         let end_row = data_range.end - 1;
 
         {
-
             let end = unsafe { self.offsets.get_unchecked(end_row + 1) };
             let start = unsafe { self.offsets.get_unchecked(data_range.start) };
             let data = unsafe { self.buffer.get_unchecked(*start..*end) };
@@ -1667,15 +1747,9 @@ fn encode_column(
         },
         Encoder::RunEndEncoded(rows) => match column.data_type() {
             DataType::RunEndEncoded(r, _) => match r.data_type() {
-                DataType::Int16 => {
-                    run::encode(data, offsets, rows, column.as_run::<Int16Type>())
-                }
-                DataType::Int32 => {
-                    run::encode(data, offsets, rows, column.as_run::<Int32Type>())
-                }
-                DataType::Int64 => {
-                    run::encode(data, offsets, rows, column.as_run::<Int64Type>())
-                }
+                DataType::Int16 => run::encode(data, offsets, rows, column.as_run::<Int16Type>()),
+                DataType::Int32 => run::encode(data, offsets, rows, column.as_run::<Int32Type>()),
+                DataType::Int64 => run::encode(data, offsets, rows, column.as_run::<Int64Type>()),
                 _ => unreachable!("Unsupported run end index type: {r:?}"),
             },
             _ => unreachable!(),
@@ -1709,6 +1783,66 @@ fn encode_column(
     }
 }
 
+/// Encodes a column to the provided [`UnorderedRows`] incrementing the offsets as it progresses
+fn encode_column_double<T: ArrowPrimitiveType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    column1: &PrimitiveArray<T>,
+    column2: &dyn Array,
+) where
+    <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
+{
+    let col2 = column2.as_primitive::<T>();
+    if let Some(_) = column1
+        .nulls()
+        .filter(|n| n.null_count() > 0)
+        .or_else(|| col2.nulls())
+        .filter(|n| n.null_count() > 0)
+    {
+        unreachable!()
+    } else {
+        fixed::encode_not_null_double(
+            data,
+            offsets,
+            column1.values().iter().copied(),
+            col2.values().iter().copied(),
+        )
+    }
+}
+
+/// Encodes a column to the provided [`UnorderedRows`] incrementing the offsets as it progresses
+fn encode_column_four<T: ArrowPrimitiveType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    column1: &PrimitiveArray<T>,
+    column2: &dyn Array,
+    column3: &dyn Array,
+    column4: &dyn Array,
+) where
+    <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
+{
+    let col2 = column2.as_primitive::<T>();
+    let col3 = column3.as_primitive::<T>();
+    let col4 = column4.as_primitive::<T>();
+    if let Some(_) = column1
+        .nulls()
+        .filter(|n| n.null_count() > 0)
+        .or_else(|| col2.nulls())
+        .filter(|n| n.null_count() > 0)
+    {
+        unreachable!()
+    } else {
+        fixed::encode_not_null_four(
+            data,
+            offsets,
+            column1.values().iter().copied(),
+            col2.values().iter().copied(),
+            col3.values().iter().copied(),
+            col4.values().iter().copied(),
+        )
+    }
+}
+
 /// Encode dictionary values not preserving the dictionary encoding
 pub fn encode_dictionary_values<K: ArrowDictionaryKeyType>(
     data: &mut [u8],
@@ -1739,13 +1873,39 @@ macro_rules! decode_primitive_helper {
 /// # Safety
 ///
 /// Rows must contain valid data for the provided field
+unsafe fn decode_column_four<T: ArrowPrimitiveType>(
+    fields: &Fields,
+    rows: &mut [&[u8]],
+) -> Result<Vec<ArrayRef>, ArrowError>
+where
+    T::Native: FixedLengthEncoding,
+{
+    let (res1, res2, res3, res4) = decode_primitive4::<T>(
+        rows,
+        fields[0].data_type().clone(),
+        fields[1].data_type().clone(),
+        fields[2].data_type().clone(),
+        fields[3].data_type().clone(),
+    );
+    Ok(vec![
+        Arc::new(res1),
+        Arc::new(res2),
+        Arc::new(res3),
+        Arc::new(res4),
+    ])
+}
+
+/// Decodes a the provided `field` from `rows`
+///
+/// # Safety
+///
+/// Rows must contain valid data for the provided field
 unsafe fn decode_column(
     field: &Field,
     rows: &mut [&[u8]],
     codec: &Codec,
     validate_utf8: bool,
 ) -> Result<ArrayRef, ArrowError> {
-
     let array: ArrayRef = match codec {
         Codec::Stateless => {
             let data_type = field.data_type().clone();
@@ -1817,15 +1977,15 @@ unsafe fn decode_column(
         },
         Codec::RunEndEncoded(converter) => match field.data_type() {
             DataType::RunEndEncoded(run_ends, _) => match run_ends.data_type() {
-                DataType::Int16 => Arc::new(unsafe {
-                    run::decode::<Int16Type>(converter, rows, validate_utf8)
-                }?),
-                DataType::Int32 => Arc::new(unsafe {
-                    run::decode::<Int32Type>(converter, rows, validate_utf8)
-                }?),
-                DataType::Int64 => Arc::new(unsafe {
-                    run::decode::<Int64Type>(converter, rows, validate_utf8)
-                }?),
+                DataType::Int16 => {
+                    Arc::new(unsafe { run::decode::<Int16Type>(converter, rows, validate_utf8) }?)
+                }
+                DataType::Int32 => {
+                    Arc::new(unsafe { run::decode::<Int32Type>(converter, rows, validate_utf8) }?)
+                }
+                DataType::Int64 => {
+                    Arc::new(unsafe { run::decode::<Int64Type>(converter, rows, validate_utf8) }?)
+                }
                 _ => unreachable!(),
             },
             _ => unreachable!(),
@@ -1937,11 +2097,6 @@ unsafe fn decode_column(
 
 #[cfg(test)]
 mod tests {
-    use std::cmp::Ordering;
-    use rand::distr::uniform::SampleUniform;
-    use rand::distr::{Distribution, StandardUniform};
-    use rand::{Rng, rng, SeedableRng, RngCore};
-    use rand::rngs::StdRng;
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
@@ -1949,6 +2104,11 @@ mod tests {
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
+    use rand::distr::uniform::SampleUniform;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::rngs::StdRng;
+    use rand::{Rng, RngCore, SeedableRng, rng};
+    use std::cmp::Ordering;
 
     use super::*;
 
@@ -1975,10 +2135,13 @@ mod tests {
             ])) as ArrayRef,
         ];
 
-        let converter = UnorderedRowConverter::new(vec![
-            Field::new("col_1", DataType::Int16, true),
-            Field::new("col_2", DataType::Float32, true),
-        ].into())
+        let converter = UnorderedRowConverter::new(
+            vec![
+                Field::new("col_1", DataType::Int16, true),
+                Field::new("col_2", DataType::Float32, true),
+            ]
+            .into(),
+        )
         .unwrap();
         let rows = converter.convert_columns(&cols).unwrap();
 
@@ -2017,10 +2180,14 @@ mod tests {
 
     #[test]
     fn test_decimal32() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Decimal32(
-            DECIMAL32_MAX_PRECISION,
-            7,
-        ), true)].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                DataType::Decimal32(DECIMAL32_MAX_PRECISION, 7),
+                true,
+            )]
+            .into(),
+        )
         .unwrap();
         let col = Arc::new(
             Decimal32Array::from_iter([
@@ -2047,10 +2214,14 @@ mod tests {
 
     #[test]
     fn test_decimal64() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Decimal64(
-            DECIMAL64_MAX_PRECISION,
-            7,
-        ), true)].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                DataType::Decimal64(DECIMAL64_MAX_PRECISION, 7),
+                true,
+            )]
+            .into(),
+        )
         .unwrap();
         let col = Arc::new(
             Decimal64Array::from_iter([
@@ -2077,10 +2248,14 @@ mod tests {
 
     #[test]
     fn test_decimal128() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Decimal128(
-            DECIMAL128_MAX_PRECISION,
-            7,
-        ), true)].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                DataType::Decimal128(DECIMAL128_MAX_PRECISION, 7),
+                true,
+            )]
+            .into(),
+        )
         .unwrap();
         let col = Arc::new(
             Decimal128Array::from_iter([
@@ -2107,10 +2282,14 @@ mod tests {
 
     #[test]
     fn test_decimal256() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Decimal256(
-            DECIMAL256_MAX_PRECISION,
-            7,
-        ), true)].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                DataType::Decimal256(DECIMAL256_MAX_PRECISION, 7),
+                true,
+            )]
+            .into(),
+        )
         .unwrap();
         let col = Arc::new(
             Decimal256Array::from_iter([
@@ -2139,7 +2318,9 @@ mod tests {
 
     #[test]
     fn test_bool() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Boolean, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Boolean, true)].into())
+                .unwrap();
 
         let col = Arc::new(BooleanArray::from_iter([None, Some(false), Some(true)])) as ArrayRef;
 
@@ -2151,11 +2332,17 @@ mod tests {
         let cols = converter.convert_rows(&rows).unwrap();
         assert_eq!(&cols[0], &col);
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", (
-            DataType::Boolean
-
-            // SortOptions::default().desc().with_nulls_first(false),
-        ), true)].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                (
+                    DataType::Boolean
+                    // SortOptions::default().desc().with_nulls_first(false),
+                ),
+                true,
+            )]
+            .into(),
+        )
         .unwrap();
 
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
@@ -2172,7 +2359,10 @@ mod tests {
             TimestampNanosecondArray::from(vec![1, 2, 3, 4, 5]).with_timezone("+01:00".to_string());
         let d = a.data_type().clone();
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", a.data_type().clone(), true)].into()).unwrap();
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new("col_1", a.data_type().clone(), true)].into(),
+        )
+        .unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         let back = converter.convert_rows(&rows).unwrap();
         assert_eq!(back.len(), 1);
@@ -2192,7 +2382,8 @@ mod tests {
         let d = DataType::Dictionary(Box::new(DataType::Int32), Box::new(v.clone()));
 
         assert_eq!(dict_with_tz.data_type(), &d);
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", d.clone(), true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", d.clone(), true)].into()).unwrap();
         let rows = converter
             .convert_columns(&[Arc::new(dict_with_tz) as _])
             .unwrap();
@@ -2204,7 +2395,9 @@ mod tests {
     #[test]
     fn test_null_encoding() {
         let col = Arc::new(NullArray::new(10));
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Null, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Null, true)].into())
+                .unwrap();
         let rows = converter.convert_columns(&[col]).unwrap();
         assert_eq!(rows.num_rows(), 10);
         assert_eq!(rows.row(1).data.len(), 0);
@@ -2220,7 +2413,9 @@ mod tests {
             Some(""),
         ])) as ArrayRef;
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into())
+                .unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
 
         // assert!(rows.row(1) < rows.row(0));
@@ -2251,7 +2446,9 @@ mod tests {
             Some(vec![0xFF_u8; variable::BLOCK_SIZE + 1]),
         ])) as ArrayRef;
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into())
+                .unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
         //
         // for i in 0..rows.num_rows() {
@@ -2270,10 +2467,14 @@ mod tests {
         let cols = converter.convert_rows(&rows).unwrap();
         assert_eq!(&cols[0], &col);
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1",
-                                                                   DataType::Binary
-            // SortOptions::default().desc().with_nulls_first(false),
-        , true)].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                DataType::Binary, // SortOptions::default().desc().with_nulls_first(false),
+                true,
+            )]
+            .into(),
+        )
         .unwrap();
         let rows = converter.convert_columns(&[Arc::clone(&col)]).unwrap();
 
@@ -2349,11 +2550,15 @@ mod tests {
         let cols = converter.convert_rows(&rows_b).unwrap();
         dictionary_eq(&cols[0], &b);
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1",
-                                                                   a.data_type().clone(),
-                                                                   true,
-            // SortOptions::default().desc().with_nulls_first(false),
-        )].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                a.data_type().clone(),
+                true,
+                // SortOptions::default().desc().with_nulls_first(false),
+            )]
+            .into(),
+        )
         .unwrap();
 
         let rows_c = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
@@ -2365,11 +2570,15 @@ mod tests {
         let cols = converter.convert_rows(&rows_c).unwrap();
         dictionary_eq(&cols[0], &a);
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1",
-                                                                   a.data_type().clone(),
-                                                                   true,
-            // SortOptions::default().desc().with_nulls_first(true),
-        )].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                a.data_type().clone(),
+                true,
+                // SortOptions::default().desc().with_nulls_first(true),
+            )]
+            .into(),
+        )
         .unwrap();
 
         let rows_c = converter.convert_columns(&[Arc::clone(&a)]).unwrap();
@@ -2653,7 +2862,9 @@ mod tests {
 
     #[test]
     fn test_from_binary_shared_buffer() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into())
+                .unwrap();
         let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
         let rows = converter.convert_columns(&[array]).unwrap();
         let binary_rows = rows.try_into_binary().expect("known-small rows");
@@ -2667,12 +2878,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "Encountered non UTF-8 data")]
     fn test_invalid_utf8() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into())
+                .unwrap();
         let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
         let rows = converter.convert_columns(&[array]).unwrap();
         let binary_row = rows.row(0);
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into())
+                .unwrap();
         let parser = converter.parser();
         let utf8_row = parser.parse(binary_row.as_ref());
 
@@ -2682,12 +2897,16 @@ mod tests {
     #[test]
     #[should_panic(expected = "Encountered non UTF-8 data")]
     fn test_invalid_utf8_array() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Binary, true)].into())
+                .unwrap();
         let array = Arc::new(BinaryArray::from_iter_values([&[0xFF]])) as _;
         let rows = converter.convert_columns(&[array]).unwrap();
         let binary_rows = rows.try_into_binary().expect("known-small rows");
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into())
+                .unwrap();
         let parsed = converter.from_binary(binary_rows);
 
         converter.convert_rows(parsed.iter()).unwrap();
@@ -2698,7 +2917,9 @@ mod tests {
     fn test_invalid_empty() {
         let binary_row: &[u8] = &[];
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into())
+                .unwrap();
         let parser = converter.parser();
         let utf8_row = parser.parse(binary_row.as_ref());
 
@@ -2711,7 +2932,9 @@ mod tests {
         let row: &[u8] = &[];
         let binary_rows = BinaryArray::from(vec![row]);
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into())
+                .unwrap();
         let parsed = converter.from_binary(binary_rows);
 
         converter.convert_rows(parsed.iter()).unwrap();
@@ -2722,7 +2945,9 @@ mod tests {
     fn test_invalid_truncated() {
         let binary_row: &[u8] = &[0x02];
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into())
+                .unwrap();
         let parser = converter.parser();
         let utf8_row = parser.parse(binary_row.as_ref());
 
@@ -2735,7 +2960,9 @@ mod tests {
         let row: &[u8] = &[0x02];
         let binary_rows = BinaryArray::from(vec![row]);
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8, true)].into())
+                .unwrap();
         let parsed = converter.from_binary(binary_rows);
 
         converter.convert_rows(parsed.iter()).unwrap();
@@ -2746,10 +2973,14 @@ mod tests {
     #[should_panic(expected = "rows were not produced by this UnorderedRowConverter")]
     fn test_different_converter() {
         let values = Arc::new(Int32Array::from_iter([Some(1), Some(-1)]));
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Int32, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Int32, true)].into())
+                .unwrap();
         let rows = converter.convert_columns(&[values]).unwrap();
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Int32, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Int32, true)].into())
+                .unwrap();
         let _ = converter.convert_rows(&rows);
     }
 
@@ -2780,7 +3011,8 @@ mod tests {
         let list = Arc::new(builder.finish()) as ArrayRef;
         let d = list.data_type().clone();
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", d.clone(), true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", d.clone(), true)].into()).unwrap();
 
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
         // assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
@@ -3018,7 +3250,8 @@ mod tests {
         let d = list.data_type().clone();
 
         // Default sorting (ascending, nulls first)
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", d.clone(), true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", d.clone(), true)].into()).unwrap();
 
         let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
         // assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
@@ -3145,10 +3378,13 @@ mod tests {
         let second = Arc::new(second.finish()) as ArrayRef;
         let second_type = second.data_type().clone();
 
-        let converter = UnorderedRowConverter::new(vec![
-            Field::new("col_1", first_type.clone(), true),
-            Field::new("col_1", second_type.clone(), true),
-        ].into())
+        let converter = UnorderedRowConverter::new(
+            vec![
+                Field::new("col_1", first_type.clone(), true),
+                Field::new("col_1", second_type.clone(), true),
+            ]
+            .into(),
+        )
         .unwrap();
 
         let rows = converter
@@ -3263,10 +3499,13 @@ mod tests {
         let second = Arc::new(second.finish()) as ArrayRef;
         let second_type = second.data_type().clone();
 
-        let converter = UnorderedRowConverter::new(vec![
-            Field::new("col_1", first_type.clone(), true),
-            Field::new("col_1", second_type.clone(), true),
-        ].into())
+        let converter = UnorderedRowConverter::new(
+            vec![
+                Field::new("col_1", first_type.clone(), true),
+                Field::new("col_1", second_type.clone(), true),
+            ]
+            .into(),
+        )
         .unwrap();
 
         let rows = converter
@@ -3281,20 +3520,28 @@ mod tests {
         assert_eq!(&back[1], &second);
     }
 
-    fn generate_primitive_array<K>(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> PrimitiveArray<K>
+    fn generate_primitive_array<K>(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> PrimitiveArray<K>
     where
-      K: ArrowPrimitiveType,
-      StandardUniform: Distribution<K::Native>,
+        K: ArrowPrimitiveType,
+        StandardUniform: Distribution<K::Native>,
     {
         (0..len)
-          .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
-          .collect()
+            .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
+            .collect()
     }
 
-    fn generate_boolean_array(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> BooleanArray {
+    fn generate_boolean_array(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> BooleanArray {
         (0..len)
-          .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
-          .collect()
+            .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
+            .collect()
     }
 
     fn generate_strings<O: OffsetSizeTrait>(
@@ -3313,7 +3560,11 @@ mod tests {
             .collect()
     }
 
-    fn generate_string_view(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> StringViewArray {
+    fn generate_string_view(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> StringViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -3325,7 +3576,11 @@ mod tests {
             .collect()
     }
 
-    fn generate_byte_view(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> BinaryViewArray {
+    fn generate_byte_view(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> BinaryViewArray {
         (0..len)
             .map(|_| {
                 rng.random_bool(valid_percent).then(|| {
@@ -3398,7 +3653,11 @@ mod tests {
         DictionaryArray::from(data)
     }
 
-    fn generate_fixed_size_binary(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> FixedSizeBinaryArray {
+    fn generate_fixed_size_binary(
+        rng: &mut impl RngCore,
+        len: usize,
+        valid_percent: f64,
+    ) -> FixedSizeBinaryArray {
         let width = rng.random_range(0..20);
         let mut builder = FixedSizeBinaryBuilder::new(width);
 
@@ -3428,7 +3687,12 @@ mod tests {
         StructArray::new(fields, values, Some(nulls))
     }
 
-    fn generate_list<R: RngCore, F>(rng: &mut R, len: usize, valid_percent: f64, values: F) -> ListArray
+    fn generate_list<R: RngCore, F>(
+        rng: &mut R,
+        len: usize,
+        valid_percent: f64,
+        values: F,
+    ) -> ListArray
     where
         F: FnOnce(&mut R, usize) -> ArrayRef,
     {
@@ -3441,7 +3705,9 @@ mod tests {
     }
 
     fn generate_nulls(rng: &mut impl RngCore, len: usize) -> Option<NullBuffer> {
-        Some(NullBuffer::from_iter((0..len).map(|_| rng.random_bool(0.8))))
+        Some(NullBuffer::from_iter(
+            (0..len).map(|_| rng.random_bool(0.8)),
+        ))
     }
 
     fn generate_column(rng: &mut impl RngCore, len: usize) -> ArrayRef {
@@ -3455,31 +3721,20 @@ mod tests {
             6 => Arc::new(generate_strings::<i32>(rng, len, 0.8)),
             7 => {
                 let dict_values_len = rng.random_range(1..len);
-                    // Cannot test dictionaries containing null values because of #2687
-                let strings =
-                    Arc::new(generate_strings::<i32>(rng, dict_values_len, 1.0));
-                Arc::new(generate_dictionary::<Int64Type>(
-                    rng,
-                    strings,
-                    len,
-                    0.8,
-                ))
-            },
+                // Cannot test dictionaries containing null values because of #2687
+                let strings = Arc::new(generate_strings::<i32>(rng, dict_values_len, 1.0));
+                Arc::new(generate_dictionary::<Int64Type>(rng, strings, len, 0.8))
+            }
             8 => {
                 let dict_values_len = rng.random_range(1..len);
                 // Cannot test dictionaries containing null values because of #2687
                 let values = Arc::new(generate_primitive_array::<Int64Type>(
-                      rng,
-                      dict_values_len,
-                      1.0,
-                  ));
-                Arc::new(generate_dictionary::<Int64Type>(
                     rng,
-                    values,
-                    len,
-                    0.8,
-                ))
-            },
+                    dict_values_len,
+                    1.0,
+                ));
+                Arc::new(generate_dictionary::<Int64Type>(rng, values, len, 0.8))
+            }
             9 => Arc::new(generate_fixed_size_binary(rng, len, 0.8)),
             10 => Arc::new(generate_struct(rng, len, 0.8)),
             11 => Arc::new(generate_list(rng, len, 0.8, |rng, values_len| {
@@ -3547,10 +3802,17 @@ mod tests {
         }
         let mut rng = StdRng::seed_from_u64(42);
         for index in 0..100 {
-            for n in [Nulls::HaveNulls, Nulls::DifferentNulls, Nulls::NullableWithNoNulls, Nulls::NoNulls] {
+            for n in [
+                Nulls::HaveNulls,
+                Nulls::DifferentNulls,
+                Nulls::NullableWithNoNulls,
+                Nulls::NoNulls,
+            ] {
                 let mut num_columns = rng.random_range(1..5);
                 let len = rng.random_range(5..100);
-                let mut arrays: Vec<_> = (0..num_columns).map(|_| generate_column(&mut rng, len)).collect();
+                let mut arrays: Vec<_> = (0..num_columns)
+                    .map(|_| generate_column(&mut rng, len))
+                    .collect();
 
                 match n {
                     Nulls::HaveNulls => {
@@ -3558,55 +3820,65 @@ mod tests {
                     }
                     Nulls::DifferentNulls => {
                         // Remove nulls
-                        arrays = arrays.into_iter().map(|a| a.into_data().into_builder()).map(|d| {
-                            make_array(d
-                              .nulls(None)
-                              .null_count(0)
-                              .null_bit_buffer(None)
-                              .nulls(generate_nulls(&mut rng, len))
-                              .build()
-                              .unwrap()
-                            )
-                        }).collect()
-                    },
+                        arrays = arrays
+                            .into_iter()
+                            .map(|a| a.into_data().into_builder())
+                            .map(|d| {
+                                make_array(
+                                    d.nulls(None)
+                                        .null_count(0)
+                                        .null_bit_buffer(None)
+                                        .nulls(generate_nulls(&mut rng, len))
+                                        .build()
+                                        .unwrap(),
+                                )
+                            })
+                            .collect()
+                    }
                     // TODO - what about nested
                     Nulls::NoNulls | Nulls::NullableWithNoNulls => {
                         // Remove nulls
-                        arrays = arrays.into_iter().map(|a| a.into_data().into_builder()).map(|d| {
-                            make_array(d
-                              .nulls(None)
-                              .null_count(0)
-                              .null_bit_buffer(None)
-                              .build()
-                              .unwrap()
-                            )
-                        }).collect()
+                        arrays = arrays
+                            .into_iter()
+                            .map(|a| a.into_data().into_builder())
+                            .map(|d| {
+                                make_array(
+                                    d.nulls(None)
+                                        .null_count(0)
+                                        .null_bit_buffer(None)
+                                        .build()
+                                        .unwrap(),
+                                )
+                            })
+                            .collect()
                     }
                 }
 
                 let options: Vec<_> = (0..num_columns)
-                  .map(|_| SortOptions {
-                      descending: rng.random_bool(0.5),
-                      nulls_first: rng.random_bool(0.5),
-                  })
-                  .collect();
+                    .map(|_| SortOptions {
+                        descending: rng.random_bool(0.5),
+                        nulls_first: rng.random_bool(0.5),
+                    })
+                    .collect();
 
                 let sort_columns: Vec<_> = options
-                  .iter()
-                  .zip(&arrays)
-                  .map(|(o, c)| SortColumn {
-                      values: Arc::clone(c),
-                      options: Some(*o),
-                  })
-                  .collect();
+                    .iter()
+                    .zip(&arrays)
+                    .map(|(o, c)| SortColumn {
+                        values: Arc::clone(c),
+                        options: Some(*o),
+                    })
+                    .collect();
 
                 let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
 
                 let columns: Fields = options
-                  .into_iter()
-                  .zip(&arrays)
-                  .map(|(o, a)| Field::new("col_1", a.data_type().clone(), !matches!(n, Nulls::NoNulls)))
-                  .collect();
+                    .into_iter()
+                    .zip(&arrays)
+                    .map(|(o, a)| {
+                        Field::new("col_1", a.data_type().clone(), !matches!(n, Nulls::NoNulls))
+                    })
+                    .collect();
 
                 let converter = UnorderedRowConverter::new(columns).unwrap();
                 let rows = converter.convert_columns(&arrays).unwrap();
@@ -3621,7 +3893,11 @@ mod tests {
                                 assert_eq!(row_i, row_j);
                             }
                             _ => {
-                                assert_ne!(row_i, row_j, "rows {} and {} should not be equal", i, j);
+                                assert_ne!(
+                                    row_i, row_j,
+                                    "rows {} and {} should not be equal",
+                                    i, j
+                                );
                             }
                         }
                         // assert_eq!(
@@ -3639,7 +3915,16 @@ mod tests {
 
                 // Convert rows produced from convert_columns().
                 // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
-                let back = converter.convert_rows(&rows).expect(format!("index: {index} {n:?} - {:?}", arrays.iter().map(|item| item.data_type()).collect::<Vec<_>>()).as_str());
+                let back = converter.convert_rows(&rows).expect(
+                    format!(
+                        "index: {index} {n:?} - {:?}",
+                        arrays
+                            .iter()
+                            .map(|item| item.data_type())
+                            .collect::<Vec<_>>()
+                    )
+                    .as_str(),
+                );
                 for (actual, expected) in back.iter().zip(&arrays) {
                     actual.to_data().validate_full().unwrap();
                     dictionary_eq(actual, expected)
@@ -3650,8 +3935,8 @@ mod tests {
                 let rows = rows.try_into_binary().expect("reasonable size");
                 let parser = converter.parser();
                 let back = converter
-                  .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
-                  .unwrap();
+                    .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                    .unwrap();
                 for (actual, expected) in back.iter().zip(&arrays) {
                     actual.to_data().validate_full().unwrap();
                     dictionary_eq(actual, expected)
@@ -3669,7 +3954,9 @@ mod tests {
 
     #[test]
     fn test_clear() {
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Int32, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Int32, true)].into())
+                .unwrap();
         let mut rows = converter.empty_rows(3, 128);
 
         let first = Int32Array::from(vec![None, Some(2), Some(4)]);
@@ -3700,10 +3987,14 @@ mod tests {
     fn test_append_codec_dictionary_binary() {
         use DataType::*;
         // Dictionary RowConverter
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", Dictionary(
-            Box::new(Int32),
-            Box::new(Binary),
-        ), true)].into())
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new(
+                "col_1",
+                Dictionary(Box::new(Int32), Box::new(Binary)),
+                true,
+            )]
+            .into(),
+        )
         .unwrap();
         let mut rows = converter.empty_rows(4, 128);
 
@@ -3733,7 +4024,10 @@ mod tests {
         a.append_value([None, None]);
         let a = a.finish();
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", a.data_type().clone(), true)].into()).unwrap();
+        let converter = UnorderedRowConverter::new(
+            vec![Field::new("col_1", a.data_type().clone(), true)].into(),
+        )
+        .unwrap();
         let rows = converter.convert_columns(&[Arc::new(a) as _]).unwrap();
         // assert_eq!(rows.row(0).cmp(&rows.row(1)), Ordering::Less);
     }
@@ -3770,7 +4064,8 @@ mod tests {
         .data_type()
         .clone();
 
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", map_data_type, true)].into());
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", map_data_type, true)].into());
 
         match converter {
             Err(ArrowError::NotYetImplemented(message)) => {
@@ -3788,7 +4083,10 @@ mod tests {
     fn test_values_buffer_smaller_when_utf8_validation_disabled() {
         fn get_values_buffer_len(col: ArrayRef) -> (usize, usize) {
             // 1. Convert cols into rows
-            let converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::Utf8View, true)].into()).unwrap();
+            let converter = UnorderedRowConverter::new(
+                vec![Field::new("col_1", DataType::Utf8View, true)].into(),
+            )
+            .unwrap();
 
             // 2a. Convert rows into colsa (validate_utf8 = false)
             let rows = converter.convert_columns(&[col]).unwrap();
@@ -3869,7 +4167,8 @@ mod tests {
         .unwrap();
 
         let union_type = union_array.data_type().clone();
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
 
         let rows = converter
             .convert_columns(&[Arc::new(union_array.clone())])
@@ -3910,7 +4209,8 @@ mod tests {
         .unwrap();
 
         let union_type = union_array.data_type().clone();
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
 
         let rows = converter
             .convert_columns(&[Arc::new(union_array.clone())])
@@ -3958,7 +4258,8 @@ mod tests {
         .unwrap();
 
         let union_type = union_array.data_type().clone();
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
 
         let rows = converter
             .convert_columns(&[Arc::new(union_array.clone())])
@@ -4000,7 +4301,8 @@ mod tests {
         .unwrap();
 
         let union_type = union_array.data_type().clone();
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
 
         let rows = converter
             .convert_columns(&[Arc::new(union_array.clone())])
@@ -4046,7 +4348,8 @@ mod tests {
         .unwrap();
 
         let union_type = union_array.data_type().clone();
-        let converter = UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
+        let converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", union_type, true)].into()).unwrap();
 
         let rows = converter.convert_columns(&[Arc::new(union_array)]).unwrap();
 
@@ -4079,7 +4382,9 @@ mod tests {
 
     #[test]
     fn rows_size_should_count_for_capacity() {
-        let row_converter = UnorderedRowConverter::new(vec![Field::new("col_1", DataType::UInt8, true)].into()).unwrap();
+        let row_converter =
+            UnorderedRowConverter::new(vec![Field::new("col_1", DataType::UInt8, true)].into())
+                .unwrap();
 
         let empty_rows_size_with_preallocate_rows_and_data = {
             let rows = row_converter.empty_rows(1000, 1000);
