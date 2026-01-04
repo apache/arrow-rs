@@ -43,6 +43,13 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
 }
 
 fn encoded_len(rows: &UnorderedRows, range: Option<Range<usize>>) -> usize {
+    // super::variable::encoded_len(
+    //     match range {
+    //         None => None,
+    //         Some(range) if range.is_empty() => Some(&[]),
+    //         Some(range) => Some(rows.data_range(range))
+    //     }
+    // )
     match range {
         None => 1,
         Some(range) => {
@@ -84,16 +91,25 @@ fn encode_one(
     rows: &UnorderedRows,
     range: Option<Range<usize>>,
 ) -> usize {
+    // super::variable::encode_one(
+    //     out,
+    //     match range {
+    //         None => None,
+    //         Some(range) if range.is_empty() => Some(&[]),
+    //         Some(range) => Some(rows.data_range(range))
+    //     }
+    // )
     match range {
         None => super::variable::encode_null(out),
-        Some(range) if range.start == range.end => super::variable::encode_empty(out),
+        Some(range) if range.start == range.end => super::variable::fast_encode_bytes(out, &[]),
         Some(range) => {
             let mut offset = 0;
+            // super::variable::fast_encode_bytes(out, rows.data_range(range))
             for i in range {
                 let row = rows.row(i);
                 offset += super::variable::encode_one(&mut out[offset..], Some(row.data));
             }
-            offset += super::variable::encode_empty(&mut out[offset..]);
+            offset += super::variable::encode_one(&mut out[offset..], Some(&[]));
             offset
         }
     }
@@ -134,7 +150,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     O::from_usize(offset).expect("overflow");
 
     let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
+    let list_nulls = MutableBuffer::collect_bool(rows.len(), |x| {
         let valid = rows[x][0] != null_sentinel();
         null_count += !valid as usize;
         valid
@@ -193,7 +209,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     let builder = ArrayDataBuilder::new(corrected_type)
         .len(rows.len())
         .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
+        .null_bit_buffer(Some(list_nulls.into()))
         .add_buffer(Buffer::from_vec(offsets))
         .add_child_data(child_data);
 
