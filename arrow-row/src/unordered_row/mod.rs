@@ -3417,6 +3417,11 @@ mod tests {
         ListArray::new(field, offsets, values, Some(nulls))
     }
 
+    fn generate_nulls(len: usize) -> Option<NullBuffer> {
+        let mut rng = rng();
+        Some(NullBuffer::from_iter((0..len).map(|_| rng.random_bool(0.8))))
+    }
+
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = rng();
         match rng.random_range(0..18) {
@@ -3492,90 +3497,137 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
+        enum Nulls {
+            /// Keep the generated array as is
+            HaveNulls,
+
+            /// Replace the null buffer with different null buffer to point to different positions as null
+            DifferentNulls,
+
+            /// Keep nullable field but remove all nulls
+            NullableWithNoNulls,
+
+            /// Remove all nulls and mark field as not nullable
+            NoNulls,
+        }
         for _ in 0..100 {
-            let mut rng = rng();
-            let num_columns = rng.random_range(1..5);
-            let len = rng.random_range(5..100);
-            let arrays: Vec<_> = (0..num_columns).map(|_| generate_column(len)).collect();
+            for n in [Nulls::HaveNulls, Nulls::DifferentNulls, Nulls::NullableWithNoNulls, Nulls::NoNulls] {
+                let mut rng = rng();
+                let num_columns = rng.random_range(1..5);
+                let len = rng.random_range(5..100);
+                let mut arrays: Vec<_> = (0..num_columns).map(|_| generate_column(len)).collect();
 
-            let options: Vec<_> = (0..num_columns)
-                .map(|_| SortOptions {
-                    descending: rng.random_bool(0.5),
-                    nulls_first: rng.random_bool(0.5),
-                })
-                .collect();
-
-            let sort_columns: Vec<_> = options
-                .iter()
-                .zip(&arrays)
-                .map(|(o, c)| SortColumn {
-                    values: Arc::clone(c),
-                    options: Some(*o),
-                })
-                .collect();
-
-            let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
-
-            let columns: Fields = options
-                .into_iter()
-                .zip(&arrays)
-                .map(|(o, a)| Field::new("col_1", a.data_type().clone(), true))
-                .collect();
-
-            let converter = UnorderedRowConverter::new(columns).unwrap();
-            let rows = converter.convert_columns(&arrays).unwrap();
-
-            for i in 0..len {
-                for j in 0..len {
-                    let row_i = rows.row(i);
-                    let row_j = rows.row(j);
-                    let lex_cmp = comparator.compare(i, j);
-                    match lex_cmp {
-                        Ordering::Equal => {
-                            assert_eq!(row_i, row_j);
-                        }
-                        _ => {
-                            assert_ne!(row_i, row_j, "rows {} and {} should not be equal", i, j);
-                        }
+                match n {
+                    Nulls::HaveNulls => {
+                        // Keep as is
                     }
-                    // assert_eq!(
-                    //     row_cmp,
-                    //     lex_cmp,
-                    //     "({:?} vs {:?}) vs ({:?} vs {:?}) for types {}",
-                    //     print_row(&sort_columns, i),
-                    //     print_row(&sort_columns, j),
-                    //     row_i,
-                    //     row_j,
-                    //     print_col_types(&sort_columns)
-                    // );
+                    Nulls::DifferentNulls => {
+                        // Remove nulls
+                        arrays = arrays.into_iter().map(|a| a.into_data().into_builder()).map(|d| {
+                            make_array(d
+                              .nulls(None)
+                              .null_count(0)
+                              .null_bit_buffer(None)
+                              .nulls(generate_nulls(len))
+                              .build()
+                              .unwrap()
+                            )
+                        }).collect()
+                    },
+                    // TODO - what about nested
+                    Nulls::NoNulls | Nulls::NullableWithNoNulls => {
+                        // Remove nulls
+                        arrays = arrays.into_iter().map(|a| a.into_data().into_builder()).map(|d| {
+                            make_array(d
+                              .nulls(None)
+                              .null_count(0)
+                              .null_bit_buffer(None)
+                              .build()
+                              .unwrap()
+                            )
+                        }).collect()
+                    }
                 }
-            }
 
-            // Convert rows produced from convert_columns().
-            // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
-            let back = converter.convert_rows(&rows).unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
-            }
+                let options: Vec<_> = (0..num_columns)
+                  .map(|_| SortOptions {
+                      descending: rng.random_bool(0.5),
+                      nulls_first: rng.random_bool(0.5),
+                  })
+                  .collect();
 
-            // Check that we can convert rows into ByteArray and then parse, convert it back to array
-            // Note: validate_utf8 is set to true since Row is initialized through RowParser
-            let rows = rows.try_into_binary().expect("reasonable size");
-            let parser = converter.parser();
-            let back = converter
-                .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
-                .unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
-            }
+                let sort_columns: Vec<_> = options
+                  .iter()
+                  .zip(&arrays)
+                  .map(|(o, c)| SortColumn {
+                      values: Arc::clone(c),
+                      options: Some(*o),
+                  })
+                  .collect();
 
-            let rows = converter.from_binary(rows);
-            let back = converter.convert_rows(&rows).unwrap();
-            for (actual, expected) in back.iter().zip(&arrays) {
-                actual.to_data().validate_full().unwrap();
-                dictionary_eq(actual, expected)
+                let comparator = LexicographicalComparator::try_new(&sort_columns).unwrap();
+
+                let columns: Fields = options
+                  .into_iter()
+                  .zip(&arrays)
+                  .map(|(o, a)| Field::new("col_1", a.data_type().clone(), !matches!(n, Nulls::NoNulls)))
+                  .collect();
+
+                let converter = UnorderedRowConverter::new(columns).unwrap();
+                let rows = converter.convert_columns(&arrays).unwrap();
+
+                for i in 0..len {
+                    for j in 0..len {
+                        let row_i = rows.row(i);
+                        let row_j = rows.row(j);
+                        let lex_cmp = comparator.compare(i, j);
+                        match lex_cmp {
+                            Ordering::Equal => {
+                                assert_eq!(row_i, row_j);
+                            }
+                            _ => {
+                                assert_ne!(row_i, row_j, "rows {} and {} should not be equal", i, j);
+                            }
+                        }
+                        // assert_eq!(
+                        //     row_cmp,
+                        //     lex_cmp,
+                        //     "({:?} vs {:?}) vs ({:?} vs {:?}) for types {}",
+                        //     print_row(&sort_columns, i),
+                        //     print_row(&sort_columns, j),
+                        //     row_i,
+                        //     row_j,
+                        //     print_col_types(&sort_columns)
+                        // );
+                    }
+                }
+
+                // Convert rows produced from convert_columns().
+                // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
+                let back = converter.convert_rows(&rows).unwrap();
+                for (actual, expected) in back.iter().zip(&arrays) {
+                    actual.to_data().validate_full().unwrap();
+                    dictionary_eq(actual, expected)
+                }
+
+                // Check that we can convert rows into ByteArray and then parse, convert it back to array
+                // Note: validate_utf8 is set to true since Row is initialized through RowParser
+                let rows = rows.try_into_binary().expect("reasonable size");
+                let parser = converter.parser();
+                let back = converter
+                  .convert_rows(rows.iter().map(|b| parser.parse(b.expect("valid bytes"))))
+                  .unwrap();
+                for (actual, expected) in back.iter().zip(&arrays) {
+                    actual.to_data().validate_full().unwrap();
+                    dictionary_eq(actual, expected)
+                }
+
+                let rows = converter.from_binary(rows);
+                let back = converter.convert_rows(&rows).unwrap();
+                for (actual, expected) in back.iter().zip(&arrays) {
+                    actual.to_data().validate_full().unwrap();
+                    dictionary_eq(actual, expected)
+                }
             }
         }
     }
