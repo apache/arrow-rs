@@ -324,6 +324,20 @@ impl ArrayReader for CachedArrayReader {
             let mask = selection_buffer.slice(selection_start, selection_length);
 
             if mask.count_set_bits() == 0 {
+                // Even when all records are filtered out, check if the batch has levels
+                // so we can return Some([]) instead of None to indicate this reader provides levels.
+                // Check local cache first, then shared cache (since skip_records doesn't populate local cache)
+                let cached_batch = self.local_cache.get(&batch_id).cloned().or_else(|| {
+                    self.shared_cache.lock().unwrap().get(self.column_idx, batch_id)
+                });
+                if let Some(batch) = cached_batch {
+                    if batch.def_levels.is_some() {
+                        has_def_levels = true;
+                    }
+                    if batch.rep_levels.is_some() {
+                        has_rep_levels = true;
+                    }
+                }
                 continue;
             }
 
@@ -1088,5 +1102,53 @@ mod tests {
         // Should get original levels from cache
         assert_eq!(consumer.get_def_levels().unwrap(), &[1, 0, 1, 1, 0]);
         assert_eq!(consumer.get_rep_levels().unwrap(), &[0, 1, 0, 1, 1]);
+    }
+
+    #[test]
+    fn test_level_propagation_empty_after_skip() {
+        let metrics = ArrowReaderMetrics::disabled();
+        let cache = Arc::new(Mutex::new(RowGroupCache::new(4, usize::MAX)));
+
+        // Producer populates cache with levels
+        let data = vec![1, 2, 3, 4];
+        let def_levels = vec![1, 0, 1, 1];
+        let rep_levels = vec![0, 1, 1, 0];
+        let mock_reader =
+            MockArrayReaderWithLevels::new(data, def_levels.clone(), rep_levels.clone());
+        let mut producer = CachedArrayReader::new(
+            Box::new(mock_reader),
+            cache.clone(),
+            0,
+            CacheRole::Producer,
+            metrics.clone(),
+        );
+
+        producer.read_records(4).unwrap();
+        producer.consume_batch().unwrap();
+
+        // Consumer skips all rows, resulting in an empty output batch
+        let mock_reader2 = MockArrayReaderWithLevels::new(
+            vec![10, 20, 30, 40],
+            vec![0, 0, 0, 0],
+            vec![0, 0, 0, 0],
+        );
+        let mut consumer = CachedArrayReader::new(
+            Box::new(mock_reader2),
+            cache,
+            0,
+            CacheRole::Consumer,
+            metrics,
+        );
+
+        let skipped = consumer.skip_records(4).unwrap();
+        assert_eq!(skipped, 4);
+
+        let array = consumer.consume_batch().unwrap();
+        assert_eq!(array.len(), 0);
+
+        let def_levels = consumer.get_def_levels().map(|l| l.to_vec());
+        assert_eq!(def_levels, Some(vec![]));
+        let rep_levels = consumer.get_rep_levels().map(|l| l.to_vec());
+        assert_eq!(rep_levels, Some(vec![]));
     }
 }
