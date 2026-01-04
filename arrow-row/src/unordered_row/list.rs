@@ -91,6 +91,21 @@ fn encode_one(
     rows: &UnorderedRows,
     range: Option<Range<usize>>,
 ) -> usize {
+    // match range {
+    //     None =>{
+    //         let offset = super::variable::encode_null(out);
+    //
+    //         // No need to encode anything else
+    //         offset
+    //     },
+    //     Some(range) => {
+    //         // Encode number of items
+    //         let offset = super::variable::encode_len(out, range.len());
+    //
+    //     },
+    // };
+
+
     // super::variable::encode_one(
     //     out,
     //     match range {

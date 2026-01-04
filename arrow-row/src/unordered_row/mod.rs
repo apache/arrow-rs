@@ -165,7 +165,7 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::*;
 use variable::{decode_binary_view, decode_string_view};
 
-use fixed::{decode_bool, decode_fixed_size_binary, decode_primitive};
+use fixed::{decode_fixed_size_binary, decode_primitive};
 use list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
 use variable::{decode_binary, decode_string};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
@@ -174,6 +174,7 @@ mod fixed;
 mod list;
 mod run;
 mod variable;
+mod boolean;
 
 /// Converts [`ArrayRef`] columns into a [row-oriented](self) format.
 ///
@@ -1457,7 +1458,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 downcast_primitive_array! {
                     array => tracker.push_fixed(fixed::encoded_len(array)),
                     DataType::Null => {},
-                    DataType::Boolean => tracker.push_fixed(bool::ENCODED_LEN),
+                    DataType::Boolean => tracker.push_fixed(boolean::FIXED_SIZE),
                     DataType::Binary => tracker.push_variable(
                         as_generic_binary_array::<i32>(array)
                             .iter()
@@ -1597,9 +1598,9 @@ fn encode_column(
                 DataType::Null => {}
                 DataType::Boolean => {
                     if let Some(nulls) = column.nulls().filter(|n| n.null_count() > 0){
-                        fixed::encode_boolean(data, offsets, column.as_boolean().values(), nulls)
+                        boolean::encode_boolean(data, offsets, column.as_boolean().values(), nulls)
                     } else {
-                        fixed::encode_boolean_not_null(data, offsets, column.as_boolean().values())
+                        boolean::encode_boolean_not_null(data, offsets, column.as_boolean().values())
                     }
                 }
                 DataType::Binary => {
@@ -1751,7 +1752,7 @@ unsafe fn decode_column(
             downcast_primitive! {
                 data_type => (decode_primitive_helper, rows, data_type),
                 DataType::Null => Arc::new(NullArray::new(rows.len())),
-                DataType::Boolean => Arc::new(decode_bool(rows)),
+                DataType::Boolean => Arc::new(boolean::decode_bool(rows)),
                 DataType::Binary => Arc::new(decode_binary::<i32>(rows)),
                 DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows)),
                 DataType::BinaryView => Arc::new(decode_binary_view(rows)),
@@ -2717,7 +2718,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
+    #[should_panic(expected = "invalid length type")]
     fn test_invalid_truncated() {
         let binary_row: &[u8] = &[0x02];
 
@@ -2729,7 +2730,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
+    #[should_panic(expected = "invalid length type")]
     fn test_invalid_truncated_array() {
         let row: &[u8] = &[0x02];
         let binary_rows = BinaryArray::from(vec![row]);
@@ -3282,12 +3283,18 @@ mod tests {
 
     fn generate_primitive_array<K>(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> PrimitiveArray<K>
     where
-        K: ArrowPrimitiveType,
-        StandardUniform: Distribution<K::Native>,
+      K: ArrowPrimitiveType,
+      StandardUniform: Distribution<K::Native>,
     {
         (0..len)
-            .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
-            .collect()
+          .map(|_| rng.random_bool(valid_percent).then(|| rng.random()))
+          .collect()
+    }
+
+    fn generate_boolean_array(rng: &mut impl RngCore, len: usize, valid_percent: f64) -> BooleanArray {
+        (0..len)
+          .map(|_| rng.random_bool(valid_percent).then(|| rng.random_bool(0.5)))
+          .collect()
     }
 
     fn generate_strings<O: OffsetSizeTrait>(
@@ -3438,7 +3445,7 @@ mod tests {
     }
 
     fn generate_column(rng: &mut impl RngCore, len: usize) -> ArrayRef {
-        match rng.random_range(0..18) {
+        match rng.random_range(0..19) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(rng, len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(rng, len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(rng, len, 0.8)),
@@ -3493,6 +3500,7 @@ mod tests {
                 })
                 .slice(500, len),
             ),
+            18 => Arc::new(generate_boolean_array(rng, len, 0.8)),
             _ => unreachable!(),
         }
     }

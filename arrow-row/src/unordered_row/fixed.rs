@@ -51,18 +51,6 @@ pub trait FixedLengthEncoding: Copy {
     fn decode(encoded: Self::Encoded) -> Self;
 }
 
-impl FixedLengthEncoding for bool {
-    type Encoded = [u8; 1];
-
-    fn encode(self) -> [u8; 1] {
-        [self as u8]
-    }
-
-    fn decode(encoded: Self::Encoded) -> Self {
-        encoded[0] != 0
-    }
-}
-
 macro_rules! encode_signed {
     ($n:expr, $t:ty) => {
         impl FixedLengthEncoding for $t {
@@ -255,51 +243,6 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
     }
 }
 
-/// Boolean values are encoded as
-///
-/// - 1 byte `0` if null or `1` if valid
-/// - bytes of [`FixedLengthEncoding`]
-pub fn encode_boolean(
-    data: &mut [u8],
-    offsets: &mut [usize],
-    values: &BooleanBuffer,
-    nulls: &NullBuffer,
-) {
-    for (idx, is_valid) in nulls.iter().enumerate() {
-        let offset = &mut offsets[idx + 1];
-        let end_offset = *offset + bool::ENCODED_LEN;
-        if is_valid {
-            let to_write = &mut data[*offset..end_offset];
-            to_write[0] = 1;
-            let mut encoded = values.value(idx).encode();
-            to_write[1..].copy_from_slice(encoded.as_ref())
-        } else {
-            data[*offset] = null_sentinel();
-        }
-        *offset = end_offset;
-    }
-}
-
-/// Encoding for non-nullable boolean arrays.
-/// Iterates directly over `values`, and skips NULLs-checking.
-pub fn encode_boolean_not_null(
-    data: &mut [u8],
-    offsets: &mut [usize],
-    values: &BooleanBuffer,
-) {
-    for (value_idx, val) in values.iter().enumerate() {
-        let offset = &mut offsets[value_idx + 1];
-        let end_offset = *offset + bool::ENCODED_LEN;
-
-        let to_write = &mut data[*offset..end_offset];
-        to_write[0] = 1;
-        let mut encoded = val.encode();
-        to_write[1..].copy_from_slice(encoded.as_ref());
-
-        *offset = end_offset;
-    }
-}
-
 pub fn encode_fixed_size_binary(
     data: &mut [u8],
     offsets: &mut [usize],
@@ -321,65 +264,10 @@ pub fn encode_fixed_size_binary(
 
 /// Splits `len` bytes from `src`
 #[inline]
-fn split_off<'a>(src: &mut &'a [u8], len: usize) -> &'a [u8] {
+pub(super) fn split_off<'a>(src: &mut &'a [u8], len: usize) -> &'a [u8] {
     let v = &src[..len];
     *src = &src[len..];
     v
-}
-
-/// Decodes a `BooleanArray` from rows
-pub fn decode_bool(rows: &mut [&[u8]]) -> BooleanArray {
-    let true_val = 1;
-
-    let len = rows.len();
-
-    let mut null_count = 0;
-    let mut nulls = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
-    let mut values = MutableBuffer::new(bit_util::ceil(len, 64) * 8);
-
-    let chunks = len / 64;
-    let remainder = len % 64;
-    for chunk in 0..chunks {
-        let mut null_packed = 0;
-        let mut values_packed = 0;
-
-        for bit_idx in 0..64 {
-            let i = split_off(&mut rows[bit_idx + chunk * 64], 2);
-            let (null, value) = (i[0] == 1, i[1] == true_val);
-            null_count += !null as usize;
-            null_packed |= (null as u64) << bit_idx;
-            values_packed |= (value as u64) << bit_idx;
-        }
-
-        nulls.push(null_packed);
-        values.push(values_packed);
-    }
-
-    if remainder != 0 {
-        let mut null_packed = 0;
-        let mut values_packed = 0;
-
-        for bit_idx in 0..remainder {
-            let i = split_off(&mut rows[bit_idx + chunks * 64], 2);
-            let (null, value) = (i[0] == 1, i[1] == true_val);
-            null_count += !null as usize;
-            null_packed |= (null as u64) << bit_idx;
-            values_packed |= (value as u64) << bit_idx;
-        }
-
-        nulls.push(null_packed);
-        values.push(values_packed);
-    }
-
-    let builder = ArrayDataBuilder::new(DataType::Boolean)
-        .len(rows.len())
-        .null_count(null_count)
-        .add_buffer(values.into())
-        .null_bit_buffer(Some(nulls.into()));
-
-    // SAFETY:
-    // Buffers are the correct length
-    unsafe { BooleanArray::from(builder.build_unchecked()) }
 }
 
 /// Decodes a single byte from each row, interpreting `0x01` as a valid value

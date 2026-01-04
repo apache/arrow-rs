@@ -153,16 +153,12 @@ pub fn encode_one(out: &mut [u8], val: Option<&[u8]>) -> usize {
     }
 }
 
-/// Faster encode_blocks that first copy all the data and then iterate over it and
-#[inline]
-pub(crate) fn fast_encode_bytes(out: &mut [u8], val: &[u8]) -> usize {
+pub(crate) fn encode_len(out: &mut [u8], len: usize) -> usize {
     // Write `2_u8` to demarcate as non-empty, non-null string
     out[0] = NON_EMPTY_SENTINEL;
 
     // TODO - in desc should do max minus the length so the order will be different (longer strings sort before shorter ones)
     let start_data_offset = {
-        let len = val.len();
-
         match get_number_of_bits_needed_to_encode(len) {
             0 => {
                 out[0] = EMPTY_SENTINEL;
@@ -209,6 +205,16 @@ pub(crate) fn fast_encode_bytes(out: &mut [u8], val: &[u8]) -> usize {
             }
         }
     };
+
+    start_data_offset
+}
+
+/// Faster encode_blocks that first copy all the data and then iterate over it and
+#[inline]
+pub(crate) fn fast_encode_bytes(out: &mut [u8], val: &[u8]) -> usize {
+
+    // TODO - in desc should do max minus the length so the order will be different (longer strings sort before shorter ones)
+    let start_data_offset = encode_len(out, val.len());
 
     let len = start_data_offset + val.len();
     out[start_data_offset..len].copy_from_slice(val);
