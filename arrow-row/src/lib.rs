@@ -180,7 +180,7 @@ mod fixed;
 mod list;
 mod run;
 mod variable;
-mod unordered_row;
+pub mod unordered_row;
 
 /// Converts [`ArrayRef`] columns into a [row-oriented](self) format.
 ///

@@ -30,43 +30,109 @@ use arrow::util::bench_util::{
 use arrow::util::data_gen::create_random_array;
 use arrow_array::Array;
 use arrow_array::types::Int32Type;
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, Fields};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
+use arrow_row::unordered_row::UnorderedRowConverter;
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
-        .iter()
-        .map(|x| SortField::new(x.data_type().clone()))
-        .collect();
+      .iter()
+      .map(|x| SortField::new(x.data_type().clone()))
+      .collect();
+    let unordered_fields: Fields = cols
+      .iter()
+      .enumerate()
+      .map(|(index, x)| Field::new(format!("col_{index}"), x.data_type().clone(), true))
+      .collect();
 
-    c.bench_function(&format!("convert_columns {name}"), |b| {
-        b.iter(|| {
-            let converter = RowConverter::new(fields.clone()).unwrap();
-            hint::black_box(converter.convert_columns(&cols).unwrap())
+    {
+        let mut group = c.benchmark_group(&format!("convert_columns {name}"));
+
+        group.bench_function("RowConverter", |b| {
+            b.iter(|| {
+                let converter = RowConverter::new(fields.clone()).unwrap();
+                hint::black_box(converter.convert_columns(&cols).unwrap())
+            });
         });
-    });
+
+        group.bench_function("UnorderedRowConverter", |b| {
+            b.iter(|| {
+                let converter = UnorderedRowConverter::new(unordered_fields.clone()).unwrap();
+                hint::black_box(converter.convert_columns(&cols).unwrap())
+            });
+        });
+
+        group.finish();
+    }
 
     let converter = RowConverter::new(fields).unwrap();
     let rows = converter.convert_columns(&cols).unwrap();
+
+    let unordered_converter = UnorderedRowConverter::new(unordered_fields).unwrap();
+    let unordered_rows = unordered_converter.convert_columns(&cols).unwrap();
+
+
     // using a pre-prepared row converter should be faster than the first time
-    c.bench_function(&format!("convert_columns_prepared {name}"), |b| {
-        b.iter(|| hint::black_box(converter.convert_columns(&cols).unwrap()));
-    });
+    {
+        let mut group = c.benchmark_group(&format!("convert_columns_prepared {name}"));
 
-    c.bench_function(&format!("convert_rows {name}"), |b| {
-        b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
-    });
+        group.bench_function("RowConverter", |b| {
+            b.iter(|| hint::black_box(converter.convert_columns(&cols).unwrap()));
 
-    let mut rows = converter.empty_rows(0, 0);
-    c.bench_function(&format!("append_rows {name}"), |b| {
-        let cols = cols.clone();
-        b.iter(|| {
-            rows.clear();
-            converter.append(&mut rows, &cols).unwrap();
-            hint::black_box(&mut rows);
         });
-    });
+
+        group.bench_function("UnorderedRowConverter", |b| {
+            b.iter(|| hint::black_box(unordered_converter.convert_columns(&cols).unwrap()));
+        });
+
+        group.finish();
+    }
+
+    // using a pre-prepared row converter should be faster than the first time
+    {
+        let mut group = c.benchmark_group(&format!("convert_rows {name}"));
+
+        group.bench_function("RowConverter", |b| {
+            b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
+
+        });
+
+        group.bench_function("UnorderedRowConverter", |b| {
+            b.iter(|| hint::black_box(unordered_converter.convert_rows(&unordered_rows).unwrap()));
+        });
+
+        group.finish();
+    }
+
+    {
+
+        let mut group = c.benchmark_group(&format!("append_rows {name}"));
+
+        let mut rows = converter.empty_rows(0, 0);
+
+        group.bench_function("RowConverter", |b| {
+            let cols = cols.clone();
+            b.iter(|| {
+                rows.clear();
+                converter.append(&mut rows, &cols).unwrap();
+                hint::black_box(&mut rows);
+            });
+        });
+
+        let mut rows = unordered_converter.empty_rows(0, 0);
+
+        group.bench_function("UnorderedRowConverter", |b| {
+            let cols = cols.clone();
+            b.iter(|| {
+                rows.clear();
+                unordered_converter.append(&mut rows, &cols).unwrap();
+                hint::black_box(&mut rows);
+            });
+        });
+
+        group.finish();
+    }
 }
 
 fn bench_iter(c: &mut Criterion) {
