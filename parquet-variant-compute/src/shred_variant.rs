@@ -123,18 +123,14 @@ pub(crate) fn make_variant_to_shredded_variant_arrow_row_builder<'a>(
         DataType::List(_)
         | DataType::LargeList(_)
         | DataType::ListView(_)
-        | DataType::LargeListView(_) => {
+        | DataType::LargeListView(_)
+        | DataType::FixedSizeList(..) => {
             let typed_value_builder = VariantToShreddedArrayVariantRowBuilder::try_new(
                 data_type,
                 cast_options,
                 capacity,
             )?;
             VariantToShreddedVariantRowBuilder::Array(typed_value_builder)
-        }
-        DataType::FixedSizeList(..) => {
-            return Err(ArrowError::NotYetImplemented(
-                "Shredding variant array values as fixed-size lists".to_string(),
-            ));
         }
         // Supported shredded primitive types, see Variant shredding spec:
         // https://github.com/apache/parquet-format/blob/master/VariantShredding.md#shredded-value-types
@@ -344,6 +340,11 @@ impl<'a> ArrayVariantToArrowRowBuilder<'a> {
             DataType::LargeList(field) => make_list_builder!(LargeList, i64, false, field),
             DataType::ListView(field) => make_list_builder!(ListView, i32, true, field),
             DataType::LargeListView(field) => make_list_builder!(LargeListView, i64, true, field),
+            DataType::FixedSizeList(..) => {
+                return Err(ArrowError::NotYetImplemented(
+                    "Converting unshredded variant arrays to arrow fixed-size lists".to_string(),
+                ));
+            }
             other => {
                 return Err(ArrowError::InvalidArgumentError(format!(
                     "Casting to {other:?} is not applicable for array Variant types"
@@ -1510,6 +1511,22 @@ mod tests {
             &[Some(2), None, Some(0)],
             &[None, Some(Variant::from("fallback")), None],
             (&[Some(1), Some(2)], &[None, None]),
+        );
+    }
+
+    #[test]
+    fn test_array_shredding_as_fixed_size_list() {
+        let input = build_variant_array(vec![VariantRow::List(vec![
+            VariantValue::from(1i64),
+            VariantValue::from(2i64),
+            VariantValue::from(3i64),
+        ])]);
+        let list_schema =
+            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Int64, true)), 2);
+        let err = shred_variant(&input, &list_schema).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Not yet implemented: Converting unshredded variant arrays to arrow fixed-size lists"
         );
     }
 
