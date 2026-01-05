@@ -25,7 +25,7 @@ use arrow::row::{RowConverter, SortField};
 use arrow::util::bench_util::{create_boolean_array, create_dict_from_values, create_primitive_array, create_primitive_array_with_seed, create_string_array_with_len, create_string_array_with_len_range_and_prefix_and_seed, create_string_dict_array, create_string_view_array_with_len, create_string_view_array_with_max_len};
 use arrow::util::data_gen::create_random_array;
 use arrow_array::{Array, BooleanArray, Float64Array};
-use arrow_array::types::{Int32Type, Int8Type};
+use arrow_array::types::{Int32Type, Int8Type, UInt32Type, UInt8Type};
 use arrow_schema::{DataType, Field, Fields};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
@@ -292,13 +292,21 @@ fn row_bench(c: &mut Criterion) {
     // ];
     // do_bench(c, "4096 u64(0) u64(0)", cols);
 
+    // let cols = vec![
+    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 1)) as ArrayRef,
+    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 2)) as ArrayRef,
+    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 3)) as ArrayRef,
+    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 4)) as ArrayRef,
+    // ];
+    // do_bench(c, "4096 u64(0) u64(0) u64(0) u64(0)", cols);
+
     let cols = vec![
         Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 1)) as ArrayRef,
-        Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 2)) as ArrayRef,
+        Arc::new(create_primitive_array_with_seed::<UInt32Type>(4096, 0., 2)) as ArrayRef,
         Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 3)) as ArrayRef,
-        Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 4)) as ArrayRef,
+        Arc::new(create_primitive_array_with_seed::<UInt8Type>(4096, 0., 4)) as ArrayRef,
     ];
-    do_bench(c, "4096 u64(0) u64(0) u64(0) u64(0)", cols);
+    do_bench(c, "4096 u64(0) u32(0) u64(0) u8(0)", cols);
 
     run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
     run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(8192, c);

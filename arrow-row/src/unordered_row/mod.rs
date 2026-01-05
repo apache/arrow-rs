@@ -843,33 +843,56 @@ impl UnorderedRowConverter {
                 _ => unreachable!("unsupported data type: {}", column1.data_type()),
             }
         } else if columns.len() == 4
-            && self.fields.len() == 4
-            && self.fields[0].data_type().is_primitive()
-            && self
-                .fields
-                .iter()
-                .all(|item| item.data_type() == self.fields[0].data_type())
-            && columns.iter().all(|col| col.null_count() == 0)
+          && self.fields.len() == 4
+          && self
+          .fields
+          .iter()
+          .all(|item| item.data_type().is_primitive())
+          && columns.iter().all(|col| col.null_count() == 0)
         {
             let column1 = &columns[0];
             let column2 = &columns[1];
             let column3 = &columns[2];
             let column4 = &columns[3];
 
-            downcast_primitive_array! {
-                column1 => {
-                    encode_column_four(
-                        &mut rows.buffer,
-                        &mut rows.offsets[write_offset..],
-                        column1,
-                        column2,
-                        column3,
-                        column4,
-                    );
-                }
-                _ => unreachable!("unsupported data type: {}", column1.data_type()),
-            }
-        } else {
+            encode_column_four_primitive(
+                &mut rows.buffer,
+                &mut rows.offsets[write_offset..],
+                column1,
+                column2,
+                column3,
+                column4,
+            );
+        }
+        // else if columns.len() == 4
+        //   && self.fields.len() == 4
+        //   && self.fields[0].data_type().is_primitive()
+        //   && self
+        //   .fields
+        //   .iter()
+        //   .all(|item| item.data_type() == self.fields[0].data_type())
+        //   && columns.iter().all(|col| col.null_count() == 0)
+        // {
+        //     let column1 = &columns[0];
+        //     let column2 = &columns[1];
+        //     let column3 = &columns[2];
+        //     let column4 = &columns[3];
+        //
+        //     downcast_primitive_array! {
+        //         column1 => {
+        //             encode_column_four(
+        //                 &mut rows.buffer,
+        //                 &mut rows.offsets[write_offset..],
+        //                 column1,
+        //                 column2,
+        //                 column3,
+        //                 column4,
+        //             );
+        //         }
+        //         _ => unreachable!("unsupported data type: {}", column1.data_type()),
+        //     }
+        // }
+        else {
             for ((column, field), encoder) in columns.iter().zip(self.fields.iter()).zip(encoders) {
                 // We encode a column at a time to minimise dispatch overheads
                 encode_column(
@@ -1809,37 +1832,102 @@ fn encode_column_double<T: ArrowPrimitiveType>(
         )
     }
 }
+//
+// /// Encodes a column to the provided [`UnorderedRows`] incrementing the offsets as it progresses
+// fn encode_column_four<T: ArrowPrimitiveType>(
+//     data: &mut [u8],
+//     offsets: &mut [usize],
+//     column1: &PrimitiveArray<T>,
+//     column2: &dyn Array,
+//     column3: &dyn Array,
+//     column4: &dyn Array,
+// ) where
+//   <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
+// {
+//     let col1 = column1;
+//     let col2 = column2.as_primitive::<T>();
+//     let col3 = column3.as_primitive::<T>();
+//     let col4 = column4.as_primitive::<T>();
+//     if let Some(_) = column1
+//       .nulls()
+//       .filter(|n| n.null_count() > 0)
+//       .or_else(|| col2.nulls())
+//       .filter(|n| n.null_count() > 0)
+//     {
+//         unreachable!()
+//     } else {
+//         fixed::encode_not_null_four(
+//             data,
+//             offsets,
+//             (
+//                 1,
+//                 Box::new(col1.values().iter().copied().map(|v| v.encode().as_ref())),
+//             ),
+//             (
+//                 1,
+//                 Box::new(col2.values().iter().copied().map(|v| v.encode().as_ref())),
+//             ),
+//             (
+//                 1,
+//                 Box::new(col3.values().iter().copied().map(|v| v.encode().as_ref())),
+//             ),
+//             (
+//                 1,
+//                 Box::new(col4.values().iter().copied().map(|v| v.encode().as_ref())),
+//             ),
+//         )
+//     }
+// }
+
 
 /// Encodes a column to the provided [`UnorderedRows`] incrementing the offsets as it progresses
-fn encode_column_four<T: ArrowPrimitiveType>(
+fn encode_column_four_primitive(
     data: &mut [u8],
     offsets: &mut [usize],
-    column1: &PrimitiveArray<T>,
+    column1: &dyn Array,
     column2: &dyn Array,
     column3: &dyn Array,
     column4: &dyn Array,
-) where
+) {
+    [column1, column2, column3, column4].iter().for_each(|col| {
+        assert_eq!(col.null_count(), 0);
+    });
+
+    fixed::encode_not_null_four(
+        data,
+        offsets,
+        get_primitive_iterator_with_size(column1),
+        get_primitive_iterator_with_size(column2),
+        get_primitive_iterator_with_size(column3),
+        get_primitive_iterator_with_size(column4),
+    );
+
+
+}
+
+
+fn get_primitive_iterator_with_size_for_primitive_array<T>(array: &dyn Array) -> (usize, &Buffer) where
+    T: ArrowPrimitiveType,
     <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
 {
-    let col2 = column2.as_primitive::<T>();
-    let col3 = column3.as_primitive::<T>();
-    let col4 = column4.as_primitive::<T>();
-    if let Some(_) = column1
-        .nulls()
-        .filter(|n| n.null_count() > 0)
-        .or_else(|| col2.nulls())
-        .filter(|n| n.null_count() > 0)
-    {
-        unreachable!()
-    } else {
-        fixed::encode_not_null_four(
-            data,
-            offsets,
-            column1.values().iter().copied(),
-            col2.values().iter().copied(),
-            col3.values().iter().copied(),
-            col4.values().iter().copied(),
-        )
+    let iter = array.as_primitive::<T>()
+          .values().inner();
+
+    (size_of::<<T::Native as fixed::FixedLengthEncoding>::Encoded>(), iter)
+}
+
+fn get_primitive_iterator_with_size(array: &dyn Array) -> (usize, &Buffer) {
+
+    macro_rules! decode_primitive_helper {
+        ($t:ty) => {
+            get_primitive_iterator_with_size_for_primitive_array::<$t>(array)
+        };
+    }
+
+    downcast_primitive! {
+        array.data_type() => (decode_primitive_helper),
+
+        _ => unreachable!("unsupported data type: {}", array.data_type()),
     }
 }
 

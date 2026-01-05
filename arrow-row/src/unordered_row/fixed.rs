@@ -48,6 +48,19 @@ pub trait FixedLengthEncoding: Copy {
 
     fn encode(self) -> Self::Encoded;
 
+    fn encode_to_box(self) -> Box<[u8]> {
+        self.encode().as_ref().to_vec().into_boxed_slice()
+    }
+
+    fn encode_to_large(self) -> [u8; 32] {
+        let encoded = self.encode();
+        let encoded = encoded.as_ref();
+        let mut out = [0_u8; 32];
+        out[..encoded.len()].copy_from_slice(encoded);
+
+        out
+    }
+
     fn decode(encoded: Self::Encoded) -> Self;
 }
 
@@ -78,7 +91,23 @@ encode_signed!(4, i32);
 encode_signed!(8, i64);
 encode_signed!(16, i128);
 encode_signed!(32, i256);
-
+// impl FixedLengthEncoding for i32 {
+//     type Encoded = [u8; 4];
+//
+//     fn encode(self) -> [u8; 4] {
+//         // (self as u32).swap_bytes()
+//
+//         let mut b = self.to_be_bytes();
+//
+//         b[0] ^= 0x80;
+//         b
+//     }
+//
+//     fn decode(mut encoded: Self::Encoded) -> Self {
+//         encoded[0] ^= 0x80;
+//         Self::from_be_bytes(encoded)
+//     }
+// }
 macro_rules! encode_unsigned {
     ($n:expr, $t:ty) => {
         impl FixedLengthEncoding for $t {
@@ -275,49 +304,54 @@ pub fn encode_not_null_double<T: FixedLengthEncoding>(
 
 /// Encoding for non-nullable primitive arrays.
 /// Iterates directly over the `values`, and skips NULLs-checking.
-pub fn encode_not_null_four<T: FixedLengthEncoding>(
-    data: &mut [u8],
-    offsets: &mut [usize],
-    values_1: impl Iterator<Item = T>,
-    values_2: impl Iterator<Item = T>,
-    values_3: impl Iterator<Item = T>,
-    values_4: impl Iterator<Item = T>,
+pub fn encode_not_null_four<'a>(
+    data: &'a mut [u8],
+    offsets: &'a mut [usize],
+    values_1: (usize, &'a Buffer),
+    values_2: (usize, &'a Buffer),
+    values_3: (usize, &'a Buffer),
+    values_4: (usize, &'a Buffer),
 ) {
-    for (value_idx, (((val1, val2), val3), val4)) in values_1
-        .zip(values_2)
-        .zip(values_3)
-        .zip(values_4)
+    let shift_1 = 1;
+    let shift_2 = shift_1 + values_1.0;
+    let shift_3 = shift_2 + values_2.0;
+    let shift_4 = shift_3 + values_3.0;
+    let total_size = shift_4 + values_4.0;
+    for (value_idx, (((val1, val2), val3), val4)) in values_1.1.as_ref().chunks_exact(values_1.0)
+        .zip(values_2.1.as_ref().chunks_exact(values_2.0))
+        .zip(values_3.1.as_ref().chunks_exact(values_3.0))
+        .zip(values_4.1.as_ref().chunks_exact(values_4.0))
         .enumerate()
     {
         let offset = &mut offsets[value_idx + 1];
-        let end_offset = *offset + T::ENCODED_LEN * 4;
+        let end_offset = *offset + total_size;
 
         let to_write = &mut data[*offset..end_offset];
 
-        let size = std::mem::size_of::<T::Encoded>();
+        // let size = std::mem::size_of::<T::Encoded>();
 
         // all valid
         let valid_bits = 0b0000_1111;
         to_write[0] = valid_bits;
 
         {
-            let mut encoded = val1.encode();
-            to_write[1 + size * 0..1 + size * 1].copy_from_slice(encoded.as_ref());
+            let mut encoded = val1;
+            to_write[shift_1..shift_2].copy_from_slice(encoded);
         }
 
         {
-            let mut encoded = val2.encode();
-            to_write[1 + size * 1..1 + size * 2].copy_from_slice(encoded.as_ref());
+            let mut encoded = val2;
+            to_write[shift_2..shift_3].copy_from_slice(encoded);
         }
 
         {
-            let mut encoded = val3.encode();
-            to_write[1 + size * 2..1 + size * 3].copy_from_slice(encoded.as_ref());
+            let mut encoded = val3;
+            to_write[shift_3..shift_4].copy_from_slice(encoded);
         }
 
         {
-            let mut encoded = val4.encode();
-            to_write[1 + size * 3..1 + size * 4].copy_from_slice(encoded.as_ref());
+            let mut encoded = val4;
+            to_write[shift_4..].copy_from_slice(encoded);
         }
 
         *offset = end_offset;
