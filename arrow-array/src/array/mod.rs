@@ -79,6 +79,7 @@ pub use list_view_array::*;
 use crate::iterator::ArrayIter;
 
 mod private {
+    /// Private marker trait to ensure [`Array`] can not be implemented outside this crate
     pub trait Sealed {}
 
     impl<T: Sealed> Sealed for &T {}
