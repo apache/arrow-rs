@@ -336,18 +336,18 @@ impl<T: ExactSizeIterator, const N: usize> ExactSizeIterator for ZipArraySameLen
 
 /// Encoding for non-nullable primitive arrays.
 /// Iterates directly over the `values`, and skips NULLs-checking.
-pub fn encode_not_null_fixed<const N: usize, T: ArrowPrimitiveType>(
+pub fn encode_not_null_fixed_2<const N: usize, T: ArrowPrimitiveType>(
     data: &mut [u8],
     offsets: &mut [usize],
     arrays: [&PrimitiveArray<T>; N],
     // iters: [impl ExactSizeIterator<Item = T>; N],
 ) where T::Native: FixedLengthEncoding {
     let valid_bits = {
-      // Create bitmask where the first N bits are 1s, and the rest are 0s.
-      let mut bits = 0u8;
-      for i in 0..N {
-          bits |= 1 << i;
-      }
+        // Create bitmask where the first N bits are 1s, and the rest are 0s.
+        let mut bits = 0u8;
+        for i in 0..N {
+            bits |= 1 << i;
+        }
         bits
     };
     let zip_iter = zip_array::<_, N>(arrays.map(|a| a.values().iter().copied()));
@@ -367,6 +367,137 @@ pub fn encode_not_null_fixed<const N: usize, T: ArrowPrimitiveType>(
 
         *offset = end_offset;
     }
+}
+
+/// Encoding for non-nullable primitive arrays.
+/// Iterates directly over the `values`, and skips NULLs-checking.
+pub fn encode_not_null_fixed<const N: usize, T: ArrowPrimitiveType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    arrays: [&PrimitiveArray<T>; N],
+    // iters: [impl ExactSizeIterator<Item = T>; N],
+) where T::Native: FixedLengthEncoding {
+    let valid_bits = {
+        // Create bitmask where the first N bits are 1s, and the rest are 0s.
+        let mut bits = 0u8;
+        for i in 0..N {
+            bits |= 1 << i;
+        }
+        bits
+    };
+    let iters = arrays.map(|a| a.values().iter().copied());
+    match N {
+        0 => panic!("N must be greater than 0"),
+        1 => unimplemented!(),
+        2 => {
+            let iter = iters[0].clone().zip(iters[1].clone());
+            for (value_idx, (val1, val2)) in iter.enumerate() {
+                let offset = &mut offsets[value_idx + 1];
+                let end_offset = *offset + T::Native::ENCODED_LEN * N;
+
+                let to_write = &mut data[*offset..end_offset];
+                for i in 0..N {
+                    to_write[i * T::Native::ENCODED_LEN] = 1;
+                }
+
+                {
+                    let mut encoded = val1.encode();
+                    to_write[1..T::Native::ENCODED_LEN].copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val2.encode();
+                    to_write[T::Native::ENCODED_LEN + 1..].copy_from_slice(encoded.as_ref());
+                }
+
+                *offset = end_offset;
+            }
+        }
+        3 => {
+            let iter = iters[0].clone().zip(iters[1].clone()).zip(iters[2].clone());
+            for (value_idx, ((val1, val2), val3)) in iter.enumerate() {
+                let offset = &mut offsets[value_idx + 1];
+                let end_offset = *offset + T::Native::ENCODED_LEN * N;
+
+                let to_write = &mut data[*offset..end_offset];
+                for i in 0..N {
+                    to_write[i * T::Native::ENCODED_LEN] = 1;
+                }
+
+                {
+                    let mut encoded = val1.encode();
+                    to_write[1 + T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1].copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val2.encode();
+                    to_write[1 + T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2].copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val3.encode();
+                    to_write[1 + T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3].copy_from_slice(encoded.as_ref());
+                }
+
+                *offset = end_offset;
+            }
+        }
+        4 => {
+
+
+            let iter = iters[0].clone().zip(iters[1].clone()).zip(iters[2].clone()).zip(iters[3].clone());
+            for (value_idx, (((val1, val2), val3), val4)) in iter.enumerate() {
+                let offset = &mut offsets[value_idx + 1];
+                let end_offset = *offset + T::Native::ENCODED_LEN * N;
+
+                let to_write = &mut data[*offset..end_offset];
+                for i in 0..N {
+                    to_write[i * T::Native::ENCODED_LEN] = 1;
+                }
+
+                {
+                    let mut encoded = val1.encode();
+                    to_write[1 + T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1].copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val2.encode();
+                    to_write[1 + T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2].copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val3.encode();
+                    to_write[1 + T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3].copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val4.encode();
+                    to_write[1 + T::Native::ENCODED_LEN * 3..T::Native::ENCODED_LEN * 4].copy_from_slice(encoded.as_ref());
+                }
+
+                *offset = end_offset;
+            }
+        }
+        _ => panic!("N must be less than or equal to 8"),
+    }
+    //
+    // let zip_iter = zip_array::<_, N>(arrays.map(|a| a.values().iter().copied()));
+    // for (value_idx, array) in zip_iter.enumerate() {
+    //     let offset = &mut offsets[value_idx + 1];
+    //     let end_offset = *offset + (T::Native::ENCODED_LEN - 1) * N;
+    //
+    //     let to_write = &mut data[*offset..end_offset];
+    //     // for i in 0..N {
+    //     //     to_write[i * T::Native::ENCODED_LEN] = 1;
+    //     // }
+    //     to_write[0] = valid_bits;
+    //     for (i, val) in array.iter().enumerate() {
+    //         let mut encoded = val.encode();
+    //         to_write[1 + i * (T::Native::ENCODED_LEN - 1)..(i + 1) * (T::Native::ENCODED_LEN - 1) + 1].copy_from_slice(encoded.as_ref());
+    //     }
+    //
+    //     *offset = end_offset;
+    // }
 }
 //
 // /// Encoding for non-nullable primitive arrays.

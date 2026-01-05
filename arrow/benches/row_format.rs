@@ -147,47 +147,47 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     let mut cols: Vec<ArrayRef> = vec![];
 
     // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    for nulls in [0.0, 0.0, 0.0, 0.0] {
-        seed += 1;
-        cols.push(Arc::new(create_primitive_array_with_seed::<Int8Type>(
-            batch_size, nulls, seed,
-        )) as ArrayRef);
-    }
-
-    // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    for nulls in [0.0, 0.0, 0.0, 0.0] {
-        seed += 1;
-        cols.push(Arc::new(create_primitive_array_with_seed::<Int32Type>(
-            batch_size, nulls, seed,
-        )) as ArrayRef);
-    }
-
-    // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    for nulls in [0.0, 0.0, 0.0, 0.0] {
-
-        seed += 1;
-        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
-            batch_size, nulls, seed,
-        )) as ArrayRef);
-    }
-
-    for _ in 0..10 {
-        seed += 1;
-        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
-            batch_size, 0.0, seed,
-        )) as ArrayRef);
-    }
-
+    // for nulls in [0.0, 0.0, 0.0, 0.0] {
+    //     seed += 1;
+    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int8Type>(
+    //         batch_size, nulls, seed,
+    //     )) as ArrayRef);
+    // }
+    //
     // // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    //     for nulls in [0.0, 0.0, 0.0, 0.0] {
+    // for nulls in [0.0, 0.0, 0.0, 0.0] {
+    //     seed += 1;
+    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int32Type>(
+    //         batch_size, nulls, seed,
+    //     )) as ArrayRef);
+    // }
+    //
+    // // for nulls in [0.0, 0.1, 0.2, 0.5] {
+    // for nulls in [0.0, 0.0, 0.0, 0.0] {
     //
     //     seed += 1;
-    //     cols.push(Arc::new(
-    //         create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-    //             batch_size, nulls, 0, 50, "", seed,
-    //         ),
-    //     ));
+    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+    //         batch_size, nulls, seed,
+    //     )) as ArrayRef);
     // }
+    //
+    // for _ in 0..10 {
+    //     seed += 1;
+    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+    //         batch_size, 0.0, seed,
+    //     )) as ArrayRef);
+    // }
+
+    // for nulls in [0.0, 0.1, 0.2, 0.5] {
+        for nulls in [0.0, 0.0, 0.0, 0.0] {
+
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, nulls, 0, 50, "", seed,
+            ),
+        ));
+    }
     //
     // for _ in 0..3 {
     //     seed += 1;
