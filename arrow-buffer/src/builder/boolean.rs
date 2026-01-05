@@ -140,7 +140,6 @@ impl BooleanBufferBuilder {
 
     /// Reserve space to at least `additional` new bits.
     /// Capacity will be `>= self.len() + additional`.
-    /// New bytes are uninitialized and reading them is undefined behavior.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         let capacity = self.len + additional;

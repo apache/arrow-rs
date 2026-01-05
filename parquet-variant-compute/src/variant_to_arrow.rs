@@ -24,14 +24,14 @@ use crate::type_conversion::{
 use crate::variant_array::ShreddedVariantFieldArray;
 use crate::{VariantArray, VariantValueArrayBuilder};
 use arrow::array::{
-    ArrayRef, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewArray, BinaryViewBuilder,
-    BooleanBuilder, FixedSizeBinaryBuilder, GenericListArray, GenericListViewArray,
-    LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder, OffsetSizeTrait,
-    PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
+    ArrayRef, ArrowNativeTypeOp, BinaryBuilder, BinaryLikeArrayBuilder, BinaryViewArray,
+    BinaryViewBuilder, BooleanBuilder, FixedSizeBinaryBuilder, GenericListArray,
+    GenericListViewArray, LargeBinaryBuilder, LargeStringBuilder, NullArray, NullBufferBuilder,
+    OffsetSizeTrait, PrimitiveBuilder, StringBuilder, StringLikeArrayBuilder, StringViewBuilder,
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::{CastOptions, DecimalCast};
-use arrow::datatypes::{self, ArrowNativeTypeOp, DataType, DecimalType};
+use arrow::datatypes::{self, DataType, DecimalType};
 use arrow::error::{ArrowError, Result};
 use arrow_schema::{FieldRef, TimeUnit};
 use parquet_variant::{Variant, VariantPath};
@@ -790,48 +790,6 @@ impl<'a> VariantToUuidArrowRowBuilder<'a> {
     }
 }
 
-/// Builder for creating VariantArray output (for path extraction without type conversion)
-pub(crate) struct VariantToBinaryVariantArrowRowBuilder {
-    metadata: BinaryViewArray,
-    builder: VariantValueArrayBuilder,
-    nulls: NullBufferBuilder,
-}
-
-impl VariantToBinaryVariantArrowRowBuilder {
-    fn new(metadata: BinaryViewArray, capacity: usize) -> Self {
-        Self {
-            metadata,
-            builder: VariantValueArrayBuilder::new(capacity),
-            nulls: NullBufferBuilder::new(capacity),
-        }
-    }
-}
-
-impl VariantToBinaryVariantArrowRowBuilder {
-    fn append_null(&mut self) -> Result<()> {
-        self.builder.append_null();
-        self.nulls.append_null();
-        Ok(())
-    }
-
-    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
-        self.builder.append_value(value);
-        self.nulls.append_non_null();
-        Ok(true)
-    }
-
-    fn finish(mut self) -> Result<ArrayRef> {
-        let variant_array = VariantArray::from_parts(
-            self.metadata,
-            Some(self.builder.build()?),
-            None, // no typed_value column
-            self.nulls.finish(),
-        );
-
-        Ok(ArrayRef::from(variant_array))
-    }
-}
-
 pub(crate) struct VariantToListArrowRowBuilder<'a, O, const IS_VIEW: bool>
 where
     O: OffsetSizeTrait + ArrowNativeTypeOp,
@@ -940,6 +898,48 @@ where
             );
             Ok(Arc::new(list_array))
         }
+    }
+}
+
+/// Builder for creating VariantArray output (for path extraction without type conversion)
+pub(crate) struct VariantToBinaryVariantArrowRowBuilder {
+    metadata: BinaryViewArray,
+    builder: VariantValueArrayBuilder,
+    nulls: NullBufferBuilder,
+}
+
+impl VariantToBinaryVariantArrowRowBuilder {
+    fn new(metadata: BinaryViewArray, capacity: usize) -> Self {
+        Self {
+            metadata,
+            builder: VariantValueArrayBuilder::new(capacity),
+            nulls: NullBufferBuilder::new(capacity),
+        }
+    }
+}
+
+impl VariantToBinaryVariantArrowRowBuilder {
+    fn append_null(&mut self) -> Result<()> {
+        self.builder.append_null();
+        self.nulls.append_null();
+        Ok(())
+    }
+
+    fn append_value(&mut self, value: Variant<'_, '_>) -> Result<bool> {
+        self.builder.append_value(value);
+        self.nulls.append_non_null();
+        Ok(true)
+    }
+
+    fn finish(mut self) -> Result<ArrayRef> {
+        let variant_array = VariantArray::from_parts(
+            self.metadata,
+            Some(self.builder.build()?),
+            None, // no typed_value column
+            self.nulls.finish(),
+        );
+
+        Ok(ArrayRef::from(variant_array))
     }
 }
 
