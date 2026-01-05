@@ -19,6 +19,7 @@ use crate::reader::serializer::TapeSerializer;
 use arrow_schema::ArrowError;
 use memchr::memchr2;
 use serde_core::Serialize;
+use std::collections::HashSet;
 use std::fmt::Write;
 
 /// We decode JSON to a flattened tape representation,
@@ -237,7 +238,20 @@ enum DecoderState {
     ///
     /// Consists of `(literal, decoded length)`
     Literal(Literal, u8),
+    /// Skipping a value (for unprojected fields)
+    ///
+    /// Consists of:
+    /// - `depth`: Nesting level of objects/arrays being skipped (u32)
+    /// - `flags`: Bit-packed flags (in_string: bit 0, escape: bit 1)
+    SkipValue {
+        depth: u32,
+        flags: u8,
+    },
 }
+
+// Bit flags for SkipValue state
+const SKIP_IN_STRING: u8 = 1 << 0; // 0x01
+const SKIP_ESCAPE: u8 = 1 << 1; // 0x02
 
 impl DecoderState {
     fn as_str(&self) -> &'static str {
@@ -251,6 +265,7 @@ impl DecoderState {
             DecoderState::Escape => "escape",
             DecoderState::Unicode(_, _, _) => "unicode literal",
             DecoderState::Literal(d, _) => d.as_str(),
+            DecoderState::SkipValue { .. } => "skip value",
         }
     }
 }
@@ -315,12 +330,23 @@ pub struct TapeDecoder {
 
     /// A stack of [`DecoderState`]
     stack: Vec<DecoderState>,
+
+    /// Optional projection: set of field names to include
+    /// If None, all fields are parsed. If Some, only fields in the set are parsed.
+    projection: Option<HashSet<String>>,
+
+    /// Cache current nesting depth to avoid O(depth) stack traversal on every field
+    /// Incremented when entering Object/List, decremented when exiting
+    current_nesting_depth: usize,
 }
 
 impl TapeDecoder {
     /// Create a new [`TapeDecoder`] with the provided batch size
     /// and an estimated number of fields in each row
-    pub fn new(batch_size: usize, num_fields: usize) -> Self {
+    ///
+    /// If `projection` is Some, only fields in the set will be parsed and written to the tape.
+    /// Other fields will be skipped during parsing.
+    pub fn new(batch_size: usize, num_fields: usize, projection: Option<HashSet<String>>) -> Self {
         let tokens_per_row = 2 + num_fields * 2;
         let mut offsets = Vec::with_capacity(batch_size * (num_fields * 2) + 1);
         offsets.push(0);
@@ -335,6 +361,8 @@ impl TapeDecoder {
             cur_row: 0,
             bytes: Vec::with_capacity(num_fields * 2 * 8),
             stack: Vec::with_capacity(10),
+            projection,
+            current_nesting_depth: 0,
         }
     }
 
@@ -372,6 +400,7 @@ impl TapeDecoder {
                             let end_idx = self.elements.len() as u32;
                             self.elements[start_idx as usize] = TapeElement::StartObject(end_idx);
                             self.elements.push(TapeElement::EndObject(start_idx));
+                            self.current_nesting_depth -= 1;
                             self.stack.pop();
                         }
                         b => return Err(err(b, "parsing object")),
@@ -387,6 +416,7 @@ impl TapeDecoder {
                             let end_idx = self.elements.len() as u32;
                             self.elements[start_idx as usize] = TapeElement::StartList(end_idx);
                             self.elements.push(TapeElement::EndList(start_idx));
+                            self.current_nesting_depth -= 1;
                             self.stack.pop();
                         }
                         Some(_) => self.stack.push(DecoderState::Value),
@@ -423,11 +453,13 @@ impl TapeDecoder {
                         b'[' => {
                             let idx = self.elements.len() as u32;
                             self.elements.push(TapeElement::StartList(u32::MAX));
+                            self.current_nesting_depth += 1;
                             DecoderState::List(idx)
                         }
                         b'{' => {
                             let idx = self.elements.len() as u32;
                             self.elements.push(TapeElement::StartObject(u32::MAX));
+                            self.current_nesting_depth += 1;
                             DecoderState::Object(idx)
                         }
                         b => return Err(err(b, "parsing value")),
@@ -449,7 +481,52 @@ impl TapeDecoder {
                 DecoderState::Colon => {
                     iter.skip_whitespace();
                     match next!(iter) {
-                        b':' => self.stack.pop(),
+                        b':' => {
+                            self.stack.pop();
+
+                            // Check projection: if the field is not in the projection set,
+                            // replace the Value state with SkipValue
+                            // IMPORTANT: Only apply projection at the top level (when there's exactly 1 Object state)
+                            // Short-circuit: Check depth first (cheaper than Option unwrap + HashSet lookup)
+                            if self.current_nesting_depth == 1 {
+                                if let Some(ref projection) = self.projection {
+                                    // Get the field name from the last String element
+                                    if let Some(TapeElement::String(string_idx)) =
+                                        self.elements.last()
+                                    {
+                                        let string_idx = *string_idx as usize;
+                                        let start = self.offsets[string_idx];
+                                        let end = self.offsets[string_idx + 1];
+                                        let field_name = std::str::from_utf8(
+                                            &self.bytes[start..end],
+                                        )
+                                        .map_err(|e| {
+                                            ArrowError::JsonError(format!(
+                                                "Invalid UTF-8 in field name: {}",
+                                                e
+                                            ))
+                                        })?;
+
+                                        if !projection.contains(field_name) {
+                                            // Field not in projection: skip its value
+                                            // CRITICAL: Remove the field name from tape to maintain structure
+                                            // The tape must have paired field_name:value entries
+                                            self.elements.pop(); // Remove the String element
+                                            self.bytes.truncate(start); // Remove the field name bytes
+                                            self.offsets.pop(); // Remove the offset entry
+
+                                            // Replace Value state with SkipValue
+                                            if let Some(last) = self.stack.last_mut() {
+                                                *last = DecoderState::SkipValue {
+                                                    depth: 0,
+                                                    flags: 0, // Both in_string and escape are false
+                                                };
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         b => return Err(err(b, "parsing colon")),
                     };
                 }
@@ -519,6 +596,118 @@ impl TapeDecoder {
                     }
                     *idx += 1;
                 },
+                // Skip a value for unprojected fields (optimized batch-processing version)
+                DecoderState::SkipValue { depth, flags } => {
+                    loop {
+                        if iter.is_empty() {
+                            break; // Need more data, preserve state
+                        }
+
+                        let in_string = (*flags & SKIP_IN_STRING) != 0;
+                        let escape = (*flags & SKIP_ESCAPE) != 0;
+
+                        if in_string {
+                            // Fast skip to next \ or " using SIMD
+                            let _ = iter.skip_chrs(b'\\', b'"');
+
+                            if iter.is_empty() {
+                                break;
+                            }
+
+                            let b = next!(iter);
+                            match b {
+                                b'\\' => *flags ^= SKIP_ESCAPE, // Toggle escape flag
+                                b'"' if !escape => {
+                                    *flags &= !SKIP_IN_STRING; // Clear in_string flag
+                                    if *depth == 0 {
+                                        // String value ended at top level - check completion
+                                        iter.skip_whitespace();
+                                        if let Some(next_b) = iter.peek() {
+                                            if matches!(next_b, b',' | b'}' | b']') {
+                                                self.stack.pop();
+                                                break;
+                                            }
+                                        }
+                                        if iter.is_empty() {
+                                            break; // Need more data
+                                        }
+                                    }
+                                }
+                                _ if escape => *flags &= !SKIP_ESCAPE, // Clear escape flag
+                                _ => {}
+                            }
+                        } else if *depth > 0 {
+                            // Inside nested structure - fast skip to next structural character
+                            let _ = iter
+                                .advance_until(|b| matches!(b, b'"' | b'{' | b'[' | b'}' | b']'));
+
+                            if iter.is_empty() {
+                                break;
+                            }
+
+                            match next!(iter) {
+                                b'"' => *flags |= SKIP_IN_STRING, // Set in_string flag
+                                b'{' | b'[' => *depth += 1,
+                                b'}' | b']' => {
+                                    *depth -= 1;
+                                    if *depth == 0 {
+                                        self.stack.pop();
+                                        break;
+                                    }
+                                }
+                                _ => {}
+                            }
+                        } else {
+                            // depth == 0: Skip simple value (number/literal/start of compound)
+                            let _ = iter.advance_until(|b| {
+                                matches!(
+                                    b,
+                                    b',' | b'}'
+                                        | b']'
+                                        | b' '
+                                        | b'\n'
+                                        | b'\r'
+                                        | b'\t'
+                                        | b'"'
+                                        | b'{'
+                                        | b'['
+                                )
+                            });
+
+                            if iter.is_empty() {
+                                break;
+                            }
+
+                            match iter.peek() {
+                                Some(b',') | Some(b'}') | Some(b']') => {
+                                    self.stack.pop();
+                                    break;
+                                }
+                                Some(b' ' | b'\n' | b'\r' | b'\t') => {
+                                    iter.skip_whitespace();
+                                    if let Some(next_b) = iter.peek() {
+                                        if matches!(next_b, b',' | b'}' | b']') {
+                                            self.stack.pop();
+                                            break;
+                                        }
+                                    }
+                                    if iter.is_empty() {
+                                        break;
+                                    }
+                                }
+                                Some(b'"') => {
+                                    next!(iter);
+                                    *flags |= SKIP_IN_STRING; // Set in_string flag
+                                }
+                                Some(b'{' | b'[') => {
+                                    next!(iter);
+                                    *depth += 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -767,7 +956,7 @@ mod tests {
 
         {"a": ["", "foo", ["bar", "c"]], "b": {"1": []}, "c": {"2": [1, 2, 3]} }
         "#;
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(a.as_bytes()).unwrap();
         assert!(!decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 7);
@@ -877,21 +1066,21 @@ mod tests {
     #[test]
     fn test_invalid() {
         // Test invalid
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         let err = decoder.decode(b"hello").unwrap_err().to_string();
         assert_eq!(
             err,
             "Json error: Encountered unexpected 'h' whilst parsing value"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         let err = decoder.decode(b"{\"hello\": }").unwrap_err().to_string();
         assert_eq!(
             err,
             "Json error: Encountered unexpected '}' whilst parsing value"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         let err = decoder
             .decode(b"{\"hello\": [ false, tru ]}")
             .unwrap_err()
@@ -901,7 +1090,7 @@ mod tests {
             "Json error: Encountered unexpected ' ' whilst parsing literal"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         let err = decoder
             .decode(b"{\"hello\": \"\\ud8\"}")
             .unwrap_err()
@@ -912,7 +1101,7 @@ mod tests {
         );
 
         // Missing surrogate pair
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         let err = decoder
             .decode(b"{\"hello\": \"\\ud83d\"}")
             .unwrap_err()
@@ -923,40 +1112,40 @@ mod tests {
         );
 
         // Test truncation
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(b"{\"he").unwrap();
         assert!(decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 1);
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading string");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(b"{\"hello\" : ").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading value");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(b"{\"hello\" : [").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading list");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(b"{\"hello\" : tru").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading true");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(b"{\"hello\" : nu").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading null");
 
         // Test invalid UTF-8
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(b"{\"hello\" : \"world\xFF\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered non-UTF-8 data");
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         decoder.decode(b"{\"\xe2\" : \"\x96\xa1\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered truncated UTF-8 sequence");
@@ -964,11 +1153,11 @@ mod tests {
 
     #[test]
     fn test_invalid_surrogates() {
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         let res = decoder.decode(b"{\"test\": \"\\ud800\\ud801\"}");
         assert!(res.is_err());
 
-        let mut decoder = TapeDecoder::new(16, 2);
+        let mut decoder = TapeDecoder::new(16, 2, None);
         let res = decoder.decode(b"{\"test\": \"\\udc00\\udc01\"}");
         assert!(res.is_err());
     }

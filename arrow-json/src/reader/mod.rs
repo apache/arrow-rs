@@ -137,6 +137,7 @@ use crate::StructMode;
 use crate::reader::binary_array::{
     BinaryArrayDecoder, BinaryViewDecoder, FixedSizeBinaryArrayDecoder,
 };
+use std::collections::HashSet;
 use std::io::BufRead;
 use std::sync::Arc;
 
@@ -304,7 +305,7 @@ impl ReaderBuilder {
         };
 
         let decoder = make_decoder(
-            data_type,
+            data_type.clone(),
             self.coerce_primitive,
             self.strict_mode,
             nullable,
@@ -313,10 +314,28 @@ impl ReaderBuilder {
 
         let num_fields = self.schema.flattened_fields().len();
 
+        // Extract projection: enable in non-strict mode to skip unknown fields
+        // In strict_mode, unknown fields cause errors, so projection skipping is not useful
+        // In non-strict mode, projection allows skipping fields not in the schema
+        // Performance overhead has been minimized via depth caching and short-circuit optimization
+        let projection = if self.strict_mode {
+            None
+        } else {
+            // Non-strict mode: always enable projection to skip unknown fields
+            match &data_type {
+                DataType::Struct(fields) if !fields.is_empty() => {
+                    let field_names: HashSet<String> =
+                        fields.iter().map(|f| f.name().clone()).collect();
+                    Some(field_names)
+                }
+                _ => None,
+            }
+        };
+
         Ok(Decoder {
             decoder,
             is_field: self.is_field,
-            tape_decoder: TapeDecoder::new(self.batch_size, num_fields),
+            tape_decoder: TapeDecoder::new(self.batch_size, num_fields, projection),
             batch_size: self.batch_size,
             schema: self.schema,
         })
