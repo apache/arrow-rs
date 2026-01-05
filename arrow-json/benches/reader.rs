@@ -18,7 +18,6 @@
 use arrow_json::ReaderBuilder;
 use arrow_schema::{DataType, Field};
 use criterion::{Criterion, criterion_group, criterion_main};
-use std::fmt::Write;
 use std::hint::black_box;
 use std::sync::Arc;
 
