@@ -79,13 +79,16 @@ pub use list_view_array::*;
 use crate::iterator::ArrayIter;
 
 mod private {
-    /// Private marker trait to ensure [`Array`] can not be implemented outside this crate
+    /// Private marker trait to ensure [`super::Array`] can not be implemented outside this crate
     pub trait Sealed {}
 
     impl<T: Sealed> Sealed for &T {}
 }
 
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
+///
+/// This trait is sealed as it is not intended for custom array types, rather only
+/// those defined in this crate.
 pub trait Array: std::fmt::Debug + Send + Sync + private::Sealed {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
