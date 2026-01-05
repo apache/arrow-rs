@@ -314,10 +314,10 @@ impl ReaderBuilder {
 
         let num_fields = self.schema.flattened_fields().len();
 
-        // Extract projection: enable in non-strict mode to skip unknown fields
-        // In strict_mode, unknown fields cause errors, so projection skipping is not useful
-        // In non-strict mode, projection allows skipping fields not in the schema
-        // Performance overhead has been minimized via depth caching and short-circuit optimization
+        // Extract projection field set from schema for projection-aware parsing
+        // - strict_mode: Disabled (unknown fields cause errors anyway)
+        // - non-strict mode: Enabled to skip JSON fields not present in the schema
+        // Performance overhead minimized via depth caching and short-circuit optimization
         let projection = if self.strict_mode {
             None
         } else {
