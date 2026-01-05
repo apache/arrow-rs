@@ -486,8 +486,8 @@ impl TapeDecoder {
 
                             // Check projection: if the field is not in the projection set,
                             // replace the Value state with SkipValue
-                            // IMPORTANT: Only apply projection at the top level (when there's exactly 1 Object state)
-                            // Short-circuit: Check depth first (cheaper than Option unwrap + HashSet lookup)
+                            // NOTE: Only apply projection at the top level (nesting_depth == 1)
+                            // This means direct fields of the root object, not nested objects
                             if self.current_nesting_depth == 1 {
                                 if let Some(ref projection) = self.projection {
                                     // Get the field name from the last String element
