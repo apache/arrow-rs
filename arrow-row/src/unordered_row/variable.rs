@@ -22,7 +22,7 @@ use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
-use arrow_schema::DataType;
+use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -66,15 +66,16 @@ fn get_number_of_bits_needed_to_encode(len: usize) -> usize {
 /// Returns the padded length of the encoded length of the given length
 #[inline]
 pub fn padded_length(a: Option<usize>) -> usize {
-    let value_len = match a {
-        None => 0,
-        Some(a) if a == 0 => 0,
-        Some(a) => get_number_of_bits_needed_to_encode(a) + a,
-    };
-
-    value_len
-      // ctrl byte
-      + 1
+    crate::variable::padded_length(a)
+    // let value_len = match a {
+    //     None => 0,
+    //     Some(a) if a == 0 => 0,
+    //     Some(a) => get_number_of_bits_needed_to_encode(a) + a,
+    // };
+    //
+    // value_len
+    //   // ctrl byte
+    //   + 1
 }
 
 /// Variable length values are encoded as
@@ -147,10 +148,15 @@ pub fn encode_null(out: &mut [u8]) -> usize {
 
 #[inline]
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>) -> usize {
-    match val {
-        None => encode_null(out),
-        Some(val) => fast_encode_bytes(out, val),
-    }
+    crate::variable::encode_one(out, val, SortOptions {
+        descending: false,
+        nulls_first: false
+    })
+    // match val {
+    //     None => encode_null(out),
+    //     // Some(val) => fast_encode_bytes(out, val),
+    //     Some(val) => crate::variable::encode_one(out, val),
+    // }
 }
 
 #[inline]

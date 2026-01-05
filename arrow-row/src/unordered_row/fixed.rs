@@ -302,61 +302,151 @@ pub fn encode_not_null_double<T: FixedLengthEncoding>(
     }
 }
 
+pub struct ZipArraySameLength<T, const N: usize> {
+    array: [T; N],
+}
+
+pub fn zip_array<T: ExactSizeIterator, const N: usize>(array: [T; N]) -> ZipArraySameLength<T, N> {
+    assert_ne!(N, 0);
+
+    ZipArraySameLength { array }
+}
+
+impl<T: ExactSizeIterator, const N: usize> Iterator for ZipArraySameLength<T, N> {
+    type Item = [T::Item; N];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // SAFETY: It is always valid to `assume_init()` an array of `MaybeUninit`s (can be replaced
+        // with `MaybeUninit::uninit_array()` once stable).
+        let mut result: [std::mem::MaybeUninit<T::Item>; N] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        for (item, iterator) in std::iter::zip(&mut result, &mut self.array) {
+            item.write(iterator.next()?);
+        }
+        // SAFETY: We initialized the array above (can be replaced with `MaybeUninit::array_assume_init()`
+        // once stable).
+        Some(unsafe { std::mem::transmute_copy::<[std::mem::MaybeUninit<T::Item>; N], [T::Item; N]>(&result) })
+    }
+}
+
+impl<T: ExactSizeIterator, const N: usize> ExactSizeIterator for ZipArraySameLength<T, N> {
+    fn len(&self) -> usize {
+        self.array[0].len()
+    }
+}
+
 /// Encoding for non-nullable primitive arrays.
 /// Iterates directly over the `values`, and skips NULLs-checking.
-pub fn encode_not_null_four<'a>(
-    data: &'a mut [u8],
-    offsets: &'a mut [usize],
-    values_1: (usize, &'a Buffer),
-    values_2: (usize, &'a Buffer),
-    values_3: (usize, &'a Buffer),
-    values_4: (usize, &'a Buffer),
-) {
-    let shift_1 = 1;
-    let shift_2 = shift_1 + values_1.0;
-    let shift_3 = shift_2 + values_2.0;
-    let shift_4 = shift_3 + values_3.0;
-    let total_size = shift_4 + values_4.0;
-    for (value_idx, (((val1, val2), val3), val4)) in values_1.1.as_ref().chunks_exact(values_1.0)
-        .zip(values_2.1.as_ref().chunks_exact(values_2.0))
-        .zip(values_3.1.as_ref().chunks_exact(values_3.0))
-        .zip(values_4.1.as_ref().chunks_exact(values_4.0))
-        .enumerate()
-    {
+pub fn encode_not_null_fixed<const N: usize, T: ArrowPrimitiveType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    arrays: [&PrimitiveArray<T>; N],
+    // iters: [impl ExactSizeIterator<Item = T>; N],
+) where T::Native: FixedLengthEncoding {
+    let valid_bits = {
+      // Create bitmask where the first N bits are 1s, and the rest are 0s.
+      let mut bits = 0u8;
+      for i in 0..N {
+          bits |= 1 << i;
+      }
+        bits
+    };
+    let zip_iter = zip_array::<_, N>(arrays.map(|a| a.values().iter().copied()));
+    for (value_idx, array) in zip_iter.enumerate() {
         let offset = &mut offsets[value_idx + 1];
-        let end_offset = *offset + total_size;
+        let end_offset = *offset + 1 + (T::Native::ENCODED_LEN - 1) * N;
 
         let to_write = &mut data[*offset..end_offset];
-
-        // let size = std::mem::size_of::<T::Encoded>();
-
-        // all valid
-        let valid_bits = 0b0000_1111;
+        // for i in 0..N {
+        //     to_write[i * T::Native::ENCODED_LEN] = 1;
+        // }
         to_write[0] = valid_bits;
-
-        {
-            let mut encoded = val1;
-            to_write[shift_1..shift_2].copy_from_slice(encoded);
-        }
-
-        {
-            let mut encoded = val2;
-            to_write[shift_2..shift_3].copy_from_slice(encoded);
-        }
-
-        {
-            let mut encoded = val3;
-            to_write[shift_3..shift_4].copy_from_slice(encoded);
-        }
-
-        {
-            let mut encoded = val4;
-            to_write[shift_4..].copy_from_slice(encoded);
+        for (i, val) in array.iter().enumerate() {
+            let mut encoded = val.encode();
+            to_write[1 + i * (T::Native::ENCODED_LEN - 1)..(i + 1) * (T::Native::ENCODED_LEN - 1) + 1].copy_from_slice(encoded.as_ref());
         }
 
         *offset = end_offset;
     }
 }
+//
+// /// Encoding for non-nullable primitive arrays.
+// /// Iterates directly over the `values`, and skips NULLs-checking.
+// pub fn encode_not_null_four<'a>(
+//     data: &'a mut [u8],
+//     offsets: &'a mut [usize],
+//     values_1: (usize, &'a Buffer),
+//     values_2: (usize, &'a Buffer),
+//     values_3: (usize, &'a Buffer),
+//     values_4: (usize, &'a Buffer),
+// ) {
+//     let shift_1 = 1;
+//     let values_1_slice = values_1.1.as_slice();
+//     let shift_2 = shift_1 + values_1.0;
+//     let values_2_slice = values_2.1.as_slice();
+//     let shift_3 = shift_2 + values_2.0;
+//     let values_3_slice = values_3.1.as_slice();
+//     let shift_4 = shift_3 + values_3.0;
+//     let values_4_slice = values_4.1.as_slice();
+//
+//     let total_size = shift_4 + values_4.0;
+//     for (value_idx, offset) in offsets.iter_mut().skip(1).enumerate()
+//     {
+//         // let offset = &mut offsets[value_idx + 1];
+//
+//         // let val1 = values_1_slice.;
+//         let end_offset = *offset + 1 + values_1.0 + values_2.0 + values_3.0 + values_4.0;
+//
+//         let to_write = &mut data[*offset..end_offset];
+//
+//
+//         // let size = std::mem::size_of::<T::Encoded>();
+//         // data[*offset..*offset + slice.len()].copy_from_slice(slice.as_slice());
+//         //
+//         // let slice = [val1, val2, val3, val4].concat();
+//
+//         // all valid
+//         let valid_bits = 0b0000_1111;
+//         to_write[0] = valid_bits;
+//
+//         unsafe { to_write.get_unchecked_mut(1..1 + values_1.0).copy_from_slice(values_1_slice.get_unchecked((value_idx * values_1.0)..(value_idx + 1) * values_1.0)); }
+//         let to_write = &mut to_write[1 + values_1.0..];
+//         unsafe { to_write.get_unchecked_mut(..values_2.0).copy_from_slice(values_2_slice.get_unchecked((value_idx * values_2.0)..(value_idx + 1) * values_2.0)); }
+//         let to_write = &mut to_write[values_2.0..];
+//         unsafe { to_write.get_unchecked_mut(..values_3.0).copy_from_slice(values_3_slice.get_unchecked((value_idx * values_3.0)..(value_idx + 1) * values_3.0)); }
+//         let to_write = &mut to_write[values_3.0..];
+//         unsafe { to_write.get_unchecked_mut(..).copy_from_slice(values_4_slice.get_unchecked((value_idx * values_4.0)..(value_idx + 1) * values_4.0)); }
+//         // to_write[1 + values_1.0..1 + values_1.0 + values_2.0].copy_from_slice(&values_2_slice[(value_idx * values_2.0)..(value_idx + 1) * values_2.0]);
+//
+//         // {
+//         //     let mut encoded = val1;
+//         //     data[*offset..*offset + slice.len()].copy_from_slice(slice.as_slice());
+//         //     *offset += slice.len();
+//         // }
+//         //
+//         // {
+//         //     let mut encoded = val2;
+//         //     data[*offset..*offset + val2.len()].copy_from_slice(encoded);
+//         //     *offset += val2.len();
+//         //     // to_write[shift_2..shift_3].copy_from_slice(encoded);
+//         // }
+//         //
+//         // {
+//         //     let mut encoded = val3;
+//         //     data[*offset..*offset + val3.len()].copy_from_slice(encoded);
+//         //     *offset += val3.len();
+//         //     // to_write[shift_3..shift_4].copy_from_slice(encoded);
+//         // }
+//         //
+//         // {
+//         //     let mut encoded = val4;
+//         //     data[*offset..*offset + val4.len()].copy_from_slice(encoded);
+//         //     *offset += val4.len();
+//         //     // to_write[shift_4..].copy_from_slice(encoded);
+//         // }
+//
+//         *offset = end_offset;
+//     }
+// }
 
 pub fn encode_fixed_size_binary(
     data: &mut [u8],
