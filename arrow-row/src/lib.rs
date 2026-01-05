@@ -1931,8 +1931,7 @@ unsafe fn decode_column(
                         for ((row_idx, original_bytes), remaining_bytes) in
                             field_rows.iter().zip(child_data)
                         {
-                            let consumed_length =
-                                1 + original_bytes.len() - remaining_bytes.len();
+                            let consumed_length = 1 + original_bytes.len() - remaining_bytes.len();
                             rows[*row_idx] = &rows[*row_idx][consumed_length..];
                         }
 
