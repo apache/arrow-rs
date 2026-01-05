@@ -4199,7 +4199,7 @@ mod tests {
             assert_eq!(col.value(i).as_ref(), union_array.value(i).as_ref());
         }
     }
-  
+
     #[test]
     fn rows_size_should_count_for_capacity() {
         let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
