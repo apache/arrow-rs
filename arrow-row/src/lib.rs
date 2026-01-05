@@ -892,7 +892,7 @@ impl RowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        if cfg!(test) {
+        if cfg!(debug_assertions) {
             for (i, row) in rows.iter().enumerate() {
                 if !row.is_empty() {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -1131,8 +1131,8 @@ impl Rows {
     pub fn size(&self) -> usize {
         // Size of fields is accounted for as part of RowConverter
         std::mem::size_of::<Self>()
-            + self.buffer.len()
-            + self.offsets.len() * std::mem::size_of::<usize>()
+            + self.buffer.capacity()
+            + self.offsets.capacity() * std::mem::size_of::<usize>()
     }
 
     /// Create a [BinaryArray] from the [Rows] data without reallocating the
@@ -1644,24 +1644,22 @@ fn encode_column(
                     }
                 }
                 DataType::Binary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i32>(column), opts)
                 }
                 DataType::BinaryView => {
                     variable::encode(data, offsets, column.as_binary_view().iter(), opts)
                 }
                 DataType::LargeBinary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i64>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i64>(column), opts)
                 }
-                DataType::Utf8 => variable::encode(
+                DataType::Utf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i32>(),
                     opts,
                 ),
-                DataType::LargeUtf8 => variable::encode(
+                DataType::LargeUtf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i64>()
-                        .iter()
-                        .map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i64>(),
                     opts,
                 ),
                 DataType::Utf8View => variable::encode(
@@ -4200,5 +4198,48 @@ mod tests {
         for i in 0..col.len() {
             assert_eq!(col.value(i).as_ref(), union_array.value(i).as_ref());
         }
+    }
+  
+    #[test]
+    fn rows_size_should_count_for_capacity() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+
+        let empty_rows_size_with_preallocate_rows_and_data = {
+            let rows = row_converter.empty_rows(1000, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_rows = {
+            let rows = row_converter.empty_rows(1000, 0);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_data = {
+            let rows = row_converter.empty_rows(0, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_without_preallocate = {
+            let rows = row_converter.empty_rows(0, 0);
+
+            rows.size()
+        };
+
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_rows,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_rows}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_data,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_data}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_rows} should be larger than {empty_rows_size_without_preallocate}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
+        );
     }
 }

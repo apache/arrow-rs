@@ -25,19 +25,6 @@ use arrow::datatypes::{
 use chrono::Timelike;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
-/// Options for controlling the behavior of `cast_to_variant_with_options`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CastOptions {
-    /// If true, return error on conversion failure. If false, insert null for failed conversions.
-    pub strict: bool,
-}
-
-impl Default for CastOptions {
-    fn default() -> Self {
-        Self { strict: true }
-    }
-}
-
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
 pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
