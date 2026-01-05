@@ -892,7 +892,7 @@ impl RowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        if cfg!(test) {
+        if cfg!(debug_assertions) {
             for (i, row) in rows.iter().enumerate() {
                 if !row.is_empty() {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -1644,24 +1644,22 @@ fn encode_column(
                     }
                 }
                 DataType::Binary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i32>(column), opts)
                 }
                 DataType::BinaryView => {
                     variable::encode(data, offsets, column.as_binary_view().iter(), opts)
                 }
                 DataType::LargeBinary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i64>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i64>(column), opts)
                 }
-                DataType::Utf8 => variable::encode(
+                DataType::Utf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i32>(),
                     opts,
                 ),
-                DataType::LargeUtf8 => variable::encode(
+                DataType::LargeUtf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i64>()
-                        .iter()
-                        .map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i64>(),
                     opts,
                 ),
                 DataType::Utf8View => variable::encode(

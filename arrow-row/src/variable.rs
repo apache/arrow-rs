@@ -17,9 +17,10 @@
 
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
+use arrow_array::types::ByteArrayType;
 use arrow_array::*;
-use arrow_buffer::MutableBuffer;
 use arrow_buffer::bit_util::ceil;
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
@@ -84,6 +85,48 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
     }
 }
 
+/// Calls [`encode`] with optimized iterator for generic byte arrays
+pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    input_array: &GenericByteArray<T>,
+    opts: SortOptions,
+) {
+    let input_offsets = input_array.value_offsets();
+    let bytes = input_array.values().as_slice();
+
+    if let Some(null_buffer) = input_array.nulls().filter(|x| x.null_count() > 0) {
+        let input_iter =
+            input_offsets
+                .windows(2)
+                .zip(null_buffer.iter())
+                .map(|(start_end, is_valid)| {
+                    if is_valid {
+                        let item_range = start_end[0].as_usize()..start_end[1].as_usize();
+                        // SAFETY: the offsets of the input are valid by construction
+                        // so it is ok to use unsafe here
+                        let item = unsafe { bytes.get_unchecked(item_range) };
+                        Some(item)
+                    } else {
+                        None
+                    }
+                });
+
+        encode(data, offsets, input_iter, opts);
+    } else {
+        // Skip null checks
+        let input_iter = input_offsets.windows(2).map(|start_end| {
+            let item_range = start_end[0].as_usize()..start_end[1].as_usize();
+            // SAFETY: the offsets of the input are valid by construction
+            // so it is ok to use unsafe here
+            let item = unsafe { bytes.get_unchecked(item_range) };
+            Some(item)
+        });
+
+        encode(data, offsets, input_iter, opts);
+    }
+}
+
 pub fn encode_null(out: &mut [u8], opts: SortOptions) -> usize {
     out[0] = null_sentinel(opts);
     1
@@ -97,6 +140,7 @@ pub fn encode_empty(out: &mut [u8], opts: SortOptions) -> usize {
     1
 }
 
+#[inline]
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usize {
     match val {
         None => encode_null(out, opts),
