@@ -591,6 +591,16 @@ impl DataType {
         matches!(self, UInt8 | UInt16 | UInt32 | UInt64)
     }
 
+    /// Returns true if this type is decimal: (Decimal*).
+    #[inline]
+    pub fn is_decimal(&self) -> bool {
+        use DataType::*;
+        matches!(
+            self,
+            Decimal32(..) | Decimal64(..) | Decimal128(..) | Decimal256(..)
+        )
+    }
+
     /// Returns true if this type is valid as a dictionary key
     #[inline]
     pub fn is_dictionary_key_type(&self) -> bool {
@@ -629,6 +639,13 @@ impl DataType {
     pub fn is_null(&self) -> bool {
         use DataType::*;
         matches!(self, Null)
+    }
+
+    /// Returns true if this type is a String type
+    #[inline]
+    pub fn is_string(&self) -> bool {
+        use DataType::*;
+        matches!(self, Utf8 | LargeUtf8 | Utf8View)
     }
 
     /// Compares the datatype with another, ignoring nested field names
@@ -1148,9 +1165,26 @@ mod tests {
     }
 
     #[test]
+    fn test_string() {
+        assert!(DataType::is_string(&DataType::Utf8));
+        assert!(DataType::is_string(&DataType::LargeUtf8));
+        assert!(DataType::is_string(&DataType::Utf8View));
+        assert!(!DataType::is_string(&DataType::Int32));
+    }
+
+    #[test]
     fn test_floating() {
         assert!(DataType::is_floating(&DataType::Float16));
         assert!(!DataType::is_floating(&DataType::Int32));
+    }
+
+    #[test]
+    fn test_decimal() {
+        assert!(DataType::is_decimal(&DataType::Decimal32(4, 2)));
+        assert!(DataType::is_decimal(&DataType::Decimal64(4, 2)));
+        assert!(DataType::is_decimal(&DataType::Decimal128(4, 2)));
+        assert!(DataType::is_decimal(&DataType::Decimal256(4, 2)));
+        assert!(!DataType::is_decimal(&DataType::Float16));
     }
 
     #[test]

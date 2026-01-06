@@ -892,7 +892,7 @@ impl RowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        if cfg!(test) {
+        if cfg!(debug_assertions) {
             for (i, row) in rows.iter().enumerate() {
                 if !row.is_empty() {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -1131,8 +1131,8 @@ impl Rows {
     pub fn size(&self) -> usize {
         // Size of fields is accounted for as part of RowConverter
         std::mem::size_of::<Self>()
-            + self.buffer.len()
-            + self.offsets.len() * std::mem::size_of::<usize>()
+            + self.buffer.capacity()
+            + self.offsets.capacity() * std::mem::size_of::<usize>()
     }
 
     /// Create a [BinaryArray] from the [Rows] data without reallocating the
@@ -1644,24 +1644,22 @@ fn encode_column(
                     }
                 }
                 DataType::Binary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i32>(column), opts)
                 }
                 DataType::BinaryView => {
                     variable::encode(data, offsets, column.as_binary_view().iter(), opts)
                 }
                 DataType::LargeBinary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i64>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i64>(column), opts)
                 }
-                DataType::Utf8 => variable::encode(
+                DataType::Utf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i32>(),
                     opts,
                 ),
-                DataType::LargeUtf8 => variable::encode(
+                DataType::LargeUtf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i64>()
-                        .iter()
-                        .map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i64>(),
                     opts,
                 ),
                 DataType::Utf8View => variable::encode(
@@ -1903,12 +1901,9 @@ unsafe fn decode_column(
 
                 let child_row = &row[1..];
                 rows_by_field[field_idx].push((idx, child_row));
-
-                *row = &row[row.len()..];
             }
 
             let mut child_arrays: Vec<ArrayRef> = Vec::with_capacity(converters.len());
-
             let mut offsets = (*mode == UnionMode::Dense).then(|| Vec::with_capacity(len));
 
             for (field_idx, converter) in converters.iter().enumerate() {
@@ -1929,6 +1924,14 @@ unsafe fn decode_column(
 
                         let child_array =
                             unsafe { converter.convert_raw(&mut child_data, validate_utf8) }?;
+
+                        // advance row slices by the bytes consumed
+                        for ((row_idx, original_bytes), remaining_bytes) in
+                            field_rows.iter().zip(child_data)
+                        {
+                            let consumed_length = 1 + original_bytes.len() - remaining_bytes.len();
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
+                        }
 
                         child_arrays.push(child_array.into_iter().next().unwrap());
                     }
@@ -1951,6 +1954,14 @@ unsafe fn decode_column(
 
                         let child_array =
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
+
+                        // advance row slices by the bytes consumed for rows that belong to this field
+                        for (row_idx, child_row) in field_rows.iter() {
+                            let remaining_len = sparse_data[*row_idx].len();
+                            let consumed_length = 1 + child_row.len() - remaining_len;
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
+                        }
+
                         child_arrays.push(child_array.into_iter().next().unwrap());
                     }
                 }
@@ -4049,5 +4060,186 @@ mod tests {
         // among strigns
         // "a" < "z"
         assert!(rows.row(3) < rows.row(1));
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_many_union_columns() {
+        // col 1: Union(Int32, Utf8) [67, "hello"]
+        let fields1 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array1 = Int32Array::from(vec![Some(67), None]);
+        let string_array1 = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids1 = vec![0i8, 1].into();
+
+        let union_array1 = UnionArray::try_new(
+            fields1.clone(),
+            type_ids1,
+            None,
+            vec![
+                Arc::new(int_array1) as ArrayRef,
+                Arc::new(string_array1) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // col 2: Union(Int32, Utf8) [100, "world"]
+        let fields2 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array2 = Int32Array::from(vec![Some(100), None]);
+        let string_array2 = StringArray::from(vec![None::<&str>, Some("world")]);
+        let type_ids2 = vec![0i8, 1].into();
+
+        let union_array2 = UnionArray::try_new(
+            fields2.clone(),
+            type_ids2,
+            None,
+            vec![
+                Arc::new(int_array2) as ArrayRef,
+                Arc::new(string_array2) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // create a row converter with 2 union columns
+        let field1 = Field::new("col1", DataType::Union(fields1, UnionMode::Sparse), true);
+        let field2 = Field::new("col2", DataType::Union(fields2, UnionMode::Sparse), true);
+
+        let sort_field1 = SortField::new(field1.data_type().clone());
+        let sort_field2 = SortField::new(field2.data_type().clone());
+
+        let converter = RowConverter::new(vec![sort_field1, sort_field2]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[
+                Arc::new(union_array1.clone()) as ArrayRef,
+                Arc::new(union_array2.clone()) as ArrayRef,
+            ])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1, col2] = out.as_slice() else {
+            panic!("expected 2 columns")
+        };
+
+        let col1 = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        let col2 = col2.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        for (expected, got) in [union_array1, union_array2].iter().zip([col1, col2]) {
+            assert_eq!(expected.len(), got.len());
+            assert_eq!(expected.type_ids(), got.type_ids());
+
+            for i in 0..expected.len() {
+                assert_eq!(expected.value(i).as_ref(), got.value(i).as_ref());
+            }
+        }
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_one_union_column() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array = Int32Array::from(vec![Some(67), None]);
+        let string_array = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids = vec![0i8, 1].into();
+
+        let union_array = UnionArray::try_new(
+            fields.clone(),
+            type_ids,
+            None,
+            vec![
+                Arc::new(int_array) as ArrayRef,
+                Arc::new(string_array) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let field = Field::new("col", DataType::Union(fields, UnionMode::Sparse), true);
+        let sort_field = SortField::new(field.data_type().clone());
+        let converter = RowConverter::new(vec![sort_field]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone()) as ArrayRef])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1] = out.as_slice() else {
+            panic!("expected 1 column")
+        };
+
+        let col = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(col.len(), union_array.len());
+        assert_eq!(col.type_ids(), union_array.type_ids());
+
+        for i in 0..col.len() {
+            assert_eq!(col.value(i).as_ref(), union_array.value(i).as_ref());
+        }
+    }
+
+    #[test]
+    fn rows_size_should_count_for_capacity() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+
+        let empty_rows_size_with_preallocate_rows_and_data = {
+            let rows = row_converter.empty_rows(1000, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_rows = {
+            let rows = row_converter.empty_rows(1000, 0);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_data = {
+            let rows = row_converter.empty_rows(0, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_without_preallocate = {
+            let rows = row_converter.empty_rows(0, 0);
+
+            rows.size()
+        };
+
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_rows,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_rows}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_data,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_data}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_rows} should be larger than {empty_rows_size_without_preallocate}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
+        );
     }
 }

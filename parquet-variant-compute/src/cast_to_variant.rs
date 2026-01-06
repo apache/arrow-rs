@@ -16,8 +16,9 @@
 // under the License.
 
 use crate::arrow_to_variant::make_arrow_to_variant_row_builder;
-use crate::{CastOptions, VariantArray, VariantArrayBuilder};
+use crate::{VariantArray, VariantArrayBuilder};
 use arrow::array::Array;
+use arrow::compute::CastOptions;
 use arrow_schema::ArrowError;
 
 /// Casts a typed arrow [`Array`] to a [`VariantArray`]. This is useful when you
@@ -75,9 +76,15 @@ pub fn cast_to_variant_with_options(
 /// failures).
 ///
 /// This function provides backward compatibility. For non-strict behavior,
-/// use [`cast_to_variant_with_options`] with `CastOptions { strict: false }`.
+/// use [`cast_to_variant_with_options`] with `CastOptions { safe: true, ..Default::default() }`.
 pub fn cast_to_variant(input: &dyn Array) -> Result<VariantArray, ArrowError> {
-    cast_to_variant_with_options(input, &CastOptions::default())
+    cast_to_variant_with_options(
+        input,
+        &CastOptions {
+            safe: false,
+            ..Default::default()
+        },
+    )
 }
 
 #[cfg(test)]
@@ -2255,14 +2262,17 @@ mod tests {
     }
 
     fn run_test(values: ArrayRef, expected: Vec<Option<Variant>>) {
-        run_test_with_options(values, expected, CastOptions { strict: false });
+        run_test_with_options(values, expected, CastOptions::default());
     }
 
     fn run_test_in_strict_mode(
         values: ArrayRef,
         expected: Result<Vec<Option<Variant>>, ArrowError>,
     ) {
-        let options = CastOptions { strict: true };
+        let options = CastOptions {
+            safe: false,
+            ..Default::default()
+        };
         match expected {
             Ok(expected) => run_test_with_options(values, expected, options),
             Err(_) => {
