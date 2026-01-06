@@ -254,6 +254,8 @@ pub mod ffi;
 #[cfg(feature = "ffi")]
 pub mod ffi_stream;
 pub mod iterator;
+#[cfg(feature = "nonblocking")]
+pub mod nonblocking;
 pub mod run_iterator;
 pub mod temporal_conversions;
 pub mod timezone;
