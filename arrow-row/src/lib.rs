@@ -415,6 +415,41 @@ mod variable;
 ///
 ///```
 ///
+/// ## Union Encoding
+///
+/// A union value is encoded as the type id byte followed by the row encoding of the underlying type.
+/// Null values are handled by the underlying type's encoding.
+///
+/// For example, given a union of Int32 (type_id = 0) and Utf8 (type_id = 1):
+///
+/// ```text
+///                           ┌──┬──────────────┐
+///  3                        │00│01│80│00│00│03│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (non-null)
+///                            └──── type_id
+///
+/// "abc"                     ┌──┬────────────────────────────────┐
+///                           │01│02│'a'│'b'│'c'│00│00│00│00│00│03│
+///                           └──┴────────────────────────────────┘
+///                            │  └──── string encoding (non-null)
+///                            └──── type_id
+///
+/// null Int32                ┌──┬──────────────┐
+///                           │00│00│00│00│00│00│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (null)
+///                            └──── type_id
+///
+/// null Utf8                 ┌──┬──┐
+///                           │01│00│
+///                           └──┴──┘
+///                            │  └─ string encoding (null)
+///                            └──── type_id
+/// ```
+///
+/// See [`UnionArray`] for more details on union types.
+///
 /// # Ordering
 ///
 /// ## Float Ordering
@@ -434,6 +469,11 @@ mod variable;
 /// ## Reverse Column Ordering
 ///
 /// The order of a given column can be reversed by negating the encoded bytes of non-null values
+///
+/// ## Union Ordering
+///
+/// Values of the same type are ordered according to the ordering of that type.
+/// Values of different types are ordered by their type id.
 ///
 /// [COBS]: https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing
 /// [byte stuffing]: https://en.wikipedia.org/wiki/High-Level_Data_Link_Control#Asynchronous_framing
