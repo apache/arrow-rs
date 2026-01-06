@@ -631,9 +631,7 @@ impl TapeDecoder {
                                 }
                                 Some(b' ' | b'\n' | b'\r' | b'\t') => {
                                     iter.skip_whitespace();
-                                    if iter
-                                        .peek()
-                                        .map_or(false, |b| matches!(b, b',' | b'}' | b']'))
+                                    if iter.peek().is_some_and(|b| matches!(b, b',' | b'}' | b']'))
                                     {
                                         self.stack.pop();
                                         break;
@@ -668,10 +666,7 @@ impl TapeDecoder {
                             if *depth == 0 {
                                 // String value ended at top level - check completion
                                 iter.skip_whitespace();
-                                if iter
-                                    .peek()
-                                    .map_or(false, |b| matches!(b, b',' | b'}' | b']'))
-                                {
+                                if iter.peek().is_some_and(|b| matches!(b, b',' | b'}' | b']')) {
                                     self.stack.pop();
                                 } else if iter.is_empty() {
                                     // Need more data, stay in a "finished string but not yet popped" state
