@@ -336,6 +336,9 @@ pub struct TapeDecoder {
     /// If None, all fields are parsed. If Some, only fields in the set are parsed.
     projection: Option<HashSet<String>>,
 
+    /// If true, return error when encountering fields not in projection
+    strict_mode: bool,
+
     /// Cache current nesting depth to avoid O(depth) stack traversal on every field
     /// Incremented when entering Object/List, decremented when exiting
     current_nesting_depth: usize,
@@ -359,8 +362,13 @@ impl TapeDecoder {
     /// and an estimated number of fields in each row
     ///
     /// If `projection` is Some, only fields in the set will be parsed and written to the tape.
-    /// Other fields will be skipped during parsing.
-    pub fn new(batch_size: usize, num_fields: usize, projection: Option<HashSet<String>>) -> Self {
+    /// Other fields will be skipped during parsing (or rejected if `strict_mode` is true).
+    pub fn new(
+        batch_size: usize,
+        num_fields: usize,
+        projection: Option<HashSet<String>>,
+        strict_mode: bool,
+    ) -> Self {
         let tokens_per_row = 2 + num_fields * 2;
         let mut offsets = Vec::with_capacity(batch_size * (num_fields * 2) + 1);
         offsets.push(0);
@@ -376,6 +384,7 @@ impl TapeDecoder {
             bytes: Vec::with_capacity(num_fields * 2 * 8),
             stack: Vec::with_capacity(10),
             projection,
+            strict_mode,
             current_nesting_depth: 0,
         }
     }
@@ -510,6 +519,11 @@ impl TapeDecoder {
                                     })?;
 
                                 if !projection.contains(field_name) {
+                                    if self.strict_mode {
+                                        return Err(ArrowError::JsonError(format!(
+                                            "column '{field_name}' missing from schema"
+                                        )));
+                                    }
                                     // Field not in projection: skip its value
                                     // Remove field name from tape (must have paired field_name:value)
                                     self.elements.pop();
@@ -945,7 +959,7 @@ mod tests {
 
         {"a": ["", "foo", ["bar", "c"]], "b": {"1": []}, "c": {"2": [1, 2, 3]} }
         "#;
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(a.as_bytes()).unwrap();
         assert!(!decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 7);
@@ -1055,21 +1069,21 @@ mod tests {
     #[test]
     fn test_invalid() {
         // Test invalid
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         let err = decoder.decode(b"hello").unwrap_err().to_string();
         assert_eq!(
             err,
             "Json error: Encountered unexpected 'h' whilst parsing value"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         let err = decoder.decode(b"{\"hello\": }").unwrap_err().to_string();
         assert_eq!(
             err,
             "Json error: Encountered unexpected '}' whilst parsing value"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         let err = decoder
             .decode(b"{\"hello\": [ false, tru ]}")
             .unwrap_err()
@@ -1079,7 +1093,7 @@ mod tests {
             "Json error: Encountered unexpected ' ' whilst parsing literal"
         );
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         let err = decoder
             .decode(b"{\"hello\": \"\\ud8\"}")
             .unwrap_err()
@@ -1090,7 +1104,7 @@ mod tests {
         );
 
         // Missing surrogate pair
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         let err = decoder
             .decode(b"{\"hello\": \"\\ud83d\"}")
             .unwrap_err()
@@ -1101,40 +1115,40 @@ mod tests {
         );
 
         // Test truncation
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(b"{\"he").unwrap();
         assert!(decoder.has_partial_row());
         assert_eq!(decoder.num_buffered_rows(), 1);
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading string");
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(b"{\"hello\" : ").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading value");
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(b"{\"hello\" : [").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading list");
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(b"{\"hello\" : tru").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading true");
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(b"{\"hello\" : nu").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Truncated record whilst reading null");
 
         // Test invalid UTF-8
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(b"{\"hello\" : \"world\xFF\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered non-UTF-8 data");
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         decoder.decode(b"{\"\xe2\" : \"\x96\xa1\"}").unwrap();
         let err = decoder.finish().unwrap_err().to_string();
         assert_eq!(err, "Json error: Encountered truncated UTF-8 sequence");
@@ -1142,11 +1156,11 @@ mod tests {
 
     #[test]
     fn test_invalid_surrogates() {
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         let res = decoder.decode(b"{\"test\": \"\\ud800\\ud801\"}");
         assert!(res.is_err());
 
-        let mut decoder = TapeDecoder::new(16, 2, None);
+        let mut decoder = TapeDecoder::new(16, 2, None, false);
         let res = decoder.decode(b"{\"test\": \"\\udc00\\udc01\"}");
         assert!(res.is_err());
     }

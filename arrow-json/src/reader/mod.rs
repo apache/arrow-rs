@@ -304,31 +304,35 @@ impl ReaderBuilder {
             }
         };
 
+        let num_fields = self.schema.flattened_fields().len();
+
+        // Extract projection field set from schema for projection-aware parsing
+        // - strict_mode: fail-fast on unknown fields during tape parsing
+        // - non-strict mode: skip JSON fields not present in the schema
+        let projection: Option<HashSet<String>> = match &data_type {
+            DataType::Struct(fields) if !fields.is_empty() => {
+                Some(fields.iter().map(|f| f.name().clone()).collect())
+            }
+            _ => None,
+        };
+
         let decoder = make_decoder(
-            data_type.clone(),
+            data_type,
             self.coerce_primitive,
             self.strict_mode,
             nullable,
             self.struct_mode,
         )?;
 
-        let num_fields = self.schema.flattened_fields().len();
-
-        // Extract projection field set from schema for projection-aware parsing
-        // - strict_mode: Disabled (unknown fields cause errors anyway)
-        // - non-strict mode: Enabled to skip JSON fields not present in the schema
-        // Performance overhead minimized via depth caching and short-circuit optimization
-        let projection: Option<HashSet<String>> = match &data_type {
-            DataType::Struct(fields) if !fields.is_empty() && !self.strict_mode => {
-                Some(fields.iter().map(|f| f.name().clone()).collect())
-            }
-            _ => None,
-        };
-
         Ok(Decoder {
             decoder,
             is_field: self.is_field,
-            tape_decoder: TapeDecoder::new(self.batch_size, num_fields, projection),
+            tape_decoder: TapeDecoder::new(
+                self.batch_size,
+                num_fields,
+                projection,
+                self.strict_mode,
+            ),
             batch_size: self.batch_size,
             schema: self.schema,
         })
