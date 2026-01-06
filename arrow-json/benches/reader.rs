@@ -34,6 +34,7 @@ fn bench_decode_schema(
     data: &[u8],
     schema: Arc<Schema>,
     rows: usize,
+    projection: bool,
 ) {
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(data.len() as u64));
@@ -45,6 +46,7 @@ fn bench_decode_schema(
         b.iter(|| {
             let mut decoder = ReaderBuilder::new(schema.clone())
                 .with_batch_size(rows)
+                .with_projection(projection)
                 .build_decoder()
                 .unwrap();
 
@@ -101,6 +103,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         &wide_projection_data,
         full_schema,
         WIDE_PROJECTION_ROWS,
+        false,
     );
 
     // Projected schema: only 3 fields (f0, f10, f50) out of 100
@@ -115,6 +118,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         &wide_projection_data,
         projected_schema,
         WIDE_PROJECTION_ROWS,
+        true,
     );
 }
 

@@ -518,20 +518,24 @@ impl TapeDecoder {
                                         ))
                                     })?;
 
-                                if !projection.contains(field_name) {
-                                    if self.strict_mode {
+                                match (projection.contains(field_name), self.strict_mode) {
+                                    (true, _) => {}
+                                    (false, true) => {
                                         return Err(ArrowError::JsonError(format!(
                                             "column '{field_name}' missing from schema"
                                         )));
                                     }
-                                    // Field not in projection: skip its value
-                                    // Remove field name from tape (must have paired field_name:value)
-                                    self.elements.pop();
-                                    self.bytes.truncate(start);
-                                    self.offsets.pop();
+                                    (false, false) => {
+                                        // Field not in projection: skip its value
+                                        // Remove field name from tape (must have paired field_name:value)
+                                        self.elements.pop();
+                                        self.bytes.truncate(start);
+                                        self.offsets.pop();
 
-                                    // Replace Value state with SkipValue
-                                    *self.stack.last_mut().unwrap() = DecoderState::SkipValue(0);
+                                        // Replace Value state with SkipValue
+                                        *self.stack.last_mut().unwrap() =
+                                            DecoderState::SkipValue(0);
+                                    }
                                 }
                             }
                         }
