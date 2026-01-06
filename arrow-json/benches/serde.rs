@@ -27,10 +27,9 @@ const ROWS: usize = 1 << 18;
 #[allow(deprecated)]
 fn do_bench<R: Serialize>(c: &mut Criterion, name: &str, rows: &[R], schema: &Schema) {
     let schema = Arc::new(schema.clone());
-    let batch_size = rows.len();
     c.bench_function(name, |b| {
         b.iter(|| {
-            let builder = ReaderBuilder::new(schema.clone()).with_batch_size(batch_size);
+            let builder = ReaderBuilder::new(schema.clone()).with_batch_size(8192);
             let mut decoder = builder.build_decoder().unwrap();
             decoder.serialize(rows)
         })
