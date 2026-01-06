@@ -238,20 +238,19 @@ enum DecoderState {
     ///
     /// Consists of `(literal, decoded length)`
     Literal(Literal, u8),
-    /// Skipping a value (for unprojected fields)
+    /// Skipping a value (for unprojected fields), not inside a string
     ///
-    /// Consists of:
-    /// - `depth`: Nesting level of objects/arrays being skipped (u32)
-    /// - `flags`: Bit-packed flags (in_string: bit 0, escape: bit 1)
-    SkipValue {
-        depth: u32,
-        flags: u8,
-    },
+    /// Contains the nesting depth of objects/arrays being skipped
+    SkipValue(u32),
+    /// Skipping inside a string literal (for unprojected fields)
+    ///
+    /// Contains the nesting depth of objects/arrays
+    SkipString(u32),
+    /// Skipping an escape sequence inside a string (for unprojected fields)
+    ///
+    /// Contains the nesting depth of objects/arrays
+    SkipEscape(u32),
 }
-
-// Bit flags for SkipValue state
-const SKIP_IN_STRING: u8 = 1 << 0; // 0x01
-const SKIP_ESCAPE: u8 = 1 << 1; // 0x02
 
 impl DecoderState {
     fn as_str(&self) -> &'static str {
@@ -265,7 +264,9 @@ impl DecoderState {
             DecoderState::Escape => "escape",
             DecoderState::Unicode(_, _, _) => "unicode literal",
             DecoderState::Literal(d, _) => d.as_str(),
-            DecoderState::SkipValue { .. } => "skip value",
+            DecoderState::SkipValue(_) => "skip value",
+            DecoderState::SkipString(_) => "skip string",
+            DecoderState::SkipEscape(_) => "skip escape",
         }
     }
 }
@@ -484,46 +485,30 @@ impl TapeDecoder {
                         b':' => {
                             self.stack.pop();
 
-                            // Check projection: if the field is not in the projection set,
-                            // replace the Value state with SkipValue
-                            // NOTE: Only apply projection at the top level (nesting_depth == 1)
-                            // This means direct fields of the root object, not nested objects
-                            if self.current_nesting_depth == 1 {
-                                if let Some(ref projection) = self.projection {
-                                    // Get the field name from the last String element
-                                    if let Some(TapeElement::String(string_idx)) =
-                                        self.elements.last()
-                                    {
-                                        let string_idx = *string_idx as usize;
-                                        let start = self.offsets[string_idx];
-                                        let end = self.offsets[string_idx + 1];
-                                        let field_name = std::str::from_utf8(
-                                            &self.bytes[start..end],
-                                        )
-                                        .map_err(|e| {
-                                            ArrowError::JsonError(format!(
-                                                "Invalid UTF-8 in field name: {}",
-                                                e
-                                            ))
-                                        })?;
+                            // Check projection at top level only (nesting_depth == 1)
+                            if self.current_nesting_depth == 1
+                                && let Some(ref projection) = self.projection
+                                && let Some(TapeElement::String(string_idx)) = self.elements.last()
+                            {
+                                let string_idx = *string_idx as usize;
+                                let start = self.offsets[string_idx];
+                                let end = self.offsets[string_idx + 1];
+                                let field_name = std::str::from_utf8(&self.bytes[start..end])
+                                    .map_err(|e| {
+                                        ArrowError::JsonError(format!(
+                                            "Invalid UTF-8 in field name: {e}"
+                                        ))
+                                    })?;
 
-                                        if !projection.contains(field_name) {
-                                            // Field not in projection: skip its value
-                                            // CRITICAL: Remove the field name from tape to maintain structure
-                                            // The tape must have paired field_name:value entries
-                                            self.elements.pop(); // Remove the String element
-                                            self.bytes.truncate(start); // Remove the field name bytes
-                                            self.offsets.pop(); // Remove the offset entry
+                                if !projection.contains(field_name) {
+                                    // Field not in projection: skip its value
+                                    // Remove field name from tape (must have paired field_name:value)
+                                    self.elements.pop();
+                                    self.bytes.truncate(start);
+                                    self.offsets.pop();
 
-                                            // Replace Value state with SkipValue
-                                            if let Some(last) = self.stack.last_mut() {
-                                                *last = DecoderState::SkipValue {
-                                                    depth: 0,
-                                                    flags: 0, // Both in_string and escape are false
-                                                };
-                                            }
-                                        }
-                                    }
+                                    // Replace Value state with SkipValue
+                                    *self.stack.last_mut().unwrap() = DecoderState::SkipValue(0);
                                 }
                             }
                         }
@@ -596,57 +581,20 @@ impl TapeDecoder {
                     }
                     *idx += 1;
                 },
-                // Skip a value for unprojected fields (optimized batch-processing version)
-                DecoderState::SkipValue { depth, flags } => {
-                    loop {
-                        if iter.is_empty() {
-                            break; // Need more data, preserve state
-                        }
-
-                        let in_string = (*flags & SKIP_IN_STRING) != 0;
-                        let escape = (*flags & SKIP_ESCAPE) != 0;
-
-                        if in_string {
-                            // Fast skip to next \ or " using SIMD
-                            let _ = iter.skip_chrs(b'\\', b'"');
-
-                            if iter.is_empty() {
-                                break;
-                            }
-
-                            let b = next!(iter);
-                            match b {
-                                b'\\' => *flags ^= SKIP_ESCAPE, // Toggle escape flag
-                                b'"' if !escape => {
-                                    *flags &= !SKIP_IN_STRING; // Clear in_string flag
-                                    if *depth == 0 {
-                                        // String value ended at top level - check completion
-                                        iter.skip_whitespace();
-                                        if let Some(next_b) = iter.peek() {
-                                            if matches!(next_b, b',' | b'}' | b']') {
-                                                self.stack.pop();
-                                                break;
-                                            }
-                                        }
-                                        if iter.is_empty() {
-                                            break; // Need more data
-                                        }
-                                    }
-                                }
-                                _ if escape => *flags &= !SKIP_ESCAPE, // Clear escape flag
-                                _ => {}
-                            }
-                        } else if *depth > 0 {
+                // Skip a value (not inside a string)
+                DecoderState::SkipValue(depth) => {
+                    while !iter.is_empty() {
+                        if *depth > 0 {
                             // Inside nested structure - fast skip to next structural character
-                            let _ = iter
-                                .advance_until(|b| matches!(b, b'"' | b'{' | b'[' | b'}' | b']'));
-
+                            iter.advance_until(|b| matches!(b, b'"' | b'{' | b'[' | b'}' | b']'));
                             if iter.is_empty() {
                                 break;
                             }
-
                             match next!(iter) {
-                                b'"' => *flags |= SKIP_IN_STRING, // Set in_string flag
+                                b'"' => {
+                                    *state = DecoderState::SkipString(*depth);
+                                    break;
+                                }
                                 b'{' | b'[' => *depth += 1,
                                 b'}' | b']' => {
                                     *depth -= 1;
@@ -659,7 +607,7 @@ impl TapeDecoder {
                             }
                         } else {
                             // depth == 0: Skip simple value (number/literal/start of compound)
-                            let _ = iter.advance_until(|b| {
+                            iter.advance_until(|b| {
                                 matches!(
                                     b,
                                     b',' | b'}'
@@ -673,23 +621,22 @@ impl TapeDecoder {
                                         | b'['
                                 )
                             });
-
                             if iter.is_empty() {
                                 break;
                             }
-
                             match iter.peek() {
-                                Some(b',') | Some(b'}') | Some(b']') => {
+                                Some(b',' | b'}' | b']') => {
                                     self.stack.pop();
                                     break;
                                 }
                                 Some(b' ' | b'\n' | b'\r' | b'\t') => {
                                     iter.skip_whitespace();
-                                    if let Some(next_b) = iter.peek() {
-                                        if matches!(next_b, b',' | b'}' | b']') {
-                                            self.stack.pop();
-                                            break;
-                                        }
+                                    if iter
+                                        .peek()
+                                        .map_or(false, |b| matches!(b, b',' | b'}' | b']'))
+                                    {
+                                        self.stack.pop();
+                                        break;
                                     }
                                     if iter.is_empty() {
                                         break;
@@ -697,16 +644,54 @@ impl TapeDecoder {
                                 }
                                 Some(b'"') => {
                                     next!(iter);
-                                    *flags |= SKIP_IN_STRING; // Set in_string flag
+                                    *state = DecoderState::SkipString(0);
+                                    break;
                                 }
                                 Some(b'{' | b'[') => {
                                     next!(iter);
-                                    *depth += 1;
+                                    *depth = 1;
                                 }
                                 _ => {}
                             }
                         }
                     }
+                }
+                // Skip inside a string literal
+                DecoderState::SkipString(depth) => {
+                    iter.skip_chrs(b'\\', b'"');
+                    if iter.is_empty() {
+                        break;
+                    }
+                    match next!(iter) {
+                        b'\\' => *state = DecoderState::SkipEscape(*depth),
+                        b'"' => {
+                            if *depth == 0 {
+                                // String value ended at top level - check completion
+                                iter.skip_whitespace();
+                                if iter
+                                    .peek()
+                                    .map_or(false, |b| matches!(b, b',' | b'}' | b']'))
+                                {
+                                    self.stack.pop();
+                                } else if iter.is_empty() {
+                                    // Need more data, stay in a "finished string but not yet popped" state
+                                    // For simplicity, transition to SkipValue(0) and let it handle
+                                    *state = DecoderState::SkipValue(0);
+                                }
+                            } else {
+                                *state = DecoderState::SkipValue(*depth);
+                            }
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                // Skip an escape sequence inside a string
+                DecoderState::SkipEscape(depth) => {
+                    if iter.is_empty() {
+                        break;
+                    }
+                    next!(iter); // consume escaped character
+                    *state = DecoderState::SkipString(*depth);
                 }
             }
         }
