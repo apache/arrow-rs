@@ -342,6 +342,19 @@ pub struct TapeDecoder {
 }
 
 impl TapeDecoder {
+    /// Returns projection info if we should check field projection.
+    /// Only applies at top level (nesting_depth == 1) with a projection set.
+    fn projection_info(&self) -> Option<(usize, &HashSet<String>)> {
+        if self.current_nesting_depth != 1 {
+            return None;
+        }
+        let projection = self.projection.as_ref()?;
+        let TapeElement::String(string_idx) = *self.elements.last()? else {
+            return None;
+        };
+        Some((string_idx as usize, projection))
+    }
+
     /// Create a new [`TapeDecoder`] with the provided batch size
     /// and an estimated number of fields in each row
     ///
@@ -485,12 +498,8 @@ impl TapeDecoder {
                         b':' => {
                             self.stack.pop();
 
-                            // Check projection at top level only (nesting_depth == 1)
-                            if self.current_nesting_depth == 1
-                                && let Some(ref projection) = self.projection
-                                && let Some(TapeElement::String(string_idx)) = self.elements.last()
-                            {
-                                let string_idx = *string_idx as usize;
+                            // Check projection at top level only
+                            if let Some((string_idx, projection)) = self.projection_info() {
                                 let start = self.offsets[string_idx];
                                 let end = self.offsets[string_idx + 1];
                                 let field_name = std::str::from_utf8(&self.bytes[start..end])
