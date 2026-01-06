@@ -318,18 +318,11 @@ impl ReaderBuilder {
         // - strict_mode: Disabled (unknown fields cause errors anyway)
         // - non-strict mode: Enabled to skip JSON fields not present in the schema
         // Performance overhead minimized via depth caching and short-circuit optimization
-        let projection = if self.strict_mode {
-            None
-        } else {
-            // Non-strict mode: always enable projection to skip unknown fields
-            match &data_type {
-                DataType::Struct(fields) if !fields.is_empty() => {
-                    let field_names: HashSet<String> =
-                        fields.iter().map(|f| f.name().clone()).collect();
-                    Some(field_names)
-                }
-                _ => None,
+        let projection: Option<HashSet<String>> = match &data_type {
+            DataType::Struct(fields) if !fields.is_empty() && !self.strict_mode => {
+                Some(fields.iter().map(|f| f.name().clone()).collect())
             }
+            _ => None,
         };
 
         Ok(Decoder {
