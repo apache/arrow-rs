@@ -28,6 +28,7 @@ use ring::rand::{SecureRandom, SystemRandom};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use std::sync::Arc;
+use ring::aead::{Algorithm, AES_128_GCM};
 
 #[derive(Debug, Clone, PartialEq)]
 struct EncryptionKey {
@@ -96,6 +97,7 @@ pub struct FileEncryptionProperties {
     column_keys: HashMap<String, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
     store_aad_prefix: bool,
+    algorithm: &'static Algorithm
 }
 
 impl FileEncryptionProperties {
@@ -186,6 +188,7 @@ pub struct EncryptionPropertiesBuilder {
     column_keys: HashMap<String, EncryptionKey>,
     aad_prefix: Option<Vec<u8>>,
     store_aad_prefix: bool,
+    algorithm: &'static Algorithm
 }
 
 impl EncryptionPropertiesBuilder {
@@ -197,6 +200,7 @@ impl EncryptionPropertiesBuilder {
             aad_prefix: None,
             encrypt_footer: true,
             store_aad_prefix: false,
+            algorithm: &AES_128_GCM
         }
     }
 
@@ -274,6 +278,11 @@ impl EncryptionPropertiesBuilder {
         self
     }
 
+    pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Self {
+        self.algorithm = algorithm;
+        self
+    }
+
     /// Build the encryption properties
     pub fn build(self) -> Result<Arc<FileEncryptionProperties>> {
         Ok(Arc::new(FileEncryptionProperties {
@@ -282,6 +291,7 @@ impl EncryptionPropertiesBuilder {
             column_keys: self.column_keys,
             aad_prefix: self.aad_prefix,
             store_aad_prefix: self.store_aad_prefix,
+            algorithm: self.algorithm
         }))
     }
 }

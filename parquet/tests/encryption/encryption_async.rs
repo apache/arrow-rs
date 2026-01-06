@@ -114,7 +114,7 @@ async fn test_misspecified_encryption_keys() {
 
     // Too short footer key
     check_for_error(
-        "Parquet error: Invalid footer key. Failed to create AES key",
+        "Parquet error: Invalid footer key. Failed to create AES_128_GCM key",
         &path,
         "bad_pwd".as_bytes(),
         column_1_key,
@@ -144,7 +144,7 @@ async fn test_misspecified_encryption_keys() {
 
     // Too short column key
     check_for_error(
-        "Parquet error: Failed to create AES key",
+        "Parquet error: Failed to create AES_128_GCM key",
         &path,
         footer_key,
         "abc".as_bytes(),

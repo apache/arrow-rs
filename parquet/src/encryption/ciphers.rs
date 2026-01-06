@@ -19,7 +19,7 @@ use crate::errors::ParquetError;
 use crate::errors::ParquetError::General;
 use crate::errors::Result;
 use crate::file::metadata::HeapSize;
-use ring::aead::{AES_128_GCM, Aad, LessSafeKey, NonceSequence, UnboundKey};
+use ring::aead::{AES_128_GCM, Aad, LessSafeKey, NonceSequence, UnboundKey, Algorithm};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
 
@@ -41,9 +41,12 @@ pub(crate) struct RingGcmBlockDecryptor {
 
 impl RingGcmBlockDecryptor {
     pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
-        // todo support other key sizes
-        let key = UnboundKey::new(&AES_128_GCM, key_bytes)
-            .map_err(|_| General("Failed to create AES key".to_string()))?;
+        Self::new_with_algorithm(&AES_128_GCM, key_bytes)
+    }
+
+    pub(crate) fn new_with_algorithm(algorithm: &'static Algorithm, key_bytes: &[u8]) -> Result<Self> {
+        let key = UnboundKey::new(algorithm, key_bytes)
+            .map_err(|_| general_err!("Failed to create {:?} key", algorithm))?;
 
         Ok(Self {
             key: LessSafeKey::new(key),
@@ -143,11 +146,13 @@ impl RingGcmBlockEncryptor {
     /// The nonce will advance appropriately with each block encryption and
     /// return an error if it wraps around.
     pub(crate) fn new(key_bytes: &[u8]) -> Result<Self> {
-        let rng = SystemRandom::new();
+        Self::new_with_algorithm(&AES_128_GCM, key_bytes)
+    }
 
-        // todo support other key sizes
-        let key = UnboundKey::new(&AES_128_GCM, key_bytes)
-            .map_err(|e| general_err!("Error creating AES key: {}", e))?;
+    pub(crate) fn new_with_algorithm(algorithm: &'static Algorithm, key_bytes: &[u8]) -> Result<Self> {
+        let rng = SystemRandom::new();
+        let key = UnboundKey::new(&algorithm, key_bytes)
+            .map_err(|e| general_err!("Error creating {:?} key: {}", algorithm, e))?;
         let nonce = CounterNonce::new(&rng)?;
 
         Ok(Self {
@@ -188,6 +193,7 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
 
 #[cfg(test)]
 mod tests {
+    use ring::aead::{AES_256_GCM, CHACHA20_POLY1305};
     use super::*;
 
     #[test]
@@ -203,5 +209,27 @@ mod tests {
         let decrypted = decryptor.decrypt(&ciphertext, aad).unwrap();
 
         assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_round_trip_with_algorithm() {
+        let key = [0u8; 32];
+        let mut encryptor = RingGcmBlockEncryptor::new_with_algorithm(&AES_256_GCM, &key).unwrap();
+        let decryptor = RingGcmBlockDecryptor::new_with_algorithm(&AES_256_GCM, &key).unwrap();
+
+        let plaintext = b"hello, world!";
+        let aad = b"some aad";
+
+        let ciphertext = encryptor.encrypt(plaintext, aad).unwrap();
+        let decrypted = decryptor.decrypt(&ciphertext, aad).unwrap();
+
+        assert_eq!(plaintext, decrypted.as_slice());
+    }
+
+    #[test]
+    fn test_round_trip_with_incorrect_key_length() {
+        let key = [0u8; 16];
+        assert!(RingGcmBlockEncryptor::new_with_algorithm(&CHACHA20_POLY1305, &key).is_err());
+        assert!(RingGcmBlockDecryptor::new_with_algorithm(&CHACHA20_POLY1305, &key).is_err());
     }
 }

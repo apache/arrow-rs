@@ -27,6 +27,7 @@ use std::collections::HashMap;
 use std::fmt::Formatter;
 use std::io::Read;
 use std::sync::Arc;
+use ring::aead::{Algorithm, AES_128_GCM};
 
 /// Trait for retrieving an encryption key using the key's metadata
 ///
@@ -352,6 +353,7 @@ pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
     aad_prefix: Option<Vec<u8>>,
     footer_signature_verification: bool,
+    algorithm: &'static Algorithm
 }
 
 impl HeapSize for FileDecryptionProperties {
@@ -448,6 +450,7 @@ pub struct DecryptionPropertiesBuilder {
     column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
     footer_signature_verification: bool,
+    algorithm: &'static Algorithm
 }
 
 impl DecryptionPropertiesBuilder {
@@ -459,6 +462,7 @@ impl DecryptionPropertiesBuilder {
             column_keys: HashMap::default(),
             aad_prefix: None,
             footer_signature_verification: true,
+            algorithm: &AES_128_GCM
         }
     }
 
@@ -472,6 +476,7 @@ impl DecryptionPropertiesBuilder {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
+            algorithm: self.algorithm
         }))
     }
 
@@ -505,6 +510,11 @@ impl DecryptionPropertiesBuilder {
         Ok(self)
     }
 
+    pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Result<Self> {
+        self.algorithm = algorithm;
+        Ok(self)
+    }
+
     /// Disable verification of footer tags for files that use plaintext footers.
     /// Signature verification is enabled by default.
     pub fn disable_footer_signature_verification(mut self) -> Self {
@@ -520,6 +530,7 @@ pub struct DecryptionPropertiesBuilderWithRetriever {
     key_retriever: Arc<dyn KeyRetriever>,
     aad_prefix: Option<Vec<u8>>,
     footer_signature_verification: bool,
+    algorithm: &'static Algorithm
 }
 
 impl DecryptionPropertiesBuilderWithRetriever {
@@ -530,6 +541,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
             key_retriever,
             aad_prefix: None,
             footer_signature_verification: true,
+            algorithm: &AES_128_GCM
         }
     }
 
@@ -540,6 +552,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
+            algorithm: self.algorithm
         }))
     }
 
@@ -548,6 +561,11 @@ impl DecryptionPropertiesBuilderWithRetriever {
     /// prefix is not stored in the file metadata.
     pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
         self.aad_prefix = Some(value);
+        self
+    }
+
+    pub fn with_algorithm(mut self, algorithm: &'static Algorithm) -> Self {
+        self.algorithm = algorithm;
         self
     }
 
