@@ -183,6 +183,7 @@ pub struct ReaderBuilder {
     batch_size: usize,
     coerce_primitive: bool,
     strict_mode: bool,
+    projection: bool,
     is_field: bool,
     struct_mode: StructMode,
 
@@ -203,6 +204,7 @@ impl ReaderBuilder {
             batch_size: 1024,
             coerce_primitive: false,
             strict_mode: false,
+            projection: false,
             is_field: false,
             struct_mode: Default::default(),
             schema,
@@ -244,6 +246,7 @@ impl ReaderBuilder {
             batch_size: 1024,
             coerce_primitive: false,
             strict_mode: false,
+            projection: false,
             is_field: true,
             struct_mode: Default::default(),
             schema: Arc::new(Schema::new([field.into()])),
@@ -274,6 +277,12 @@ impl ReaderBuilder {
             strict_mode,
             ..self
         }
+    }
+
+    /// Enables projection-aware parsing to skip fields not present in the schema.
+    /// This is ignored when `strict_mode` is true, which always checks projection.
+    pub fn with_projection(self, projection: bool) -> Self {
+        Self { projection, ..self }
     }
 
     /// Set the [`StructMode`] for the reader, which determines whether structs
@@ -308,9 +317,10 @@ impl ReaderBuilder {
 
         // Extract projection field set from schema for projection-aware parsing
         // - strict_mode: fail-fast on unknown fields during tape parsing
-        // - non-strict mode: skip JSON fields not present in the schema
+        // - projection: skip JSON fields not present in the schema
+        let enable_projection = self.strict_mode || self.projection;
         let projection: Option<HashSet<String>> = match &data_type {
-            DataType::Struct(fields) if !fields.is_empty() => {
+            DataType::Struct(fields) if enable_projection && !fields.is_empty() => {
                 Some(fields.iter().map(|f| f.name().clone()).collect())
             }
             _ => None,
