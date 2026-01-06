@@ -1809,6 +1809,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_projection_skip_unknown_fields() {
+        // JSON has fields a, b, c but schema only has a, c
+        let buf = r#"
+        {"a": 1, "b": "ignored", "c": true}
+        {"a": 2, "b": "also ignored", "c": false}
+        "#;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("c", DataType::Boolean, true),
+        ]));
+
+        // with_projection(true): skip unknown field "b" and succeed
+        let batch = ReaderBuilder::new(schema)
+            .with_projection(true)
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .read()
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(batch.num_rows(), 2);
+        assert_eq!(batch.num_columns(), 2);
+
+        let a = batch.column(0).as_primitive::<Int32Type>();
+        assert_eq!(a.values(), &[1, 2]);
+
+        let c = batch.column(1).as_boolean();
+        assert!(c.value(0));
+        assert!(!c.value(1));
+    }
+
     fn read_file(path: &str, schema: Option<Schema>) -> Reader<BufReader<File>> {
         let file = File::open(path).unwrap();
         let mut reader = BufReader::new(file);
