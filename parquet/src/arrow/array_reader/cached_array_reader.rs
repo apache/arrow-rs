@@ -160,11 +160,11 @@ impl CachedArrayReader {
         // Store in both shared cache and local cache
         // The shared cache is used to reuse results between readers
         // The local cache ensures data is available for our consume_batch call
-        let _cached =
-            self.shared_cache
-                .lock()
-                .unwrap()
-                .insert(self.column_idx, batch_id, cached_batch.clone());
+        let _cached = self.shared_cache.lock().unwrap().insert(
+            self.column_idx,
+            batch_id,
+            cached_batch.clone(),
+        );
         // Note: if the shared cache is full (_cached == false), we continue without caching
         // The local cache will still store the data for this reader's use
 
@@ -328,7 +328,10 @@ impl ArrayReader for CachedArrayReader {
                 // so we can return Some([]) instead of None to indicate this reader provides levels.
                 // Check local cache first, then shared cache (since skip_records doesn't populate local cache)
                 let cached_batch = self.local_cache.get(&batch_id).cloned().or_else(|| {
-                    self.shared_cache.lock().unwrap().get(self.column_idx, batch_id)
+                    self.shared_cache
+                        .lock()
+                        .unwrap()
+                        .get(self.column_idx, batch_id)
                 });
                 if let Some(batch) = cached_batch {
                     if batch.def_levels.is_some() {
@@ -1061,11 +1064,8 @@ mod tests {
         let def_levels = vec![1, 0, 1, 1, 0];
         let rep_levels = vec![0, 1, 0, 1, 1];
 
-        let mock_reader = MockArrayReaderWithLevels::new(
-            data.clone(),
-            def_levels.clone(),
-            rep_levels.clone(),
-        );
+        let mock_reader =
+            MockArrayReaderWithLevels::new(data.clone(), def_levels.clone(), rep_levels.clone());
         let mut producer = CachedArrayReader::new(
             Box::new(mock_reader),
             cache.clone(),
