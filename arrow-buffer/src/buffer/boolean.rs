@@ -343,7 +343,7 @@ impl BooleanBuffer {
             .iter()
             .zip(right_chunks.iter())
             .map(|(left, right)| op(left, right));
-        // Soundness: `BitChunks` is a `BitChunks` iterator which
+        // Soundness: `BitChunks` is a `BitChunks` trusted length iterator which
         // correctly reports its upper bound
         let mut buffer = unsafe { MutableBuffer::from_trusted_len_iter(chunks) };
 
