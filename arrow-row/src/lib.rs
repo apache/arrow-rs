@@ -415,6 +415,41 @@ mod variable;
 ///
 ///```
 ///
+/// ## Union Encoding
+///
+/// A union value is encoded as a single type-id byte followed by the row encoding of the selected child value.
+/// The type-id byte is always present; union arrays have no top-level null marker, so nulls are represented by the child encoding.
+///
+/// For example, given a union of Int32 (type_id = 0) and Utf8 (type_id = 1):
+///
+/// ```text
+///                           ┌──┬──────────────┐
+///  3                        │00│01│80│00│00│03│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (non-null)
+///                            └──── type_id
+///
+///                           ┌──┬────────────────────────────────┐
+/// "abc"                     │01│02│'a'│'b'│'c'│00│00│00│00│00│03│
+///                           └──┴────────────────────────────────┘
+///                            │  └─ string encoding (non-null)
+///                            └──── type_id
+///
+///                           ┌──┬──────────────┐
+/// null Int32                │00│00│00│00│00│00│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (null)
+///                            └──── type_id
+///
+///                           ┌──┬──┐
+/// null Utf8                 │01│00│
+///                           └──┴──┘
+///                            │  └─ string encoding (null)
+///                            └──── type_id
+/// ```
+///
+/// See [`UnionArray`] for more details on union types.
+///
 /// # Ordering
 ///
 /// ## Float Ordering
@@ -430,6 +465,12 @@ mod variable;
 ///
 /// The encoding described above will order nulls first, this can be inverted by representing
 /// nulls as `0xFF_u8` instead of `0_u8`
+///
+/// ## Union Ordering
+///
+/// Values of the same type are ordered according to the ordering of that type.
+/// Values of different types are ordered by their type id.
+/// The type_id is negated when descending order is specified.
 ///
 /// ## Reverse Column Ordering
 ///
