@@ -19,16 +19,19 @@
 
 # Changelog
 
-## [57.2.0](https://github.com/apache/arrow-rs/tree/57.2.0) (2026-01-06)
+## [57.2.0](https://github.com/apache/arrow-rs/tree/57.2.0) (2026-01-07)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/57.1.0...57.2.0)
 
 **Breaking changes:**
 
+- Seal Array trait [\#9092](https://github.com/apache/arrow-rs/pull/9092) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([tustvold](https://github.com/tustvold))
 - \[Variant\] Unify the CastOptions usage in parquet-variant-compute [\#8984](https://github.com/apache/arrow-rs/pull/8984) ([klion26](https://github.com/klion26))
 
 **Implemented enhancements:**
 
+- \[parquet\] further relax `LevelInfoBuilder::types_compatible` for `ArrowWriter` [\#9098](https://github.com/apache/arrow-rs/issues/9098)
+- Update arrow-row documentation with Union encoding [\#9084](https://github.com/apache/arrow-rs/issues/9084)
 - Add code examples for min and max compute functions [\#9055](https://github.com/apache/arrow-rs/issues/9055)
 - Add `append_n` to bytes view builder API [\#9034](https://github.com/apache/arrow-rs/issues/9034) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Move `RunArray::get_physical_indices` to `RunEndBuffer` [\#9025](https://github.com/apache/arrow-rs/issues/9025) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
@@ -61,6 +64,8 @@
 
 **Fixed bugs:**
 
+- Soundness Bug in `try_binary` when `Array` is implemented incorrectly in external crate [\#9106](https://github.com/apache/arrow-rs/issues/9106)
+- casting `Dict(_, LargeUtf8)` to `Utf8View` \(`StringViewArray`\) panics [\#9101](https://github.com/apache/arrow-rs/issues/9101)
 - wrong results for null count of `nullif` kernel [\#9085](https://github.com/apache/arrow-rs/issues/9085) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] [[arrow](https://github.com/apache/arrow-rs/labels/arrow)]
 - Empty first line in some code examples [\#9063](https://github.com/apache/arrow-rs/issues/9063)
 - GenericByteViewArray::slice is not zero-copy but ought to be [\#9014](https://github.com/apache/arrow-rs/issues/9014)
@@ -77,6 +82,7 @@
 
 **Documentation updates:**
 
+- Add Union encoding documentation  [\#9102](https://github.com/apache/arrow-rs/pull/9102) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([EduardAkhmetshin](https://github.com/EduardAkhmetshin))
 - docs: fix misleading reserve documentation [\#9076](https://github.com/apache/arrow-rs/pull/9076) ([WaterWhisperer](https://github.com/WaterWhisperer))
 - Fix headers and empty lines in code examples [\#9064](https://github.com/apache/arrow-rs/pull/9064) ([EduardAkhmetshin](https://github.com/EduardAkhmetshin))
 - Add examples for min and max functions [\#9062](https://github.com/apache/arrow-rs/pull/9062) ([EduardAkhmetshin](https://github.com/EduardAkhmetshin))
@@ -88,6 +94,9 @@
 **Performance improvements:**
 
 - \[parquet\] Avoid a clone while resolving the read strategy [\#9056](https://github.com/apache/arrow-rs/pull/9056) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
+- perf: improve performance of encoding `GenericByteArray` by 8% [\#9054](https://github.com/apache/arrow-rs/pull/9054) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
+- Speed up unary `not` kernel by 50%, add `BooleanBuffer::from_bitwise_unary` [\#8996](https://github.com/apache/arrow-rs/pull/8996) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
+- arrow-select: improve dictionary interleave fallback performance [\#8978](https://github.com/apache/arrow-rs/pull/8978) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([asubiotto](https://github.com/asubiotto))
 - Add special implementation for zip for Utf8View/BinaryView scalars [\#8963](https://github.com/apache/arrow-rs/pull/8963) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([mkleen](https://github.com/mkleen))
 - arrow-select: implement specialized interleave\_list [\#8953](https://github.com/apache/arrow-rs/pull/8953) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([asubiotto](https://github.com/asubiotto))
 
@@ -98,11 +107,13 @@
 **Merged pull requests:**
 
 - Add `DataType::is_decimal` [\#9100](https://github.com/apache/arrow-rs/pull/9100) ([AdamGS](https://github.com/AdamGS))
+- feat\(parquet\): relax type compatility check in parquet ArrowWriter [\#9099](https://github.com/apache/arrow-rs/pull/9099) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([gruuya](https://github.com/gruuya))
 - \[Variant\] Move `ArrayVariantToArrowRowBuilder` to `variant_to_arrow` [\#9094](https://github.com/apache/arrow-rs/pull/9094) ([liamzwbao](https://github.com/liamzwbao))
+- chore: increase row count and batch size for more deterministic tests [\#9088](https://github.com/apache/arrow-rs/pull/9088) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Weijun-H](https://github.com/Weijun-H))
 - Fix `nullif` kernel [\#9087](https://github.com/apache/arrow-rs/pull/9087) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - Add `FlightInfo::with_endpoints` method [\#9075](https://github.com/apache/arrow-rs/pull/9075) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] [[arrow-flight](https://github.com/apache/arrow-rs/labels/arrow-flight)] ([lewiszlw](https://github.com/lewiszlw))
 - chore: run validation when debug assertion enabled and not only for test [\#9073](https://github.com/apache/arrow-rs/pull/9073) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
-- perf: improve performance of encoding `GenericByteArray` by 8% [\#9054](https://github.com/apache/arrow-rs/pull/9054) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
+- Minor: make it clear cache array reader is not cloning arrays [\#9057](https://github.com/apache/arrow-rs/pull/9057) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - Minor: avoid clone in RunArray row decoding via buffer stealing [\#9052](https://github.com/apache/arrow-rs/pull/9052) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([lyang24](https://github.com/lyang24))
 - Minor: avoid some clones when reading parquet [\#9048](https://github.com/apache/arrow-rs/pull/9048) [[parquet](https://github.com/apache/arrow-rs/labels/parquet)] ([alamb](https://github.com/alamb))
 - fix: don't generate nulls for `Decimal128` and `Decimal256` when field is non-nullable and have non-zero `null_density` [\#9046](https://github.com/apache/arrow-rs/pull/9046) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([rluvaton](https://github.com/rluvaton))
@@ -119,7 +130,6 @@
 - arrow-ipc: Add ListView support [\#9006](https://github.com/apache/arrow-rs/pull/9006) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([brancz](https://github.com/brancz))
 - Add quote style to csv writer [\#9004](https://github.com/apache/arrow-rs/pull/9004) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([xanderbailey](https://github.com/xanderbailey))
 - Fix row slice bug in Union column decoding with many columns [\#9000](https://github.com/apache/arrow-rs/pull/9000) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([friendlymatthew](https://github.com/friendlymatthew))
-- Speed up unary `not` kernel by 50%, add `BooleanBuffer::from_bitwise_unary` [\#8996](https://github.com/apache/arrow-rs/pull/8996) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - build\(deps\): bump actions/download-artifact from 6 to 7 [\#8995](https://github.com/apache/arrow-rs/pull/8995) ([dependabot[bot]](https://github.com/apps/dependabot))
 - minor: Add comment blocks to PR template [\#8994](https://github.com/apache/arrow-rs/pull/8994) ([Jefffrey](https://github.com/Jefffrey))
 - Implement `BinaryArrayType` for `&FixedSizeBinaryArray`s [\#8993](https://github.com/apache/arrow-rs/pull/8993) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([Jefffrey](https://github.com/Jefffrey))
@@ -131,7 +141,6 @@
 - Take fsb null indices [\#8981](https://github.com/apache/arrow-rs/pull/8981) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - Add List to `interleave_kernels` benchmark [\#8980](https://github.com/apache/arrow-rs/pull/8980) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([alamb](https://github.com/alamb))
 - Fix ipc errors for `LargeList` containing sliced `StringViews` [\#8979](https://github.com/apache/arrow-rs/pull/8979) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([fabianmurariu](https://github.com/fabianmurariu))
-- arrow-select: improve dictionary interleave fallback performance [\#8978](https://github.com/apache/arrow-rs/pull/8978) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([asubiotto](https://github.com/asubiotto))
 - arrow-buffer: implement num-traits numeric operations [\#8977](https://github.com/apache/arrow-rs/pull/8977) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([theirix](https://github.com/theirix))
 - Update `xz` crate dependency to use `liblzma` in arrow-avro [\#8975](https://github.com/apache/arrow-rs/pull/8975) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([jecsand838](https://github.com/jecsand838))
 - arrow-data: avoid allocating in get\_last\_run\_end [\#8974](https://github.com/apache/arrow-rs/pull/8974) [[arrow](https://github.com/apache/arrow-rs/labels/arrow)] ([asubiotto](https://github.com/asubiotto))
