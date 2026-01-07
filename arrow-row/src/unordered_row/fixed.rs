@@ -243,9 +243,9 @@ pub fn encode<T: FixedLengthEncoding>(
         if is_valid {
             let to_write = &mut data[*offset..end_offset];
             let mut encoded = values[value_idx].encode();
-            to_write.copy_from_slice(encoded.as_ref())
+            to_write.copy_from_slice(encoded.as_ref());
         } else {
-            data[*offset] = null_sentinel();
+            debug_assert_eq!(data[*offset..end_offset].iter().all(|b| *b == 0), true, "all bytes should be 0");
         }
         *offset = end_offset;
     }

@@ -4218,6 +4218,92 @@ mod tests {
         t.join(",")
     }
 
+    fn change_underline_null_values_for_primitive<T: ArrowPrimitiveType>(array: &PrimitiveArray<T>) -> PrimitiveArray<T> {
+        let (dt, values, nulls) = array.clone().into_parts();
+
+        let new_values = ScalarBuffer::<T::Native>::from_iter(
+            values.iter().zip(nulls.as_ref().unwrap().iter())
+              .map(|(val, is_valid)| {
+                  if is_valid {
+                      *val
+                  } else {
+                      val.add_wrapping(T::Native::usize_as(1))
+                  }
+              })
+        );
+
+        PrimitiveArray::new(
+            new_values,
+            nulls,
+        ).with_data_type(dt)
+    }
+
+    fn change_underline_null_values_for_byte_array<T: ByteArrayType>(array: &GenericByteArray<T>) -> GenericByteArray<T> {
+
+        let (offsets, values, nulls) = array.clone().into_parts();
+
+        let new_offsets = OffsetBuffer::<T::Offset>::from_lengths(
+            offsets.lengths().zip(nulls.as_ref().unwrap().iter())
+              .map(|(len, is_valid)| {
+                  if is_valid {
+                      len
+                  } else {
+                      len + 1
+                  }
+              })
+        );
+
+        let mut new_bytes = Vec::<u8>::with_capacity(new_offsets[new_offsets.len() - 1].as_usize());
+
+        offsets.windows(2).zip(nulls.as_ref().unwrap().iter()).for_each(|(start_and_end, is_valid)| {
+            let start = start_and_end[0].as_usize();
+            let end = start_and_end[1].as_usize();
+            new_bytes.extend_from_slice(&values.as_slice()[start..end]);
+
+            // add an extra byte
+            if !is_valid {
+                new_bytes.push(b'c');
+            }
+        });
+
+
+        GenericByteArray::<T>::new(
+            new_offsets,
+            Buffer::from_vec(new_bytes),
+            nulls,
+        )
+    }
+
+    fn change_underline_null_values(array: &ArrayRef) -> ArrayRef {
+        if array.null_count() == 0 {
+            return Arc::clone(array)
+        }
+
+        downcast_primitive_array!(
+            array => {
+                let output = change_underline_null_values_for_primitive(array);
+
+                Arc::new(output)
+            }
+
+            DataType::Utf8 => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_string::<i32>()))
+            }
+            DataType::LargeUtf8 => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_string::<i64>()))
+            }
+            DataType::Binary => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_binary::<i32>()))
+            }
+            DataType::LargeBinary => {
+                Arc::new(change_underline_null_values_for_byte_array(array.as_binary::<i64>()))
+            }
+            _ => {
+                Arc::clone(array)
+            }
+        )
+    }
+
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
@@ -4315,10 +4401,25 @@ mod tests {
                     })
                     .collect();
 
-                let converter = UnorderedRowConverter::new(columns).unwrap();
+                let converter = UnorderedRowConverter::new(columns.clone()).unwrap();
                 let rows = converter.convert_columns(&arrays).unwrap();
+                let maybe_compare = if matches!(n, Nulls::DifferentNulls) {
+                    let converter = UnorderedRowConverter::new(columns).unwrap();
+                    let arrays_with_different_data_behind_nulls = arrays.iter().map(|arr| change_underline_null_values(arr)).collect::<Vec<_>>();
+                    let rows = converter.convert_columns(&arrays_with_different_data_behind_nulls).unwrap();
+
+                    Some(rows)
+                } else {
+                    None
+                };
 
                 for i in 0..rows.num_rows() {
+                    if let Some(different_underline_nulls_rows) = &maybe_compare {
+                        assert_eq!(different_underline_nulls_rows.row(i), rows.row(i),
+                            "rows with different underline null values should be equal at row {}", i
+                        );
+                    }
+
                     for j in 0..rows.num_rows() {
                         let row_i = rows.row(i);
                         let row_j = rows.row(j);
@@ -4859,4 +4960,5 @@ mod tests {
             "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
         );
     }
+
 }
