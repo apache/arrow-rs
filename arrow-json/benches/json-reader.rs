@@ -15,8 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_json::reader::Decoder;
 use arrow_json::ReaderBuilder;
+use arrow_json::reader::Decoder;
 use arrow_schema::{DataType, Field, Schema};
 use criterion::{
     BenchmarkId, Criterion, SamplingMode, Throughput, criterion_group, criterion_main,
@@ -179,12 +179,7 @@ fn bench_binary_hex(c: &mut Criterion) {
     bench_decode_binary(c, "decode_binary_view_hex_json", &binary_data, view_field);
 }
 
-fn bench_decode_schema(
-    c: &mut Criterion,
-    name: &str,
-    data: &[u8],
-    schema: Arc<Schema>,
-) {
+fn bench_decode_schema(c: &mut Criterion, name: &str, data: &[u8], schema: Arc<Schema>) {
     let mut group = c.benchmark_group(name);
     group.throughput(Throughput::Bytes(data.len() as u64));
     group.sample_size(50);
@@ -225,8 +220,7 @@ fn build_wide_projection_json(rows: usize, total_fields: usize) -> Vec<u8> {
 
 fn bench_wide_projection(c: &mut Criterion) {
     // Wide projection workload: tests overhead of parsing unused fields
-    let wide_projection_data =
-        build_wide_projection_json(ROWS, WIDE_PROJECTION_TOTAL_FIELDS);
+    let wide_projection_data = build_wide_projection_json(ROWS, WIDE_PROJECTION_TOTAL_FIELDS);
 
     let full_schema = build_schema(WIDE_PROJECTION_TOTAL_FIELDS);
     bench_decode_schema(
