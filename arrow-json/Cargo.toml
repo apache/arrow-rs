@@ -67,13 +67,5 @@ name = "serde"
 harness = false
 
 [[bench]]
-name = "wide_object"
-harness = false
-
-[[bench]]
-name = "binary_hex"
-harness = false
-
-[[bench]]
-name = "wide_projection"
+name = "json-reader"
 harness = false
