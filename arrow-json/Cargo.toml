@@ -73,3 +73,7 @@ harness = false
 [[bench]]
 name = "binary_hex"
 harness = false
+
+[[bench]]
+name = "wide_projection"
+harness = false
