@@ -22,7 +22,7 @@ use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
 use arrow_buffer::{ArrowNativeType, MutableBuffer};
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
-use arrow_schema::{DataType, SortOptions};
+use arrow_schema::DataType;
 use builder::make_view;
 
 /// The block size of the variable length encoding
@@ -66,16 +66,16 @@ fn get_number_of_bits_needed_to_encode(len: usize) -> usize {
 /// Returns the padded length of the encoded length of the given length
 #[inline]
 pub fn padded_length(a: Option<usize>) -> usize {
-    crate::variable::padded_length(a)
-    // let value_len = match a {
-    //     None => 0,
-    //     Some(a) if a == 0 => 0,
-    //     Some(a) => get_number_of_bits_needed_to_encode(a) + a,
-    // };
-    //
-    // value_len
-    //   // ctrl byte
-    //   + 1
+    let value_len = match a {
+        // None should be encoded as empty
+        None => 0,
+        Some(a) if a == 0 => 0,
+        Some(a) => get_number_of_bits_needed_to_encode(a) + a,
+    };
+
+    value_len
+      // ctrl byte
+      + 1
 }
 
 /// Variable length values are encoded as
@@ -148,15 +148,10 @@ pub fn encode_null(out: &mut [u8]) -> usize {
 
 #[inline]
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>) -> usize {
-    crate::variable::encode_one(out, val, SortOptions {
-        descending: false,
-        nulls_first: false
-    })
-    // match val {
-    //     None => encode_null(out),
-    //     // Some(val) => fast_encode_bytes(out, val),
-    //     Some(val) => crate::variable::encode_one(out, val),
-    // }
+    match val {
+        None => encode_null(out),
+        Some(val) => fast_encode_bytes(out, val),
+    }
 }
 
 #[inline]
@@ -177,33 +172,33 @@ pub(crate) fn encode_len(out: &mut [u8], len: usize) -> usize {
                 out[0] = EMPTY_SENTINEL;
                 return 1;
             }
-            2 => {
-                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U16;
-
-                // encode length
-                let start_data_offset = 1 + size_of::<u16>();
-                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u16).to_be_bytes());
-
-                start_data_offset
-            }
-            4 => {
-                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U32;
-
-                // encode length
-                let start_data_offset = 1 + size_of::<u32>();
-                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u32).to_be_bytes());
-
-                start_data_offset
-            }
-            8 => {
-                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U64;
-
-                // encode length
-                let start_data_offset = 1 + size_of::<u64>();
-                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u64).to_be_bytes());
-
-                start_data_offset
-            }
+            // 2 => {
+            //     out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U16;
+            //
+            //     // encode length
+            //     let start_data_offset = 1 + size_of::<u16>();
+            //     unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u16).to_be_bytes());
+            //
+            //     start_data_offset
+            // }
+            // 4 => {
+            //     out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U32;
+            //
+            //     // encode length
+            //     let start_data_offset = 1 + size_of::<u32>();
+            //     unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u32).to_be_bytes());
+            //
+            //     start_data_offset
+            // }
+            // 8 => {
+            //     out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U64;
+            //
+            //     // encode length
+            //     let start_data_offset = 1 + size_of::<u64>();
+            //     unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u64).to_be_bytes());
+            //
+            //     start_data_offset
+            // }
             bits_required => {
                 unreachable!("invalid length type {len}. numbr of bits required {bits_required}");
             }
@@ -221,6 +216,7 @@ pub(crate) fn fast_encode_bytes(out: &mut [u8], val: &[u8]) -> usize {
     let start_data_offset = encode_len(out, val.len());
 
     let len = start_data_offset + val.len();
+
     out[start_data_offset..len].copy_from_slice(val);
 
     len

@@ -170,12 +170,14 @@ use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use fixed::{decode_fixed_size_binary, decode_primitive};
 use list::{compute_lengths_fixed_size_list, encode_fixed_size_list};
 use variable::{decode_binary, decode_string};
+use crate::unordered_row::nulls::encode_nulls_naive;
 
 mod boolean;
 mod fixed;
 mod list;
 mod run;
 mod variable;
+mod nulls;
 
 /// Converts [`ArrayRef`] columns into a [row-oriented](self) format.
 ///
@@ -911,6 +913,7 @@ impl UnorderedRowConverter {
             }
         }
 
+
         let encoders = columns
             .iter()
             .zip(&self.codecs)
@@ -931,6 +934,17 @@ impl UnorderedRowConverter {
         let lengths = row_lengths(columns, &encoders);
         let total = lengths.extend_offsets(rows.offsets[write_offset], &mut rows.offsets);
         rows.buffer.resize(total, 0);
+
+
+        // Encode all nulls separately
+        {
+            let nulls = columns.iter().map(|c| c.nulls()).collect::<Vec<_>>();
+            encode_nulls_naive(
+                &mut rows.buffer,
+                &mut rows.offsets[write_offset..],
+                nulls,
+            );
+        }
 
         // grouping by same type
         enum ColumnChunk<'a> {
@@ -1791,11 +1805,22 @@ impl LengthTracker {
 }
 
 /// Computes the length of each encoded [`UnorderedRows`] and returns an empty [`UnorderedRows`]
-fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
+fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder], fields: &Fields) -> LengthTracker {
     use fixed::FixedLengthEncoding;
 
     let num_rows = cols.first().map(|x| x.len()).unwrap_or(0);
     let mut tracker = LengthTracker::new(num_rows);
+
+    // Account for nulls as they are handled separately
+    // except nulls for boolean arrays
+    tracker.push_fixed(nulls::get_number_of_bytes_for_nulls(
+        fields
+          .iter()
+          .filter(|a| {
+              a.is_nullable() &&
+        // TODO - skip NullArray as well
+        a.data_type() != &DataType::Boolean
+    }).count()));
 
     for (array, encoder) in cols.iter().zip(encoders) {
         match encoder {
@@ -1836,7 +1861,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     ),
                     DataType::FixedSizeBinary(len) => {
                         let len = len.to_usize().unwrap();
-                        tracker.push_fixed(1 + len)
+                        tracker.push_fixed(len)
                     }
                     _ => unimplemented!("unsupported data type: {}", array.data_type()),
                 }
@@ -1847,6 +1872,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                         tracker.push_variable(
                             array.keys().iter().map(|v| match v {
                                 Some(k) => values.row(k.as_usize()).data.len(),
+                                // TODO - handle nulls
                                 None => null.data.len(),
                             })
                         )
@@ -1858,6 +1884,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 let array = as_struct_array(array);
                 tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
                     true => 1 + rows.row(idx).as_ref().len(),
+                    // TODO - handle nulls
                     false => 1 + null.data.len(),
                 }));
             }

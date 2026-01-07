@@ -42,7 +42,7 @@ impl<const N: usize> FromSlice for [u8; N] {
 /// Encodes a value of a particular fixed width type into bytes according to the rules
 /// described on [`super::UnorderedRowConverter`]
 pub trait FixedLengthEncoding: Copy {
-    const ENCODED_LEN: usize = 1 + std::mem::size_of::<Self::Encoded>();
+    const ENCODED_LEN: usize = std::mem::size_of::<Self::Encoded>();
 
     type Encoded: Sized + Copy + FromSlice + AsRef<[u8]> + AsMut<[u8]>;
 
