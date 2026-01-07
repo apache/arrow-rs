@@ -931,7 +931,7 @@ impl UnorderedRowConverter {
             .collect::<Result<Vec<_>, _>>()?;
 
         let write_offset = rows.num_rows();
-        let lengths = row_lengths(columns, &encoders);
+        let lengths = row_lengths(columns, &encoders, &self.fields);
         let total = lengths.extend_offsets(rows.offsets[write_offset], &mut rows.offsets);
         rows.buffer.resize(total, 0);
 
@@ -943,6 +943,7 @@ impl UnorderedRowConverter {
                 &mut rows.buffer,
                 &mut rows.offsets[write_offset..],
                 nulls,
+                columns[0].len()
             );
         }
 

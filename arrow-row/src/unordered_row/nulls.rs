@@ -126,8 +126,8 @@ struct MergeIter<'a> {
     number_of_bits_remaining: usize,
 }
 
-impl MergeIter<'_> {
-    fn new(nulls: &[Option<&NullBuffer>], len: usize) -> Self {
+impl<'a> MergeIter<'a> {
+    fn new(nulls: &'a [Option<&'a NullBuffer>], len: usize) -> Self {
         assert!(
             nulls.len() <= 8,
             "MergeIter only supports up to 8 null buffers"
@@ -154,20 +154,25 @@ impl MergeIter<'_> {
             })
             .collect::<Vec<_>>();
 
-        let mut inner = [None; 8];
+        let mut inner = [const { None }; 8];
         for (i, it) in normalized_iterators.into_iter().enumerate() {
             inner[i] = it;
         }
 
-        let mut current = [0; 8].map(|iter| {
-            match iter {
-                None => u64::MAX,
-                Some(mut it) => {
-                    // We already asserted that length cannot be 0
-                    it.next().unwrap()
+        let mut current = {
+            let mut current = [0; 8];
+            inner.iter_mut().zip(current.iter_mut()).for_each(|(inner, current)| {
+                *current = match inner {
+                    None => u64::MAX,
+                    Some(it) => {
+                        // We already asserted that length cannot be 0
+                        it.next().unwrap()
+                    }
                 }
-            }
-        });
+            });
+
+            current
+        };
 
         MergeIter {
             inner,
@@ -271,8 +276,15 @@ pub(crate) fn encode_nulls_naive(
     data: &mut [u8],
     offsets: &mut [usize],
     mut nulls: Vec<Option<&NullBuffer>>,
+    number_of_rows: usize,
 ) {
-    assert_ne!(nulls.len(), 0, "Must have columns nulls to encode");
+    let number_of_columns = nulls.len();
+    assert_ne!(number_of_columns, 0, "Must have columns nulls to encode");
+
+    assert!(
+        nulls.iter().all(|n| n.is_none_or(|n| n.len() == number_of_rows)),
+        "All null buffers must have the same length as the data"
+    );
 
     // Replace all Null buffers with no nulls with None for normalization
     nulls.iter_mut().for_each(|n| {
@@ -283,20 +295,20 @@ pub(crate) fn encode_nulls_naive(
 
     // Fast path, if all valid
     if nulls.iter().all(|n| n.is_none()) {
-        encode_all_valid(data, offsets, nulls.len());
+        encode_all_valid(data, offsets, number_of_columns);
         return;
     }
 
     let mut merge_iters: Vec<MergeIter> = vec![];
 
-    match get_metadata_encoding_type(nulls.len()) {
+    match get_metadata_encoding_type(number_of_columns) {
         MetadataEncodingType::None => {
             {
                 let mut left_nulls = nulls.as_mut_slice();
                 while !left_nulls.is_empty() {
                     let (current_chunk, next_slice) =
                         left_nulls.split_at_mut(std::cmp::min(8, left_nulls.len()));
-                    let merge_iter = MergeIter::new(current_chunk, data.len());
+                    let merge_iter = MergeIter::new(current_chunk, number_of_rows);
                     merge_iters.push(merge_iter);
                     left_nulls = next_slice;
                 }
@@ -306,7 +318,7 @@ pub(crate) fn encode_nulls_naive(
                 data,
                 offsets,
                 merge_iters,
-                nulls.len(),
+                number_of_columns,
             );
         }
         MetadataEncodingType::FullByte => {
@@ -315,7 +327,7 @@ pub(crate) fn encode_nulls_naive(
                 while !left_nulls.is_empty() {
                     let (current_chunk, next_slice) =
                         left_nulls.split_at_mut(std::cmp::min(8, left_nulls.len()));
-                    let merge_iter = MergeIter::new(current_chunk, data.len());
+                    let merge_iter = MergeIter::new(current_chunk, number_of_rows);
                     merge_iters.push(merge_iter);
                     left_nulls = next_slice;
                 }
@@ -325,7 +337,7 @@ pub(crate) fn encode_nulls_naive(
                 data,
                 offsets,
                 merge_iters,
-                nulls.len(),
+                number_of_columns,
             );
         }
         MetadataEncodingType::SingleBit => {
@@ -337,14 +349,14 @@ pub(crate) fn encode_nulls_naive(
 
                 // First None to reserve space for the metadata bit
                 let mut first_byte = vec![None];
-                first_byte.extend(current_chunk);
-                let merge_iter = MergeIter::new(current_chunk, data.len());
+                first_byte.extend(current_chunk.iter().copied());
+                let merge_iter = MergeIter::new(current_chunk, number_of_rows);
                 merge_iters.push(merge_iter);
 
                 while !left_nulls.is_empty() {
                     let (current_chunk, next_slice) =
                         left_nulls.split_at_mut(std::cmp::min(8, left_nulls.len()));
-                    let merge_iter = MergeIter::new(current_chunk, data.len());
+                    let merge_iter = MergeIter::new(current_chunk, number_of_rows);
                     merge_iters.push(merge_iter);
                     left_nulls = next_slice;
                 }
@@ -354,7 +366,7 @@ pub(crate) fn encode_nulls_naive(
                 data,
                 offsets,
                 merge_iters,
-                nulls.len(),
+                number_of_columns,
             );
         }
     }
@@ -429,7 +441,7 @@ pub fn decode_packed_nulls_in_rows_with_metadata_type<const METADATA_TYPE: u8>(
     );
 
     let number_of_rows = rows.len();
-    let mut builders = vec![NullBufferBuilder::new(number_of_rows); number_of_columns];
+    let mut builders = (0..number_of_columns).map(|_| NullBufferBuilder::new(number_of_rows)).collect::<Vec<_>>();
     let number_of_bytes =
         get_number_of_bytes_for_nulls_from_metadata(metadata_type, number_of_columns);
 
@@ -455,7 +467,7 @@ pub fn decode_packed_nulls_in_rows_with_metadata_type<const METADATA_TYPE: u8>(
             MetadataEncodingType::None => {}
             MetadataEncodingType::FullByte => {
                 // Skip the first byte
-                null_bytes = &mut null_bytes[1..];
+                null_bytes = &null_bytes[1..];
             }
             MetadataEncodingType::SingleBit => {
                 // Adding this assertion as the implementation assume that
@@ -478,7 +490,7 @@ pub fn decode_packed_nulls_in_rows_with_metadata_type<const METADATA_TYPE: u8>(
                     byte_builders,
                 );
 
-                null_bytes = &mut null_bytes[1..];
+                null_bytes = &null_bytes[1..];
             }
         }
 
