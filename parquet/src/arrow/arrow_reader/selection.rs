@@ -44,7 +44,7 @@ pub enum RowSelectionPolicy {
 
 impl Default for RowSelectionPolicy {
     fn default() -> Self {
-        Self::Auto { threshold: 16 }
+        Self::Auto { threshold: 32 }
     }
 }
 
@@ -146,7 +146,6 @@ impl RowSelection {
     /// # Panic
     ///
     /// Panics if any of the [`BooleanArray`] contain nulls
-    #[inline(never)]
     pub fn from_filters(filters: &[BooleanArray]) -> Self {
         let mut next_offset = 0;
         let total_rows = filters.iter().map(|x| x.len()).sum();
@@ -162,7 +161,6 @@ impl RowSelection {
     }
 
     /// Creates a [`RowSelection`] from an iterator of consecutive ranges to keep
-    #[inline(never)]
     pub fn from_consecutive_ranges<I: Iterator<Item = Range<usize>>>(
         ranges: I,
         total_rows: usize,
@@ -203,7 +201,6 @@ impl RowSelection {
     /// Note: this method does not make any effort to combine consecutive ranges, nor coalesce
     /// ranges that are close together. This is instead delegated to the IO subsystem to optimise,
     /// e.g. [`ObjectStore::get_ranges`](object_store::ObjectStore::get_ranges)
-    #[inline(never)]
     pub fn scan_ranges(&self, page_locations: &[PageLocation]) -> Vec<Range<u64>> {
         let mut ranges: Vec<Range<u64>> = vec![];
         let mut row_offset = 0;
@@ -345,7 +342,6 @@ impl RowSelection {
     /// Panics if `other` does not have a length equal to the number of rows selected
     /// by this RowSelection
     ///
-    #[inline(never)]
     pub fn and_then(&self, other: &Self) -> Self {
         let mut selectors = vec![];
         let mut first = self.selectors.iter().cloned().peekable();
@@ -927,7 +923,6 @@ impl RowSelectionCursor {
     }
 }
 
-#[inline(never)]
 fn boolean_mask_from_selectors(selectors: &[RowSelector]) -> BooleanBuffer {
     let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
     let mut builder = BooleanBufferBuilder::new(total_rows);
