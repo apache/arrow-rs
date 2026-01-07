@@ -20,7 +20,7 @@ use arrow_array::builder::BufferBuilder;
 use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, MutableBuffer, NullBuffer};
 use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::DataType;
 use builder::make_view;
@@ -43,7 +43,7 @@ pub const EMPTY_SENTINEL: u8 = 0b00000001;
 
 /// Indicates a non-empty string
 pub const NON_EMPTY_SENTINEL: u8 = 0b00000010;
-pub const NULL_SENTINEL: u8 = null_sentinel();
+// pub const NULL_SENTINEL: u8 = null_sentinel();
 
 // u8 must be smaller value than u16 in the bit representation so we can sort by them
 pub const LENGTH_TYPE_U8: u8 =  0b00000100;
@@ -139,17 +139,17 @@ pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
         encode(data, offsets, input_iter);
     }
 }
-
-pub fn encode_null(out: &mut [u8]) -> usize {
-    out[0] = null_sentinel();
-    1
-}
+//
+// pub fn encode_null(out: &mut [u8]) -> usize {
+//     out[0] = null_sentinel();
+//     1
+// }
 
 
 #[inline]
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>) -> usize {
     match val {
-        None => encode_null(out),
+        None => encode_empty(out),
         Some(val) => fast_encode_bytes(out, val),
     }
 }
@@ -169,36 +169,35 @@ pub(crate) fn encode_len(out: &mut [u8], len: usize) -> usize {
                 start_data_offset
             }
             0 => {
-                out[0] = EMPTY_SENTINEL;
-                return 1;
+                return encode_empty(out);
             }
-            // 2 => {
-            //     out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U16;
-            //
-            //     // encode length
-            //     let start_data_offset = 1 + size_of::<u16>();
-            //     unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u16).to_be_bytes());
-            //
-            //     start_data_offset
-            // }
-            // 4 => {
-            //     out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U32;
-            //
-            //     // encode length
-            //     let start_data_offset = 1 + size_of::<u32>();
-            //     unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u32).to_be_bytes());
-            //
-            //     start_data_offset
-            // }
-            // 8 => {
-            //     out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U64;
-            //
-            //     // encode length
-            //     let start_data_offset = 1 + size_of::<u64>();
-            //     unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u64).to_be_bytes());
-            //
-            //     start_data_offset
-            // }
+            2 => {
+                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U16;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u16>();
+                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u16).to_be_bytes());
+
+                start_data_offset
+            }
+            4 => {
+                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U32;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u32>();
+                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u32).to_be_bytes());
+
+                start_data_offset
+            }
+            8 => {
+                out[0] = NON_EMPTY_SENTINEL | LENGTH_TYPE_U64;
+
+                // encode length
+                let start_data_offset = 1 + size_of::<u64>();
+                unsafe { out.get_unchecked_mut(1..start_data_offset) }.copy_from_slice(&(len as u64).to_be_bytes());
+
+                start_data_offset
+            }
             bits_required => {
                 unreachable!("invalid length type {len}. numbr of bits required {bits_required}");
             }
@@ -222,6 +221,12 @@ pub(crate) fn fast_encode_bytes(out: &mut [u8], val: &[u8]) -> usize {
     len
 }
 
+#[inline]
+pub(crate) fn encode_empty(out: &mut [u8]) -> usize {
+    out[0] = EMPTY_SENTINEL;
+    1
+}
+
 /// Decodes a single block of data
 /// The `f` function accepts a slice of the decoded data, it may be called multiple times
 pub fn decode_blocks_fast(row: &[u8], f: impl FnMut(&[u8])) -> usize {
@@ -234,7 +239,7 @@ pub fn decode_blocks_fast_order(row: &[u8], mut f: impl FnMut(&[u8])) -> usize {
     // TODO - we can avoid the no if we change the ifs
     let normalized_ctrl_byte = row[0];
 
-    if normalized_ctrl_byte == EMPTY_SENTINEL || normalized_ctrl_byte == NULL_SENTINEL {
+    if normalized_ctrl_byte == EMPTY_SENTINEL {
         // Empty or null string
         return 1;
     }
@@ -324,14 +329,9 @@ fn decoded_len(row: &[u8]) -> usize {
 /// Decodes a binary array from `rows` with the provided `options`
 pub fn decode_binary<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
+    nulls: Option<NullBuffer>,
 ) -> GenericBinaryArray<I> {
     let len = rows.len();
-    let mut null_count = 0;
-    let nulls = MutableBuffer::collect_bool(len, |x| {
-        let valid = rows[x][0] != null_sentinel();
-        null_count += !valid as usize;
-        valid
-    });
 
     let values_capacity = rows.iter().map(|row| decoded_len(row)).sum();
     let mut offsets = BufferBuilder::<I>::new(len + 1);
@@ -351,8 +351,7 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 
     let builder = ArrayDataBuilder::new(d)
         .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
+        .nulls(nulls)
         .add_buffer(offsets.finish())
         .add_buffer(values.into());
 
@@ -364,17 +363,10 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 fn decode_binary_view_inner(
     rows: &mut [&[u8]],
     validate_utf8: bool,
+    nulls: Option<NullBuffer>,
 ) -> BinaryViewArray {
     let len = rows.len();
     let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
-
-    let mut null_count = 0;
-
-    let nulls = MutableBuffer::collect_bool(len, |x| {
-        let valid = rows[x][0] != null_sentinel();
-        null_count += !valid as usize;
-        valid
-    });
 
     // If we are validating UTF-8, decode all string values (including short strings)
     // into the values buffer and validate UTF-8 once. If not validating,
@@ -432,8 +424,7 @@ fn decode_binary_view_inner(
 
     let builder = ArrayDataBuilder::new(DataType::BinaryView)
         .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls.into()))
+        .nulls(nulls)
         .add_buffer(views.finish())
         .add_buffer(values.into());
 
@@ -443,8 +434,8 @@ fn decode_binary_view_inner(
 }
 
 /// Decodes a binary view array from `rows` with the provided `options`
-pub fn decode_binary_view(rows: &mut [&[u8]]) -> BinaryViewArray {
-    decode_binary_view_inner(rows, false)
+pub fn decode_binary_view(rows: &mut [&[u8]], nulls: Option<NullBuffer>) -> BinaryViewArray {
+    decode_binary_view_inner(rows, false, nulls)
 }
 
 /// Decodes a string array from `rows` with the provided `options`
@@ -455,8 +446,9 @@ pub fn decode_binary_view(rows: &mut [&[u8]]) -> BinaryViewArray {
 pub unsafe fn decode_string<I: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     validate_utf8: bool,
+    nulls: Option<NullBuffer>,
 ) -> GenericStringArray<I> {
-    let decoded = decode_binary::<I>(rows);
+    let decoded = decode_binary::<I>(rows, nulls);
 
     if validate_utf8 {
         return GenericStringArray::from(decoded);
@@ -480,7 +472,8 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
 pub unsafe fn decode_string_view(
     rows: &mut [&[u8]],
     validate_utf8: bool,
+    nulls: Option<NullBuffer>,
 ) -> StringViewArray {
-    let view = decode_binary_view_inner(rows, validate_utf8);
+    let view = decode_binary_view_inner(rows, validate_utf8, nulls);
     unsafe { view.to_string_view_unchecked() }
 }

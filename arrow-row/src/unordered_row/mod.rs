@@ -939,8 +939,16 @@ impl UnorderedRowConverter {
 
         // Encode all nulls separately
         {
-            let nulls = columns.iter().zip(get_fields_should_encode_nulls_for(&self.fields)).filter(|(c, should_encode)| *should_encode).map(|(c, _)| c.logical_nulls()).collect::<Vec<_>>();
-            let logical_nulls = nulls.iter().map(|n| n.as_ref()).collect::<Vec<_>>();
+            let nulls = columns
+              .iter()
+              .zip(get_fields_should_encode_nulls_for(&self.fields))
+              .filter(|(c, should_encode)| *should_encode)
+              .map(|(c, _)| c.logical_nulls())
+              .collect::<Vec<_>>();
+            let logical_nulls = nulls
+              .iter()
+              .map(|n| n.as_ref())
+              .collect::<Vec<_>>();
             encode_nulls_naive(
                 &mut rows.buffer,
                 &mut rows.offsets[write_offset..],
@@ -1197,8 +1205,6 @@ impl UnorderedRowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        let result = self.reverse_reorder_columns(result);
-
         if cfg!(test) {
             for (i, row) in rows.iter().enumerate() {
                 if !row.is_empty() {
@@ -1348,6 +1354,9 @@ impl UnorderedRowConverter {
                 _ => unreachable!("unsupported data type: {data_type}"),
             }?;
 
+            let results = self.reverse_reorder_columns(results);
+
+
             Ok(results)
         } else {
             let results = self.fields
@@ -1356,6 +1365,8 @@ impl UnorderedRowConverter {
               .zip(null_buffer_for_fields.into_iter())
                 .map(|((field, codec), nulls)| unsafe { decode_column(field, rows, codec, validate_utf8, nulls) })
                 .collect::<Result<Vec<_>, _>>()?;
+
+            let results = self.reverse_reorder_columns(results);
 
             Ok(results)
         }
@@ -1835,7 +1846,14 @@ fn should_encode_null_for_field(field: &Field) -> bool {
         field.is_nullable() &&
           // Boolean nulls are encoded together
           // and NullArray is not encoded at all
-          !matches!(field.data_type(), DataType::Boolean | DataType::Null)
+          !matches!(field.data_type(),
+              // Boolean encode its own nulls
+              DataType::Boolean |
+              // NullArray is not encoded at all
+              DataType::Null |
+              // Dictionary encodes its own nulls
+              DataType::Dictionary(_, _)
+          )
 }
 
 /// Computes the length of each encoded [`UnorderedRows`] and returns an empty [`UnorderedRows`]
@@ -2323,18 +2341,23 @@ unsafe fn decode_column(
             downcast_primitive! {
                 data_type => (decode_primitive_helper, rows, data_type, nulls),
                 DataType::Null => Arc::new(NullArray::new(rows.len())),
-                DataType::Boolean => Arc::new(boolean::decode_bool(rows)),
-                DataType::Binary => Arc::new(decode_binary::<i32>(rows)),
-                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows)),
-                DataType::BinaryView => Arc::new(decode_binary_view(rows)),
-                DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size)),
-                DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, validate_utf8) }),
-                DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, validate_utf8) }),
-                DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, validate_utf8) }),
+                DataType::Boolean => {
+                    assert_eq!(nulls, None, "Boolean columns encode its own nulls");
+                    Arc::new(boolean::decode_bool(rows))
+                }
+                DataType::Binary => Arc::new(decode_binary::<i32>(rows, nulls)),
+                DataType::LargeBinary => Arc::new(decode_binary::<i64>(rows, nulls)),
+                DataType::BinaryView => Arc::new(decode_binary_view(rows, nulls)),
+                DataType::FixedSizeBinary(size) => Arc::new(decode_fixed_size_binary(rows, size, nulls)),
+                DataType::Utf8 => Arc::new(unsafe{ decode_string::<i32>(rows, validate_utf8, nulls) }),
+                DataType::LargeUtf8 => Arc::new(unsafe { decode_string::<i64>(rows, validate_utf8, nulls) }),
+                DataType::Utf8View => Arc::new(unsafe { decode_string_view(rows, validate_utf8, nulls) }),
                 _ => return Err(ArrowError::NotYetImplemented(format!("unsupported data type: {data_type}" )))
             }
         }
         Codec::Dictionary(converter, _) => {
+            assert_eq!(nulls, None, "Dictionary columns encode its own nulls");
+
             let cols = unsafe { converter.convert_raw(rows, validate_utf8) }?;
             cols.into_iter().next().unwrap()
         }
@@ -2370,10 +2393,10 @@ unsafe fn decode_column(
         }
         Codec::List(converter) => match field.data_type() {
             DataType::List(_) => {
-                Arc::new(unsafe { list::decode::<i32>(converter, rows, field, validate_utf8) }?)
+                Arc::new(unsafe { list::decode::<i32>(converter, rows, field, validate_utf8, nulls) }?)
             }
             DataType::LargeList(_) => {
-                Arc::new(unsafe { list::decode::<i64>(converter, rows, field, validate_utf8) }?)
+                Arc::new(unsafe { list::decode::<i64>(converter, rows, field, validate_utf8, nulls) }?)
             }
             DataType::FixedSizeList(_, value_length) => Arc::new(unsafe {
                 list::decode_fixed_size_list(
@@ -2382,6 +2405,7 @@ unsafe fn decode_column(
                     field,
                     validate_utf8,
                     value_length.as_usize(),
+                    nulls,
                 )
             }?),
             _ => unreachable!(),

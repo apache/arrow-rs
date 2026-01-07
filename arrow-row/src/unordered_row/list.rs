@@ -17,7 +17,7 @@
 
 use super::{LengthTracker, UnorderedRowConverter, UnorderedRows, fixed, null_sentinel};
 use arrow_array::{Array, FixedSizeListArray, GenericListArray, OffsetSizeTrait, new_null_array};
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer, NullBuffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, Field};
 use std::{ops::Range, sync::Arc};
@@ -115,8 +115,8 @@ fn encode_one(
     //     }
     // )
     match range {
-        None => super::variable::encode_null(out),
-        Some(range) if range.start == range.end => super::variable::fast_encode_bytes(out, &[]),
+        None => super::variable::encode_empty(out),
+        Some(range) if range.start == range.end => super::variable::encode_empty(out),
         Some(range) => {
             let mut offset = 0;
             // super::variable::fast_encode_bytes(out, rows.data_range(range))
@@ -140,6 +140,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     rows: &mut [&[u8]],
     field: &Field,
     validate_utf8: bool,
+    list_nulls: Option<NullBuffer>,
 ) -> Result<GenericListArray<O>, ArrowError> {
 
     let mut values_bytes = 0;
@@ -163,13 +164,6 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         }
     }
     O::from_usize(offset).expect("overflow");
-
-    let mut null_count = 0;
-    let list_nulls = MutableBuffer::collect_bool(rows.len(), |x| {
-        let valid = rows[x][0] != null_sentinel();
-        null_count += !valid as usize;
-        valid
-    });
 
     let mut values_offsets = Vec::with_capacity(offset);
     let mut values_bytes = Vec::with_capacity(values_bytes);
@@ -223,8 +217,7 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
 
     let builder = ArrayDataBuilder::new(corrected_type)
         .len(rows.len())
-        .null_count(null_count)
-        .null_bit_buffer(Some(list_nulls.into()))
+        .nulls(list_nulls)
         .add_buffer(Buffer::from_vec(offsets))
         .add_child_data(child_data);
 
@@ -295,6 +288,7 @@ pub unsafe fn decode_fixed_size_list(
     field: &Field,
     validate_utf8: bool,
     value_length: usize,
+    nulls: Option<NullBuffer>,
 ) -> Result<FixedSizeListArray, ArrowError> {
     let list_type = field.data_type();
     let element_type = match list_type {
@@ -307,7 +301,6 @@ pub unsafe fn decode_fixed_size_list(
     };
 
     let len = rows.len();
-    let (null_count, nulls) = fixed::decode_nulls(rows);
 
     let null_element_encoded = converter.convert_columns(&[new_null_array(element_type, 1)])?;
     let null_element_encoded = null_element_encoded.row(0);
@@ -338,8 +331,7 @@ pub unsafe fn decode_fixed_size_list(
     let child_data = children.iter().map(|c| c.to_data()).collect();
     let builder = ArrayDataBuilder::new(list_type.clone())
         .len(len)
-        .null_count(null_count)
-        .null_bit_buffer(Some(nulls))
+        .nulls(nulls)
         .child_data(child_data);
 
     Ok(FixedSizeListArray::from(unsafe {

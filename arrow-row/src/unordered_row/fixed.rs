@@ -760,24 +760,22 @@ where
 }
 
 /// Decodes a `FixedLengthBinary` from rows
-pub fn decode_fixed_size_binary(rows: &mut [&[u8]], size: i32) -> FixedSizeBinaryArray {
+pub(crate) fn decode_fixed_size_binary(rows: &mut [&[u8]], size: i32, nulls: Option<NullBuffer>) -> FixedSizeBinaryArray {
     let len = rows.len();
 
     let mut values = MutableBuffer::new(size as usize * rows.len());
-    let (null_count, nulls) = decode_nulls(rows);
 
-    let encoded_len = size as usize + 1;
+    let encoded_len = size as usize;
 
     for row in rows {
         let i = split_off(row, encoded_len);
-        values.extend_from_slice(&i[1..]);
+        values.extend_from_slice(i);
     }
 
     let builder = ArrayDataBuilder::new(DataType::FixedSizeBinary(size))
         .len(len)
-        .null_count(null_count)
-        .add_buffer(values.into())
-        .null_bit_buffer(Some(nulls));
+        .nulls(nulls)
+        .add_buffer(values.into());
 
     // SAFETY: Buffers correct length
     unsafe { builder.build_unchecked().into() }

@@ -145,6 +145,23 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     let mut seed = 0;
 
     let mut cols: Vec<ArrayRef> = vec![];
+    // columnar vs row
+
+    // columnar:
+    // going column, column and for each value writing in a partition
+    // so if we have a column in L1, we partition write in different memory locations having cache misses?
+
+    // If we write in row format, we write all values for a row in one go but we still write in different location and the partitioning have cache misses
+    //
+    // the current columnar based implementation don't use the column right away but only in the end
+    // which means that we need to fetch it again from memory.
+    // and when we tested in rows I think we converted to rows right away and stored the rows.
+    // and then the partitioning of the rows is much small copies and more larger ones.
+    //
+    // But converting to row-based still copies around small pieces of memory, except it is sequentially.
+    //
+    // but if we look at number of iterations.
+    // columnar based: for each column
 
     // for nulls in [0.0, 0.1, 0.2, 0.5] {
     // for nulls in [0.0, 0.0, 0.0, 0.0] {
@@ -179,40 +196,40 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     // }
 
     // for nulls in [0.0, 0.1, 0.2, 0.5] {
-        for nulls in [0.0, 0.0, 0.0, 0.0] {
-
+    //     for nulls in [0.0, 0.0, 0.0, 0.0] {
+    //
+    //     seed += 1;
+    //     cols.push(Arc::new(
+    //         create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+    //             batch_size, nulls, 0, 50, "", seed,
+    //         ),
+    //     ));
+    // }
+    //
+    for _ in 0..3 {
         seed += 1;
         cols.push(Arc::new(
             create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-                batch_size, nulls, 0, 50, "", seed,
+                batch_size, 0.0, 0, 10, "", seed,
             ),
         ));
     }
-    //
-    // for _ in 0..3 {
-    //     seed += 1;
-    //     cols.push(Arc::new(
-    //         create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-    //             batch_size, 0.0, 0, 10, "", seed,
-    //         ),
-    //     ));
-    // }
-    // for _ in 0..3 {
-    //     seed += 1;
-    //     cols.push(Arc::new(
-    //         create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-    //             batch_size, 0.0, 10, 20, "", seed,
-    //         ),
-    //     ));
-    // }
-    // for _ in 0..3 {
-    //     seed += 1;
-    //     cols.push(Arc::new(
-    //         create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-    //             batch_size, 0.0, 20, 30, "", seed,
-    //         ),
-    //     ));
-    // }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 10, 20, "", seed,
+            ),
+        ));
+    }
+    for _ in 0..3 {
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, 0.0, 20, 30, "", seed,
+            ),
+        ));
+    }
 
     // for nulls in [0.0, 0.1, 0.2, 0.5] {
     //     for nulls in [0.0, 0.0, 0.0, 0.0] {
