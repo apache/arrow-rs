@@ -417,8 +417,8 @@ mod variable;
 ///
 /// ## Union Encoding
 ///
-/// A union value is encoded as the type id byte followed by the row encoding of the underlying type.
-/// Null values are handled by the underlying type's encoding.
+/// A union value is encoded as a single type-id byte followed by the row encoding of the selected child value.
+/// The type-id byte is always present; union arrays have no top-level null marker, so nulls are represented by the child encoding.
 ///
 /// For example, given a union of Int32 (type_id = 0) and Utf8 (type_id = 1):
 ///
@@ -466,14 +466,15 @@ mod variable;
 /// The encoding described above will order nulls first, this can be inverted by representing
 /// nulls as `0xFF_u8` instead of `0_u8`
 ///
-/// ## Reverse Column Ordering
-///
-/// The order of a given column can be reversed by negating the encoded bytes of non-null values
-///
 /// ## Union Ordering
 ///
 /// Values of the same type are ordered according to the ordering of that type.
 /// Values of different types are ordered by their type id.
+/// The type_id is negated when descending order is specified.
+///
+/// ## Reverse Column Ordering
+///
+/// The order of a given column can be reversed by negating the encoded bytes of non-null values
 ///
 /// [COBS]: https://en.wikipedia.org/wiki/Consistent_Overhead_Byte_Stuffing
 /// [byte stuffing]: https://en.wikipedia.org/wiki/High-Level_Data_Link_Control#Asynchronous_framing
