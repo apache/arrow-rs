@@ -279,7 +279,11 @@ pub(crate) fn encode_nulls_naive(
     number_of_rows: usize,
 ) {
     let number_of_columns = nulls.len();
-    assert_ne!(number_of_columns, 0, "Must have columns nulls to encode");
+
+    // If nothing to encode
+    if number_of_columns == 0 {
+        return;
+    }
 
     assert!(
         nulls.iter().all(|n| n.is_none_or(|n| n.len() == number_of_rows)),
@@ -413,6 +417,9 @@ pub(crate) fn decode_packed_nulls_in_rows(
     rows: &mut [&[u8]],
     number_of_columns: usize,
 ) -> Vec<Option<NullBuffer>> {
+    if number_of_columns == 0 {
+        return vec![];
+    }
     match get_metadata_encoding_type(number_of_columns) {
         MetadataEncodingType::None => decode_packed_nulls_in_rows_with_metadata_type::<
             { MetadataEncodingType::None as u8 },

@@ -242,9 +242,8 @@ pub fn encode<T: FixedLengthEncoding>(
         let end_offset = *offset + T::ENCODED_LEN;
         if is_valid {
             let to_write = &mut data[*offset..end_offset];
-            to_write[0] = 1;
             let mut encoded = values[value_idx].encode();
-            to_write[1..].copy_from_slice(encoded.as_ref())
+            to_write.copy_from_slice(encoded.as_ref())
         } else {
             data[*offset] = null_sentinel();
         }
@@ -264,9 +263,8 @@ pub fn encode_not_null<T: FixedLengthEncoding>(
         let end_offset = *offset + T::ENCODED_LEN;
 
         let to_write = &mut data[*offset..end_offset];
-        to_write[0] = 1;
         let mut encoded = val.encode();
-        to_write[1..].copy_from_slice(encoded.as_ref());
+        to_write.copy_from_slice(encoded.as_ref());
 
         *offset = end_offset;
     }
@@ -285,17 +283,15 @@ pub fn encode_not_null_double<T: FixedLengthEncoding>(
         let end_offset = *offset + T::ENCODED_LEN * 2;
 
         let to_write = &mut data[*offset..end_offset];
-        to_write[0] = 1;
-        to_write[T::ENCODED_LEN] = 1;
 
         {
             let mut encoded = val1.encode();
-            to_write[1..T::ENCODED_LEN].copy_from_slice(encoded.as_ref());
+            to_write[..T::ENCODED_LEN].copy_from_slice(encoded.as_ref());
         }
 
         {
             let mut encoded = val2.encode();
-            to_write[T::ENCODED_LEN + 1..].copy_from_slice(encoded.as_ref());
+            to_write[T::ENCODED_LEN..].copy_from_slice(encoded.as_ref());
         }
 
         *offset = end_offset;
@@ -318,13 +314,16 @@ impl<T: ExactSizeIterator, const N: usize> Iterator for ZipArraySameLength<T, N>
     fn next(&mut self) -> Option<Self::Item> {
         // SAFETY: It is always valid to `assume_init()` an array of `MaybeUninit`s (can be replaced
         // with `MaybeUninit::uninit_array()` once stable).
-        let mut result: [std::mem::MaybeUninit<T::Item>; N] = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
+        let mut result: [std::mem::MaybeUninit<T::Item>; N] =
+            unsafe { std::mem::MaybeUninit::uninit().assume_init() };
         for (item, iterator) in std::iter::zip(&mut result, &mut self.array) {
             item.write(iterator.next()?);
         }
         // SAFETY: We initialized the array above (can be replaced with `MaybeUninit::array_assume_init()`
         // once stable).
-        Some(unsafe { std::mem::transmute_copy::<[std::mem::MaybeUninit<T::Item>; N], [T::Item; N]>(&result) })
+        Some(unsafe {
+            std::mem::transmute_copy::<[std::mem::MaybeUninit<T::Item>; N], [T::Item; N]>(&result)
+        })
     }
 }
 
@@ -341,28 +340,19 @@ pub fn encode_not_null_fixed_2<const N: usize, T: ArrowPrimitiveType>(
     offsets: &mut [usize],
     arrays: [&PrimitiveArray<T>; N],
     // iters: [impl ExactSizeIterator<Item = T>; N],
-) where T::Native: FixedLengthEncoding {
-    let valid_bits = {
-        // Create bitmask where the first N bits are 1s, and the rest are 0s.
-        let mut bits = 0u8;
-        for i in 0..N {
-            bits |= 1 << i;
-        }
-        bits
-    };
+) where
+    T::Native: FixedLengthEncoding,
+{
     let zip_iter = zip_array::<_, N>(arrays.map(|a| a.values().iter().copied()));
     for (value_idx, array) in zip_iter.enumerate() {
         let offset = &mut offsets[value_idx + 1];
-        let end_offset = *offset + 1 + (T::Native::ENCODED_LEN - 1) * N;
+        let end_offset = *offset + T::Native::ENCODED_LEN * N;
 
         let to_write = &mut data[*offset..end_offset];
-        // for i in 0..N {
-        //     to_write[i * T::Native::ENCODED_LEN] = 1;
-        // }
-        to_write[0] = valid_bits;
         for (i, val) in array.iter().enumerate() {
             let mut encoded = val.encode();
-            to_write[1 + i * (T::Native::ENCODED_LEN - 1)..(i + 1) * (T::Native::ENCODED_LEN - 1) + 1].copy_from_slice(encoded.as_ref());
+            to_write[i * (T::Native::ENCODED_LEN)..(i + 1) * (T::Native::ENCODED_LEN)]
+                .copy_from_slice(encoded.as_ref());
         }
 
         *offset = end_offset;
@@ -376,15 +366,9 @@ pub fn encode_not_null_fixed<const N: usize, T: ArrowPrimitiveType>(
     offsets: &mut [usize],
     arrays: [&PrimitiveArray<T>; N],
     // iters: [impl ExactSizeIterator<Item = T>; N],
-) where T::Native: FixedLengthEncoding {
-    let valid_bits = {
-        // Create bitmask where the first N bits are 1s, and the rest are 0s.
-        let mut bits = 0u8;
-        for i in 0..N {
-            bits |= 1 << i;
-        }
-        bits
-    };
+) where
+    T::Native: FixedLengthEncoding,
+{
     let iters = arrays.map(|a| a.values().iter().copied());
     match N {
         0 => panic!("N must be greater than 0"),
@@ -396,18 +380,14 @@ pub fn encode_not_null_fixed<const N: usize, T: ArrowPrimitiveType>(
                 let end_offset = *offset + T::Native::ENCODED_LEN * N;
 
                 let to_write = &mut data[*offset..end_offset];
-                for i in 0..N {
-                    to_write[i * T::Native::ENCODED_LEN] = 1;
-                }
-
                 {
                     let mut encoded = val1.encode();
-                    to_write[1..T::Native::ENCODED_LEN].copy_from_slice(encoded.as_ref());
+                    to_write[..T::Native::ENCODED_LEN].copy_from_slice(encoded.as_ref());
                 }
 
                 {
                     let mut encoded = val2.encode();
-                    to_write[T::Native::ENCODED_LEN + 1..].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN..].copy_from_slice(encoded.as_ref());
                 }
 
                 *offset = end_offset;
@@ -420,59 +400,62 @@ pub fn encode_not_null_fixed<const N: usize, T: ArrowPrimitiveType>(
                 let end_offset = *offset + T::Native::ENCODED_LEN * N;
 
                 let to_write = &mut data[*offset..end_offset];
-                for i in 0..N {
-                    to_write[i * T::Native::ENCODED_LEN] = 1;
-                }
 
                 {
                     let mut encoded = val1.encode();
-                    to_write[1 + T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1]
+                        .copy_from_slice(encoded.as_ref());
                 }
 
                 {
                     let mut encoded = val2.encode();
-                    to_write[1 + T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2]
+                        .copy_from_slice(encoded.as_ref());
                 }
 
                 {
                     let mut encoded = val3.encode();
-                    to_write[1 + T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3]
+                        .copy_from_slice(encoded.as_ref());
                 }
 
                 *offset = end_offset;
             }
         }
         4 => {
-
-
-            let iter = iters[0].clone().zip(iters[1].clone()).zip(iters[2].clone()).zip(iters[3].clone());
+            let iter = iters[0]
+                .clone()
+                .zip(iters[1].clone())
+                .zip(iters[2].clone())
+                .zip(iters[3].clone());
             for (value_idx, (((val1, val2), val3), val4)) in iter.enumerate() {
                 let offset = &mut offsets[value_idx + 1];
                 let end_offset = *offset + T::Native::ENCODED_LEN * N;
 
                 let to_write = &mut data[*offset..end_offset];
-                for i in 0..N {
-                    to_write[i * T::Native::ENCODED_LEN] = 1;
-                }
 
                 {
                     let mut encoded = val1.encode();
-                    to_write[1 + T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1]
+                        .copy_from_slice(encoded.as_ref());
                 }
 
                 {
                     let mut encoded = val2.encode();
-                    to_write[1 + T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2]
+                        .copy_from_slice(encoded.as_ref());
                 }
 
                 {
                     let mut encoded = val3.encode();
-                    to_write[1 + T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3]
+                        .copy_from_slice(encoded.as_ref());
                 }
 
                 {
                     let mut encoded = val4.encode();
-                    to_write[1 + T::Native::ENCODED_LEN * 3..T::Native::ENCODED_LEN * 4].copy_from_slice(encoded.as_ref());
+                    to_write[T::Native::ENCODED_LEN * 3..T::Native::ENCODED_LEN * 4]
+                        .copy_from_slice(encoded.as_ref());
                 }
 
                 *offset = end_offset;
@@ -586,11 +569,10 @@ pub fn encode_fixed_size_binary(
 ) {
     let len = array.value_length() as usize;
     for (offset, maybe_val) in offsets.iter_mut().skip(1).zip(array.iter()) {
-        let end_offset = *offset + len + 1;
+        let end_offset = *offset + len;
         if let Some(val) = maybe_val {
             let to_write = &mut data[*offset..end_offset];
-            to_write[0] = 1;
-            to_write[1..].copy_from_slice(&val[..len]);
+            to_write.copy_from_slice(&val[..len]);
         } else {
             data[*offset] = null_sentinel();
         }
@@ -629,23 +611,24 @@ pub fn decode_nulls(rows: &[&[u8]]) -> (usize, Buffer) {
 unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
     rows: &mut [&[u8]],
     data_type: DataType,
+    nulls: Option<NullBuffer>,
 ) -> ArrayData {
     let len = rows.len();
 
     let mut values = BufferBuilder::<T>::new(len);
-    let (null_count, nulls) = decode_nulls(rows);
 
     for row in rows {
         let i = split_off(row, T::ENCODED_LEN);
-        let value = T::Encoded::from_slice(&i[1..]);
+        let value = T::Encoded::from_slice(i);
         values.append(T::decode(value));
     }
+    let null_count = nulls.as_ref().map(|n| n.null_count()).unwrap_or(0);
 
     let builder = ArrayDataBuilder::new(data_type)
         .len(len)
-        .null_count(null_count)
         .add_buffer(values.finish())
-        .null_bit_buffer(Some(nulls));
+        .nulls(nulls)
+        .null_count(null_count);
 
     // SAFETY: Buffers correct length
     unsafe { builder.build_unchecked() }
@@ -658,11 +641,9 @@ unsafe fn decode_fixed<T: FixedLengthEncoding + ArrowNativeType>(
 /// `data_type` must be appropriate native type for `T`
 unsafe fn decode_fixed_four<T: FixedLengthEncoding + ArrowNativeType>(
     rows: &mut [&[u8]],
-    data_type1: DataType,
-    data_type2: DataType,
-    data_type3: DataType,
-    data_type4: DataType,
-) -> (ArrayData, ArrayData, ArrayData, ArrayData) {
+    data_types: [DataType; 4],
+    nulls: [Option<NullBuffer>; 4],
+) -> [ArrayData; 4] {
     let len = rows.len();
 
     let mut values1 = BufferBuilder::<T>::new(len);
@@ -671,34 +652,6 @@ unsafe fn decode_fixed_four<T: FixedLengthEncoding + ArrowNativeType>(
     let mut values4 = BufferBuilder::<T>::new(len);
     // let (null_count, nulls) = decode_nulls(rows);
 
-    let mut null_count1 = 0;
-    let mut null_count2 = 0;
-    let mut null_count3 = 0;
-    let mut null_count4 = 0;
-    let nulls_buffer1 = MutableBuffer::collect_bool(rows.len(), |idx| {
-        let valid = rows[idx][0] & 0b00000001 != 0;
-        null_count1 += !valid as usize;
-        valid
-    })
-    .into();
-    let nulls_buffer2 = MutableBuffer::collect_bool(rows.len(), |idx| {
-        let valid = rows[idx][0] & 0b00000010 != 0;
-        null_count2 += !valid as usize;
-        valid
-    })
-    .into();
-    let nulls_buffer3 = MutableBuffer::collect_bool(rows.len(), |idx| {
-        let valid = rows[idx][0] & 0b00000100 != 0;
-        null_count3 += !valid as usize;
-        valid
-    })
-    .into();
-    let nulls_buffer4 = MutableBuffer::collect_bool(rows.len(), |idx| {
-        let valid = rows[idx][0] & 0b00001000 != 0;
-        null_count4 += !valid as usize;
-        valid
-    })
-    .into();
     // (null_count, buffer)
 
     for row in rows {
@@ -706,49 +659,58 @@ unsafe fn decode_fixed_four<T: FixedLengthEncoding + ArrowNativeType>(
         let i = split_off(row, size * 4 + 1);
 
         {
-            let value = T::Encoded::from_slice(&i[1 + size * 0..1 + size * 1]);
+            let value = T::Encoded::from_slice(&i[size * 0..size * 1]);
             values1.append(T::decode(value));
         }
 
         {
-            let value = T::Encoded::from_slice(&i[1 + size * 1..1 + size * 2]);
+            let value = T::Encoded::from_slice(&i[size * 1..size * 2]);
             values2.append(T::decode(value));
         }
 
         {
-            let value = T::Encoded::from_slice(&i[1 + size * 2..1 + size * 3]);
+            let value = T::Encoded::from_slice(&i[size * 2..size * 3]);
             values3.append(T::decode(value));
         }
 
         {
-            let value = T::Encoded::from_slice(&i[1 + size * 3..1 + size * 4]);
+            let value = T::Encoded::from_slice(&i[size * 3..size * 4]);
             values4.append(T::decode(value));
         }
     }
 
+    // TODO - assert all have the same length
+
+    let [data_type1, data_type2, data_type3, data_type4] = data_types;
+    let [nulls1, nulls2, nulls3, nulls4] = nulls;
+    let null_count1 = nulls1.as_ref().map(|n| n.null_count()).unwrap_or(0);
+    let null_count2 = nulls2.as_ref().map(|n| n.null_count()).unwrap_or(0);
+    let null_count3 = nulls3.as_ref().map(|n| n.null_count()).unwrap_or(0);
+    let null_count4 = nulls4.as_ref().map(|n| n.null_count()).unwrap_or(0);
+
     let builder1 = ArrayDataBuilder::new(data_type1)
         .len(len)
-        .null_count(null_count1)
         .add_buffer(values1.finish())
-        .null_bit_buffer(Some(nulls_buffer1));
+        .nulls(nulls1)
+        .null_count(null_count1);
 
     let builder2 = ArrayDataBuilder::new(data_type2)
         .len(len)
-        .null_count(null_count2)
         .add_buffer(values2.finish())
-        .null_bit_buffer(Some(nulls_buffer2));
+        .nulls(nulls2)
+        .null_count(null_count2);
 
     let builder3 = ArrayDataBuilder::new(data_type3)
         .len(len)
-        .null_count(null_count3)
         .add_buffer(values3.finish())
-        .null_bit_buffer(Some(nulls_buffer3));
+        .nulls(nulls3)
+        .null_count(null_count3);
 
     let builder4 = ArrayDataBuilder::new(data_type4)
         .len(len)
-        .null_count(null_count4)
         .add_buffer(values4.finish())
-        .null_bit_buffer(Some(nulls_buffer4));
+        .nulls(nulls4)
+        .null_count(null_count4);
 
     // SAFETY: Buffers correct length
     let array1 = unsafe { builder1.build_unchecked() };
@@ -759,13 +721,14 @@ unsafe fn decode_fixed_four<T: FixedLengthEncoding + ArrowNativeType>(
     // SAFETY: Buffers correct length
     let array4 = unsafe { builder4.build_unchecked() };
 
-    (array1, array2, array3, array4)
+    [array1, array2, array3, array4]
 }
 
 /// Decodes a `PrimitiveArray` from rows
 pub fn decode_primitive<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
     data_type: DataType,
+    nulls: Option<NullBuffer>,
 ) -> PrimitiveArray<T>
 where
     T::Native: FixedLengthEncoding,
@@ -773,34 +736,27 @@ where
     assert!(PrimitiveArray::<T>::is_compatible(&data_type));
     // SAFETY:
     // Validated data type above
-    unsafe { decode_fixed::<T::Native>(rows, data_type).into() }
+    unsafe { decode_fixed::<T::Native>(rows, data_type, nulls).into() }
 }
 
 /// Decodes a `PrimitiveArray` from rows
 pub fn decode_primitive4<T: ArrowPrimitiveType>(
     rows: &mut [&[u8]],
-    data_type1: DataType,
-    data_type2: DataType,
-    data_type3: DataType,
-    data_type4: DataType,
-) -> (
-    PrimitiveArray<T>,
-    PrimitiveArray<T>,
-    PrimitiveArray<T>,
-    PrimitiveArray<T>,
-)
+    data_types: [DataType; 4],
+    nulls: [Option<NullBuffer>; 4],
+) -> [PrimitiveArray<T>; 4]
 where
     T::Native: FixedLengthEncoding,
 {
-    assert!(PrimitiveArray::<T>::is_compatible(&data_type1));
-    assert!(PrimitiveArray::<T>::is_compatible(&data_type2));
-    assert!(PrimitiveArray::<T>::is_compatible(&data_type3));
-    assert!(PrimitiveArray::<T>::is_compatible(&data_type4));
+    for data_type in &data_types {
+        PrimitiveArray::<T>::is_compatible(data_type);
+    }
+
     // SAFETY:
     // Validated data type above
-    let (data1, data2, data3, data4) = unsafe { decode_fixed_four::<T::Native>(rows, data_type1, data_type2, data_type3, data_type4) };
+    let datas = unsafe { decode_fixed_four::<T::Native>(rows, data_types, nulls) };
 
-    (data1.into(), data2.into(), data3.into(), data4.into())
+    datas.map(Into::into)
 }
 
 /// Decodes a `FixedLengthBinary` from rows
