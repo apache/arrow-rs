@@ -66,10 +66,9 @@ impl<const OFFSET_SIZE: u8, const ID_SIZE: u8> ObjectHeaderWriter<OFFSET_SIZE, I
     }
 }
 
+#[inline(always)]
 fn append_packed_u32<const SIZE: u8>(dest: &mut Vec<u8>, value: usize) {
-    let len = dest.len() + SIZE as usize;
-    dest.extend(value.to_le_bytes());
-    dest.truncate(len);
+    dest.extend_from_slice(&value.to_le_bytes()[..SIZE as usize]);
 }
 
 /// A builder for creating [`Variant::Object`] values.
