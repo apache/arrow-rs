@@ -22,6 +22,9 @@ use serde_json::{Map, Number, Value};
 use std::fmt::Write;
 use std::sync::Arc;
 
+const WIDE_ROWS: usize = 1 << 17; // 128K rows
+const WIDE_BATCH_SIZE: usize = 1 << 13; // 8K rows per batch
+
 fn build_schema(field_count: usize) -> Arc<Schema> {
     // Builds a schema with fields named f0..f{field_count-1}, all Int64 and non-nullable.
     let fields: Vec<Field> = (0..field_count)
@@ -67,7 +70,7 @@ fn build_wide_values(rows: usize, fields: usize) -> Vec<Value> {
 }
 
 fn bench_decode_wide_object(c: &mut Criterion) {
-    let rows = 4096;
+    let rows = WIDE_ROWS;
     let fields = 64;
     let data = build_wide_json(rows, fields);
     let schema = build_schema(fields);
@@ -75,7 +78,7 @@ fn bench_decode_wide_object(c: &mut Criterion) {
     c.bench_function("decode_wide_object_i64_json", |b| {
         b.iter(|| {
             let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(1024)
+                .with_batch_size(WIDE_BATCH_SIZE)
                 .build_decoder()
                 .unwrap();
 
@@ -93,7 +96,7 @@ fn bench_decode_wide_object(c: &mut Criterion) {
 }
 
 fn bench_serialize_wide_object(c: &mut Criterion) {
-    let rows = 4096;
+    let rows = WIDE_ROWS;
     let fields = 64;
     let values = build_wide_values(rows, fields);
     let schema = build_schema(fields);
@@ -101,7 +104,7 @@ fn bench_serialize_wide_object(c: &mut Criterion) {
     c.bench_function("decode_wide_object_i64_serialize", |b| {
         b.iter(|| {
             let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(1024)
+                .with_batch_size(WIDE_BATCH_SIZE)
                 .build_decoder()
                 .unwrap();
 

@@ -21,14 +21,15 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::sync::Arc;
 
-const BINARY_ROWS: usize = 1 << 15;
+const BINARY_ROWS: usize = 1 << 17;
 const BINARY_BYTES: usize = 64;
+const BINARY_BATCH_SIZE: usize = 1 << 13;
 
-fn bench_decode(c: &mut Criterion, name: &str, data: &[u8], field: Arc<Field>, rows: usize) {
+fn bench_decode(c: &mut Criterion, name: &str, data: &[u8], field: Arc<Field>) {
     c.bench_function(name, |b| {
         b.iter(|| {
             let mut decoder = ReaderBuilder::new_with_field(field.clone())
-                .with_batch_size(rows)
+                .with_batch_size(BINARY_BATCH_SIZE)
                 .build_decoder()
                 .unwrap();
 
@@ -72,35 +73,17 @@ fn criterion_benchmark(c: &mut Criterion) {
     let binary_data = build_hex_lines(BINARY_ROWS, BINARY_BYTES);
 
     let binary_field = Arc::new(Field::new("item", DataType::Binary, false));
-    bench_decode(
-        c,
-        "decode_binary_hex_json",
-        &binary_data,
-        binary_field,
-        BINARY_ROWS,
-    );
+    bench_decode(c, "decode_binary_hex_json", &binary_data, binary_field);
 
     let fixed_field = Arc::new(Field::new(
         "item",
         DataType::FixedSizeBinary(BINARY_BYTES as i32),
         false,
     ));
-    bench_decode(
-        c,
-        "decode_fixed_binary_hex_json",
-        &binary_data,
-        fixed_field,
-        BINARY_ROWS,
-    );
+    bench_decode(c, "decode_fixed_binary_hex_json", &binary_data, fixed_field);
 
     let view_field = Arc::new(Field::new("item", DataType::BinaryView, false));
-    bench_decode(
-        c,
-        "decode_binary_view_hex_json",
-        &binary_data,
-        view_field,
-        BINARY_ROWS,
-    );
+    bench_decode(c, "decode_binary_view_hex_json", &binary_data, view_field);
 }
 
 criterion_group!(benches, criterion_benchmark);

@@ -25,8 +25,9 @@ use std::hint::black_box;
 use std::sync::Arc;
 
 // Projection benchmark constants
-const WIDE_PROJECTION_ROWS: usize = 1 << 14; // 16K rows
+const WIDE_PROJECTION_ROWS: usize = 1 << 17; // 128K rows
 const WIDE_PROJECTION_TOTAL_FIELDS: usize = 100; // 100 fields total, select only 3
+const WIDE_PROJECTION_BATCH_SIZE: usize = 1 << 13; // 8K rows per batch
 
 fn bench_decode_schema(
     c: &mut Criterion,
@@ -45,7 +46,8 @@ fn bench_decode_schema(
     group.bench_function(BenchmarkId::from_parameter(rows), |b| {
         b.iter(|| {
             let mut decoder = ReaderBuilder::new(schema.clone())
-                .with_batch_size(rows)
+                .with_batch_size(WIDE_PROJECTION_BATCH_SIZE)
+                .with_projection(projection)
                 .build_decoder()
                 .unwrap();
 
