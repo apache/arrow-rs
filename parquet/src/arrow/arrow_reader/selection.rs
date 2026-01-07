@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::ProjectionMask;
+// use crate::arrow::ProjectionMask;
 use crate::errors::ParquetError;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::{Array, BooleanArray};
@@ -250,38 +250,39 @@ impl RowSelection {
         ranges
     }
 
-    /// Returns true if this selection would skip any data pages within the provided columns
-    fn selection_skips_any_page(
-        &self,
-        projection: &ProjectionMask,
-        columns: &[OffsetIndexMetaData],
-    ) -> bool {
-        columns.iter().enumerate().any(|(leaf_idx, column)| {
-            if !projection.leaf_included(leaf_idx) {
-                return false;
-            }
+    // /// Returns true if this selection would skip any data pages within the provided columns
+    // fn selection_skips_any_page(
+    //     &self,
+    //     projection: &ProjectionMask,
+    //     columns: &[OffsetIndexMetaData],
+    // ) -> bool {
+    //     columns.iter().enumerate().any(|(leaf_idx, column)| {
+    //         if !projection.leaf_included(leaf_idx) {
+    //             return false;
+    //         }
 
-            let locations = column.page_locations();
-            if locations.is_empty() {
-                return false;
-            }
+    //         let locations = column.page_locations();
+    //         if locations.is_empty() {
+    //             return false;
+    //         }
 
-            let ranges = self.scan_ranges(locations);
-            !ranges.is_empty() && ranges.len() < locations.len()
-        })
-    }
+    //         let ranges = self.scan_ranges(locations);
+    //         !ranges.is_empty() && ranges.len() < locations.len()
+    //     })
+    // }
 
-    /// Returns true if selectors should be forced, preventing mask materialisation
-    pub(crate) fn should_force_selectors(
-        &self,
-        projection: &ProjectionMask,
-        offset_index: Option<&[OffsetIndexMetaData]>,
-    ) -> bool {
-        match offset_index {
-            Some(columns) => self.selection_skips_any_page(projection, columns),
-            None => false,
-        }
-    }
+    // / Returns true if selectors should be forced, preventing mask materialisation
+    // pub(crate) fn should_force_selectors(
+    //     &self,
+    //     _projection: &ProjectionMask,
+    //     _offset_index: Option<&[OffsetIndexMetaData]>,
+    // ) -> bool {
+    //     match offset_index {
+    //         Some(columns) => self.selection_skips_any_page(projection, columns),
+    //         None => false,
+    //     }
+    //     false
+    // }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
     pub fn split_off(&mut self, row_count: usize) -> Self {
@@ -779,7 +780,7 @@ impl MaskCursor {
     }
 
     /// Advance through the mask representation, producing the next chunk summary
-    pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
+    pub fn next_mask_chunk(&mut self, batch_size: usize, range_end: usize) -> Option<MaskChunk> {
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
 
@@ -791,7 +792,9 @@ impl MaskCursor {
             let mut cursor = start_position;
             let mut initial_skip = 0;
 
-            while cursor < mask.len() && !mask.value(cursor) {
+            let limit = range_end.min(mask.len());
+
+            while cursor < limit && !mask.value(cursor) {
                 initial_skip += 1;
                 cursor += 1;
             }
@@ -803,7 +806,7 @@ impl MaskCursor {
             // Advance until enough rows have been selected to satisfy the batch size,
             // or until the mask is exhausted. This mirrors the behaviour of the legacy
             // `RowSelector` queue-based iteration.
-            while cursor < mask.len() && selected_rows < batch_size {
+            while cursor < limit && selected_rows < batch_size {
                 chunk_rows += 1;
                 if mask.value(cursor) {
                     selected_rows += 1;
