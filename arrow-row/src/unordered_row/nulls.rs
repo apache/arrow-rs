@@ -1,7 +1,8 @@
 use crate::unordered_row::fixed::split_off;
 use arrow_buffer::bit_chunk_iterator::BitChunkIterator;
-use arrow_buffer::{bit_util, NullBuffer, NullBufferBuilder};
+use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, NullBufferBuilder};
 use std::iter::{Chain, Once};
+use arrow_array::BooleanArray;
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 #[repr(u8)]
@@ -303,6 +304,16 @@ pub(crate) fn encode_nulls_naive(
         return;
     }
 
+    if number_of_columns == 1 {
+        let nulls = nulls.into_iter().next().unwrap();
+
+        // Unwrap as we know there are nulls as we checked above
+        let nulls = nulls.unwrap();
+        encode_all_as_single_byte(data, offsets, nulls);
+
+        return;
+    }
+
     let mut merge_iters: Vec<MergeIter> = vec![];
 
     match get_metadata_encoding_type(number_of_columns) {
@@ -401,12 +412,27 @@ fn encode_slice_with_metadata_const<const METADATA_TYPE: u8>(
 // Optimized implementation when all columns don't have nulls in them
 fn encode_all_valid(data: &mut [u8], offsets: &mut [usize], null_bits: usize) {
     assert_ne!(null_bits, 0, "Number of null bits must be greater than 0");
-    let bytes_to_copy = get_all_valid_bytes(null_bits);
-    let number_of_bytes = bytes_to_copy.len();
 
-    for offset in offsets.iter_mut().skip(1) {
-        data[*offset..*offset + number_of_bytes].copy_from_slice(&bytes_to_copy);
-        *offset += number_of_bytes;
+    if null_bits == 1 {
+        for offset in offsets.iter_mut().skip(1) {
+            data[*offset] = true as u8;
+            *offset += 1;
+        }
+    } else {
+        let bytes_to_copy = get_all_valid_bytes(null_bits);
+        let number_of_bytes = bytes_to_copy.len();
+
+        for offset in offsets.iter_mut().skip(1) {
+            data[*offset..*offset + number_of_bytes].copy_from_slice(&bytes_to_copy);
+            *offset += number_of_bytes;
+        }
+    }
+}
+
+fn encode_all_as_single_byte(data: &mut [u8], offsets: &mut [usize], nulls: &NullBuffer) {
+    for (offset, is_valid) in offsets.iter_mut().skip(1).zip(nulls.iter()) {
+        data[*offset] = is_valid as u8;
+        *offset += 1;
     }
 }
 
@@ -420,6 +446,36 @@ pub(crate) fn decode_packed_nulls_in_rows(
     if number_of_columns == 0 {
         return vec![];
     }
+
+    // If only 1 column than we use a single byte
+    if number_of_columns == 1 {
+        let mut null_count = 0;
+        let buffer = MutableBuffer::collect_bool(rows.len(), |idx| {
+            let valid = rows[idx][0] == 1;
+            null_count += !valid as usize;
+
+            // Advance the row slice
+            let row = rows[idx];
+            rows[idx] = &row[1..];
+            valid
+        })
+          .into();
+
+        if null_count == 0 {
+            return vec![None];
+        }
+
+        let boolean_buffer= BooleanBuffer::new(buffer, 0, rows.len());
+
+        // SAFETY: we know that the buffer is valid as we just created it
+        let null_buffer = unsafe {NullBuffer::new_unchecked(
+            boolean_buffer,
+            null_count
+        )};
+
+        return vec![Some(null_buffer)];
+    }
+
     match get_metadata_encoding_type(number_of_columns) {
         MetadataEncodingType::None => decode_packed_nulls_in_rows_with_metadata_type::<
             { MetadataEncodingType::None as u8 },

@@ -3348,7 +3348,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "range end index 1 out of range for slice of length 0")]
+    #[should_panic(expected = "index out of bounds")]
     fn test_invalid_empty() {
         let binary_row: &[u8] = &[];
 
@@ -3362,7 +3362,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "range end index 1 out of range for slice of length 0")]
+    #[should_panic(expected = "index out of bounds")]
     fn test_invalid_empty_array() {
         let row: &[u8] = &[];
         let binary_rows = BinaryArray::from(vec![row]);
