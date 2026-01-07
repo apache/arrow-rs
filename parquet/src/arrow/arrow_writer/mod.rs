@@ -1533,11 +1533,12 @@ fn get_fsb_array_slice(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     use std::fs::File;
 
-    use crate::arrow::ARROW_SCHEMA_META_KEY;
     use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
+    use crate::arrow::{ARROW_SCHEMA_META_KEY, PARQUET_FIELD_ID_META_KEY};
     use crate::column::page::{Page, PageReader};
     use crate::file::metadata::thrift::PageHeader;
     use crate::file::page_index::column_index::ColumnIndexMetaData;
@@ -1550,7 +1551,7 @@ mod tests {
     use arrow::util::data_gen::create_random_array;
     use arrow::util::pretty::pretty_format_batches;
     use arrow::{array::*, buffer::Buffer};
-    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, i256};
+    use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, NullBuffer, OffsetBuffer, i256};
     use arrow_schema::Fields;
     use half::f16;
     use num_traits::{FromPrimitive, ToPrimitive};
@@ -3333,6 +3334,52 @@ mod tests {
             LargeBinaryArray::from_iter_values(vec![b"parquet"]),
             BinaryViewArray::from_iter_values(vec![b"barquet"]),
             LargeBinaryArray::from_iter_values(vec![b"parquet", b"barquet"]),
+        );
+
+        // check compatibility for list types
+
+        let list_field_metadata = HashMap::from_iter(vec![(
+            PARQUET_FIELD_ID_META_KEY.to_string(),
+            "1".to_string(),
+        )]);
+        let list_field = Field::new_list_field(DataType::Int32, false);
+
+        let values1 = Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4]));
+        let offsets1 = OffsetBuffer::new(vec![0, 2, 5].into());
+
+        let values2 = Arc::new(Int32Array::from(vec![5, 6, 7, 8, 9]));
+        let offsets2 = OffsetBuffer::new(vec![0, 3, 5].into());
+
+        let values_expected = Arc::new(Int32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9]));
+        let offsets_expected = OffsetBuffer::new(vec![0, 2, 5, 8, 10].into());
+
+        ensure_compatible_write(
+            // when the initial schema has the metadata ...
+            ListArray::try_new(
+                Arc::new(
+                    list_field
+                        .clone()
+                        .with_metadata(list_field_metadata.clone()),
+                ),
+                offsets1,
+                values1,
+                None,
+            )
+            .unwrap(),
+            // ... and some intermediate schema doesn't have the metadata
+            ListArray::try_new(Arc::new(list_field.clone()), offsets2, values2, None).unwrap(),
+            // ... the write will still go through, and the resulting schema will inherit the initial metadata
+            ListArray::try_new(
+                Arc::new(
+                    list_field
+                        .clone()
+                        .with_metadata(list_field_metadata.clone()),
+                ),
+                offsets_expected,
+                values_expected,
+                None,
+            )
+            .unwrap(),
         );
     }
 
