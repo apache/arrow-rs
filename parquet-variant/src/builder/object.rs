@@ -283,11 +283,8 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
             (if is_large { 4 } else { 1 }) + // num_fields
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
-        // Calculated header size becomes a hint; being wrong only risks extra allocations.
-        // Make sure to reserve enough capacity to handle the extra bytes we'll truncate.
-        let mut bytes_to_splice = Vec::with_capacity(header_size + 3);
-        // let header = object_header(is_large, id_size, offset_size);
-        // bytes_to_splice.push(header);
+
+        let mut bytes_to_splice = Vec::with_capacity(header_size);
 
         match (offset_size, id_size) {
             (1, 1) => ObjectHeaderWriter::<1, 1>::write(
