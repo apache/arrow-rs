@@ -508,6 +508,66 @@ impl ArrowReaderOptions {
     /// let mut reader = builder.build().unwrap();
     /// let _batch = reader.next().unwrap().unwrap();
     /// ```
+    ///
+    /// # Example: Preserving Dictionary Encoding
+    ///
+    /// By default, Parquet string columns are read as `Utf8Array` (or `LargeUtf8Array`),
+    /// even if the underlying Parquet data uses dictionary encoding. You can preserve
+    /// the dictionary encoding by specifying a `Dictionary` type in the schema hint:
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tempfile::tempfile;
+    /// use arrow_array::{ArrayRef, RecordBatch, StringArray};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// use parquet::arrow::ArrowWriter;
+    ///
+    /// // Write a Parquet file with string data
+    /// let file = tempfile().unwrap();
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("city", DataType::Utf8, false)
+    /// ]));
+    /// let cities = StringArray::from(vec!["Berlin", "Berlin", "Paris", "Berlin", "Paris"]);
+    /// let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(cities)]).unwrap();
+    ///
+    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// writer.write(&batch).unwrap();
+    /// writer.close().unwrap();
+    ///
+    /// // Read the file back, requesting dictionary encoding preservation
+    /// let dict_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("city", DataType::Dictionary(
+    ///         Box::new(DataType::Int32),
+    ///         Box::new(DataType::Utf8)
+    ///     ), false)
+    /// ]));
+    /// let options = ArrowReaderOptions::new().with_schema(dict_schema);
+    /// let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+    ///     file.try_clone().unwrap(),
+    ///     options
+    /// ).unwrap();
+    ///
+    /// // Verify the schema shows Dictionary type
+    /// assert!(matches!(
+    ///     builder.schema().field(0).data_type(),
+    ///     DataType::Dictionary(_, _)
+    /// ));
+    ///
+    /// let mut reader = builder.build().unwrap();
+    /// let batch = reader.next().unwrap().unwrap();
+    ///
+    /// // The column is now a DictionaryArray
+    /// assert!(matches!(
+    ///     batch.column(0).data_type(),
+    ///     DataType::Dictionary(_, _)
+    /// ));
+    /// ```
+    ///
+    /// **Note**: Dictionary encoding preservation works best when the batch size
+    /// is a divisor of the row group size and a single read does not span multiple
+    /// column chunks. If these conditions are not met, the reader may compute
+    /// a fresh dictionary from the decoded values.
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             supplied_schema: Some(schema),
