@@ -525,6 +525,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> super::private::Sealed for GenericListArray<OffsetSize> {}
+
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self
@@ -1283,5 +1285,12 @@ mod tests {
         let values = builder.build().unwrap();
         let field = Arc::new(Field::new("element", values.data_type().clone(), false));
         ListArray::new(field.clone(), offsets, Arc::new(values), None);
+    }
+
+    #[test]
+    fn test_list_new_null_len() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let array = ListArray::new_null(field, 5);
+        assert_eq!(array.len(), 5);
     }
 }

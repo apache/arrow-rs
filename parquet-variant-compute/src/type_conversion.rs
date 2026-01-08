@@ -25,19 +25,6 @@ use arrow::datatypes::{
 use chrono::Timelike;
 use parquet_variant::{Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16};
 
-/// Options for controlling the behavior of `cast_to_variant_with_options`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CastOptions {
-    /// If true, return error on conversion failure. If false, insert null for failed conversions.
-    pub strict: bool,
-}
-
-impl Default for CastOptions {
-    fn default() -> Self {
-        Self { strict: true }
-    }
-}
-
 /// Extension trait for Arrow primitive types that can extract their native value from a Variant
 pub(crate) trait PrimitiveFromVariant: ArrowPrimitiveType {
     fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native>;
@@ -56,7 +43,7 @@ macro_rules! impl_primitive_from_variant {
         impl PrimitiveFromVariant for $arrow_type {
             fn from_variant(variant: &Variant<'_, '_>) -> Option<Self::Native> {
                 let value = variant.$variant_method();
-                $( let value = value.map($cast_fn); )?
+                $( let value = value.and_then($cast_fn); )?
                 value
             }
         }
@@ -84,14 +71,87 @@ impl_primitive_from_variant!(datatypes::UInt64Type, as_u64);
 impl_primitive_from_variant!(datatypes::Float16Type, as_f16);
 impl_primitive_from_variant!(datatypes::Float32Type, as_f32);
 impl_primitive_from_variant!(datatypes::Float64Type, as_f64);
-impl_primitive_from_variant!(
-    datatypes::Date32Type,
-    as_naive_date,
-    datatypes::Date32Type::from_naive_date
-);
-impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
-    (v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64
+impl_primitive_from_variant!(datatypes::Date32Type, as_naive_date, |v| {
+    Some(datatypes::Date32Type::from_naive_date(v))
 });
+impl_primitive_from_variant!(datatypes::Date64Type, as_naive_date, |v| {
+    Some(datatypes::Date64Type::from_naive_date(v))
+});
+impl_primitive_from_variant!(datatypes::Time32SecondType, as_time_utc, |v| {
+    // Return None if there are leftover nanoseconds
+    if v.nanosecond() != 0 {
+        None
+    } else {
+        Some(v.num_seconds_from_midnight() as i32)
+    }
+});
+impl_primitive_from_variant!(datatypes::Time32MillisecondType, as_time_utc, |v| {
+    // Return None if there are leftover microseconds
+    if v.nanosecond() % 1_000_000 != 0 {
+        None
+    } else {
+        Some((v.num_seconds_from_midnight() * 1_000) as i32 + (v.nanosecond() / 1_000_000) as i32)
+    }
+});
+impl_primitive_from_variant!(datatypes::Time64MicrosecondType, as_time_utc, |v| {
+    Some((v.num_seconds_from_midnight() * 1_000_000 + v.nanosecond() / 1_000) as i64)
+});
+impl_primitive_from_variant!(datatypes::Time64NanosecondType, as_time_utc, |v| {
+    // convert micro to nano seconds
+    Some(v.num_seconds_from_midnight() as i64 * 1_000_000_000 + v.nanosecond() as i64)
+});
+impl_timestamp_from_variant!(
+    datatypes::TimestampSecondType,
+    as_timestamp_ntz_nanos,
+    ntz = true,
+    |timestamp| {
+        // Return None if there are leftover nanoseconds
+        if timestamp.nanosecond() != 0 {
+            None
+        } else {
+            Self::make_value(timestamp)
+        }
+    }
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampSecondType,
+    as_timestamp_nanos,
+    ntz = false,
+    |timestamp| {
+        // Return None if there are leftover nanoseconds
+        if timestamp.nanosecond() != 0 {
+            None
+        } else {
+            Self::make_value(timestamp.naive_utc())
+        }
+    }
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampMillisecondType,
+    as_timestamp_ntz_nanos,
+    ntz = true,
+    |timestamp| {
+        // Return None if there are leftover microseconds
+        if timestamp.nanosecond() % 1_000_000 != 0 {
+            None
+        } else {
+            Self::make_value(timestamp)
+        }
+    }
+);
+impl_timestamp_from_variant!(
+    datatypes::TimestampMillisecondType,
+    as_timestamp_nanos,
+    ntz = false,
+    |timestamp| {
+        // Return None if there are leftover microseconds
+        if timestamp.nanosecond() % 1_000_000 != 0 {
+            None
+        } else {
+            Self::make_value(timestamp.naive_utc())
+        }
+    }
+);
 impl_timestamp_from_variant!(
     datatypes::TimestampMicrosecondType,
     as_timestamp_ntz_micros,

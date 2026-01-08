@@ -18,8 +18,8 @@
 //! Implements the `nullif` function for Arrow arrays.
 
 use arrow_array::{Array, ArrayRef, BooleanArray, make_array};
-use arrow_buffer::buffer::{bitwise_bin_op_helper, bitwise_unary_op_helper};
-use arrow_buffer::{BooleanBuffer, NullBuffer};
+use arrow_buffer::buffer::bitwise_bin_op_helper;
+use arrow_buffer::{BooleanBuffer, NullBuffer, bitwise_unary_op_helper};
 use arrow_schema::{ArrowError, DataType};
 
 /// Returns a new array with the same values and the validity bit to false where
@@ -120,7 +120,8 @@ mod tests {
     use arrow_array::{Int32Array, NullArray, StringArray, StructArray};
     use arrow_data::ArrayData;
     use arrow_schema::{Field, Fields};
-    use rand::{Rng, rng};
+    use rand::prelude::StdRng;
+    use rand::{Rng, SeedableRng};
 
     #[test]
     fn test_nullif_int_array() {
@@ -492,23 +493,60 @@ mod tests {
         let r_data = r.to_data();
         r_data.validate().unwrap();
 
-        assert_eq!(r.as_ref(), &expected);
+        assert_eq!(
+            r.as_ref(),
+            &expected,
+            "expected nulls: {:#?}\n\n\
+        result nulls:   {:#?}\n\n\\
+        expected values: {:#?}\n\n\
+        result values:   {:#?}",
+            expected.nulls(),
+            r.nulls(),
+            expected.values(),
+            r.as_primitive::<Int32Type>().values()
+        );
+        validate_nulls(expected.nulls());
+        validate_nulls(r.nulls());
+    }
+
+    /// Ensures that the null count matches the actual number of nulls.
+    fn validate_nulls(nulls: Option<&NullBuffer>) {
+        let Some(nulls) = nulls else {
+            return;
+        };
+        let mut actual_null_count = 0;
+        for i in 0..nulls.len() {
+            if nulls.is_null(i) {
+                actual_null_count += 1;
+            }
+        }
+        assert_eq!(actual_null_count, nulls.null_count());
     }
 
     #[test]
     fn nullif_fuzz() {
-        let mut rng = rng();
+        let mut rng = StdRng::seed_from_u64(7337);
 
         let arrays = [
-            Int32Array::from(vec![0; 128]),
-            (0..128)
-                .map(|_| rng.random_bool(0.5).then_some(0))
+            Int32Array::from(vec![0; 1024]), // no nulls
+            (0..1024) // 50% nulls
+                .map(|_| rng.random_bool(0.5).then_some(1))
                 .collect(),
         ];
 
         for a in arrays {
-            let a_slices = [(0, 128), (64, 64), (0, 64), (32, 32), (0, 0), (32, 0)];
-
+            let a_slices = [
+                (0, 128),
+                (0, 129),
+                (64, 64),
+                (0, 64),
+                (32, 32),
+                (0, 0),
+                (32, 0),
+                (5, 800),
+                (33, 53),
+                (77, 101),
+            ];
             for (a_offset, a_length) in a_slices {
                 let a = a.slice(a_offset, a_length);
 
@@ -516,14 +554,54 @@ mod tests {
                     let b_start_offset = rng.random_range(0..i);
                     let b_end_offset = rng.random_range(0..i);
 
+                    // b with 50% nulls
                     let b: BooleanArray = (0..a_length + b_start_offset + b_end_offset)
                         .map(|_| rng.random_bool(0.5).then(|| rng.random_bool(0.5)))
                         .collect();
-                    let b = b.slice(b_start_offset, a_length);
+                    let b_sliced = b.slice(b_start_offset, a_length);
+                    test_nullif(&a, &b_sliced);
 
-                    test_nullif(&a, &b);
+                    // b with no nulls (and no null buffer)
+                    let b = remove_null_buffer(&b);
+                    let b_sliced = b.slice(b_start_offset, a_length);
+                    test_nullif(&a, &b_sliced);
+
+                    // b with no nulls (but with a null buffer)
+                    let b = remove_null_values(&b);
+                    let b_sliced = b.slice(b_start_offset, a_length);
+                    test_nullif(&a, &b_sliced);
                 }
             }
         }
+    }
+
+    /// Returns a new BooleanArray with no null buffer
+    fn remove_null_buffer(array: &BooleanArray) -> BooleanArray {
+        make_array(
+            array
+                .into_data()
+                .into_builder()
+                .nulls(None)
+                .build()
+                .unwrap(),
+        )
+        .as_boolean()
+        .clone()
+    }
+
+    /// Returns a new BooleanArray with a null buffer where all values are valid
+    fn remove_null_values(array: &BooleanArray) -> BooleanArray {
+        let len = array.len();
+        let new_nulls = NullBuffer::from_iter(std::iter::repeat_n(true, len));
+        make_array(
+            array
+                .into_data()
+                .into_builder()
+                .nulls(Some(new_nulls))
+                .build()
+                .unwrap(),
+        )
+        .as_boolean()
+        .clone()
     }
 }

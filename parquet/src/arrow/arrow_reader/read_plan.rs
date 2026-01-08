@@ -110,19 +110,22 @@ impl ReadPlanBuilder {
                     None => return RowSelectionStrategy::Selectors,
                 };
 
-                let trimmed = selection.clone().trim();
-                let selectors: Vec<RowSelector> = trimmed.into();
-                if selectors.is_empty() {
+                // total_rows: total number of rows selected / skipped
+                // effective_count: number of non-empty selectors
+                let (total_rows, effective_count) =
+                    selection.iter().fold((0usize, 0usize), |(rows, count), s| {
+                        if s.row_count > 0 {
+                            (rows + s.row_count, count + 1)
+                        } else {
+                            (rows, count)
+                        }
+                    });
+
+                if effective_count == 0 {
                     return RowSelectionStrategy::Mask;
                 }
 
-                let total_rows: usize = selectors.iter().map(|s| s.row_count).sum();
-                let selector_count = selectors.len();
-                if selector_count == 0 {
-                    return RowSelectionStrategy::Mask;
-                }
-
-                if total_rows < selector_count.saturating_mul(threshold) {
+                if total_rows < effective_count.saturating_mul(threshold) {
                     RowSelectionStrategy::Mask
                 } else {
                     RowSelectionStrategy::Selectors
