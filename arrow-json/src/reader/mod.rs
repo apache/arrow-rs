@@ -220,7 +220,7 @@ impl ReaderBuilder {
     /// # use arrow_array::cast::AsArray;
     /// # use arrow_array::types::Int32Type;
     /// # use arrow_json::ReaderBuilder;
-    /// # use arrow_schema::{DataType, Field};
+    /// # use arrow_schema::{DataType, Field, FieldRef};
     /// // Root of JSON schema is a numeric type
     /// let data = "1\n2\n3\n";
     /// let field = Arc::new(Field::new("int", DataType::Int32, true));
@@ -396,7 +396,7 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
 /// ```
 /// use arrow_json::{ArrayDecoder, DecoderFactory, TapeElement, Tape, ReaderBuilder, StructMode};
 /// use arrow_schema::ArrowError;
-/// use arrow_schema::{DataType, Field, Fields, Schema};
+/// use arrow_schema::{DataType, Field, FieldRef, Fields, Schema};
 /// use arrow_array::cast::AsArray;
 /// use arrow_array::Array;
 /// use arrow_array::builder::StringBuilder;

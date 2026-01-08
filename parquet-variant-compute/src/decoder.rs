@@ -82,6 +82,7 @@ impl DecoderFactory for VariantArrayDecoderFactory {
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
         if let Some(field) = field
             && field.extension_type_name() == Some(VariantType::NAME)
+            && field.try_extension_type::<VariantType>().is_ok()
         {
             return Ok(Some(Box::new(VariantArrayDecoder)));
         }
