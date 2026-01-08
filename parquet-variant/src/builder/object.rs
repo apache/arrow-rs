@@ -42,17 +42,14 @@ impl<const OFFSET_SIZE: u8, const ID_SIZE: u8> ObjectHeaderWriter<OFFSET_SIZE, I
         data_size: usize,
     ) {
         let is_large = num_fields > u8::MAX as usize;
-        match is_large {
-            true => {
-                dst.push(object_header::<1, { ID_SIZE }, { OFFSET_SIZE }>());
-                // num_fields will consume 4 bytes when it is larger than u8::MAX
-                append_packed_u32::<4>(dst, num_fields);
-            }
-            false => {
-                dst.push(object_header::<0, { ID_SIZE }, { OFFSET_SIZE }>());
-                append_packed_u32::<1>(dst, num_fields);
-            }
-        };
+        // num_fields will consume 4 bytes when it is larger than u8::MAX
+        if is_large {
+            dst.push(object_header::<1, { ID_SIZE }, { OFFSET_SIZE }>());
+            append_packed_u32::<4>(dst, num_fields);
+        } else {
+            dst.push(object_header::<0, { ID_SIZE }, { OFFSET_SIZE }>());
+            append_packed_u32::<1>(dst, num_fields);
+        }
 
         for id in field_ids {
             append_packed_u32::<ID_SIZE>(dst, id as usize);
@@ -267,7 +264,7 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
         });
 
         let max_id = self.fields.iter().map(|(i, _)| *i).max().unwrap_or(0);
-        let id_size: u8 = int_size(max_id as usize);
+        let id_size = int_size(max_id as usize);
 
         let starting_offset = self.parent_state.saved_value_builder_offset;
         let value_builder = self.parent_state.value_builder();
@@ -286,120 +283,36 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
 
         let mut bytes_to_splice = Vec::with_capacity(header_size);
 
+        macro_rules! write_header {
+            ($offset_size:expr, $id_size:expr) => {
+                ObjectHeaderWriter::<{ $offset_size as u8 }, { $id_size as u8 }>::write(
+                    &mut bytes_to_splice,
+                    num_fields,
+                    self.fields.keys().copied(),
+                    self.fields.values().copied(),
+                    data_size,
+                )
+            };
+        }
+
+        use crate::decoder::OffsetSizeBytes::*;
         match (offset_size, id_size) {
-            (1, 1) => ObjectHeaderWriter::<1, 1>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (1, 2) => ObjectHeaderWriter::<1, 2>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (1, 3) => ObjectHeaderWriter::<1, 3>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (1, 4) => ObjectHeaderWriter::<1, 4>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (2, 1) => ObjectHeaderWriter::<2, 1>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (2, 2) => ObjectHeaderWriter::<2, 2>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (2, 3) => ObjectHeaderWriter::<2, 3>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (2, 4) => ObjectHeaderWriter::<2, 4>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (3, 1) => ObjectHeaderWriter::<3, 1>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (3, 2) => ObjectHeaderWriter::<3, 2>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (3, 3) => ObjectHeaderWriter::<3, 3>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (3, 4) => ObjectHeaderWriter::<3, 4>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (4, 1) => ObjectHeaderWriter::<4, 1>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (4, 2) => ObjectHeaderWriter::<4, 2>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (4, 3) => ObjectHeaderWriter::<4, 3>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            (4, 4) => ObjectHeaderWriter::<4, 4>::write(
-                &mut bytes_to_splice,
-                num_fields,
-                self.fields.keys().copied(),
-                self.fields.values().copied(),
-                data_size,
-            ),
-            _ => panic!("Unsupported offset_size/id_size combination"),
+            (One, One) => write_header!(One, One),
+            (One, Two) => write_header!(One, Two),
+            (One, Three) => write_header!(One, Three),
+            (One, Four) => write_header!(One, Four),
+            (Two, One) => write_header!(Two, One),
+            (Two, Two) => write_header!(Two, Two),
+            (Two, Three) => write_header!(Two, Three),
+            (Two, Four) => write_header!(Two, Four),
+            (Three, One) => write_header!(Three, One),
+            (Three, Two) => write_header!(Three, Two),
+            (Three, Three) => write_header!(Three, Three),
+            (Three, Four) => write_header!(Three, Four),
+            (Four, One) => write_header!(Four, One),
+            (Four, Two) => write_header!(Four, Two),
+            (Four, Three) => write_header!(Four, Three),
+            (Four, Four) => write_header!(Four, Four),
         }
 
         // Shift existing data to make room for the header

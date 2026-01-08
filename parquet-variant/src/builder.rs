@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::{VariantBasicType, VariantPrimitiveType};
+use crate::decoder::{OffsetSizeBytes, VariantBasicType, VariantPrimitiveType};
 use crate::{
     ShortString, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantList,
     VariantMetadata, VariantObject,
@@ -43,12 +43,12 @@ fn short_string_header(len: usize) -> u8 {
     (len as u8) << 2 | VariantBasicType::ShortString as u8
 }
 
-pub(crate) fn int_size(v: usize) -> u8 {
+pub(crate) fn int_size(v: usize) -> OffsetSizeBytes {
     match v {
-        0..=0xFF => 1,
-        0x100..=0xFFFF => 2,
-        0x10000..=0xFFFFFF => 3,
-        _ => 4,
+        0..=0xFF => OffsetSizeBytes::One,
+        0x100..=0xFFFF => OffsetSizeBytes::Two,
+        0x10000..=0xFFFFFF => OffsetSizeBytes::Three,
+        _ => OffsetSizeBytes::Four,
     }
 }
 
