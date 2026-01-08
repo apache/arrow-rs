@@ -17,6 +17,7 @@
 
 //! Interleave elements from multiple arrays
 
+use crate::concat::concat;
 use crate::dictionary::{merge_dictionary_values, should_merge_dictionary_values};
 use arrow_array::builder::{BooleanBufferBuilder, PrimitiveBuilder};
 use arrow_array::cast::AsArray;
@@ -25,7 +26,7 @@ use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, BooleanBuffer, MutableBuffer, NullBuffer, OffsetBuffer};
 use arrow_data::ByteView;
 use arrow_data::transform::MutableArrayData;
-use arrow_schema::{ArrowError, DataType, Fields};
+use arrow_schema::{ArrowError, DataType, FieldRef, Fields};
 use std::sync::Arc;
 
 macro_rules! primitive_helper {
@@ -105,6 +106,8 @@ pub fn interleave(
             _ => unreachable!("illegal dictionary key type {k}")
         },
         DataType::Struct(fields) => interleave_struct(fields, values, indices),
+        DataType::List(field) => interleave_list::<i32>(values, indices, field),
+        DataType::LargeList(field) => interleave_list::<i64>(values, indices, field),
         _ => interleave_fallback(values, indices)
     }
 }
@@ -195,8 +198,14 @@ fn interleave_dictionaries<K: ArrowDictionaryKeyType>(
     indices: &[(usize, usize)],
 ) -> Result<ArrayRef, ArrowError> {
     let dictionaries: Vec<_> = arrays.iter().map(|x| x.as_dictionary::<K>()).collect();
-    if !should_merge_dictionary_values::<K>(&dictionaries, indices.len()) {
-        return interleave_fallback(arrays, indices);
+    let (should_merge, has_overflow) =
+        should_merge_dictionary_values::<K>(&dictionaries, indices.len());
+    if !should_merge {
+        return if has_overflow {
+            interleave_fallback(arrays, indices)
+        } else {
+            interleave_fallback_dictionary::<K>(&dictionaries, indices)
+        };
     }
 
     let masks: Vec<_> = dictionaries
@@ -312,6 +321,50 @@ fn interleave_struct(
     Ok(Arc::new(struct_array))
 }
 
+fn interleave_list<O: OffsetSizeTrait>(
+    values: &[&dyn Array],
+    indices: &[(usize, usize)],
+    field: &FieldRef,
+) -> Result<ArrayRef, ArrowError> {
+    let interleaved = Interleave::<'_, GenericListArray<O>>::new(values, indices);
+
+    let mut capacity = 0usize;
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
+    offsets.push(O::from_usize(0).unwrap());
+    offsets.extend(indices.iter().map(|(array, row)| {
+        let o = interleaved.arrays[*array].value_offsets();
+        let element_len = o[*row + 1].as_usize() - o[*row].as_usize();
+        capacity += element_len;
+        O::from_usize(capacity).expect("offset overflow")
+    }));
+
+    let mut child_indices = Vec::with_capacity(capacity);
+    for (array, row) in indices {
+        let list = interleaved.arrays[*array];
+        let start = list.value_offsets()[*row].as_usize();
+        let end = list.value_offsets()[*row + 1].as_usize();
+        child_indices.extend((start..end).map(|i| (*array, i)));
+    }
+
+    let child_arrays: Vec<&dyn Array> = interleaved
+        .arrays
+        .iter()
+        .map(|list| list.values().as_ref())
+        .collect();
+
+    let interleaved_values = interleave(&child_arrays, &child_indices)?;
+
+    let offsets = OffsetBuffer::new(offsets.into());
+    let list_array = GenericListArray::<O>::new(
+        field.clone(),
+        offsets,
+        interleaved_values,
+        interleaved.nulls,
+    );
+
+    Ok(Arc::new(list_array))
+}
+
 /// Fallback implementation of interleave using [`MutableArrayData`]
 fn interleave_fallback(
     values: &[&dyn Array],
@@ -344,6 +397,76 @@ fn interleave_fallback(
     // emit final batch of rows
     array_data.extend(cur_array, start_row_idx, end_row_idx);
     Ok(make_array(array_data.freeze()))
+}
+
+/// Fallback implementation for interleaving dictionaries when it was determined
+/// that the dictionary values should not be merged. This implementation concatenates
+/// the value slices and recomputes the resulting dictionary keys.
+///
+/// # Panics
+///
+/// This function assumes that the combined dictionary values will not overflow the
+/// key type. Callers must verify this condition [`should_merge_dictionary_values`]
+/// before calling this function.
+fn interleave_fallback_dictionary<K: ArrowDictionaryKeyType>(
+    dictionaries: &[&DictionaryArray<K>],
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef, ArrowError> {
+    let relative_offsets: Vec<usize> = dictionaries
+        .iter()
+        .scan(0usize, |offset, dict| {
+            let current = *offset;
+            *offset += dict.values().len();
+            Some(current)
+        })
+        .collect();
+    let all_values: Vec<&dyn Array> = dictionaries.iter().map(|d| d.values().as_ref()).collect();
+    let concatenated_values = concat(&all_values)?;
+
+    let any_nulls = dictionaries.iter().any(|d| d.keys().nulls().is_some());
+    let (new_keys, nulls) = if any_nulls {
+        let mut has_nulls = false;
+        let new_keys: Vec<K::Native> = indices
+            .iter()
+            .map(|(array, row)| {
+                let old_keys = dictionaries[*array].keys();
+                if old_keys.is_valid(*row) {
+                    let old_key = old_keys.values()[*row].as_usize();
+                    K::Native::from_usize(relative_offsets[*array] + old_key)
+                        .expect("key overflow should be checked by caller")
+                } else {
+                    has_nulls = true;
+                    K::Native::ZERO
+                }
+            })
+            .collect();
+
+        let nulls = if has_nulls {
+            let null_buffer = BooleanBuffer::collect_bool(indices.len(), |i| {
+                let (array, row) = indices[i];
+                dictionaries[array].keys().is_valid(row)
+            });
+            Some(NullBuffer::new(null_buffer))
+        } else {
+            None
+        };
+        (new_keys, nulls)
+    } else {
+        let new_keys: Vec<K::Native> = indices
+            .iter()
+            .map(|(array, row)| {
+                let old_key = dictionaries[*array].keys().values()[*row].as_usize();
+                K::Native::from_usize(relative_offsets[*array] + old_key)
+                    .expect("key overflow should be checked by caller")
+            })
+            .collect();
+        (new_keys, None)
+    };
+
+    let keys_array = PrimitiveArray::<K>::new(new_keys.into(), nulls);
+    // SAFETY: keys_array is constructed from a valid set of keys.
+    let array = unsafe { DictionaryArray::new_unchecked(keys_array, concatenated_values) };
+    Ok(Arc::new(array))
 }
 
 /// Interleave rows by index from multiple [`RecordBatch`] instances and return a new [`RecordBatch`].
@@ -411,7 +534,8 @@ pub fn interleave_record_batch(
 mod tests {
     use super::*;
     use arrow_array::Int32RunArray;
-    use arrow_array::builder::{Int32Builder, ListBuilder, PrimitiveRunBuilder};
+    use arrow_array::builder::{GenericListBuilder, Int32Builder, PrimitiveRunBuilder};
+    use arrow_array::types::Int8Type;
     use arrow_schema::Field;
 
     #[test]
@@ -510,9 +634,43 @@ mod tests {
     }
 
     #[test]
-    fn test_lists() {
+    fn test_interleave_dictionary_overflow_same_values() {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..50).map(|i| format!("v{i}")),
+        ));
+
+        // With 3 dictionaries of 50 values each, relative_offsets = [0, 50, 100]
+        // Accessing key 49 from dict3 gives 100 + 49 = 149 which overflows Int8
+        // (max 127).
+        // This test case falls back to interleave_fallback because the
+        // dictionaries share the same underlying values slice.
+        let dict1 = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_iter_values([0, 1, 2]),
+            values.clone(),
+        );
+        let dict2 = DictionaryArray::<Int8Type>::new(
+            Int8Array::from_iter_values([0, 1, 2]),
+            values.clone(),
+        );
+        let dict3 =
+            DictionaryArray::<Int8Type>::new(Int8Array::from_iter_values([49]), values.clone());
+
+        let indices = &[(0, 0), (1, 0), (2, 0)];
+        let result = interleave(&[&dict1, &dict2, &dict3], indices).unwrap();
+
+        let dict_result = result.as_dictionary::<Int8Type>();
+        let string_result: Vec<_> = dict_result
+            .downcast_dict::<StringArray>()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap())
+            .collect();
+        assert_eq!(string_result, vec!["v0", "v0", "v49"]);
+    }
+
+    fn test_interleave_lists<O: OffsetSizeTrait>() {
         // [[1, 2], null, [3]]
-        let mut a = ListBuilder::new(Int32Builder::new());
+        let mut a = GenericListBuilder::<O, _>::new(Int32Builder::new());
         a.values().append_value(1);
         a.values().append_value(2);
         a.append(true);
@@ -522,7 +680,7 @@ mod tests {
         let a = a.finish();
 
         // [[4], null, [5, 6, null]]
-        let mut b = ListBuilder::new(Int32Builder::new());
+        let mut b = GenericListBuilder::<O, _>::new(Int32Builder::new());
         b.values().append_value(4);
         b.append(true);
         b.append(false);
@@ -533,10 +691,13 @@ mod tests {
         let b = b.finish();
 
         let values = interleave(&[&a, &b], &[(0, 2), (0, 1), (1, 0), (1, 2), (1, 1)]).unwrap();
-        let v = values.as_any().downcast_ref::<ListArray>().unwrap();
+        let v = values
+            .as_any()
+            .downcast_ref::<GenericListArray<O>>()
+            .unwrap();
 
         // [[3], null, [4], [5, 6, null], null]
-        let mut expected = ListBuilder::new(Int32Builder::new());
+        let mut expected = GenericListBuilder::<O, _>::new(Int32Builder::new());
         expected.values().append_value(3);
         expected.append(true);
         expected.append(false);
@@ -550,6 +711,16 @@ mod tests {
         let expected = expected.finish();
 
         assert_eq!(v, &expected);
+    }
+
+    #[test]
+    fn test_lists() {
+        test_interleave_lists::<i32>();
+    }
+
+    #[test]
+    fn test_large_lists() {
+        test_interleave_lists::<i64>();
     }
 
     #[test]
@@ -1001,6 +1172,32 @@ mod tests {
     }
 
     #[test]
+    #[should_panic = "assertion `left == right` failed\n  left: [1, 4, 2, 5, 6]\n right: [2, 5, 2, 5, 6]"]
+    // TODO: fix interleave of RunArrays to account for sliced RunArray's
+    // https://github.com/apache/arrow-rs/issues/9018
+    fn test_interleave_run_end_encoded_sliced() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([1, 1, 2, 2, 2, 3].into_iter().map(Some));
+        let a = builder.finish();
+        let a = a.slice(2, 3); // [2, 2, 2]
+
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([4, 5, 5, 6, 6, 6].into_iter().map(Some));
+        let b = builder.finish();
+        let b = b.slice(1, 3); // [5, 5, 6]
+
+        let indices = &[(0, 1), (1, 0), (0, 3), (1, 2), (1, 3)];
+        let result = interleave(&[&a, &b], indices).unwrap();
+
+        let result = result.as_run::<Int32Type>();
+        let result = result.downcast::<Int32Array>().unwrap();
+
+        let expected = vec![2, 5, 2, 5, 6];
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
     fn test_interleave_run_end_encoded_string() {
         let a: Int32RunArray = vec!["hello", "hello", "world", "world", "foo"]
             .into_iter()
@@ -1181,5 +1378,43 @@ mod tests {
         let v = interleave(&[&a], &[(0, 0)]).unwrap();
         assert_eq!(v.len(), 1);
         assert_eq!(v.data_type(), &DataType::Struct(fields));
+    }
+
+    #[test]
+    fn test_interleave_fallback_dictionary_with_nulls() {
+        let input_1_keys = Int32Array::from_iter([Some(0), None, Some(1)]);
+        let input_1_values = StringArray::from_iter_values(["foo", "bar"]);
+        let dict_a = DictionaryArray::new(input_1_keys, Arc::new(input_1_values));
+
+        let input_2_keys = Int32Array::from_iter([Some(0), Some(1), None]);
+        let input_2_values = StringArray::from_iter_values(["baz", "qux"]);
+        let dict_b = DictionaryArray::new(input_2_keys, Arc::new(input_2_values));
+
+        let indices = vec![
+            (0, 0), // "foo"
+            (0, 1), // null
+            (1, 0), // "baz"
+            (1, 2), // null
+            (0, 2), // "bar"
+            (1, 1), // "qux"
+        ];
+
+        let result =
+            interleave_fallback_dictionary::<Int32Type>(&[&dict_a, &dict_b], &indices).unwrap();
+        let dict_result = result.as_dictionary::<Int32Type>();
+
+        let string_result = dict_result.downcast_dict::<StringArray>().unwrap();
+        let collected: Vec<_> = string_result.into_iter().collect();
+        assert_eq!(
+            collected,
+            vec![
+                Some("foo"),
+                None,
+                Some("baz"),
+                None,
+                Some("bar"),
+                Some("qux")
+            ]
+        );
     }
 }

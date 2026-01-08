@@ -118,7 +118,33 @@ fn filter_count(filter: &BooleanArray) -> usize {
     filter.values().count_set_bits()
 }
 
-/// Remove null values by do a bitmask AND operation with null bits and the boolean bits.
+/// Convert all null values in `BooleanArray` to `false`
+///
+/// This is useful for filter-like operations which select only `true`
+/// values, but not `false` or `NULL` values
+///
+/// Internally this is implemented as a bitwise `AND` operation with null bits
+/// and the boolean bits.
+///
+/// # Example
+/// ```
+/// # use arrow_array::{Array, BooleanArray};
+/// # use arrow_select::filter::prep_null_mask_filter;
+/// let filter = BooleanArray::from(vec![
+///   Some(true),
+///   Some(false),
+///   None
+/// ]);
+/// // convert Boolean array to a filter mask
+/// let null_mask = prep_null_mask_filter(&filter);
+/// // there are no nulls in the output mask
+/// assert!(null_mask.nulls().is_none());
+/// assert_eq!(null_mask, BooleanArray::from(vec![
+///  true,
+///  false,
+///  false, // Null is converted to false
+/// ]));
+/// ```
 pub fn prep_null_mask_filter(filter: &BooleanArray) -> BooleanArray {
     let nulls = filter.nulls().unwrap();
     let mask = filter.values() & nulls.inner();
@@ -1326,6 +1352,26 @@ mod tests {
 
         assert_eq!(&actual.run_ends().values(), &expected.run_ends().values());
         assert_eq!(actual.values(), expected.values())
+    }
+
+    #[test]
+    #[should_panic = "assertion `left == right` failed\n  left: [-2, 9]\n right: [7, -2]"]
+    // TODO: fix filter of RunArrays to account for sliced RunArray's
+    // https://github.com/apache/arrow-rs/issues/9018
+    fn test_filter_run_end_encoding_array_sliced() {
+        let run_ends = Int64Array::from(vec![2, 3, 8]);
+        let values = Int64Array::from(vec![7, -2, 9]);
+        let a = RunArray::try_new(&run_ends, &values).unwrap(); // [7, 7, -2, 9, 9, 9, 9, 9]
+        let a = a.slice(2, 3); // [-2, 9, 9]
+        let b = BooleanArray::from(vec![true, false, true]);
+        let result = filter(&a, &b).unwrap();
+
+        let result = result.as_run::<Int64Type>();
+        let result = result.downcast::<Int64Array>().unwrap();
+
+        let expected = vec![-2, 9];
+        let actual = result.into_iter().flatten().collect::<Vec<_>>();
+        assert_eq!(expected, actual);
     }
 
     #[test]

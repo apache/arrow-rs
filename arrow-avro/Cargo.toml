@@ -68,7 +68,7 @@ futures = { version = "0.3", default-features = false, features = ["std"], optio
 snap = { version = "1.0", default-features = false, optional = true }
 zstd = { version = "0.13", default-features = false, optional = true }
 bzip2 = { version = "0.6.0", optional = true }
-xz = { version = "0.1", default-features = false, optional = true }
+xz = { package = "liblzma", version = "0.4", default-features = false, optional = true }
 crc = { version = "3.0", optional = true }
 strum_macros = "0.27"
 uuid = "1.17"

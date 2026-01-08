@@ -1016,9 +1016,62 @@ pub enum EdgeInterpolationAlgorithm {
     _Unknown(i32),
 }
 
+#[cfg(feature = "geospatial")]
+impl EdgeInterpolationAlgorithm {
+    /// Converts an [`EdgeInterpolationAlgorithm`] into its corresponding algorithm defined by
+    /// [`parquet_geospatial::WkbEdges`].
+    ///
+    /// This method will only return an Err if the [`EdgeInterpolationAlgorithm`] is the `_Unknown`
+    /// variant.
+    pub fn try_as_edges(&self) -> Result<parquet_geospatial::WkbEdges> {
+        match &self {
+            Self::SPHERICAL => Ok(parquet_geospatial::WkbEdges::Spherical),
+            Self::VINCENTY => Ok(parquet_geospatial::WkbEdges::Vincenty),
+            Self::THOMAS => Ok(parquet_geospatial::WkbEdges::Thomas),
+            Self::ANDOYER => Ok(parquet_geospatial::WkbEdges::Andoyer),
+            Self::KARNEY => Ok(parquet_geospatial::WkbEdges::Karney),
+            unknown => Err(general_err!(
+                "Unknown edge interpolation algorithm: {}",
+                unknown
+            )),
+        }
+    }
+}
+
 impl fmt::Display for EdgeInterpolationAlgorithm {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.write_fmt(format_args!("{0:?}", self))
+    }
+}
+
+#[cfg(feature = "geospatial")]
+impl From<parquet_geospatial::WkbEdges> for EdgeInterpolationAlgorithm {
+    fn from(value: parquet_geospatial::WkbEdges) -> Self {
+        match value {
+            parquet_geospatial::WkbEdges::Spherical => Self::SPHERICAL,
+            parquet_geospatial::WkbEdges::Vincenty => Self::VINCENTY,
+            parquet_geospatial::WkbEdges::Thomas => Self::THOMAS,
+            parquet_geospatial::WkbEdges::Andoyer => Self::ANDOYER,
+            parquet_geospatial::WkbEdges::Karney => Self::KARNEY,
+        }
+    }
+}
+
+impl FromStr for EdgeInterpolationAlgorithm {
+    type Err = ParquetError;
+
+    fn from_str(s: &str) -> Result<Self> {
+        match s.to_ascii_uppercase().as_str() {
+            "SPHERICAL" => Ok(EdgeInterpolationAlgorithm::SPHERICAL),
+            "VINCENTY" => Ok(EdgeInterpolationAlgorithm::VINCENTY),
+            "THOMAS" => Ok(EdgeInterpolationAlgorithm::THOMAS),
+            "ANDOYER" => Ok(EdgeInterpolationAlgorithm::ANDOYER),
+            "KARNEY" => Ok(EdgeInterpolationAlgorithm::KARNEY),
+            unknown => Err(general_err!(
+                "Unknown edge interpolation algorithm: {}",
+                unknown
+            )),
+        }
     }
 }
 
@@ -2459,6 +2512,35 @@ mod tests {
         assert_eq!(EdgeInterpolationAlgorithm::THOMAS.to_string(), "THOMAS");
         assert_eq!(EdgeInterpolationAlgorithm::ANDOYER.to_string(), "ANDOYER");
         assert_eq!(EdgeInterpolationAlgorithm::KARNEY.to_string(), "KARNEY");
+    }
+
+    #[test]
+    fn test_from_str_edge_algo() {
+        assert_eq!(
+            "spHErical".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::SPHERICAL
+        );
+        assert_eq!(
+            "vinceNTY".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::VINCENTY
+        );
+        assert_eq!(
+            "tHOmas".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::THOMAS
+        );
+        assert_eq!(
+            "anDOYEr".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::ANDOYER
+        );
+        assert_eq!(
+            "kaRNey".parse::<EdgeInterpolationAlgorithm>().unwrap(),
+            EdgeInterpolationAlgorithm::KARNEY
+        );
+        assert!(
+            "does not exist"
+                .parse::<EdgeInterpolationAlgorithm>()
+                .is_err()
+        );
     }
 
     fn encodings_roundtrip(mut encodings: Vec<Encoding>) {

@@ -16,10 +16,16 @@
 // under the License.
 
 use super::{Buffer, MutableBuffer};
+use crate::BooleanBuffer;
 use crate::util::bit_util::ceil;
 
 /// Apply a bitwise operation `op` to four inputs and return the result as a Buffer.
-/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// The inputs are treated as bitmaps, meaning that offsets and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_quaternary_op_helper<F>(
     buffers: [&Buffer; 4],
     offsets: [usize; 4],
@@ -59,7 +65,12 @@ where
 }
 
 /// Apply a bitwise operation `op` to two inputs and return the result as a Buffer.
-/// The inputs are treated as bitmaps, meaning that offsets and length are specified in number of bits.
+///
+/// The inputs are treated as bitmaps, meaning that offsets and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_bin_op_helper<F>(
     left: &Buffer,
     left_offset_in_bits: usize,
@@ -92,7 +103,12 @@ where
 }
 
 /// Apply a bitwise operation `op` to one input and return the result as a Buffer.
-/// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
+///
+/// The input is treated as a bitmap, meaning that offset and length are
+/// specified in number of bits.
+///
+/// NOTE: The operation `op` is applied to chunks of 64 bits (u64) and any bits
+/// outside the offsets and len are set to zero out before calling `op`.
 pub fn bitwise_unary_op_helper<F>(
     left: &Buffer,
     offset_in_bits: usize,
@@ -204,5 +220,6 @@ pub fn buffer_bin_and_not(
 /// Apply a bitwise not to one input and return the result as a Buffer.
 /// The input is treated as a bitmap, meaning that offset and length are specified in number of bits.
 pub fn buffer_unary_not(left: &Buffer, offset_in_bits: usize, len_in_bits: usize) -> Buffer {
-    bitwise_unary_op_helper(left, offset_in_bits, len_in_bits, |a| !a)
+    // TODO: should we deprecate this function in favor of the Buffer ! impl ?
+    BooleanBuffer::from_bitwise_unary_op(left, offset_in_bits, len_in_bits, |a| !a).into_inner()
 }

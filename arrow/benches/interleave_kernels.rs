@@ -116,6 +116,11 @@ fn add_benchmark(c: &mut Criterion) {
 
     let string_view = create_string_view_array(1024, 0.0);
 
+    // use 8192 as a standard list size for better coverage
+    let list_i64 = create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.1, 0.1, 20, 42);
+    let list_i64_no_nulls =
+        create_primitive_list_array_with_seed::<i32, Int64Type>(8192, 0.0, 0.0, 20, 42);
+
     let cases: &[(&str, &dyn Array)] = &[
         ("i32(0.0)", &i32),
         ("i32(0.5)", &i32_opt),
@@ -136,6 +141,8 @@ fn add_benchmark(c: &mut Criterion) {
             "struct(i32(0.0), str(20, 0.0)",
             &struct_i32_no_nulls_string_no_nulls,
         ),
+        ("list<i64>(0.1,0.1,20)", &list_i64),
+        ("list<i64>(0.0,0.0,20)", &list_i64_no_nulls),
     ];
 
     for (prefix, base) in cases {
