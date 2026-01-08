@@ -41,30 +41,6 @@ fn invalid_hex_error_at(index: usize, byte: u8) -> ArrowError {
     ))
 }
 
-fn decode_hex_to_vec(hex_string: &str, out: &mut Vec<u8>) -> Result<(), ArrowError> {
-    let bytes = hex_string.as_bytes();
-    out.reserve(bytes.len().div_ceil(2));
-
-    let mut iter = bytes.chunks_exact(2);
-    for (pair_index, pair) in (&mut iter).enumerate() {
-        let base = pair_index * 2;
-        let high = decode_hex_digit(pair[0]).ok_or_else(|| invalid_hex_error_at(base, pair[0]))?;
-        let low =
-            decode_hex_digit(pair[1]).ok_or_else(|| invalid_hex_error_at(base + 1, pair[1]))?;
-        out.push((high << 4) | low);
-    }
-
-    let remainder = iter.remainder();
-    if !remainder.is_empty() {
-        let index = (bytes.len() / 2) * 2;
-        let low = decode_hex_digit(remainder[0])
-            .ok_or_else(|| invalid_hex_error_at(index, remainder[0]))?;
-        out.push(low);
-    }
-
-    Ok(())
-}
-
 fn decode_hex_to_writer<W: Write>(hex_string: &str, writer: &mut W) -> Result<(), ArrowError> {
     let bytes = hex_string.as_bytes();
     let mut iter = bytes.chunks_exact(2);
@@ -155,6 +131,7 @@ impl FixedSizeBinaryArrayDecoder {
 impl ArrayDecoder for FixedSizeBinaryArrayDecoder {
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
         let mut builder = FixedSizeBinaryBuilder::with_capacity(pos.len(), self.len);
+        // Preallocate for the decoded byte width (FixedSizeBinary len), not the hex string length.
         let mut scratch = Vec::with_capacity(self.len as usize);
 
         for p in pos {
@@ -162,7 +139,8 @@ impl ArrayDecoder for FixedSizeBinaryArrayDecoder {
                 TapeElement::String(idx) => {
                     let string = tape.get_string(idx);
                     scratch.clear();
-                    decode_hex_to_vec(string, &mut scratch)?;
+                    scratch.reserve(string.len().div_ceil(2));
+                    decode_hex_to_writer(string, &mut scratch)?;
                     builder.append_value(&scratch)?;
                 }
                 TapeElement::Null => builder.append_null(),
@@ -188,7 +166,8 @@ impl ArrayDecoder for BinaryViewDecoder {
                 TapeElement::String(idx) => {
                     let string = tape.get_string(idx);
                     scratch.clear();
-                    decode_hex_to_vec(string, &mut scratch)?;
+                    scratch.reserve(string.len().div_ceil(2));
+                    decode_hex_to_writer(string, &mut scratch)?;
                     builder.append_value(&scratch);
                 }
                 TapeElement::Null => builder.append_null(),
@@ -227,37 +206,6 @@ mod tests {
     use std::io::Cursor;
 
     #[test]
-    fn test_decode_hex_to_vec_empty() {
-        let mut out = Vec::new();
-        decode_hex_to_vec("", &mut out).unwrap();
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn test_decode_hex_to_vec_odd_length() {
-        let mut out = Vec::new();
-        decode_hex_to_vec("0f0", &mut out).unwrap();
-        assert_eq!(out, vec![0x0f, 0x00]);
-
-        out.clear();
-        decode_hex_to_vec("a", &mut out).unwrap();
-        assert_eq!(out, vec![0x0a]);
-    }
-
-    #[test]
-    fn test_decode_hex_to_vec_invalid() {
-        let mut out = Vec::new();
-        let err = decode_hex_to_vec("0g", &mut out).unwrap_err();
-        match err {
-            ArrowError::JsonError(msg) => {
-                assert!(msg.contains("invalid hex encoding in binary data"));
-                assert!(msg.contains("position 1"));
-            }
-            _ => panic!("expected JsonError"),
-        }
-    }
-
-    #[test]
     fn test_decode_hex_to_writer_empty() {
         let mut out = Vec::new();
         decode_hex_to_writer("", &mut out).unwrap();
@@ -269,6 +217,10 @@ mod tests {
         let mut out = Vec::new();
         decode_hex_to_writer("0f0", &mut out).unwrap();
         assert_eq!(out, vec![0x0f, 0x00]);
+
+        out.clear();
+        decode_hex_to_writer("a", &mut out).unwrap();
+        assert_eq!(out, vec![0x0a]);
     }
 
     #[test]
