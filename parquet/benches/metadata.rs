@@ -168,12 +168,20 @@ fn criterion_benchmark(c: &mut Criterion) {
     let data = Bytes::from(data);
 
     c.bench_function("open(default)", |b| {
-        b.iter(|| SerializedFileReader::new(data.clone()).unwrap())
+        b.iter(|| {
+            let options = ReadOptionsBuilder::new()
+                .with_encoding_stats_as_mask(false)
+                .build();
+            SerializedFileReader::new_with_options(data.clone(), options).unwrap()
+        })
     });
 
     c.bench_function("open(page index)", |b| {
         b.iter(|| {
-            let options = ReadOptionsBuilder::new().with_page_index().build();
+            let options = ReadOptionsBuilder::new()
+                .with_page_index()
+                .with_encoding_stats_as_mask(false)
+                .build();
             SerializedFileReader::new_with_options(data.clone(), options).unwrap()
         })
     });
