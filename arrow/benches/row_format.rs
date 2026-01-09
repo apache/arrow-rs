@@ -179,7 +179,8 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
         cols.push(Arc::new(create_f64_array_with_seed(batch_size, nulls, seed)) as ArrayRef);
     }
 
-    do_bench(c, format!("{batch_size} lot of columns").as_str(), cols);
+    assert_eq!(cols.len(), 53);
+    do_bench(c, format!("{batch_size} 53 columns").as_str(), cols);
 }
 
 fn row_bench(c: &mut Criterion) {
