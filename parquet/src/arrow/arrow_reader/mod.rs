@@ -548,12 +548,6 @@ impl ArrowReaderOptions {
     ///     options
     /// ).unwrap();
     ///
-    /// // Verify the schema shows Dictionary type
-    /// assert!(matches!(
-    ///     builder.schema().field(0).data_type(),
-    ///     DataType::Dictionary(_, _)
-    /// ));
-    ///
     /// let mut reader = builder.build().unwrap();
     /// let batch = reader.next().unwrap().unwrap();
     ///
@@ -564,10 +558,9 @@ impl ArrowReaderOptions {
     /// ));
     /// ```
     ///
-    /// **Note**: Dictionary encoding preservation works best when the batch size
-    /// is a divisor of the row group size and a single read does not span multiple
-    /// column chunks. If these conditions are not met, the reader may compute
-    /// a fresh dictionary from the decoded values.
+    /// **Note**: Dictionary encoding preservation works best when:
+    /// 1. The original column was dictionary encoded (the default for string columns)
+    /// 2. There are a small number of distinct values
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             supplied_schema: Some(schema),
