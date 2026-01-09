@@ -859,8 +859,6 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     where
         K: ArrowPrimitiveType<Native = T::Native>,
     {
-        // SAFETY:
-        // Native type is the same
         PrimitiveArray::new(self.values.clone(), self.nulls.clone())
     }
 
