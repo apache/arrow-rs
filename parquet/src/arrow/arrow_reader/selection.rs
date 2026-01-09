@@ -16,7 +16,6 @@
 // under the License.
 
 use crate::arrow::ProjectionMask;
-// use crate::arrow::ProjectionMask;
 use crate::errors::ParquetError;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
 use arrow_array::{Array, BooleanArray};

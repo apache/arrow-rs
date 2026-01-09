@@ -22,7 +22,6 @@ use crate::DecodeResult;
 use crate::arrow::ProjectionMask;
 use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
-// use crate::arrow::arrow_reader::selection::RowSelectionStrategy;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
 };
