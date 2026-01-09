@@ -15,6 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use crate::arrow::ProjectionMask;
 // use crate::arrow::ProjectionMask;
 use crate::errors::ParquetError;
 use crate::file::page_index::offset_index::{OffsetIndexMetaData, PageLocation};
@@ -250,39 +251,38 @@ impl RowSelection {
         ranges
     }
 
-    // /// Returns true if this selection would skip any data pages within the provided columns
-    // fn selection_skips_any_page(
-    //     &self,
-    //     projection: &ProjectionMask,
-    //     columns: &[OffsetIndexMetaData],
-    // ) -> bool {
-    //     columns.iter().enumerate().any(|(leaf_idx, column)| {
-    //         if !projection.leaf_included(leaf_idx) {
-    //             return false;
-    //         }
+    /// Returns true if this selection would skip any data pages within the provided columns
+    fn selection_skips_any_page(
+        &self,
+        projection: &ProjectionMask,
+        columns: &[OffsetIndexMetaData],
+    ) -> bool {
+        columns.iter().enumerate().any(|(leaf_idx, column)| {
+            if !projection.leaf_included(leaf_idx) {
+                return false;
+            }
 
-    //         let locations = column.page_locations();
-    //         if locations.is_empty() {
-    //             return false;
-    //         }
+            let locations = column.page_locations();
+            if locations.is_empty() {
+                return false;
+            }
 
-    //         let ranges = self.scan_ranges(locations);
-    //         !ranges.is_empty() && ranges.len() < locations.len()
-    //     })
-    // }
+            let ranges = self.scan_ranges(locations);
+            !ranges.is_empty() && ranges.len() < locations.len()
+        })
+    }
 
-    // / Returns true if selectors should be forced, preventing mask materialisation
-    // pub(crate) fn should_force_selectors(
-    //     &self,
-    //     _projection: &ProjectionMask,
-    //     _offset_index: Option<&[OffsetIndexMetaData]>,
-    // ) -> bool {
-    //     match offset_index {
-    //         Some(columns) => self.selection_skips_any_page(projection, columns),
-    //         None => false,
-    //     }
-    //     false
-    // }
+    /// Returns true if bitmasks should be page aware
+    pub(crate) fn requires_page_aware_mask(
+        &self,
+        projection: &ProjectionMask,
+        offset_index: Option<&[OffsetIndexMetaData]>,
+    ) -> bool {
+        match offset_index {
+            Some(columns) => self.selection_skips_any_page(projection, columns),
+            None => false,
+        }
+    }
 
     /// Splits off the first `row_count` from this [`RowSelection`]
     pub fn split_off(&mut self, row_count: usize) -> Self {
@@ -779,8 +779,13 @@ impl MaskCursor {
         self.position >= self.mask.len()
     }
 
-    /// Advance through the mask representation, producing the next chunk summary
-    pub fn next_mask_chunk(&mut self, batch_size: usize, range_end: usize) -> Option<MaskChunk> {
+    /// Advance through the mask representation, producing the next chunk summary.
+    /// Optionally clips chunk boundaries to page boundaries.
+    pub fn next_mask_chunk(
+        &mut self,
+        batch_size: usize,
+        page_locations: Option<&[PageLocation]>,
+    ) -> Option<MaskChunk> {
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
 
@@ -792,9 +797,8 @@ impl MaskCursor {
             let mut cursor = start_position;
             let mut initial_skip = 0;
 
-            let limit = range_end.min(mask.len());
-
-            while cursor < limit && !mask.value(cursor) {
+            // Skip unselected rows
+            while cursor < mask.len() && !mask.value(cursor) {
                 initial_skip += 1;
                 cursor += 1;
             }
@@ -803,14 +807,29 @@ impl MaskCursor {
             let mut chunk_rows = 0;
             let mut selected_rows = 0;
 
-            // Advance until enough rows have been selected to satisfy the batch size,
-            // or until the mask is exhausted. This mirrors the behaviour of the legacy
-            // `RowSelector` queue-based iteration.
-            while cursor < limit && selected_rows < batch_size {
+            // Advance until enough rows have been selected to satisfy batch_size,
+            // or until the mask is exhausted.
+            while cursor < mask.len() && selected_rows < batch_size {
+                // Increment counters
                 chunk_rows += 1;
                 if mask.value(cursor) {
                     selected_rows += 1;
                 }
+
+                // If page boundaries are provided, clip the chunk at the first boundary
+                if let Some(pages) = page_locations {
+                    for loc in pages {
+                        // Convert first_row_index safely to usize
+                        let page_start = loc.first_row_index.try_into().unwrap_or(usize::MAX);
+                        if page_start > mask_start && page_start < mask_start + chunk_rows {
+                            // shrink chunk_rows to page boundary
+                            chunk_rows = page_start - mask_start;
+                            // stop checking further pages
+                            break;
+                        }
+                    }
+                }
+
                 cursor += 1;
             }
 

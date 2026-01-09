@@ -44,6 +44,7 @@ use crate::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
     ParquetStatisticsPolicy, RowGroupMetaData,
 };
+use crate::file::page_index::offset_index::OffsetIndexMetaData;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -1083,7 +1084,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             .build_limited()
             .build();
 
-        Ok(ParquetRecordBatchReader::new(array_reader, read_plan))
+        Ok(ParquetRecordBatchReader::new(array_reader, read_plan, None))
     }
 }
 
@@ -1185,6 +1186,7 @@ pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     read_plan: ReadPlan,
+    page_offsets: Option<Arc<Vec<OffsetIndexMetaData>>>,
 }
 
 impl Debug for ParquetRecordBatchReader {
@@ -1223,11 +1225,14 @@ impl ParquetRecordBatchReader {
             RowSelectionCursor::Mask(mask_cursor) => {
                 // Stream the record batch reader using contiguous segments of the selection
                 // mask, avoiding the need to materialize intermediate `RowSelector` ranges.
-                // Start here
-                let pages = self.array_reader.
-                for page in self.
+                let page_locations = self.page_offsets.as_ref().map(|columns| {
+                    // Use only the first column as the global guide
+                    &columns[0].page_locations()[..]
+                });
+
                 while !mask_cursor.is_empty() {
-                    let Some(mask_chunk) = mask_cursor.next_mask_chunk(batch_size, end) else {
+                    let Some(mask_chunk) = mask_cursor.next_mask_chunk(batch_size, page_locations)
+                    else {
                         return Ok(None);
                     };
 
@@ -1394,13 +1399,18 @@ impl ParquetRecordBatchReader {
             array_reader,
             schema: Arc::new(Schema::new(levels.fields.clone())),
             read_plan,
+            page_offsets: None,
         })
     }
 
     /// Create a new [`ParquetRecordBatchReader`] that will read at most `batch_size` rows at
     /// a time from [`ArrayReader`] based on the configured `selection`. If `selection` is `None`
     /// all rows will be returned
-    pub(crate) fn new(array_reader: Box<dyn ArrayReader>, read_plan: ReadPlan) -> Self {
+    pub(crate) fn new(
+        array_reader: Box<dyn ArrayReader>,
+        read_plan: ReadPlan,
+        page_offsets: Option<&[OffsetIndexMetaData]>,
+    ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(fields) => Schema::new(fields.clone()),
             _ => unreachable!("Struct array reader's data type is not struct!"),
@@ -1410,6 +1420,7 @@ impl ParquetRecordBatchReader {
             array_reader,
             schema: Arc::new(schema),
             read_plan,
+            page_offsets: page_offsets.map(|slice| Arc::new(slice.to_vec())),
         }
     }
 
