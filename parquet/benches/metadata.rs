@@ -179,14 +179,8 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let meta_data = get_footer_bytes(data.clone());
-    c.bench_function("decode parquet metadata", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata(&meta_data).unwrap();
-        })
-    });
-
     let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
-    c.bench_function("decode metadata (full stats)", |b| {
+    c.bench_function("decode parquet metadata", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
                 .unwrap();
@@ -194,7 +188,9 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let schema = ParquetMetaDataReader::decode_schema(&meta_data).unwrap();
-    let options = ParquetMetaDataOptions::new().with_schema(schema);
+    let options = ParquetMetaDataOptions::new()
+        .with_schema(schema)
+        .with_encoding_stats_as_mask(false);
     c.bench_function("decode metadata with schema", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
@@ -219,8 +215,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let options =
-        ParquetMetaDataOptions::new().with_column_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    let options = ParquetMetaDataOptions::new()
+        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_encoding_stats_as_mask(false);
     c.bench_function("decode metadata with skip column stats", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&meta_data, Some(&options))
@@ -229,21 +226,17 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 
     let buf: Bytes = black_box(encoded_meta(false, false)).into();
-    c.bench_function("decode parquet metadata (wide)", |b| {
-        b.iter(|| {
-            ParquetMetaDataReader::decode_metadata(&buf).unwrap();
-        })
-    });
-
     let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
-    c.bench_function("decode metadata (wide) (full stats)", |b| {
+    c.bench_function("decode parquet metadata (wide)", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
         })
     });
 
     let schema = ParquetMetaDataReader::decode_schema(&buf).unwrap();
-    let options = ParquetMetaDataOptions::new().with_schema(schema);
+    let options = ParquetMetaDataOptions::new()
+        .with_schema(schema)
+        .with_encoding_stats_as_mask(false);
     c.bench_function("decode metadata (wide) with schema", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
@@ -265,8 +258,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
-    let options =
-        ParquetMetaDataOptions::new().with_column_stats_policy(ParquetStatisticsPolicy::SkipAll);
+    let options = ParquetMetaDataOptions::new()
+        .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll)
+        .with_encoding_stats_as_mask(false);
     c.bench_function("decode metadata (wide) with skip column stats", |b| {
         b.iter(|| {
             ParquetMetaDataReader::decode_metadata_with_options(&buf, Some(&options)).unwrap();
