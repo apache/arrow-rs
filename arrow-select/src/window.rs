@@ -29,7 +29,6 @@ use num_traits::abs;
 /// ```
 /// # use arrow_array::Int32Array;
 /// # use arrow_select::window::shift;
-///
 /// let a: Int32Array = vec![Some(1), None, Some(4)].into();
 ///
 /// // shift array 1 element to the right

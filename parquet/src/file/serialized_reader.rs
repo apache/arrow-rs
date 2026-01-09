@@ -160,6 +160,28 @@ impl ReadOptionsBuilder {
         self
     }
 
+    /// Set whether to convert the [`encoding_stats`] in the Parquet `ColumnMetaData` to a bitmask
+    /// (defaults to `false`).
+    ///
+    /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for an explanation of why this
+    /// might be desirable.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
+    pub fn with_encoding_stats_as_mask(mut self, val: bool) -> Self {
+        self.metadata_options.set_encoding_stats_as_mask(val);
+        self
+    }
+
+    /// Sets the decoding policy for [`encoding_stats`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`encoding_stats`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
+    pub fn with_encoding_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_encoding_stats_policy(policy);
+        self
+    }
+
     /// Seal the builder and return the read options
     pub fn build(self) -> ReadOptions {
         let props = self
@@ -1833,7 +1855,10 @@ mod tests {
     fn test_file_reader_optional_metadata() {
         // file with optional metadata: bloom filters, encoding stats, column index and offset index.
         let file = get_test_file("data_index_bloom_encoding_stats.parquet");
-        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
+        let file_reader = Arc::new(SerializedFileReader::new_with_options(file, options).unwrap());
 
         let row_group_metadata = file_reader.metadata.row_group(0);
         let col0_metadata = row_group_metadata.column(0);
@@ -1855,6 +1880,63 @@ mod tests {
         // test optional offset index offset
         assert_eq!(col0_metadata.offset_index_offset().unwrap(), 181);
         assert_eq!(col0_metadata.offset_index_length().unwrap(), 11);
+    }
+
+    #[test]
+    fn test_file_reader_page_stats_mask() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(true)
+            .build();
+        let file_reader = Arc::new(SerializedFileReader::new_with_options(file, options).unwrap());
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+
+        // test page encoding stats
+        let page_encoding_stats = row_group_metadata
+            .column(0)
+            .page_encoding_stats_mask()
+            .unwrap();
+        assert!(page_encoding_stats.is_only(Encoding::PLAIN));
+        let page_encoding_stats = row_group_metadata
+            .column(2)
+            .page_encoding_stats_mask()
+            .unwrap();
+        assert!(page_encoding_stats.is_only(Encoding::PLAIN_DICTIONARY));
+    }
+
+    #[test]
+    fn test_file_reader_page_stats_skipped() {
+        let file = get_test_file("alltypes_tiny_pages.parquet");
+
+        // test skipping all
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for column in row_group_metadata.columns() {
+            assert!(column.page_encoding_stats().is_none());
+            assert!(column.page_encoding_stats_mask().is_none());
+        }
+
+        // test skipping all but one column
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(true)
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .build();
+        let file_reader = Arc::new(
+            SerializedFileReader::new_with_options(file.try_clone().unwrap(), options).unwrap(),
+        );
+
+        let row_group_metadata = file_reader.metadata.row_group(0);
+        for (idx, column) in row_group_metadata.columns().iter().enumerate() {
+            assert!(column.page_encoding_stats().is_none());
+            assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
+        }
     }
 
     #[test]
@@ -2735,12 +2817,12 @@ mod tests {
 
         let schema = reader.metadata().file_metadata().schema_descr();
         assert_eq!(
-            schema.column(0).logical_type(),
-            Some(basic::LogicalType::String)
+            schema.column(0).logical_type_ref(),
+            Some(&basic::LogicalType::String)
         );
         assert_eq!(
-            schema.column(1).logical_type(),
-            Some(basic::LogicalType::_Unknown { field_id: 2555 })
+            schema.column(1).logical_type_ref(),
+            Some(&basic::LogicalType::_Unknown { field_id: 2555 })
         );
         assert_eq!(schema.column(1).physical_type(), Type::BYTE_ARRAY);
 

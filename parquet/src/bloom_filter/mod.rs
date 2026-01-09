@@ -216,8 +216,17 @@ pub(crate) fn chunk_read_bloom_filter_header_and_offset(
 pub(crate) fn read_bloom_filter_header_and_length(
     buffer: Bytes,
 ) -> Result<(BloomFilterHeader, u64), ParquetError> {
+    read_bloom_filter_header_and_length_from_bytes(buffer.as_ref())
+}
+
+/// Given a byte slice, try to read out a bloom filter header and return both the header and
+/// length of the header.
+#[inline]
+fn read_bloom_filter_header_and_length_from_bytes(
+    buffer: &[u8],
+) -> Result<(BloomFilterHeader, u64), ParquetError> {
     let total_length = buffer.len();
-    let mut prot = ThriftSliceInputProtocol::new(buffer.as_ref());
+    let mut prot = ThriftSliceInputProtocol::new(buffer);
     let header = BloomFilterHeader::read_thrift(&mut prot)
         .map_err(|e| ParquetError::General(format!("Could not read bloom filter header: {e}")))?;
     Ok((header, (total_length - prot.as_slice().len()) as u64))
@@ -283,7 +292,8 @@ impl Sbbf {
     /// Write the bloom filter data (header and then bitset) to the output. This doesn't
     /// flush the writer in order to boost performance of bulk writing all blocks. Caller
     /// must remember to flush the writer.
-    pub(crate) fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
+    /// This method usually is used in conjunction with [`Self::from_bytes`] for serialization/deserialization.
+    pub fn write<W: Write>(&self, mut writer: W) -> Result<(), ParquetError> {
         let mut protocol = ThriftCompactOutputProtocol::new(&mut writer);
         self.header().write_thrift(&mut protocol).map_err(|e| {
             ParquetError::General(format!("Could not write bloom filter header: {e}"))
@@ -333,7 +343,7 @@ impl Sbbf {
     }
 
     /// Read a new bloom filter from the given offset in the given reader.
-    pub(crate) fn read_from_column_chunk<R: ChunkReader>(
+    pub fn read_from_column_chunk<R: ChunkReader>(
         column_metadata: &ColumnChunkMetaData,
         reader: &R,
     ) -> Result<Option<Self>, ParquetError> {
@@ -416,6 +426,54 @@ impl Sbbf {
     /// Return the total in memory size of this bloom filter in bytes
     pub(crate) fn estimated_memory_size(&self) -> usize {
         self.0.capacity() * std::mem::size_of::<Block>()
+    }
+
+    /// Reads a Sbff from Thrift encoded bytes
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use parquet::errors::Result;
+    /// # use parquet::bloom_filter::Sbbf;
+    /// # fn main() -> Result<()> {
+    /// // In a real application, you would read serialized bloom filter bytes from a cache.
+    /// // This example demonstrates the deserialization process.
+    /// // Assuming you have bloom filter bytes from a Parquet file:
+    /// # let serialized_bytes: Vec<u8> = vec![];
+    /// let bloom_filter = Sbbf::from_bytes(&serialized_bytes)?;
+    /// // Now you can use the bloom filter to check for values
+    /// if bloom_filter.check(&"some_value") {
+    ///     println!("Value might be present (or false positive)");
+    /// } else {
+    ///     println!("Value is definitely not present");
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, ParquetError> {
+        let (header, header_len) = read_bloom_filter_header_and_length_from_bytes(bytes)?;
+
+        let bitset_length: u64 = header
+            .num_bytes
+            .try_into()
+            .map_err(|_| ParquetError::General("Bloom filter length is invalid".to_string()))?;
+
+        // Validate that bitset consumes all remaining bytes
+        if header_len + bitset_length != bytes.len() as u64 {
+            return Err(ParquetError::General(format!(
+                "Bloom filter data contains extra bytes: expected {} total bytes, got {}",
+                header_len + bitset_length,
+                bytes.len()
+            )));
+        }
+
+        let start = header_len as usize;
+        let end = (header_len + bitset_length) as usize;
+        let bitset = bytes
+            .get(start..end)
+            .ok_or_else(|| ParquetError::General("Bloom filter bitset is invalid".to_string()))?;
+
+        Ok(Self::new(bitset))
     }
 }
 
@@ -539,6 +597,45 @@ mod tests {
             (1e-50, 1_000_000_000_000, 14226231280773240832),
         ] {
             assert_eq!(*num_bits, num_of_bits_from_ndv_fpp(*ndv, *fpp) as u64);
+        }
+    }
+
+    #[test]
+    fn test_sbbf_write_round_trip() {
+        // Create a bloom filter with a 32-byte bitset (minimum size)
+        let bitset_bytes = vec![0u8; 32];
+        let mut original = Sbbf::new(&bitset_bytes);
+
+        // Insert some test values
+        let test_values = ["hello", "world", "rust", "parquet", "bloom", "filter"];
+        for value in &test_values {
+            original.insert(value);
+        }
+
+        // Serialize to bytes
+        let mut output = Vec::new();
+        original.write(&mut output).unwrap();
+
+        // Validate header was written correctly
+        let mut protocol = ThriftSliceInputProtocol::new(&output);
+        let header = BloomFilterHeader::read_thrift(&mut protocol).unwrap();
+        assert_eq!(header.num_bytes, bitset_bytes.len() as i32);
+        assert_eq!(header.algorithm, BloomFilterAlgorithm::BLOCK);
+        assert_eq!(header.hash, BloomFilterHash::XXHASH);
+        assert_eq!(header.compression, BloomFilterCompression::UNCOMPRESSED);
+
+        // Deserialize using from_bytes
+        let reconstructed = Sbbf::from_bytes(&output).unwrap();
+
+        // Most importantly: verify the bloom filter WORKS correctly after round-trip
+        // Note: bloom filters can have false positives, but should never have false negatives
+        // So we can't assert !check(), but we should verify inserted values are found
+        for value in &test_values {
+            assert!(
+                reconstructed.check(value),
+                "Value '{}' should be present after round-trip",
+                value
+            );
         }
     }
 }

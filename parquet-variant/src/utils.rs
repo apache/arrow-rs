@@ -16,6 +16,7 @@
 // under the License.
 use std::{array::TryFromSliceError, ops::Range, str};
 
+use crate::VariantPathElement;
 use arrow_schema::ArrowError;
 
 use std::cmp::Ordering;
@@ -147,6 +148,38 @@ pub(crate) const fn expect_size_of<T>(expected: usize) {
 
 pub(crate) fn fits_precision<const N: u32>(n: impl Into<i64>) -> bool {
     n.into().unsigned_abs().leading_zeros() >= (i64::BITS - N)
+}
+
+// Helper fn to parse input segments like foo[0] or foo[0][0]
+#[inline]
+pub(crate) fn parse_path<'a>(segment: &'a str) -> Vec<VariantPathElement<'a>> {
+    if segment.is_empty() {
+        return Vec::new();
+    }
+
+    let mut path_elements = Vec::new();
+    let mut base = segment;
+
+    while let Some(stripped) = base.strip_suffix(']') {
+        let Some(open_pos) = stripped.rfind('[') else {
+            return vec![VariantPathElement::field(segment)];
+        };
+
+        let index_str = &stripped[open_pos + 1..];
+        let Ok(index) = index_str.parse::<usize>() else {
+            return vec![VariantPathElement::field(segment)];
+        };
+
+        path_elements.push(VariantPathElement::index(index));
+        base = &stripped[..open_pos];
+    }
+
+    if !base.is_empty() {
+        path_elements.push(VariantPathElement::field(base));
+    }
+
+    path_elements.reverse();
+    path_elements
 }
 
 #[cfg(test)]

@@ -15,19 +15,23 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow::array::{Array, ArrayRef, StringArray};
+use arrow::array::{Array, ArrayRef, BinaryViewArray, StringArray, StructArray};
 use arrow::util::test_util::seedable_rng;
+use arrow_schema::{DataType, Field, FieldRef, Fields};
 use criterion::{Criterion, criterion_group, criterion_main};
-use parquet_variant::{Variant, VariantBuilder};
+use parquet_variant::{EMPTY_VARIANT_METADATA_BYTES, Variant, VariantBuilder};
 use parquet_variant_compute::{
     GetOptions, VariantArray, VariantArrayBuilder, json_to_variant, variant_get,
 };
+use parquet_variant_json::append_json;
 use rand::Rng;
 use rand::SeedableRng;
 use rand::distr::Alphanumeric;
 use rand::rngs::StdRng;
+use serde_json::Value;
 use std::fmt::Write;
 use std::sync::Arc;
+
 fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
     let input_array = StringArray::from_iter_values(json_repeated_struct(8000));
     let array_ref: ArrayRef = Arc::new(input_array);
@@ -65,6 +69,58 @@ fn benchmark_batch_json_string_to_variant(c: &mut Criterion) {
         });
     });
 
+    let input_array = StringArray::from_iter_values(random_structure(8000, 200));
+    let total_input_bytes = input_array
+        .iter()
+        .flatten() // filter None
+        .map(|v| v.len())
+        .sum::<usize>();
+    let id = format!(
+        "batch_json_string_to_variant object - 1 depth(200 fields) random_json({} bytes per document)",
+        total_input_bytes / input_array.len()
+    );
+    let array_ref: ArrayRef = Arc::new(input_array);
+    let string_array = array_ref.as_any().downcast_ref::<StringArray>().unwrap();
+    let mut json_array: Vec<Value> = Vec::with_capacity(string_array.len());
+    for i in 0..string_array.len() {
+        json_array.push(serde_json::from_str(string_array.value(i)).unwrap());
+    }
+    c.bench_function(&id, |b| {
+        b.iter(|| {
+            let mut variant_array_builder = VariantArrayBuilder::new(string_array.len());
+            for json in &json_array {
+                append_json(json, &mut variant_array_builder).unwrap();
+            }
+            let _ = variant_array_builder.build();
+        });
+    });
+
+    let input_array = StringArray::from_iter_values(random_structure(8000, 100));
+    let total_input_bytes = input_array
+        .iter()
+        .flatten() // filter None
+        .map(|v| v.len())
+        .sum::<usize>();
+    let id = format!(
+        "batch_json_string_to_variant object - 1 depth(100 fields) random_json({} bytes per document)",
+        total_input_bytes / input_array.len()
+    );
+    let array_ref: ArrayRef = Arc::new(input_array);
+    let string_array = array_ref.as_any().downcast_ref::<StringArray>().unwrap();
+    let mut json_array: Vec<Value> = Vec::with_capacity(string_array.len());
+    for i in 0..string_array.len() {
+        json_array.push(serde_json::from_str(string_array.value(i)).unwrap());
+    }
+    c.bench_function(&id, |b| {
+        b.iter(|| {
+            let mut variant_array_builder = VariantArrayBuilder::new(string_array.len());
+            for json in &json_array {
+                append_json(json, &mut variant_array_builder).unwrap();
+            }
+            let _ = variant_array_builder.build();
+        });
+    });
+
     let input_array = StringArray::from_iter_values(random_json_structure(8000));
     let total_input_bytes = input_array
         .iter()
@@ -98,9 +154,26 @@ pub fn variant_get_bench(c: &mut Criterion) {
     });
 }
 
+pub fn variant_get_shredded_utf8_bench(c: &mut Criterion) {
+    let variant_array = create_shredded_utf8_variant_array(8192);
+    let input = ArrayRef::from(variant_array);
+
+    let field: FieldRef = Arc::new(Field::new("typed_value", DataType::Utf8, true));
+    let options = GetOptions {
+        path: vec![].into(),
+        as_type: Some(field),
+        cast_options: Default::default(),
+    };
+
+    c.bench_function("variant_get_shredded_utf8", |b| {
+        b.iter(|| variant_get(&input.clone(), options.clone()))
+    });
+}
+
 criterion_group!(
     benches,
     variant_get_bench,
+    variant_get_shredded_utf8_bench,
     benchmark_batch_json_string_to_variant
 );
 criterion_main!(benches);
@@ -119,6 +192,35 @@ fn create_primitive_variant_array(size: usize) -> VariantArray {
     }
 
     variant_builder.build()
+}
+
+/// Creates a `VariantArray` where the values are already shredded as UTF8.
+fn create_shredded_utf8_variant_array(size: usize) -> VariantArray {
+    let metadata =
+        BinaryViewArray::from_iter_values(std::iter::repeat_n(EMPTY_VARIANT_METADATA_BYTES, size));
+    let typed_value = StringArray::from_iter_values((0..size).map(|i| format!("value_{i}")));
+
+    let metadata_ref: ArrayRef = Arc::new(metadata);
+    let typed_value_ref: ArrayRef = Arc::new(typed_value);
+
+    let fields = Fields::from(vec![
+        Arc::new(Field::new(
+            "metadata",
+            metadata_ref.data_type().clone(),
+            false,
+        )),
+        Arc::new(Field::new(
+            "typed_value",
+            typed_value_ref.data_type().clone(),
+            true,
+        )),
+    ]);
+
+    let struct_array = StructArray::new(fields, vec![metadata_ref, typed_value_ref], None);
+    let struct_array_ref: ArrayRef = Arc::new(struct_array);
+
+    VariantArray::try_new(struct_array_ref.as_ref())
+        .expect("created struct should be a valid shredded variant")
 }
 
 /// Return an iterator off JSON strings, each representing a person
@@ -193,6 +295,22 @@ fn random_json_structure(count: usize) -> impl Iterator<Item = String> {
     (0..count).map(move |_| generator.next().to_string())
 }
 
+fn random_structure(count: usize, max_fields: usize) -> impl Iterator<Item = String> {
+    let mut generator = RandomJsonGenerator {
+        null_weight: 5,
+        string_weight: 25,
+        number_weight: 25,
+        boolean_weight: 10,
+        object_weight: 25,
+        array_weight: 0,
+        max_fields,
+        max_array_length: 0,
+        max_depth: 1,
+        ..Default::default()
+    };
+    (0..count).map(move |_| generator.next_object().to_string())
+}
+
 /// Creates JSON with random structure and fields.
 ///
 /// Each type is created in proportion controlled by the
@@ -250,6 +368,82 @@ impl RandomJsonGenerator {
         self.output_buffer.clear();
         self.append_random_json(0);
         &self.output_buffer
+    }
+
+    fn next_object(&mut self) -> &str {
+        self.output_buffer.clear();
+        self.append_random_json_for_object();
+        &self.output_buffer
+    }
+
+    fn append_random_json_for_object(&mut self) {
+        // use destructuring to ensure each field is used
+        let Self {
+            rng,
+            null_weight,
+            string_weight,
+            number_weight,
+            boolean_weight,
+            max_fields,
+            output_buffer,
+            ..
+        } = self;
+
+        write!(output_buffer, "{{").unwrap();
+        for i in 0..*max_fields {
+            let key_length = rng.random_range(1..=20);
+            let key: String = (0..key_length)
+                .map(|_| rng.sample(Alphanumeric) as char)
+                .collect();
+            write!(output_buffer, "\"{key}\":").unwrap();
+
+            let total_weight = *null_weight + *string_weight + *number_weight + *boolean_weight;
+
+            // Generate a random number to determine the type
+            let mut random_value: usize = rng.random_range(0..total_weight);
+
+            if random_value <= *null_weight {
+                write!(output_buffer, "null").unwrap();
+            } else {
+                random_value -= *null_weight;
+
+                if random_value <= *string_weight {
+                    // Generate a random string between 1 and 20 characters
+                    let length = rng.random_range(1..=20);
+                    let random_string: String = (0..length)
+                        .map(|_| rng.sample(Alphanumeric) as char)
+                        .collect();
+                    write!(output_buffer, "\"{random_string}\"",).unwrap();
+                } else {
+                    random_value -= *string_weight;
+
+                    if random_value <= *number_weight {
+                        // 50% chance of generating an integer or a float
+                        if rng.random_bool(0.5) {
+                            // Generate a random integer
+                            let random_integer: i64 = rng.random_range(-1000..1000);
+                            write!(output_buffer, "{random_integer}",).unwrap();
+                        } else {
+                            // Generate a random float
+                            let random_float: f64 = rng.random_range(-1000.0..1000.0);
+                            write!(output_buffer, "{random_float}",).unwrap();
+                        }
+                    } else {
+                        random_value -= *number_weight;
+
+                        if random_value <= *boolean_weight {
+                            // Generate a random boolean
+                            let random_boolean: bool = rng.random();
+                            write!(output_buffer, "{random_boolean}",).unwrap();
+                        }
+                    }
+                }
+            }
+            if i < *max_fields - 1 {
+                write!(output_buffer, ",").unwrap();
+            }
+        }
+        write!(&mut self.output_buffer, "}}").unwrap();
     }
 
     /// Appends a random JSON value to the output buffer.
