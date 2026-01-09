@@ -87,13 +87,25 @@ impl ParquetStatisticsPolicy {
 /// [`ParquetMetaData`]: crate::file::metadata::ParquetMetaData
 /// [`ParquetMetaDataReader`]: crate::file::metadata::ParquetMetaDataReader
 /// [`ParquetMetaDataPushDecoder`]: crate::file::metadata::ParquetMetaDataPushDecoder
-#[derive(Default, Debug, Clone)]
+#[derive(Debug, Clone)]
 pub struct ParquetMetaDataOptions {
     schema_descr: Option<SchemaDescPtr>,
     encoding_stats_as_mask: bool,
     encoding_stats_policy: ParquetStatisticsPolicy,
     column_stats_policy: ParquetStatisticsPolicy,
     size_stats_policy: ParquetStatisticsPolicy,
+}
+
+impl Default for ParquetMetaDataOptions {
+    fn default() -> Self {
+        Self {
+            schema_descr: None,
+            encoding_stats_as_mask: true,
+            encoding_stats_policy: ParquetStatisticsPolicy::KeepAll,
+            column_stats_policy: ParquetStatisticsPolicy::KeepAll,
+            size_stats_policy: ParquetStatisticsPolicy::KeepAll,
+        }
+    }
 }
 
 impl ParquetMetaDataOptions {
@@ -120,7 +132,7 @@ impl ParquetMetaDataOptions {
     }
 
     /// Returns whether to present the [`encoding_stats`] field of the Parquet `ColumnMetaData`
-    /// as a bitmask (defaults to `false`).
+    /// as a bitmask (defaults to `true`).
     ///
     /// See [`ColumnChunkMetaData::page_encoding_stats_mask`] for an explanation of why this
     /// might be desirable.
@@ -244,6 +256,12 @@ mod tests {
         util::test_common::file_util::get_test_file,
     };
     use std::{io::Read, sync::Arc};
+
+    #[test]
+    fn test_options_default() {
+        let options = ParquetMetaDataOptions::default();
+        assert!(options.encoding_stats_as_mask());
+    }
 
     #[test]
     fn test_provide_schema() {

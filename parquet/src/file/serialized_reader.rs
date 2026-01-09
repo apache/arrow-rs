@@ -1873,7 +1873,10 @@ mod tests {
     fn test_file_reader_optional_metadata() {
         // file with optional metadata: bloom filters, encoding stats, column index and offset index.
         let file = get_test_file("data_index_bloom_encoding_stats.parquet");
-        let file_reader = Arc::new(SerializedFileReader::new(file).unwrap());
+        let options = ReadOptionsBuilder::new()
+            .with_encoding_stats_as_mask(false)
+            .build();
+        let file_reader = Arc::new(SerializedFileReader::new_with_options(file, options).unwrap());
 
         let row_group_metadata = file_reader.metadata.row_group(0);
         let col0_metadata = row_group_metadata.column(0);
