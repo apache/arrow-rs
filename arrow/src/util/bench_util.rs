@@ -208,6 +208,33 @@ pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSize
         })
         .collect()
 }
+/// Creates a string view array of a given range, null density and length
+///
+/// Arguments:
+/// - `size`: number of  string view array
+/// - `null_density`: density of nulls in the string view array
+/// - `range`: range size of each string in the string view array
+/// - `seed`: seed for the random number generator
+pub fn create_string_view_array_with_len_range_and_seed(
+    size: usize,
+    null_density: f32,
+    range: Range<usize>,
+    seed: u64,
+) -> StringViewArray {
+    let rng = &mut StdRng::seed_from_u64(seed);
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let str_len = rng.random_range(range.clone());
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
+                Some(value)
+            }
+        })
+        .collect()
+}
 
 fn create_string_view_array_with_len_range_and_prefix(
     size: usize,
