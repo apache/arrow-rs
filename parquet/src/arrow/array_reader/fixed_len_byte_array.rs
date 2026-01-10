@@ -284,6 +284,15 @@ fn move_values<F>(
 }
 
 impl ValuesBuffer for FixedLenByteArrayBuffer {
+    fn with_capacity(_capacity: usize) -> Self {
+        // byte_length is not known at trait level, so we return a default buffer
+        // The decoder will pre-allocate when it knows both capacity and byte_length
+        Self {
+            buffer: Vec::new(),
+            byte_length: None,
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,

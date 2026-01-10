@@ -44,6 +44,19 @@ impl<I: OffsetSizeTrait> Default for OffsetBuffer<I> {
 }
 
 impl<I: OffsetSizeTrait> OffsetBuffer<I> {
+    /// Create a new `OffsetBuffer` with capacity for at least `capacity` elements
+    ///
+    /// Pre-allocates the offsets vector to avoid reallocations during reading.
+    /// The values vector is not pre-allocated as its size is unpredictable.
+    pub fn with_capacity(capacity: usize) -> Self {
+        let mut offsets = Vec::with_capacity(capacity + 1);
+        offsets.push(I::default());
+        Self {
+            offsets,
+            values: Vec::new(),
+        }
+    }
+
     /// Returns the number of byte arrays in this buffer
     pub fn len(&self) -> usize {
         self.offsets.len() - 1
@@ -139,6 +152,10 @@ impl<I: OffsetSizeTrait> OffsetBuffer<I> {
 }
 
 impl<I: OffsetSizeTrait> ValuesBuffer for OffsetBuffer<I> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
