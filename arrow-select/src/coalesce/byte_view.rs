@@ -314,6 +314,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // If creating StringViewArray output, ensure input was valid utf8 too
         let s = source.array.as_byte_view::<B>();
+
         // add any nulls, as necessary
         if let Some(nulls) = s.nulls().as_ref() {
             let nulls = nulls.slice(offset, len);
