@@ -193,6 +193,24 @@ impl NullBufferBuilder {
         }
     }
 
+    /// Extends this builder with validity values.
+    ///
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_buffer::NullBufferBuilder;
+    /// let mut builder = NullBufferBuilder::new(8);
+    /// let validities = [true, false, true, true];
+    /// builder.extend(validities.iter().copied());
+    /// assert_eq!(builder.len(), 4);
+    /// ```
+    pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
+        // Materialize since we're about to append bits
+        self.materialize_if_needed();
+
+        self.bitmap_builder.as_mut().unwrap().extend(iter)
+    }
+
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
     pub fn finish(&mut self) -> Option<NullBuffer> {
@@ -401,5 +419,44 @@ mod tests {
         builder.append_buffer(&buffer);
 
         assert_eq!(builder.finish(), None);
+    }
+
+    #[test]
+    fn test_extend() {
+        // Test small extend (less than 64 bits)
+        let mut builder = NullBufferBuilder::new(0);
+        builder.extend([true, false, true, true].iter().copied());
+        // bits: 0=true, 1=false, 2=true, 3=true -> 0b1101 = 13
+        assert_eq!(builder.as_slice().unwrap(), &[0b1101_u8]);
+
+        // Test extend with exactly 64 bits
+        let mut builder = NullBufferBuilder::new(0);
+        let pattern: Vec<bool> = (0..64).map(|i| i % 2 == 0).collect();
+        builder.extend(pattern.iter().copied());
+        // Even positions are true: 0, 2, 4, ... -> bits 0, 2, 4, ...
+        // In little-endian: 0b01010101 repeated
+        assert_eq!(
+            builder.as_slice().unwrap(),
+            &[0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55, 0x55]
+        );
+
+        // Test extend with more than 64 bits (tests chunking)
+        let mut builder = NullBufferBuilder::new(0);
+        let pattern: Vec<bool> = (0..100).map(|i| i % 3 == 0).collect();
+        builder.extend(pattern.iter().copied());
+        assert_eq!(builder.len(), 100);
+        // Verify a few specific bits
+        let buf = builder.finish().unwrap();
+        assert!(buf.is_valid(0)); // 0 % 3 == 0
+        assert!(!buf.is_valid(1)); // 1 % 3 != 0
+        assert!(!buf.is_valid(2)); // 2 % 3 != 0
+        assert!(buf.is_valid(3)); // 3 % 3 == 0
+        assert!(buf.is_valid(99)); // 99 % 3 == 0
+
+        // Test extend with non-aligned start (tests bit-by-bit path)
+        let mut builder = NullBufferBuilder::new(0);
+        builder.append_non_null(); // Start at bit 1 (non-aligned)
+        builder.extend([false, true, false, true].iter().copied());
+        assert_eq!(builder.as_slice().unwrap(), &[0b10101_u8]);
     }
 }

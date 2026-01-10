@@ -118,6 +118,132 @@ impl BooleanBufferBuilder {
         self.len = new_len;
     }
 
+    /// Advances the buffer by `additional` bits without initializing the new bytes.
+    ///
+    /// # Safety
+    /// Callers must ensure that all newly added bits are written before the buffer is read.
+    #[inline]
+    unsafe fn advance_uninit(&mut self, additional: usize) {
+        let new_len = self.len + additional;
+        let new_len_bytes = bit_util::ceil(new_len, 8);
+        if new_len_bytes > self.buffer.len() {
+            self.buffer.reserve(new_len_bytes - self.buffer.len());
+            // SAFETY: caller will initialize all newly exposed bytes
+            unsafe { self.buffer.set_len(new_len_bytes) };
+        }
+        self.len = new_len;
+    }
+
+    /// Extends this builder with boolean values.
+    ///
+    /// This requires `iter` to report an exact size via `size_hint`.
+    #[inline]
+    pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
+        let (lower, upper) = iter.size_hint();
+        let len = upper.expect("Iterator must have exact size_hint");
+        assert_eq!(lower, len, "Iterator must have exact size_hint");
+
+        if len == 0 {
+            return;
+        }
+
+        let start_len = self.len;
+        let end_bit = start_len + len;
+
+        // SAFETY: we will initialize all newly exposed bytes before they are read
+        unsafe { self.advance_uninit(len) };
+        let slice = self.buffer.as_slice_mut();
+
+        let mut iter = iter;
+        let mut bit_idx = start_len;
+
+        // ---- Unaligned prefix: advance to the next 64-bit boundary ----
+        let misalignment = bit_idx & 63;
+        let prefix_bits = if misalignment == 0 {
+            0
+        } else {
+            (64 - misalignment).min(end_bit - bit_idx)
+        };
+
+        if prefix_bits != 0 {
+            let byte_start = bit_idx / 8;
+            let byte_end = bit_util::ceil(bit_idx + prefix_bits, 8);
+            let bit_offset = bit_idx % 8;
+
+            // Clear any newly-visible bits in the existing partial byte
+            if bit_offset != 0 {
+                let keep_mask = (1u8 << bit_offset).wrapping_sub(1);
+                slice[byte_start] &= keep_mask;
+            }
+
+            // Zero any new bytes we will partially fill in this prefix
+            let zero_from = if bit_offset == 0 {
+                byte_start
+            } else {
+                byte_start + 1
+            };
+            if byte_end > zero_from {
+                slice[zero_from..byte_end].fill(0);
+            }
+
+            for _ in 0..prefix_bits {
+                let v = iter.next().unwrap();
+                if v {
+                    let byte_idx = bit_idx / 8;
+                    let bit = bit_idx % 8;
+                    slice[byte_idx] |= 1 << bit;
+                }
+                bit_idx += 1;
+            }
+        }
+
+        if bit_idx < end_bit {
+            // ---- Aligned middle: write u64 chunks ----
+            debug_assert_eq!(bit_idx & 63, 0);
+            let remaining_bits = end_bit - bit_idx;
+            let chunks = remaining_bits / 64;
+
+            let words_start = bit_idx / 8;
+            let words_end = words_start + chunks * 8;
+            for dst in slice[words_start..words_end].chunks_exact_mut(8) {
+                let mut packed: u64 = 0;
+                for i in 0..64 {
+                    packed |= (iter.next().unwrap() as u64) << i;
+                }
+                dst.copy_from_slice(&packed.to_le_bytes());
+                bit_idx += 64;
+            }
+
+            // ---- Unaligned suffix: remaining < 64 bits ----
+            let suffix_bits = end_bit - bit_idx;
+            if suffix_bits != 0 {
+                debug_assert_eq!(bit_idx % 8, 0);
+                let byte_start = bit_idx / 8;
+                let byte_end = bit_util::ceil(end_bit, 8);
+                slice[byte_start..byte_end].fill(0);
+
+                for _ in 0..suffix_bits {
+                    let v = iter.next().unwrap();
+                    if v {
+                        let byte_idx = bit_idx / 8;
+                        let bit = bit_idx % 8;
+                        slice[byte_idx] |= 1 << bit;
+                    }
+                    bit_idx += 1;
+                }
+            }
+        }
+
+        // Clear any unused bits in the last byte
+        let remainder = end_bit % 8;
+        if remainder != 0 {
+            let mask = (1u8 << remainder).wrapping_sub(1);
+            slice[bit_util::ceil(end_bit, 8) - 1] &= mask;
+        }
+
+        debug_assert_eq!(bit_idx, end_bit);
+    }
+
     /// Truncates the builder to the given length
     ///
     /// If `len` is greater than the buffer's current length, this has no effect
