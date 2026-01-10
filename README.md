@@ -31,7 +31,7 @@ project is governed by the Apache Software Foundation's [code of
 conduct](https://www.apache.org/foundation/policies/conduct.html).
 
 We use GitHub [issues] and [pull requests] for all technical discussions, reviews,
-new features, bug fixes and release coordiation. This ensures that all communication
+new features, bug fixes and release coordination. This ensures that all communication
 is public and archived for future reference.
 
 The `dev@arrow.apache.org` mailing list is the communication channel for the overall Apache Arrow community.
