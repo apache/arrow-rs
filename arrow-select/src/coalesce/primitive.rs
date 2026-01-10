@@ -49,12 +49,6 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
             current: vec![],
         }
     }
-}
-
-impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray<T> {
-    fn set_source(&mut self, source: Option<ArrayRef>) {
-        self.source = source;
-    }
 
     /// Allocate space for output values if necessary.
     ///
@@ -63,8 +57,15 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
     fn ensure_capacity(&mut self) {
         self.current.reserve(self.batch_size - self.current.len());
     }
+}
+
+impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray<T> {
+    fn set_source(&mut self, source: Option<ArrayRef>) {
+        self.source = source;
+    }
 
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
+        self.ensure_capacity();
         let s = self
             .source
             .as_ref()

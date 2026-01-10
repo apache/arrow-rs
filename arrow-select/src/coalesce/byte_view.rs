@@ -93,6 +93,14 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         }
     }
 
+    /// Allocate space for output views and nulls if needed
+    ///
+    /// This is done on write (when we know it is necessary) rather than
+    /// eagerly to avoid allocations that are not used.
+    fn ensure_capacity(&mut self) {
+        self.views.reserve(self.batch_size - self.views.len());
+    }
+
     /// Finishes in progress buffer, if any
     fn finish_current(&mut self) {
         let Some(next_buffer) = self.current.take() else {
@@ -295,15 +303,8 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         })
     }
 
-    /// Allocate space for output views and nulls if needed
-    ///
-    /// This is done on write (when we know it is necessary) rather than
-    /// eagerly to avoid allocations that are not used.
-    fn ensure_capacity(&mut self) {
-        self.views.reserve(self.batch_size - self.views.len());
-    }
-
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
+        self.ensure_capacity();
         let source = self.source.take().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
                 "Internal Error: InProgressByteViewArray: source not set".to_string(),
