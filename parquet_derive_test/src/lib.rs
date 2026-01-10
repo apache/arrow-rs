@@ -592,14 +592,14 @@ mod heap_size_tests {
     struct WithIgnore {
         data: String,
         #[heap_size(ignore)]
-        ignored: Vec<u8>,
+        _ignored: Vec<u8>,
     }
 
     #[test]
     fn test_heap_size_ignore_attribute() {
         let s = WithIgnore {
             data: "hello".to_string(),
-            ignored: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], // 10 bytes, but ignored
+            _ignored: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], // 10 bytes, but ignored
         };
         let size = s.heap_size();
         // Should only count the String, not the Vec

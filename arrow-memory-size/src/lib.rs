@@ -397,14 +397,14 @@ impl<T0: HeapSize, T1: HeapSize, T2: HeapSize, T3: HeapSize, T4: HeapSize, T5: H
 }
 
 impl<
-        T0: HeapSize,
-        T1: HeapSize,
-        T2: HeapSize,
-        T3: HeapSize,
-        T4: HeapSize,
-        T5: HeapSize,
-        T6: HeapSize,
-    > HeapSize for (T0, T1, T2, T3, T4, T5, T6)
+    T0: HeapSize,
+    T1: HeapSize,
+    T2: HeapSize,
+    T3: HeapSize,
+    T4: HeapSize,
+    T5: HeapSize,
+    T6: HeapSize,
+> HeapSize for (T0, T1, T2, T3, T4, T5, T6)
 {
     fn heap_size(&self) -> usize {
         self.0.heap_size()
@@ -418,15 +418,15 @@ impl<
 }
 
 impl<
-        T0: HeapSize,
-        T1: HeapSize,
-        T2: HeapSize,
-        T3: HeapSize,
-        T4: HeapSize,
-        T5: HeapSize,
-        T6: HeapSize,
-        T7: HeapSize,
-    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7)
+    T0: HeapSize,
+    T1: HeapSize,
+    T2: HeapSize,
+    T3: HeapSize,
+    T4: HeapSize,
+    T5: HeapSize,
+    T6: HeapSize,
+    T7: HeapSize,
+> HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7)
 {
     fn heap_size(&self) -> usize {
         self.0.heap_size()
@@ -441,16 +441,16 @@ impl<
 }
 
 impl<
-        T0: HeapSize,
-        T1: HeapSize,
-        T2: HeapSize,
-        T3: HeapSize,
-        T4: HeapSize,
-        T5: HeapSize,
-        T6: HeapSize,
-        T7: HeapSize,
-        T8: HeapSize,
-    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+    T0: HeapSize,
+    T1: HeapSize,
+    T2: HeapSize,
+    T3: HeapSize,
+    T4: HeapSize,
+    T5: HeapSize,
+    T6: HeapSize,
+    T7: HeapSize,
+    T8: HeapSize,
+> HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
 {
     fn heap_size(&self) -> usize {
         self.0.heap_size()
@@ -466,17 +466,17 @@ impl<
 }
 
 impl<
-        T0: HeapSize,
-        T1: HeapSize,
-        T2: HeapSize,
-        T3: HeapSize,
-        T4: HeapSize,
-        T5: HeapSize,
-        T6: HeapSize,
-        T7: HeapSize,
-        T8: HeapSize,
-        T9: HeapSize,
-    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+    T0: HeapSize,
+    T1: HeapSize,
+    T2: HeapSize,
+    T3: HeapSize,
+    T4: HeapSize,
+    T5: HeapSize,
+    T6: HeapSize,
+    T7: HeapSize,
+    T8: HeapSize,
+    T9: HeapSize,
+> HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
 {
     fn heap_size(&self) -> usize {
         self.0.heap_size()
@@ -493,18 +493,18 @@ impl<
 }
 
 impl<
-        T0: HeapSize,
-        T1: HeapSize,
-        T2: HeapSize,
-        T3: HeapSize,
-        T4: HeapSize,
-        T5: HeapSize,
-        T6: HeapSize,
-        T7: HeapSize,
-        T8: HeapSize,
-        T9: HeapSize,
-        T10: HeapSize,
-    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+    T0: HeapSize,
+    T1: HeapSize,
+    T2: HeapSize,
+    T3: HeapSize,
+    T4: HeapSize,
+    T5: HeapSize,
+    T6: HeapSize,
+    T7: HeapSize,
+    T8: HeapSize,
+    T9: HeapSize,
+    T10: HeapSize,
+> HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
 {
     fn heap_size(&self) -> usize {
         self.0.heap_size()
@@ -522,19 +522,19 @@ impl<
 }
 
 impl<
-        T0: HeapSize,
-        T1: HeapSize,
-        T2: HeapSize,
-        T3: HeapSize,
-        T4: HeapSize,
-        T5: HeapSize,
-        T6: HeapSize,
-        T7: HeapSize,
-        T8: HeapSize,
-        T9: HeapSize,
-        T10: HeapSize,
-        T11: HeapSize,
-    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+    T0: HeapSize,
+    T1: HeapSize,
+    T2: HeapSize,
+    T3: HeapSize,
+    T4: HeapSize,
+    T5: HeapSize,
+    T6: HeapSize,
+    T7: HeapSize,
+    T8: HeapSize,
+    T9: HeapSize,
+    T10: HeapSize,
+    T11: HeapSize,
+> HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
 {
     fn heap_size(&self) -> usize {
         self.0.heap_size()

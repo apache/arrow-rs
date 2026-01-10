@@ -100,8 +100,8 @@ extern crate proc_macro;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, Data, DataEnum, DataStruct, DeriveInput, Expr, Fields, GenericParam, Lit,
-    Path, Type,
+    Data, DataEnum, DataStruct, DeriveInput, Expr, Fields, GenericParam, Lit, Path, Type,
+    parse_macro_input,
 };
 
 /// Field attribute configuration parsed from `#[heap_size(...)]`
