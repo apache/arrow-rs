@@ -16,25 +16,25 @@
 # under the License.
 
 [package]
-name = "parquet_derive_test"
+name = "arrow-memory-size-derive"
 version = { workspace = true }
-license = { workspace = true }
-description = "Integration test package for parquet-derive"
+description = "Derive macro for HeapSize trait"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
-keywords = [ "parquet" ]
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
 edition = { workspace = true }
-publish = false
 rust-version = { workspace = true }
 
-[dependencies]
-parquet = { workspace = true }
-parquet_derive = { path = "../parquet_derive", default-features = false }
-arrow-memory-size = { workspace = true }
-arrow-memory-size-derive = { workspace = true }
-chrono = { workspace = true }
-uuid = { version = "1", features = ["v4"] }
+[lib]
+proc-macro = true
 
 [package.metadata.docs.rs]
 all-features = true
+
+[dependencies]
+proc-macro2 = { version = "1.0", default-features = false }
+quote = { version = "1.0", default-features = false }
+syn = { version = "2.0", features = ["extra-traits"] }

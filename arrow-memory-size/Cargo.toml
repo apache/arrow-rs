@@ -16,25 +16,29 @@
 # under the License.
 
 [package]
-name = "parquet_derive_test"
+name = "arrow-memory-size"
 version = { workspace = true }
-license = { workspace = true }
-description = "Integration test package for parquet-derive"
+description = "Memory size estimation utilities for Apache Arrow"
 homepage = { workspace = true }
 repository = { workspace = true }
 authors = { workspace = true }
-keywords = [ "parquet" ]
+license = { workspace = true }
+keywords = { workspace = true }
+include = { workspace = true }
 edition = { workspace = true }
-publish = false
 rust-version = { workspace = true }
 
-[dependencies]
-parquet = { workspace = true }
-parquet_derive = { path = "../parquet_derive", default-features = false }
-arrow-memory-size = { workspace = true }
-arrow-memory-size-derive = { workspace = true }
-chrono = { workspace = true }
-uuid = { version = "1", features = ["v4"] }
+[lib]
+name = "arrow_memory_size"
+bench = false
 
 [package.metadata.docs.rs]
 all-features = true
+
+[dependencies]
+arrow-buffer = { workspace = true }
+arrow-schema = { workspace = true }
+arrow-data = { workspace = true }
+arrow-array = { workspace = true }
+
+[dev-dependencies]

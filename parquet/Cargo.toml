@@ -43,6 +43,7 @@ arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
+arrow-memory-size = { workspace = true }
 arrow-ipc = { workspace = true, optional = true }
 parquet-geospatial = { workspace = true, optional = true }
 parquet-variant = { workspace = true, optional = true }
