@@ -19,8 +19,8 @@
 
 use arrow_memory_size::HeapSize;
 
-use crate::types::{ArrowDictionaryKeyType, ArrowPrimitiveType, RunEndIndexType};
 use crate::Array;
+use crate::types::{ArrowDictionaryKeyType, ArrowPrimitiveType, RunEndIndexType};
 use crate::{
     BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray, FixedSizeBinaryArray,
     FixedSizeListArray, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
@@ -217,5 +217,4 @@ mod tests {
         let size = array.heap_size();
         assert!(size > 0);
     }
-
 }
