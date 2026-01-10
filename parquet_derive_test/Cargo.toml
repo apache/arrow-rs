@@ -31,8 +31,6 @@ rust-version = { workspace = true }
 [dependencies]
 parquet = { workspace = true }
 parquet_derive = { path = "../parquet_derive", default-features = false }
-arrow-memory-size = { workspace = true }
-arrow-memory-size-derive = { workspace = true }
 chrono = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 
