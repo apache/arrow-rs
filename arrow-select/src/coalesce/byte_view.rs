@@ -37,7 +37,7 @@ use std::sync::Arc;
 /// [`BinaryViewArray`]: arrow_array::BinaryViewArray
 pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     /// The source array and information
-    source: Option<Source<B>>,
+    source: Option<Source>,
     /// the target batch size (and thus size for views allocation)
     batch_size: usize,
     /// The in progress views
@@ -55,9 +55,9 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     _phantom: PhantomData<B>,
 }
 
-struct Source<B: ByteViewType> {
+struct Source {
     /// The array to copy form
-    array: GenericByteViewArray<B>,
+    array: ArrayRef,
     /// Should the strings from the source array be copied into new buffers?
     need_gc: bool,
     /// How many bytes were actually used in the source array's buffers?
@@ -288,7 +288,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             };
 
             Source {
-                array: s.clone(),
+                array,
                 need_gc,
                 ideal_buffer_size,
             }
@@ -311,8 +311,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         })?;
 
         // If creating StringViewArray output, ensure input was valid utf8 too
-        let s = &source.array;
-
+        let s = source.array.as_byte_view::<B>();
         // add any nulls, as necessary
         if let Some(nulls) = s.nulls().as_ref() {
             let nulls = nulls.slice(offset, len);

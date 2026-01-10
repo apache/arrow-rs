@@ -49,8 +49,6 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
             current: vec![],
         }
     }
-
-
 }
 
 impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray<T> {
