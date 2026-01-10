@@ -259,6 +259,132 @@ impl BooleanBufferBuilder {
     pub fn finish_cloned(&self) -> BooleanBuffer {
         BooleanBuffer::new(Buffer::from_slice_ref(self.as_slice()), 0, self.len)
     }
+
+    /// Advances the buffer by `additional` bits without initializing the new bytes.
+    ///
+    /// # Safety
+    /// Callers must ensure that all newly added bits are written before the buffer is read.
+    #[inline]
+    unsafe fn advance_uninit(&mut self, additional: usize) {
+        let new_len = self.len + additional;
+        let new_len_bytes = bit_util::ceil(new_len, 8);
+        if new_len_bytes > self.buffer.len() {
+            self.buffer.reserve(new_len_bytes - self.buffer.len());
+            // SAFETY: caller will initialize all newly exposed bytes
+            unsafe { self.buffer.set_len(new_len_bytes) };
+        }
+        self.len = new_len;
+    }
+
+    /// Extends this builder with boolean values.
+    ///
+    /// This requires `iter` to report an exact size via `size_hint`.
+    #[inline]
+    pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
+        let (lower, upper) = iter.size_hint();
+        let len = upper.expect("Iterator must have exact size_hint");
+        assert_eq!(lower, len, "Iterator must have exact size_hint");
+
+        if len == 0 {
+            return;
+        }
+
+        let start_len = self.len;
+        let end_bit = start_len + len;
+
+        // SAFETY: we will initialize all newly exposed bytes before they are read
+        unsafe { self.advance_uninit(len) };
+        let slice = self.buffer.as_slice_mut();
+
+        let mut iter = iter;
+        let mut bit_idx = start_len;
+
+        // ---- Unaligned prefix: advance to the next 64-bit boundary ----
+        let misalignment = bit_idx & 63;
+        let prefix_bits = if misalignment == 0 {
+            0
+        } else {
+            (64 - misalignment).min(end_bit - bit_idx)
+        };
+
+        if prefix_bits != 0 {
+            let byte_start = bit_idx / 8;
+            let byte_end = bit_util::ceil(bit_idx + prefix_bits, 8);
+            let bit_offset = bit_idx % 8;
+
+            // Clear any newly-visible bits in the existing partial byte
+            if bit_offset != 0 {
+                let keep_mask = (1u8 << bit_offset).wrapping_sub(1);
+                slice[byte_start] &= keep_mask;
+            }
+
+            // Zero any new bytes we will partially fill in this prefix
+            let zero_from = if bit_offset == 0 {
+                byte_start
+            } else {
+                byte_start + 1
+            };
+            if byte_end > zero_from {
+                slice[zero_from..byte_end].fill(0);
+            }
+
+            for _ in 0..prefix_bits {
+                let v = iter.next().unwrap();
+                if v {
+                    let byte_idx = bit_idx / 8;
+                    let bit = bit_idx % 8;
+                    slice[byte_idx] |= 1 << bit;
+                }
+                bit_idx += 1;
+            }
+        }
+
+        if bit_idx < end_bit {
+            // ---- Aligned middle: write u64 chunks ----
+            debug_assert_eq!(bit_idx & 63, 0);
+            let remaining_bits = end_bit - bit_idx;
+            let chunks = remaining_bits / 64;
+
+            let words_start = bit_idx / 8;
+            let words_end = words_start + chunks * 8;
+            for dst in slice[words_start..words_end].chunks_exact_mut(8) {
+                let mut packed: u64 = 0;
+                for i in 0..64 {
+                    packed |= (iter.next().unwrap() as u64) << i;
+                }
+                dst.copy_from_slice(&packed.to_le_bytes());
+                bit_idx += 64;
+            }
+
+            // ---- Unaligned suffix: remaining < 64 bits ----
+            let suffix_bits = end_bit - bit_idx;
+            if suffix_bits != 0 {
+                debug_assert_eq!(bit_idx % 8, 0);
+                let byte_start = bit_idx / 8;
+                let byte_end = bit_util::ceil(end_bit, 8);
+                slice[byte_start..byte_end].fill(0);
+
+                for _ in 0..suffix_bits {
+                    let v = iter.next().unwrap();
+                    if v {
+                        let byte_idx = bit_idx / 8;
+                        let bit = bit_idx % 8;
+                        slice[byte_idx] |= 1 << bit;
+                    }
+                    bit_idx += 1;
+                }
+            }
+        }
+
+        // Clear any unused bits in the last byte
+        let remainder = end_bit % 8;
+        if remainder != 0 {
+            let mask = (1u8 << remainder).wrapping_sub(1);
+            slice[bit_util::ceil(end_bit, 8) - 1] &= mask;
+        }
+
+        debug_assert_eq!(bit_idx, end_bit);
+    }
 }
 
 impl From<BooleanBufferBuilder> for Buffer {
@@ -525,5 +651,66 @@ mod tests {
 
         assert_eq!(buf.len(), buf2.inner().len());
         assert_eq!(buf.as_slice(), buf2.values());
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools = vec![true, false, true, true, false, true, true, true, false];
+        builder.extend(bools.clone().into_iter());
+        assert_eq!(builder.len(), 9);
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().enumerate() {
+            assert_eq!(finished.value(i), v);
+        }
+
+        // Test > 64 bits
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
+        builder.extend(bools.clone().into_iter());
+        assert_eq!(builder.len(), 100);
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().enumerate() {
+            assert_eq!(finished.value(i), v, "at index {}", i);
+        }
+    }
+
+    #[test]
+    fn test_extend_misaligned() {
+        // Test misaligned start
+        for offset in 1..65 {
+            let mut builder = BooleanBufferBuilder::new(0);
+            builder.append_n(offset, false);
+
+            let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
+            builder.extend(bools.clone().into_iter());
+            assert_eq!(builder.len(), offset + 100);
+
+            let finished = builder.finish();
+            for i in 0..offset {
+                assert!(!finished.value(i));
+            }
+            for (i, v) in bools.into_iter().enumerate() {
+                assert_eq!(finished.value(offset + i), v, "at index {}", offset + i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_extend_misaligned_end() {
+        for len in 1..130 {
+            let mut builder = BooleanBufferBuilder::new(0);
+            let mut bools: Vec<_> = (0..len).map(|i| i % 2 == 0).collect();
+            builder.extend(bools.clone().into_iter());
+            builder.extend(bools.clone().into_iter());
+            let copy = bools.clone();
+            bools.extend(copy);
+            assert_eq!(builder.len(), 2 * len);
+
+            let finished = builder.finish();
+            for (i, &v) in bools.iter().enumerate() {
+                assert_eq!(finished.value(i), v, "at index {} for len {}", i, len);
+            }
+        }
     }
 }
