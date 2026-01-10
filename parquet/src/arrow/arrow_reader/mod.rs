@@ -634,6 +634,24 @@ impl ArrowReaderOptions {
         self
     }
 
+    /// Sets the decoding policy for [`statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L912
+    pub fn with_column_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_column_stats_policy(policy);
+        self
+    }
+
+    /// Sets the decoding policy for [`size_statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`size_statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L936
+    pub fn with_size_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_size_stats_policy(policy);
+        self
+    }
+
     /// Provide the file decryption properties to use when reading encrypted parquet files.
     ///
     /// If encryption is enabled and the file is encrypted, the `file_decryption_properties` must be provided.
@@ -1577,14 +1595,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_page_encoding_stats_skipped() {
+    fn test_stats_stats_skipped() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let file = File::open(path).unwrap();
 
         // test skipping all
-        let arrow_options =
-            ArrowReaderOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+        let arrow_options = ArrowReaderOptions::new()
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll);
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,
@@ -1595,12 +1614,14 @@ pub(crate) mod tests {
         for column in row_group_metadata.columns() {
             assert!(column.page_encoding_stats().is_none());
             assert!(column.page_encoding_stats_mask().is_none());
+            assert!(column.statistics().is_none());
         }
 
         // test skipping all but one column and converting to mask
         let arrow_options = ArrowReaderOptions::new()
             .with_encoding_stats_as_mask(true)
-            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]));
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .with_column_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]));
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,
@@ -1611,6 +1632,47 @@ pub(crate) mod tests {
         for (idx, column) in row_group_metadata.columns().iter().enumerate() {
             assert!(column.page_encoding_stats().is_none());
             assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
+            assert_eq!(column.statistics().is_some(), idx == 0);
+        }
+    }
+
+    #[test]
+    fn test_size_stats_stats_skipped() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/repeated_primitive_no_list.parquet");
+        let file = File::open(path).unwrap();
+
+        // test skipping all
+        let arrow_options =
+            ArrowReaderOptions::new().with_size_stats_policy(ParquetStatisticsPolicy::SkipAll);
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.try_clone().unwrap(),
+            arrow_options,
+        )
+        .unwrap();
+
+        let row_group_metadata = builder.metadata.row_group(0);
+        for column in row_group_metadata.columns() {
+            assert!(column.repetition_level_histogram().is_none());
+            assert!(column.definition_level_histogram().is_none());
+            assert!(column.unencoded_byte_array_data_bytes().is_none());
+        }
+
+        // test skipping all but one column and converting to mask
+        let arrow_options = ArrowReaderOptions::new()
+            .with_encoding_stats_as_mask(true)
+            .with_size_stats_policy(ParquetStatisticsPolicy::skip_except(&[1]));
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.try_clone().unwrap(),
+            arrow_options,
+        )
+        .unwrap();
+
+        let row_group_metadata = builder.metadata.row_group(0);
+        for (idx, column) in row_group_metadata.columns().iter().enumerate() {
+            assert_eq!(column.repetition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.definition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.unencoded_byte_array_data_bytes().is_some(), idx == 1);
         }
     }
 
