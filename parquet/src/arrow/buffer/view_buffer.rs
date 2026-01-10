@@ -105,6 +105,10 @@ impl ViewBuffer {
 }
 
 impl ValuesBuffer for ViewBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,

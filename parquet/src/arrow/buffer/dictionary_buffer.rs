@@ -194,6 +194,12 @@ impl<K: ArrowNativeType + Ord, V: OffsetSizeTrait> DictionaryBuffer<K, V> {
 }
 
 impl<K: ArrowNativeType, V: OffsetSizeTrait> ValuesBuffer for DictionaryBuffer<K, V> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::Values {
+            values: OffsetBuffer::with_capacity(capacity),
+        }
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,

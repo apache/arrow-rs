@@ -58,6 +58,8 @@ pub struct GenericRecordReader<V, CV> {
     num_values: usize,
     /// Number of buffered records
     num_records: usize,
+    /// Capacity hint for pre-allocating buffers based on batch size
+    capacity_hint: usize,
 }
 
 impl<V, CV> GenericRecordReader<V, CV>
@@ -67,19 +69,23 @@ where
 {
     /// Create a new [`GenericRecordReader`]
     pub fn new(desc: ColumnDescPtr) -> Self {
+        // Start with a reasonable default capacity to avoid zero reallocations on first batch
+        const DEFAULT_CAPACITY: usize = 1024;
+
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
         let rep_levels = (desc.max_rep_level() > 0).then(Vec::new);
 
         Self {
-            values: V::default(),
+            values: V::with_capacity(DEFAULT_CAPACITY),
             def_levels,
             rep_levels,
             column_reader: None,
             column_desc: desc,
             num_values: 0,
             num_records: 0,
+            capacity_hint: DEFAULT_CAPACITY,
         }
     }
 
@@ -169,7 +175,9 @@ where
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_record_data(&mut self) -> V {
-        std::mem::take(&mut self.values)
+        // Replace the buffer with a new one that has the same capacity
+        // This avoids reallocations on subsequent batches
+        std::mem::replace(&mut self.values, V::with_capacity(self.capacity_hint))
     }
 
     /// Returns currently stored null bitmap data for nullable columns.
@@ -208,6 +216,11 @@ where
 
     /// Try to read one batch of data returning the number of records read
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
+        // Update capacity hint to the largest batch size seen
+        if batch_size > self.capacity_hint {
+            self.capacity_hint = batch_size;
+        }
+
         let (records_read, values_read, levels_read) =
             self.column_reader.as_mut().unwrap().read_records(
                 batch_size,
