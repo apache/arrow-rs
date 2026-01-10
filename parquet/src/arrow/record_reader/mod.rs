@@ -58,6 +58,8 @@ pub struct GenericRecordReader<V, CV> {
     num_values: usize,
     /// Number of buffered records
     num_records: usize,
+    /// Capacity hint for pre-allocating buffers based on batch size
+    capacity_hint: usize,
 }
 
 impl<V, CV> GenericRecordReader<V, CV>
@@ -66,20 +68,25 @@ where
     CV: ColumnValueDecoder<Buffer = V>,
 {
     /// Create a new [`GenericRecordReader`]
-    pub fn new(desc: ColumnDescPtr) -> Self {
+    ///
+    /// The capacity is used to pre-allocate internal buffers, avoiding reallocations
+    /// when reading the first batch of data. For optimal performance, set this to
+    /// the expected batch size.
+    pub fn new(desc: ColumnDescPtr, capacity: usize) -> Self {
         let def_levels = (desc.max_def_level() > 0)
             .then(|| DefinitionLevelBuffer::new(&desc, packed_null_mask(&desc)));
 
         let rep_levels = (desc.max_rep_level() > 0).then(Vec::new);
 
         Self {
-            values: V::default(),
+            values: V::with_capacity(capacity),
             def_levels,
             rep_levels,
             column_reader: None,
             column_desc: desc,
             num_values: 0,
             num_records: 0,
+            capacity_hint: capacity,
         }
     }
 
@@ -169,7 +176,9 @@ where
     /// Returns currently stored buffer data.
     /// The side effect is similar to `consume_def_levels`.
     pub fn consume_record_data(&mut self) -> V {
-        std::mem::take(&mut self.values)
+        // Replace the buffer with a new one that has the same capacity
+        // This avoids reallocations on subsequent batches
+        std::mem::replace(&mut self.values, V::with_capacity(self.capacity_hint))
     }
 
     /// Returns currently stored null bitmap data for nullable columns.
@@ -208,6 +217,11 @@ where
 
     /// Try to read one batch of data returning the number of records read
     fn read_one_batch(&mut self, batch_size: usize) -> Result<usize> {
+        // Update capacity hint to the largest batch size seen
+        if batch_size > self.capacity_hint {
+            self.capacity_hint = batch_size;
+        }
+
         let (records_read, values_read, levels_read) =
             self.column_reader.as_mut().unwrap().read_records(
                 batch_size,
@@ -272,7 +286,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone());
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
 
         // First page
 
@@ -345,7 +359,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone());
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
 
         // First page
 
@@ -447,7 +461,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone());
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
 
         // First page
 
@@ -550,7 +564,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone());
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
 
         {
             let values = [100; 5000];
@@ -600,7 +614,7 @@ mod tests {
         pb.add_values::<Int32Type>(Encoding::PLAIN, &values);
         let page = pb.consume();
 
-        let mut record_reader = RecordReader::<Int32Type>::new(desc);
+        let mut record_reader = RecordReader::<Int32Type>::new(desc, 1024);
         let page_reader = Box::new(InMemoryPageReader::new(vec![page.clone()]));
         record_reader.set_page_reader(page_reader).unwrap();
         assert_eq!(record_reader.read_records(4).unwrap(), 4);
@@ -639,7 +653,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone());
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
 
         // First page
 
@@ -713,7 +727,7 @@ mod tests {
             .unwrap();
 
         // Construct record reader
-        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone());
+        let mut record_reader = RecordReader::<Int32Type>::new(desc.clone(), 1024);
 
         // First page
 

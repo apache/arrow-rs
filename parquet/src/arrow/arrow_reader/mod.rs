@@ -57,6 +57,9 @@ mod read_plan;
 pub(crate) mod selection;
 pub mod statistics;
 
+/// Default batch size for reading parquet files
+pub const DEFAULT_BATCH_SIZE: usize = 1024;
+
 /// Builder for constructing Parquet readers that decode into [Apache Arrow]
 /// arrays.
 ///
@@ -168,7 +171,7 @@ impl<T> ArrowReaderBuilder<T> {
             metadata: metadata.metadata,
             schema: metadata.schema,
             fields: metadata.fields,
-            batch_size: 1024,
+            batch_size: DEFAULT_BATCH_SIZE,
             row_groups: None,
             projection: ProjectionMask::all(),
             filter: None,
@@ -196,7 +199,7 @@ impl<T> ArrowReaderBuilder<T> {
         &self.schema
     }
 
-    /// Set the size of [`RecordBatch`] to produce. Defaults to 1024
+    /// Set the size of [`RecordBatch`] to produce. Defaults to [`DEFAULT_BATCH_SIZE`]
     /// If the batch_size more than the file row count, use the file row count.
     pub fn with_batch_size(self, batch_size: usize) -> Self {
         // Try to avoid allocate large buffer
@@ -1216,7 +1219,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
                 let mut cache_projection = predicate.projection().clone();
                 cache_projection.intersect(&projection);
 
-                let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+                let array_reader = ArrayReaderBuilder::new(&reader, &metrics, batch_size)
                     .with_parquet_metadata(&reader.metadata)
                     .build_array_reader(fields.as_deref(), predicate.projection())?;
 
@@ -1224,7 +1227,7 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
             }
         }
 
-        let array_reader = ArrayReaderBuilder::new(&reader, &metrics)
+        let array_reader = ArrayReaderBuilder::new(&reader, &metrics, batch_size)
             .with_parquet_metadata(&reader.metadata)
             .build_array_reader(fields.as_deref(), &projection)?;
 
@@ -1531,7 +1534,7 @@ impl ParquetRecordBatchReader {
     ) -> Result<Self> {
         // note metrics are not supported in this API
         let metrics = ArrowReaderMetrics::disabled();
-        let array_reader = ArrayReaderBuilder::new(row_groups, &metrics)
+        let array_reader = ArrayReaderBuilder::new(row_groups, &metrics, batch_size)
             .with_parquet_metadata(row_groups.metadata())
             .build_array_reader(levels.levels.as_ref(), &ProjectionMask::all())?;
 

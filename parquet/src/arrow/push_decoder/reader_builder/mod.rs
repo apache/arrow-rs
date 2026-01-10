@@ -432,10 +432,11 @@ impl RowGroupReaderBuilder {
 
                 let cache_options = filter_info.cache_builder().producer();
 
-                let array_reader = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_cache_options(Some(&cache_options))
-                    .with_parquet_metadata(&self.metadata)
-                    .build_array_reader(self.fields.as_deref(), predicate.projection())?;
+                let array_reader =
+                    ArrayReaderBuilder::new(&row_group, &self.metrics, self.batch_size)
+                        .with_cache_options(Some(&cache_options))
+                        .with_parquet_metadata(&self.metadata)
+                        .build_array_reader(self.fields.as_deref(), predicate.projection())?;
 
                 plan_builder =
                     plan_builder.with_predicate(array_reader, filter_info.current_mut())?;
@@ -591,8 +592,9 @@ impl RowGroupReaderBuilder {
                 let plan = plan_builder.build();
 
                 // if we have any cached results, connect them up
-                let array_reader_builder = ArrayReaderBuilder::new(&row_group, &self.metrics)
-                    .with_parquet_metadata(&self.metadata);
+                let array_reader_builder =
+                    ArrayReaderBuilder::new(&row_group, &self.metrics, self.batch_size)
+                        .with_parquet_metadata(&self.metadata);
                 let array_reader = if let Some(cache_info) = cache_info.as_ref() {
                     let cache_options = cache_info.builder().consumer();
                     array_reader_builder
