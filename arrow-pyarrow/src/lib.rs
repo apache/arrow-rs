@@ -633,7 +633,7 @@ impl<T: FromPyArrow> FromPyObject<'_, '_> for PyArrowType<T> {
     type Error = PyErr;
 
     fn extract(value: Borrowed<'_, '_, PyAny>) -> PyResult<Self> {
-        Ok(Self(T::from_pyarrow_bound(&*value)?))
+        Ok(Self(T::from_pyarrow_bound(&value)?))
     }
 }
 
