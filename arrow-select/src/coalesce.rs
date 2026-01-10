@@ -470,6 +470,10 @@ impl BatchCoalescer {
         // If pushing this batch would exceed the target batch size,
         // finish the current batch and start a new one
         let mut offset = 0;
+        for in_progress in self.in_progress_arrays.iter_mut() {
+            in_progress.ensure_capacity();
+        }
+
         while num_rows > (self.target_batch_size - self.buffered_rows) {
             let remaining_rows = self.target_batch_size - self.buffered_rows;
             debug_assert!(remaining_rows > 0);
@@ -607,6 +611,11 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;
+
+    /// Ensure the in-progress array has enough capacity to hold more rows
+    fn ensure_capacity(&mut self) {
+        // Default implementation does nothing
+    }
 }
 
 #[cfg(test)]

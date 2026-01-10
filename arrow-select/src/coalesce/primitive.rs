@@ -50,13 +50,7 @@ impl<T: ArrowPrimitiveType> InProgressPrimitiveArray<T> {
         }
     }
 
-    /// Allocate space for output values if necessary.
-    ///
-    /// This is done on write (when we know it is necessary) rather than
-    /// eagerly to avoid allocations that are not used.
-    fn ensure_capacity(&mut self) {
-        self.current.reserve(self.batch_size);
-    }
+
 }
 
 impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray<T> {
@@ -64,9 +58,15 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
         self.source = source;
     }
 
-    fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
-        self.ensure_capacity();
+    /// Allocate space for output values if necessary.
+    ///
+    /// This is done on write (when we know it is necessary) rather than
+    /// eagerly to avoid allocations that are not used.
+    fn ensure_capacity(&mut self) {
+        self.current.reserve(self.batch_size - self.current.len());
+    }
 
+    fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
         let s = self
             .source
             .as_ref()

@@ -37,7 +37,7 @@ use std::sync::Arc;
 /// [`BinaryViewArray`]: arrow_array::BinaryViewArray
 pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     /// The source array and information
-    source: Option<Source>,
+    source: Option<Source<B>>,
     /// the target batch size (and thus size for views allocation)
     batch_size: usize,
     /// The in progress views
@@ -55,9 +55,9 @@ pub(crate) struct InProgressByteViewArray<B: ByteViewType> {
     _phantom: PhantomData<B>,
 }
 
-struct Source {
+struct Source<B: ByteViewType> {
     /// The array to copy form
-    array: ArrayRef,
+    array: GenericByteViewArray<B>,
     /// Should the strings from the source array be copied into new buffers?
     need_gc: bool,
     /// How many bytes were actually used in the source array's buffers?
@@ -91,14 +91,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
             buffer_source,
             _phantom: PhantomData,
         }
-    }
-
-    /// Allocate space for output views and nulls if needed
-    ///
-    /// This is done on write (when we know it is necessary) rather than
-    /// eagerly to avoid allocations that are not used.
-    fn ensure_capacity(&mut self) {
-        self.views.reserve(self.batch_size);
     }
 
     /// Finishes in progress buffer, if any
@@ -296,15 +288,22 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             };
 
             Source {
-                array,
+                array: s.clone(),
                 need_gc,
                 ideal_buffer_size,
             }
         })
     }
 
+    /// Allocate space for output views and nulls if needed
+    ///
+    /// This is done on write (when we know it is necessary) rather than
+    /// eagerly to avoid allocations that are not used.
+    fn ensure_capacity(&mut self) {
+        self.views.reserve(self.batch_size - self.views.len());
+    }
+
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError> {
-        self.ensure_capacity();
         let source = self.source.take().ok_or_else(|| {
             ArrowError::InvalidArgumentError(
                 "Internal Error: InProgressByteViewArray: source not set".to_string(),
@@ -312,7 +311,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         })?;
 
         // If creating StringViewArray output, ensure input was valid utf8 too
-        let s = source.array.as_byte_view::<B>();
+        let s = &source.array;
 
         // add any nulls, as necessary
         if let Some(nulls) = s.nulls().as_ref() {
