@@ -98,7 +98,9 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// This is done on write (when we know it is necessary) rather than
     /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
-        self.views.reserve(self.batch_size - self.views.len());
+        if self.views.capacity() == 0 {
+            self.views = Vec::with_capacity(self.batch_size);
+        }
     }
 
     /// Finishes in progress buffer, if any
