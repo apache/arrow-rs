@@ -41,6 +41,7 @@
 
 mod arrow_to_variant;
 mod cast_to_variant;
+mod decoder;
 mod from_json;
 mod shred_variant;
 mod to_json;
@@ -55,6 +56,7 @@ pub use variant_array::{BorrowedShreddingState, ShreddingState, VariantArray, Va
 pub use variant_array_builder::{VariantArrayBuilder, VariantValueArrayBuilder};
 
 pub use cast_to_variant::{cast_to_variant, cast_to_variant_with_options};
+pub use decoder::VariantArrayDecoderFactory;
 pub use from_json::json_to_variant;
 pub use shred_variant::{IntoShreddingField, ShreddedSchemaBuilder, shred_variant};
 pub use to_json::variant_to_json;

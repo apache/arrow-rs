@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::StructMode;
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, make_decoder};
@@ -23,6 +25,8 @@ use arrow_buffer::ArrowNativeType;
 use arrow_buffer::buffer::NullBuffer;
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType};
+
+use super::DecoderFactory;
 
 pub struct MapArrayDecoder {
     data_type: DataType,
@@ -38,6 +42,7 @@ impl MapArrayDecoder {
         strict_mode: bool,
         is_nullable: bool,
         struct_mode: StructMode,
+        decoder_factory: Option<Arc<dyn DecoderFactory>>,
     ) -> Result<Self, ArrowError> {
         let fields = match &data_type {
             DataType::Map(_, true) => {
@@ -57,18 +62,22 @@ impl MapArrayDecoder {
         };
 
         let keys = make_decoder(
+            Some(fields[0].clone()),
             fields[0].data_type().clone(),
             coerce_primitive,
             strict_mode,
             fields[0].is_nullable(),
             struct_mode,
+            decoder_factory.clone(),
         )?;
         let values = make_decoder(
+            Some(fields[1].clone()),
             fields[1].data_type().clone(),
             coerce_primitive,
             strict_mode,
             fields[1].is_nullable(),
             struct_mode,
+            decoder_factory,
         )?;
 
         Ok(Self {
