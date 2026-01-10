@@ -279,7 +279,7 @@ impl BooleanBufferBuilder {
     /// Extends this builder with boolean values.
     ///
     /// This requires `iter` to report an exact size via `size_hint`.
-    /// 
+    ///
     /// # Safety
     /// Callers must ensure that `iter` reports an exact size via `size_hint`.
     #[inline]
