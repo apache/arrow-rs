@@ -26,6 +26,21 @@ Memory size estimation utilities for [Apache Arrow].
 
 This crate provides the `HeapSize` trait for calculating heap memory usage of data structures.
 
+[Apache Arrow]: https://arrow.apache.org/
+
+## Why This Crate?
+
+Several memory size estimation crates exist in the Rust ecosystem ([deepsize], [get-size2], etc.), but none has emerged as a clear standard. Rather than take a dependency on any of them, this crate provides a minimal `HeapSize` trait with a small API surface that can be implemented across the Arrow ecosystem.
+
+Key motivations:
+
+- **Minimal API**: Just two methods (`heap_size()` and `total_size()`)
+- **Customizable semantics**: Behavior around `Arc`/`Rc` deduplication varies between crates and use cases; having our own trait allows us to make decisions appropriate for Arrow's needs
+- **Arrow integration**: Implementations for all Arrow buffer and array types
+
+[deepsize]: https://github.com/Aeledfyr/deepsize
+[get-size2]: https://github.com/bircni/get-size2
+
 ## Crate Structure
 
 - **`arrow-memory-size`**: Core trait + standard library implementations
@@ -33,8 +48,6 @@ This crate provides the `HeapSize` trait for calculating heap memory usage of da
 - **`arrow-buffer`**: Implements `HeapSize` for buffer types (`Buffer`, `ScalarBuffer`, etc.)
 - **`arrow-array`**: Implements `HeapSize` for array types (`PrimitiveArray`, `StringArray`, etc.)
 - **`arrow`**: Re-exports `HeapSize` via `arrow::util::HeapSize` and `arrow::util::HeapSizeDerive`
-
-[Apache Arrow]: https://arrow.apache.org/
 
 ---
 
@@ -117,7 +130,7 @@ struct MyStruct {
 }
 ```
 
-**Note:** The derive macro emits a compile error if any field contains `Arc` or `Rc` types, unless the field is marked with `#[heap_size(ignore)]`.
+**Note:** The derive macro emits a compile error if any field contains `Arc` or `Rc` types, unless the field is marked with `#[heap_size(ignore)]`. This is intentional—shared reference semantics are complex and vary by use case, so they should be handled explicitly.
 
 ---
 
@@ -166,41 +179,11 @@ All array types delegate to `get_buffer_memory_size()`:
 
 ---
 
-## Comparison with Other Crates
+## Arc/Rc Handling
 
-There are several memory size estimation crates in the Rust ecosystem. Here's how `arrow-memory-size` compares:
+This crate counts `Arc<T>` and `Rc<T>` fully each time they appear—shared references will be counted multiple times. This is a deliberate choice: deduplication requires threading a context/tracker through all calls, which adds API complexity and may not be the right tradeoff for all use cases.
 
-### Feature Comparison
-
-| Feature | arrow-memory-size | [deepsize] | [get-size2] |
-|---------|-------------------|------------|-------------|
-| **Maintenance** | Active | Unmaintained | Active |
-| **syn version** | 2.0 | 1.0 (outdated) | 2.0 |
-| **Arc/Rc deduplication** | No | Yes (Context) | Yes (Tracker) |
-| **Derive attributes** | `ignore`, `size`, `size_fn` | None | `ignore`, `size`, `size_fn` |
-| **Arrow type support** | Full | None | None |
-| **Tuple support** | Up to 12 | No | Up to 16 |
-| **Array `[T; N]` support** | Yes | Yes | Yes |
-| **Mutex/RwLock support** | Yes | No | Yes |
-| **no_std support** | No | Yes | Yes |
-
-[deepsize]: https://github.com/Aeledfyr/deepsize
-[get-size2]: https://github.com/bircni/get-size2
-
-### Arc/Rc Handling
-
-**arrow-memory-size** counts `Arc<T>` and `Rc<T>` fully each time they appear. This means shared references will be counted multiple times. The derive macro prevents accidental use by emitting compile errors for Arc/Rc fields unless explicitly ignored.
-
-**deepsize** and **get-size2** use a context/tracker pattern to deduplicate shared references, counting them only once. This is more accurate for data structures with significant sharing but adds complexity.
-
-### When to Use Each
-
-| Use Case | Recommended Crate |
-|----------|-------------------|
-| Arrow ecosystem | `arrow-memory-size` |
-| Shared `Arc`/`Rc` deduplication needed | `get-size2` |
-| Simple structs without sharing | `arrow-memory-size` or `get-size2` |
-| `no_std` environments | `get-size2` or `deepsize` |
+The derive macro enforces explicit handling by emitting compile errors for `Arc`/`Rc` fields unless they're marked with `#[heap_size(ignore)]`.
 
 ---
 
