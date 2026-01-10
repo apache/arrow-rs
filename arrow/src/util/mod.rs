@@ -21,6 +21,12 @@ pub use arrow_buffer::{bit_chunk_iterator, bit_util};
 pub use arrow_data::bit_iterator;
 pub use arrow_data::bit_mask;
 
+/// Re-export of [`arrow_memory_size::HeapSize`] for memory size estimation.
+pub use arrow_memory_size::HeapSize;
+
+/// Re-export of [`arrow_memory_size_derive::HeapSize`] derive macro.
+pub use arrow_memory_size_derive::HeapSize as HeapSizeDerive;
+
 #[cfg(feature = "test_utils")]
 pub mod bench_util;
 #[cfg(feature = "test_utils")]

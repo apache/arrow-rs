@@ -87,7 +87,7 @@
 //!                         * Same name, different struct
 //! ```
 mod footer_tail;
-mod memory;
+pub mod memory;
 mod options;
 mod parser;
 mod push_decoder;
