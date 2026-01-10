@@ -18,11 +18,11 @@
 //! Memory size estimation utilities for Apache Arrow
 //!
 //! This crate provides the [`HeapSize`] trait for calculating heap memory usage
-//! of data structures, with implementations for:
+//! of data structures, with implementations for standard library types.
 //!
-//! - Standard library types (String, Vec, HashMap, etc.)
-//! - Arrow buffer types (Buffer, ScalarBuffer, NullBuffer, etc.)
-//! - Arrow array types (PrimitiveArray, StringArray, StructArray, etc.)
+//! For Arrow type implementations, see:
+//! - [`arrow-buffer`](https://docs.rs/arrow-buffer) for buffer types
+//! - [`arrow-array`](https://docs.rs/arrow-array) for array types
 //!
 //! # Example
 //!
@@ -41,11 +41,8 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 
-mod array;
-mod buffer;
-
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Trait for calculating the heap memory size of a value.
 ///
@@ -340,6 +337,255 @@ impl HeapSize for f64 {
     }
 }
 
+// =============================================================================
+// Tuple implementations (up to 12 elements)
+// =============================================================================
+
+impl HeapSize for () {
+    fn heap_size(&self) -> usize {
+        0
+    }
+}
+
+impl<T0: HeapSize> HeapSize for (T0,) {
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+    }
+}
+
+impl<T0: HeapSize, T1: HeapSize> HeapSize for (T0, T1) {
+    fn heap_size(&self) -> usize {
+        self.0.heap_size() + self.1.heap_size()
+    }
+}
+
+impl<T0: HeapSize, T1: HeapSize, T2: HeapSize> HeapSize for (T0, T1, T2) {
+    fn heap_size(&self) -> usize {
+        self.0.heap_size() + self.1.heap_size() + self.2.heap_size()
+    }
+}
+
+impl<T0: HeapSize, T1: HeapSize, T2: HeapSize, T3: HeapSize> HeapSize for (T0, T1, T2, T3) {
+    fn heap_size(&self) -> usize {
+        self.0.heap_size() + self.1.heap_size() + self.2.heap_size() + self.3.heap_size()
+    }
+}
+
+impl<T0: HeapSize, T1: HeapSize, T2: HeapSize, T3: HeapSize, T4: HeapSize> HeapSize
+    for (T0, T1, T2, T3, T4)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+    }
+}
+
+impl<T0: HeapSize, T1: HeapSize, T2: HeapSize, T3: HeapSize, T4: HeapSize, T5: HeapSize> HeapSize
+    for (T0, T1, T2, T3, T4, T5)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+            + self.5.heap_size()
+    }
+}
+
+impl<
+        T0: HeapSize,
+        T1: HeapSize,
+        T2: HeapSize,
+        T3: HeapSize,
+        T4: HeapSize,
+        T5: HeapSize,
+        T6: HeapSize,
+    > HeapSize for (T0, T1, T2, T3, T4, T5, T6)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+            + self.5.heap_size()
+            + self.6.heap_size()
+    }
+}
+
+impl<
+        T0: HeapSize,
+        T1: HeapSize,
+        T2: HeapSize,
+        T3: HeapSize,
+        T4: HeapSize,
+        T5: HeapSize,
+        T6: HeapSize,
+        T7: HeapSize,
+    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+            + self.5.heap_size()
+            + self.6.heap_size()
+            + self.7.heap_size()
+    }
+}
+
+impl<
+        T0: HeapSize,
+        T1: HeapSize,
+        T2: HeapSize,
+        T3: HeapSize,
+        T4: HeapSize,
+        T5: HeapSize,
+        T6: HeapSize,
+        T7: HeapSize,
+        T8: HeapSize,
+    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+            + self.5.heap_size()
+            + self.6.heap_size()
+            + self.7.heap_size()
+            + self.8.heap_size()
+    }
+}
+
+impl<
+        T0: HeapSize,
+        T1: HeapSize,
+        T2: HeapSize,
+        T3: HeapSize,
+        T4: HeapSize,
+        T5: HeapSize,
+        T6: HeapSize,
+        T7: HeapSize,
+        T8: HeapSize,
+        T9: HeapSize,
+    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+            + self.5.heap_size()
+            + self.6.heap_size()
+            + self.7.heap_size()
+            + self.8.heap_size()
+            + self.9.heap_size()
+    }
+}
+
+impl<
+        T0: HeapSize,
+        T1: HeapSize,
+        T2: HeapSize,
+        T3: HeapSize,
+        T4: HeapSize,
+        T5: HeapSize,
+        T6: HeapSize,
+        T7: HeapSize,
+        T8: HeapSize,
+        T9: HeapSize,
+        T10: HeapSize,
+    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+            + self.5.heap_size()
+            + self.6.heap_size()
+            + self.7.heap_size()
+            + self.8.heap_size()
+            + self.9.heap_size()
+            + self.10.heap_size()
+    }
+}
+
+impl<
+        T0: HeapSize,
+        T1: HeapSize,
+        T2: HeapSize,
+        T3: HeapSize,
+        T4: HeapSize,
+        T5: HeapSize,
+        T6: HeapSize,
+        T7: HeapSize,
+        T8: HeapSize,
+        T9: HeapSize,
+        T10: HeapSize,
+        T11: HeapSize,
+    > HeapSize for (T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11)
+{
+    fn heap_size(&self) -> usize {
+        self.0.heap_size()
+            + self.1.heap_size()
+            + self.2.heap_size()
+            + self.3.heap_size()
+            + self.4.heap_size()
+            + self.5.heap_size()
+            + self.6.heap_size()
+            + self.7.heap_size()
+            + self.8.heap_size()
+            + self.9.heap_size()
+            + self.10.heap_size()
+            + self.11.heap_size()
+    }
+}
+
+// =============================================================================
+// Array implementation
+// =============================================================================
+
+impl<T: HeapSize, const N: usize> HeapSize for [T; N] {
+    fn heap_size(&self) -> usize {
+        self.iter().map(|item| item.heap_size()).sum()
+    }
+}
+
+// =============================================================================
+// Synchronization primitives
+// =============================================================================
+
+impl<T: HeapSize> HeapSize for Mutex<T> {
+    fn heap_size(&self) -> usize {
+        // Try to lock; if poisoned or would block, return 0 as best effort
+        match self.try_lock() {
+            Ok(guard) => guard.heap_size(),
+            Err(_) => 0,
+        }
+    }
+}
+
+impl<T: HeapSize> HeapSize for RwLock<T> {
+    fn heap_size(&self) -> usize {
+        // Try to read lock; if poisoned or would block, return 0 as best effort
+        match self.try_read() {
+            Ok(guard) => guard.heap_size(),
+            Err(_) => 0,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -393,5 +639,50 @@ mod tests {
         let s = String::from("hello");
         let total = s.total_size();
         assert_eq!(total, std::mem::size_of::<String>() + s.heap_size());
+    }
+
+    #[test]
+    fn test_tuple_heap_size() {
+        let t0: () = ();
+        assert_eq!(t0.heap_size(), 0);
+
+        let t1 = ("hello".to_string(),);
+        assert!(t1.heap_size() >= 5);
+
+        let t2 = ("hello".to_string(), "world".to_string());
+        assert!(t2.heap_size() >= 10);
+
+        let t3 = (1i32, "hello".to_string(), vec![1u8, 2, 3]);
+        assert!(t3.heap_size() >= 5 + 3); // string + vec
+    }
+
+    #[test]
+    fn test_array_heap_size() {
+        let arr: [i32; 5] = [1, 2, 3, 4, 5];
+        assert_eq!(arr.heap_size(), 0); // primitives have no heap
+
+        let arr: [String; 2] = ["hello".to_string(), "world".to_string()];
+        assert!(arr.heap_size() >= 10);
+
+        let arr: [Vec<u8>; 3] = [vec![1, 2], vec![3, 4, 5], vec![6]];
+        assert!(arr.heap_size() >= 6); // at least 6 bytes for elements
+    }
+
+    #[test]
+    fn test_mutex_heap_size() {
+        let m = Mutex::new("hello".to_string());
+        assert!(m.heap_size() >= 5);
+
+        let m = Mutex::new(vec![1i32, 2, 3]);
+        assert!(m.heap_size() >= 3 * std::mem::size_of::<i32>());
+    }
+
+    #[test]
+    fn test_rwlock_heap_size() {
+        let rw = RwLock::new("hello".to_string());
+        assert!(rw.heap_size() >= 5);
+
+        let rw = RwLock::new(vec![1i32, 2, 3]);
+        assert!(rw.heap_size() >= 3 * std::mem::size_of::<i32>());
     }
 }

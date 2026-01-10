@@ -36,9 +36,5 @@ bench = false
 all-features = true
 
 [dependencies]
-arrow-buffer = { workspace = true }
-arrow-schema = { workspace = true }
-arrow-data = { workspace = true }
-arrow-array = { workspace = true }
 
 [dev-dependencies]

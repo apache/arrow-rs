@@ -62,6 +62,8 @@ pub use interval::*;
 
 mod arith;
 
+mod heap_size;
+
 #[cfg(feature = "pool")]
 mod pool;
 #[cfg(feature = "pool")]

@@ -584,4 +584,146 @@ mod heap_size_tests {
         let total = s.total_size();
         assert_eq!(total, std::mem::size_of::<HeapSizeUnit>());
     }
+
+    // Tests for derive macro attributes
+
+    /// Test #[heap_size(ignore)] attribute
+    #[derive(HeapSize)]
+    struct WithIgnore {
+        data: String,
+        #[heap_size(ignore)]
+        ignored: Vec<u8>,
+    }
+
+    #[test]
+    fn test_heap_size_ignore_attribute() {
+        let s = WithIgnore {
+            data: "hello".to_string(),
+            ignored: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], // 10 bytes, but ignored
+        };
+        let size = s.heap_size();
+        // Should only count the String, not the Vec
+        assert!(size >= 5, "heap_size should be at least 5 for 'hello', got {}", size);
+        // Should be less than if we counted the Vec too
+        assert!(size < 20, "heap_size should not include ignored Vec, got {}", size);
+    }
+
+    /// Test #[heap_size(size = N)] attribute
+    #[derive(HeapSize)]
+    struct WithConstantSize {
+        data: String,
+        #[heap_size(size = 1024)]
+        fixed: u64, // primitives normally have 0 heap size
+    }
+
+    #[test]
+    fn test_heap_size_constant_attribute() {
+        let s = WithConstantSize {
+            data: "hello".to_string(),
+            fixed: 42,
+        };
+        let size = s.heap_size();
+        // Should include 5 bytes for "hello" + 1024 constant
+        assert!(size >= 1029, "heap_size should be at least 1029, got {}", size);
+    }
+
+    /// Custom function for size_fn attribute test
+    fn custom_size_fn(v: &Vec<u8>) -> usize {
+        v.len() * 100 // Deliberately different from actual size
+    }
+
+    /// Test #[heap_size(size_fn = path)] attribute
+    #[derive(HeapSize)]
+    struct WithSizeFn {
+        data: String,
+        #[heap_size(size_fn = custom_size_fn)]
+        custom: Vec<u8>,
+    }
+
+    #[test]
+    fn test_heap_size_size_fn_attribute() {
+        let s = WithSizeFn {
+            data: "hello".to_string(),
+            custom: vec![1, 2, 3], // 3 elements * 100 = 300
+        };
+        let size = s.heap_size();
+        // Should include 5 bytes for "hello" + 300 from custom_size_fn
+        assert!(size >= 305, "heap_size should be at least 305, got {}", size);
+    }
+
+    /// Test #[heap_size(ignore)] allows Arc fields
+    #[derive(HeapSize)]
+    struct WithIgnoredArc {
+        data: String,
+        #[heap_size(ignore)]
+        shared: std::sync::Arc<String>,
+    }
+
+    #[test]
+    fn test_heap_size_ignored_arc() {
+        let s = WithIgnoredArc {
+            data: "hello".to_string(),
+            shared: std::sync::Arc::new("world".to_string()),
+        };
+        let size = s.heap_size();
+        // Should only count the data String, Arc is ignored
+        assert!(size >= 5, "heap_size should be at least 5, got {}", size);
+    }
+
+    /// Test enum with attributes
+    #[derive(HeapSize)]
+    enum EnumWithAttributes {
+        Normal(String),
+        WithIgnored {
+            data: String,
+            #[heap_size(ignore)]
+            ignored: Vec<u8>,
+        },
+        WithConstant {
+            #[heap_size(size = 500)]
+            fixed: u8,
+        },
+    }
+
+    #[test]
+    fn test_enum_with_ignore_attribute() {
+        let e = EnumWithAttributes::WithIgnored {
+            data: "test".to_string(),
+            ignored: vec![1, 2, 3, 4, 5],
+        };
+        let size = e.heap_size();
+        // Should only count "test" (4 bytes)
+        assert!(size >= 4, "heap_size should be at least 4, got {}", size);
+        assert!(size < 15, "heap_size should not include ignored Vec, got {}", size);
+    }
+
+    #[test]
+    fn test_enum_with_constant_attribute() {
+        let e = EnumWithAttributes::WithConstant { fixed: 42 };
+        let size = e.heap_size();
+        assert_eq!(size, 500, "heap_size should be exactly 500, got {}", size);
+    }
+
+    /// Test tuple struct with attributes
+    #[derive(HeapSize)]
+    struct TupleWithAttributes(
+        String,
+        #[heap_size(ignore)]
+        Vec<u8>,
+        #[heap_size(size = 200)]
+        u32,
+    );
+
+    #[test]
+    fn test_tuple_struct_with_attributes() {
+        let s = TupleWithAttributes(
+            "hello".to_string(),
+            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+            42,
+        );
+        let size = s.heap_size();
+        // Should be 5 (string) + 0 (ignored) + 200 (constant) = 205
+        assert!(size >= 205, "heap_size should be at least 205, got {}", size);
+        assert!(size < 220, "heap_size should not include ignored Vec, got {}", size);
+    }
 }

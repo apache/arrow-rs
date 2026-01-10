@@ -15,10 +15,11 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! HeapSize implementations for arrow-buffer types
+//! [`HeapSize`] implementations for arrow-buffer types
 
-use crate::HeapSize;
-use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_memory_size::HeapSize;
+
+use crate::{ArrowNativeType, BooleanBuffer, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 
 impl HeapSize for Buffer {
     fn heap_size(&self) -> usize {
@@ -26,13 +27,13 @@ impl HeapSize for Buffer {
     }
 }
 
-impl<T: arrow_buffer::ArrowNativeType> HeapSize for ScalarBuffer<T> {
+impl<T: ArrowNativeType> HeapSize for ScalarBuffer<T> {
     fn heap_size(&self) -> usize {
         self.inner().capacity()
     }
 }
 
-impl<T: arrow_buffer::ArrowNativeType> HeapSize for OffsetBuffer<T> {
+impl<T: ArrowNativeType> HeapSize for OffsetBuffer<T> {
     fn heap_size(&self) -> usize {
         self.inner().inner().capacity()
     }

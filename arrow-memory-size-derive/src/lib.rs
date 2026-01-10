@@ -34,11 +34,57 @@
 //! }
 //! ```
 //!
+//! # Field Attributes
+//!
+//! The derive macro supports several attributes to customize behavior:
+//!
+//! ## `#[heap_size(ignore)]`
+//!
+//! Skip this field entirely (contributes 0 to heap size).
+//!
+//! ```rust,ignore
+//! #[derive(HeapSize)]
+//! struct MyStruct {
+//!     data: Vec<u8>,
+//!     #[heap_size(ignore)]
+//!     cached_hash: u64,  // Not counted
+//! }
+//! ```
+//!
+//! ## `#[heap_size(size = N)]`
+//!
+//! Use a constant value instead of calling `heap_size()`.
+//!
+//! ```rust,ignore
+//! #[derive(HeapSize)]
+//! struct MyStruct {
+//!     #[heap_size(size = 1024)]
+//!     fixed_buffer: *const u8,  // Known to be 1KB
+//! }
+//! ```
+//!
+//! ## `#[heap_size(size_fn = path)]`
+//!
+//! Call a custom function to compute the heap size.
+//! The function must have signature `fn(&FieldType) -> usize`.
+//!
+//! ```rust,ignore
+//! fn custom_size(data: &ExternalType) -> usize {
+//!     data.len() * 8
+//! }
+//!
+//! #[derive(HeapSize)]
+//! struct MyStruct {
+//!     #[heap_size(size_fn = custom_size)]
+//!     external: ExternalType,
+//! }
+//! ```
+//!
 //! # Restrictions
 //!
 //! This macro will emit a compile error if any field contains `Arc` or `Rc`
-//! types, as the semantics for shared references are complex and should be
-//! handled manually.
+//! types (unless the field is ignored), as the semantics for shared references
+//! are complex and should be handled manually.
 //!
 //! [`HeapSize`]: arrow_memory_size::HeapSize
 
@@ -53,7 +99,69 @@ extern crate proc_macro;
 
 use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{Data, DataEnum, DataStruct, DeriveInput, Fields, GenericParam, Type, parse_macro_input};
+use syn::{
+    parse_macro_input, Data, DataEnum, DataStruct, DeriveInput, Expr, Fields, GenericParam, Lit,
+    Path, Type,
+};
+
+/// Field attribute configuration parsed from `#[heap_size(...)]`
+#[derive(Default)]
+struct FieldAttr {
+    /// Skip this field (return 0)
+    ignore: bool,
+    /// Use a constant size value
+    size: Option<usize>,
+    /// Use a custom function to compute size
+    size_fn: Option<Path>,
+}
+
+impl FieldAttr {
+    fn parse(field: &syn::Field) -> Result<Self, syn::Error> {
+        let mut attr = FieldAttr::default();
+
+        for a in &field.attrs {
+            if !a.path().is_ident("heap_size") {
+                continue;
+            }
+
+            a.parse_nested_meta(|meta| {
+                if meta.path.is_ident("ignore") {
+                    attr.ignore = true;
+                    Ok(())
+                } else if meta.path.is_ident("size") {
+                    let value: Expr = meta.value()?.parse()?;
+                    if let Expr::Lit(expr_lit) = &value {
+                        if let Lit::Int(lit_int) = &expr_lit.lit {
+                            attr.size = Some(lit_int.base10_parse()?);
+                            return Ok(());
+                        }
+                    }
+                    Err(meta.error("expected integer literal for `size`"))
+                } else if meta.path.is_ident("size_fn") {
+                    let value: Expr = meta.value()?.parse()?;
+                    if let Expr::Path(expr_path) = value {
+                        attr.size_fn = Some(expr_path.path);
+                        return Ok(());
+                    }
+                    Err(meta.error("expected path for `size_fn`"))
+                } else {
+                    Err(meta.error("unknown heap_size attribute"))
+                }
+            })?;
+        }
+
+        // Validate that only one option is set
+        let count = attr.ignore as u8 + attr.size.is_some() as u8 + attr.size_fn.is_some() as u8;
+        if count > 1 {
+            return Err(syn::Error::new_spanned(
+                field,
+                "only one of `ignore`, `size`, or `size_fn` can be specified",
+            ));
+        }
+
+        Ok(attr)
+    }
+}
 
 /// Derive [`HeapSize`] implementations for structs and enums.
 ///
@@ -67,11 +175,17 @@ use syn::{Data, DataEnum, DataStruct, DeriveInput, Fields, GenericParam, Type, p
 /// - **Unit structs**: returns 0
 /// - **Enums**: matches on variants and sums heap size of variant fields
 ///
+/// # Field Attributes
+///
+/// - `#[heap_size(ignore)]` - Skip this field (contributes 0)
+/// - `#[heap_size(size = N)]` - Use constant value N
+/// - `#[heap_size(size_fn = path)]` - Call custom function
+///
 /// # Restrictions
 ///
 /// This macro will emit a compile error if any field contains `Arc` or `Rc`
-/// types, as the semantics for shared references are complex and should be
-/// handled manually.
+/// types (unless ignored), as the semantics for shared references are complex
+/// and should be handled manually.
 ///
 /// # Example
 ///
@@ -83,24 +197,25 @@ use syn::{Data, DataEnum, DataStruct, DeriveInput, Fields, GenericParam, Type, p
 /// struct MyStruct {
 ///     name: String,
 ///     data: Vec<u8>,
-///     count: i32,
+///     #[heap_size(ignore)]
+///     cached: u64,
 /// }
 ///
 /// let s = MyStruct {
 ///     name: "test".to_string(),
 ///     data: vec![1, 2, 3],
-///     count: 42,
+///     cached: 0,
 /// };
 /// println!("Heap size: {} bytes", s.heap_size());
 /// ```
 ///
 /// [`HeapSize`]: arrow_memory_size::HeapSize
-#[proc_macro_derive(HeapSize)]
+#[proc_macro_derive(HeapSize, attributes(heap_size))]
 pub fn heap_size_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
 
-    // Check for Arc/Rc in all fields and emit error if found
+    // Check for Arc/Rc in non-ignored fields and emit error if found
     if let Err(err) = check_no_arc_rc(&input.data) {
         return err.to_compile_error().into();
     }
@@ -110,8 +225,14 @@ pub fn heap_size_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     let (impl_generics, ty_generics, where_clause) = generics.split_for_impl();
 
     let heap_size_body = match &input.data {
-        Data::Struct(data) => generate_struct_heap_size(data),
-        Data::Enum(data) => generate_enum_heap_size(data),
+        Data::Struct(data) => match generate_struct_heap_size(data) {
+            Ok(body) => body,
+            Err(err) => return err.to_compile_error().into(),
+        },
+        Data::Enum(data) => match generate_enum_heap_size(data) {
+            Ok(body) => body,
+            Err(err) => return err.to_compile_error().into(),
+        },
         Data::Union(_) => {
             return syn::Error::new_spanned(&input, "HeapSize cannot be derived for unions")
                 .to_compile_error()
@@ -130,7 +251,7 @@ pub fn heap_size_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStre
     expanded.into()
 }
 
-/// Check that no fields contain Arc or Rc types
+/// Check that no non-ignored fields contain Arc or Rc types
 fn check_no_arc_rc(data: &Data) -> Result<(), syn::Error> {
     match data {
         Data::Struct(data) => check_fields_no_arc_rc(&data.fields),
@@ -144,14 +265,20 @@ fn check_no_arc_rc(data: &Data) -> Result<(), syn::Error> {
     }
 }
 
-/// Check that fields don't contain Arc/Rc
+/// Check that non-ignored fields don't contain Arc/Rc
 fn check_fields_no_arc_rc(fields: &Fields) -> Result<(), syn::Error> {
     for field in fields {
+        // Parse attributes to check if field is ignored
+        let attr = FieldAttr::parse(field)?;
+        if attr.ignore {
+            continue; // Skip Arc/Rc check for ignored fields
+        }
+
         if contains_arc_or_rc(&field.ty) {
             return Err(syn::Error::new_spanned(
                 &field.ty,
                 "HeapSize cannot be derived for types containing Arc or Rc. \
-                 The semantics for shared references are complex and should be handled manually.",
+                 Use #[heap_size(ignore)] to skip this field, or implement HeapSize manually.",
             ));
         }
     }
@@ -211,44 +338,73 @@ fn add_heap_size_bounds(generics: &syn::Generics) -> syn::Generics {
     generics
 }
 
+/// Generate the size expression for a single field
+fn generate_field_size_expr(
+    field: &syn::Field,
+    accessor: TokenStream,
+) -> Result<TokenStream, syn::Error> {
+    let attr = FieldAttr::parse(field)?;
+
+    if attr.ignore {
+        return Ok(quote! { 0 });
+    }
+
+    if let Some(size) = attr.size {
+        return Ok(quote! { #size });
+    }
+
+    if let Some(size_fn) = attr.size_fn {
+        return Ok(quote! { #size_fn(&#accessor) });
+    }
+
+    // Default: call heap_size()
+    Ok(quote! { ::arrow_memory_size::HeapSize::heap_size(&#accessor) })
+}
+
 /// Generate heap_size() body for structs
-fn generate_struct_heap_size(data: &DataStruct) -> TokenStream {
+fn generate_struct_heap_size(data: &DataStruct) -> Result<TokenStream, syn::Error> {
     match &data.fields {
         Fields::Named(fields) => {
             if fields.named.is_empty() {
-                quote! { 0 }
+                Ok(quote! { 0 })
             } else {
-                let field_sizes = fields.named.iter().map(|f| {
+                let mut field_sizes = Vec::new();
+                for f in &fields.named {
                     let name = &f.ident;
-                    quote! { ::arrow_memory_size::HeapSize::heap_size(&self.#name) }
-                });
-                quote! { #(#field_sizes)+* }
+                    let accessor = quote! { self.#name };
+                    field_sizes.push(generate_field_size_expr(f, accessor)?);
+                }
+                Ok(quote! { #(#field_sizes)+* })
             }
         }
         Fields::Unnamed(fields) => {
             if fields.unnamed.is_empty() {
-                quote! { 0 }
+                Ok(quote! { 0 })
             } else {
-                let field_sizes = fields.unnamed.iter().enumerate().map(|(i, _)| {
+                let mut field_sizes = Vec::new();
+                for (i, f) in fields.unnamed.iter().enumerate() {
                     let index = syn::Index::from(i);
-                    quote! { ::arrow_memory_size::HeapSize::heap_size(&self.#index) }
-                });
-                quote! { #(#field_sizes)+* }
+                    let accessor = quote! { self.#index };
+                    field_sizes.push(generate_field_size_expr(f, accessor)?);
+                }
+                Ok(quote! { #(#field_sizes)+* })
             }
         }
-        Fields::Unit => quote! { 0 },
+        Fields::Unit => Ok(quote! { 0 }),
     }
 }
 
 /// Generate heap_size() body for enums
-fn generate_enum_heap_size(data: &DataEnum) -> TokenStream {
+fn generate_enum_heap_size(data: &DataEnum) -> Result<TokenStream, syn::Error> {
     if data.variants.is_empty() {
-        return quote! { 0 };
+        return Ok(quote! { 0 });
     }
 
-    let match_arms = data.variants.iter().map(|variant| {
+    let mut match_arms = Vec::new();
+
+    for variant in &data.variants {
         let variant_name = &variant.ident;
-        match &variant.fields {
+        let arm = match &variant.fields {
             Fields::Named(fields) => {
                 let field_names: Vec<_> = fields
                     .named
@@ -258,9 +414,12 @@ fn generate_enum_heap_size(data: &DataEnum) -> TokenStream {
                 if field_names.is_empty() {
                     quote! { Self::#variant_name {} => 0 }
                 } else {
-                    let field_sizes = field_names.iter().map(|name| {
-                        quote! { ::arrow_memory_size::HeapSize::heap_size(#name) }
-                    });
+                    let mut field_sizes = Vec::new();
+                    for f in &fields.named {
+                        let name = f.ident.as_ref().unwrap();
+                        let accessor = quote! { *#name };
+                        field_sizes.push(generate_field_size_expr(f, accessor)?);
+                    }
                     quote! {
                         Self::#variant_name { #(#field_names),* } => {
                             #(#field_sizes)+*
@@ -275,9 +434,13 @@ fn generate_enum_heap_size(data: &DataEnum) -> TokenStream {
                 if field_names.is_empty() {
                     quote! { Self::#variant_name() => 0 }
                 } else {
-                    let field_sizes = field_names.iter().map(|name| {
-                        quote! { ::arrow_memory_size::HeapSize::heap_size(#name) }
-                    });
+                    let mut field_sizes = Vec::new();
+                    for (i, f) in fields.unnamed.iter().enumerate() {
+                        let name =
+                            syn::Ident::new(&format!("f{}", i), proc_macro2::Span::call_site());
+                        let accessor = quote! { *#name };
+                        field_sizes.push(generate_field_size_expr(f, accessor)?);
+                    }
                     quote! {
                         Self::#variant_name(#(#field_names),*) => {
                             #(#field_sizes)+*
@@ -286,12 +449,13 @@ fn generate_enum_heap_size(data: &DataEnum) -> TokenStream {
                 }
             }
             Fields::Unit => quote! { Self::#variant_name => 0 },
-        }
-    });
+        };
+        match_arms.push(arm);
+    }
 
-    quote! {
+    Ok(quote! {
         match self {
             #(#match_arms),*
         }
-    }
+    })
 }

@@ -15,27 +15,21 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! HeapSize implementations for arrow-array types
+//! [`HeapSize`] implementations for arrow-array types
 
-use crate::HeapSize;
-use arrow_array::types::{ArrowDictionaryKeyType, ArrowPrimitiveType, RunEndIndexType};
-use arrow_array::{
-    Array, ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray,
-    FixedSizeBinaryArray, FixedSizeListArray, LargeBinaryArray, LargeListArray, LargeListViewArray,
-    LargeStringArray, ListArray, ListViewArray, MapArray, NullArray, PrimitiveArray, RunArray,
-    StringArray, StringViewArray, StructArray, UnionArray,
+use arrow_memory_size::HeapSize;
+
+use crate::types::{ArrowDictionaryKeyType, ArrowPrimitiveType, RunEndIndexType};
+use crate::Array;
+use crate::{
+    BinaryArray, BinaryViewArray, BooleanArray, DictionaryArray, FixedSizeBinaryArray,
+    FixedSizeListArray, LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray,
+    ListArray, ListViewArray, MapArray, NullArray, PrimitiveArray, RunArray, StringArray,
+    StringViewArray, StructArray, UnionArray,
 };
 
-// =============================================================================
-// ArrayRef (Arc<dyn Array>)
-// =============================================================================
-
-impl HeapSize for ArrayRef {
-    fn heap_size(&self) -> usize {
-        // Arc overhead + the array's buffer memory
-        2 * std::mem::size_of::<usize>() + self.get_buffer_memory_size()
-    }
-}
+// Note: HeapSize cannot be implemented for ArrayRef (Arc<dyn Array>) here due to
+// Rust's orphan rules. Use array.get_buffer_memory_size() directly instead.
 
 // =============================================================================
 // Primitive and Boolean Arrays
@@ -177,7 +171,7 @@ impl<R: RunEndIndexType> HeapSize for RunArray<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow_array::Int32Array;
+    use crate::Int32Array;
 
     #[test]
     fn test_primitive_array_heap_size() {
@@ -209,13 +203,13 @@ mod tests {
 
     #[test]
     fn test_struct_array_heap_size() {
-        use arrow_array::builder::StructBuilder;
+        use crate::builder::StructBuilder;
         use arrow_schema::{DataType, Field, Fields};
 
         let fields = Fields::from(vec![Field::new("a", DataType::Int32, false)]);
         let mut builder = StructBuilder::from_fields(fields, 10);
         builder
-            .field_builder::<arrow_array::builder::Int32Builder>(0)
+            .field_builder::<crate::builder::Int32Builder>(0)
             .unwrap()
             .append_value(1);
         builder.append(true);
@@ -224,11 +218,4 @@ mod tests {
         assert!(size > 0);
     }
 
-    #[test]
-    fn test_array_ref_heap_size() {
-        let array: ArrayRef = std::sync::Arc::new(Int32Array::from(vec![1, 2, 3]));
-        let size = array.heap_size();
-        // Should include Arc overhead + buffer memory
-        assert!(size > 0);
-    }
 }
