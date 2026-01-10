@@ -112,6 +112,8 @@ simdutf8 = { version = "0.1.5", default-features = false }
 
 criterion = { version = "0.8.0", default-features = false }
 
+zmij = "0.1"
+
 # release inherited profile keeping debug information and symbols
 # for mem/cpu profiling
 [profile.profiling]
