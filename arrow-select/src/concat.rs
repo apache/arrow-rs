@@ -43,7 +43,11 @@ use arrow_buffer::{
 use arrow_data::ArrayDataBuilder;
 use arrow_data::transform::{Capacities, MutableArrayData};
 use arrow_schema::{ArrowError, DataType, FieldRef, Fields, SchemaRef};
-use std::{collections::HashSet, ops::Add, sync::Arc};
+use std::{
+    collections::HashSet,
+    ops::{Add, Sub},
+    sync::Arc,
+};
 
 fn binary_capacity<T: ByteArrayType>(arrays: &[&dyn Array]) -> Capacities {
     let mut item_capacity = 0;
@@ -350,7 +354,7 @@ fn concat_structs(arrays: &[&dyn Array], fields: &Fields) -> Result<ArrayRef, Ar
 /// 3. Creating a new RunArray with the combined data
 fn concat_run_arrays<R: RunEndIndexType>(arrays: &[&dyn Array]) -> Result<ArrayRef, ArrowError>
 where
-    R::Native: Add<Output = R::Native>,
+    R::Native: Add<Output = R::Native> + Sub<Output = R::Native> + Ord,
 {
     let run_arrays: Vec<_> = arrays
         .iter()
@@ -364,7 +368,7 @@ where
             run_arrays
                 .iter()
                 .scan(R::default_value(), |acc, run_array| {
-                    *acc = *acc + *run_array.run_ends().values().last().unwrap();
+                    *acc = *acc + R::Native::from_usize(run_array.len()).unwrap();
                     Some(*acc)
                 }),
         )
@@ -377,20 +381,27 @@ where
         PrimitiveArray::<R>::from_iter_values(run_arrays.iter().enumerate().flat_map(
             move |(i, run_array)| {
                 let adjustment = needed_run_end_adjustments[i];
+                let offset = R::Native::from_usize(run_array.offset()).unwrap();
+                let length = R::Native::from_usize(run_array.len()).unwrap();
+
                 run_array
                     .run_ends()
-                    .values()
+                    .values_slice()
                     .iter()
-                    .map(move |run_end| *run_end + adjustment)
+                    .map(move |run_end| {
+                        let value = *run_end - offset;
+                        //min required for cases where slice ends in the partway of the run at the end.
+                        value.min(length) + adjustment
+                    })
             },
         ));
 
-    let all_values = concat(
-        &run_arrays
-            .iter()
-            .map(|x| x.values().as_ref())
-            .collect::<Vec<_>>(),
-    )?;
+    let values_slices: Vec<ArrayRef> = run_arrays
+        .iter()
+        .map(|run_array| run_array.values_slice())
+        .collect();
+
+    let all_values = concat(&values_slices.iter().map(|x| x.as_ref()).collect::<Vec<_>>())?;
 
     let builder = ArrayDataBuilder::new(run_arrays[0].data_type().clone())
         .len(total_len)
@@ -1716,9 +1727,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "assertion `left == right` failed\n  left: [20, 20, 40, 40, 40]\n right: [10, 10, 20, 20, 30, 40, 40, 40]"]
-    // TODO: fix concat of RunArrays to account for sliced RunArray's
-    // https://github.com/apache/arrow-rs/issues/9018
     fn test_concat_sliced_run_array() {
         // Slicing away first run in both arrays
         let run_ends1 = Int32Array::from(vec![2, 4]);
@@ -1878,5 +1886,43 @@ mod tests {
             .unwrap();
         assert_eq!(values.len(), 6);
         assert_eq!(&[10, 20, 30, 40, 50, 60], values.values());
+    }
+
+    #[test]
+    fn test_concat_run_array_with_truncated_run() {
+        // Create a run array with run ends [2, 5] and values [10, 20]
+        // Logical: [10, 10, 20, 20, 20]
+        let run_ends1 = Int32Array::from(vec![2, 5]);
+        let values1 = Int32Array::from(vec![10, 20]);
+        let array1 = RunArray::try_new(&run_ends1, &values1).unwrap();
+
+        // This test case handles the scenario where a slice ends partway through its final run.
+        // It validates the logic in `concat_run_arrays` that uses `.min(length)` to truncate
+        // the last run end to the slice's logical length:
+        //
+        // .map(move |run_end| {
+        //     let value = *run_end - offset;
+        //     value.min(length) + adjustment
+        // })
+        //
+        // For array1.slice(0, 3) (logical length 3), the last physical run ends at 5.
+        // Without min(length), its run end would be 5 - 0 = 5.
+        // With min(length), it becomes min(5 - 0, 3) = 3.
+        let array1_sliced = array1.slice(0, 3);
+
+        let run_ends2 = Int32Array::from(vec![2]);
+        let values2 = Int32Array::from(vec![30]);
+        let array2 = RunArray::try_new(&run_ends2, &values2).unwrap();
+
+        let result = concat(&[&array1_sliced, &array2]).unwrap();
+        let result_run_array = result.as_run::<Int32Type>();
+
+        // Result should be [10, 10, 20, 30, 30]
+        // Run ends should be [2, 3, 5]
+        assert_eq!(result_run_array.len(), 5);
+        let run_ends = result_run_array.run_ends().values();
+        let values = result_run_array.values().as_primitive::<Int32Type>();
+        assert_eq!(values.values(), &[10, 20, 30]);
+        assert_eq!(&[2, 3, 5], run_ends);
     }
 }
