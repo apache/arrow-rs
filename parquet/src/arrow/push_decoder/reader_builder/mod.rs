@@ -645,7 +645,7 @@ impl RowGroupReaderBuilder {
     }
 
     /// Get the offset index for the specified row group, if any
-    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[OffsetIndexMetaData]> {
+    fn row_group_offset_index(&self, row_group_idx: usize) -> Option<&[Option<OffsetIndexMetaData>]> {
         self.metadata
             .offset_index()
             .filter(|index| !index.is_empty())
@@ -676,7 +676,7 @@ impl RowGroupReaderBuilder {
 fn override_selector_strategy_if_needed(
     plan_builder: ReadPlanBuilder,
     projection_mask: &ProjectionMask,
-    offset_index: Option<&[OffsetIndexMetaData]>,
+    offset_index: Option<&[Option<OffsetIndexMetaData>]>,
 ) -> ReadPlanBuilder {
     // override only applies to Auto policy, If the policy is already Mask or Selectors, respect that
     let RowSelectionPolicy::Auto { .. } = plan_builder.row_selection_policy() else {

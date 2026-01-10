@@ -146,14 +146,14 @@ pub(crate) use writer::ThriftMetadataWriter;
 ///
 /// `column_index[row_group_number][column_number]` holds the
 /// [`ColumnIndex`] corresponding to column `column_number` of row group
-/// `row_group_number`.
+/// `row_group_number`, or `None` if no index is available.
 ///
 /// For example `column_index[2][3]` holds the [`ColumnIndex`] for the fourth
-/// column in the third row group of the parquet file.
+/// column in the third row group of the parquet file, or `None`.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`ColumnIndex`]: crate::file::page_index::column_index::ColumnIndexMetaData
-pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
+pub type ParquetColumnIndex = Vec<Vec<Option<ColumnIndexMetaData>>>;
 
 /// [`OffsetIndexMetaData`] for each data page of each row group of each column
 ///
@@ -162,11 +162,11 @@ pub type ParquetColumnIndex = Vec<Vec<ColumnIndexMetaData>>;
 ///
 /// `offset_index[row_group_number][column_number]` holds
 /// the [`OffsetIndexMetaData`] corresponding to column
-/// `column_number`of row group `row_group_number`.
+/// `column_number`of row group `row_group_number`, or `None` if no index is available.
 ///
 /// [PageIndex documentation]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 /// [`OffsetIndex`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
-pub type ParquetOffsetIndex = Vec<Vec<OffsetIndexMetaData>>;
+pub type ParquetOffsetIndex = Vec<Vec<Option<OffsetIndexMetaData>>>;
 
 /// Parsed metadata for a single Parquet file
 ///
@@ -2038,8 +2038,8 @@ mod tests {
 
         let parquet_meta = ParquetMetaDataBuilder::new(file_metadata)
             .set_row_groups(row_group_meta)
-            .set_column_index(Some(vec![vec![ColumnIndexMetaData::BOOLEAN(native_index)]]))
-            .set_offset_index(Some(vec![vec![offset_index]]))
+            .set_column_index(Some(vec![vec![Some(ColumnIndexMetaData::BOOLEAN(native_index))]]))
+            .set_offset_index(Some(vec![vec![Some(offset_index)]]))
             .build();
 
         #[cfg(not(feature = "encryption"))]
