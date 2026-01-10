@@ -16,8 +16,11 @@
 // under the License.
 
 use arrow_buffer::{ArrowNativeType, MutableBuffer, bit_util};
+use arrow_schema::DataType;
 use num_integer::Integer;
 use num_traits::CheckedAdd;
+
+use crate::ArrayData;
 
 /// extends the `buffer` to be able to hold `len` bits, setting all bits of the new size to zero.
 #[inline]
@@ -56,6 +59,38 @@ pub(super) unsafe fn get_last_offset<T: ArrowNativeType>(offset_buffer: &Mutable
     let (prefix, offsets, suffix) = unsafe { offset_buffer.as_slice().align_to::<T>() };
     debug_assert!(prefix.is_empty() && suffix.is_empty());
     *unsafe { offsets.get_unchecked(offsets.len() - 1) }
+}
+
+fn to_bytes_vec_variable_sized<T: ArrowNativeType + Integer>(data: &ArrayData) -> Vec<&[u8]> {
+    let offsets = data.buffer::<T>(0);
+
+    // the offsets of the `ArrayData` are ignored as they are only applied to the offset buffer.
+    let values = data.buffers()[1].as_slice();
+    (0..data.len())
+        .map(move |i| {
+            let start = offsets[i].to_usize().unwrap();
+            let end = offsets[i + 1].to_usize().unwrap();
+            &values[start..end]
+        })
+        .collect::<Vec<_>>()
+}
+
+fn to_bytes_vec_fixed_sized(data: &ArrayData, size: usize) -> Vec<&[u8]> {
+    let values = &data.buffers()[0].as_slice()[data.offset() * size..];
+    values.chunks(size).collect::<Vec<_>>()
+}
+
+/// vector of bytes representation of logical values, useful for hashing on values of an
+/// `ArrayData`
+pub(crate) fn to_bytes_vec<'a>(data_type: &DataType, data: &'a ArrayData) -> Vec<&'a [u8]> {
+    if data_type.is_primitive() {
+        return to_bytes_vec_fixed_sized(data, data_type.primitive_width().unwrap());
+    }
+    match data_type {
+        DataType::Utf8 | DataType::Binary => to_bytes_vec_variable_sized::<i32>(data),
+        DataType::LargeUtf8 | DataType::LargeBinary => to_bytes_vec_variable_sized::<i64>(data),
+        _ => unimplemented!("to_bytes_vec is not supported for {data_type}"),
+    }
 }
 
 #[cfg(test)]
