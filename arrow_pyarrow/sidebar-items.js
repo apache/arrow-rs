@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"constant":["ARROW_ARRAY_CAPSULE_NAME","ARROW_ARRAY_STREAM_CAPSULE_NAME","ARROW_SCHEMA_CAPSULE_NAME"],"fn":["to_py_err","validate_class","validate_pycapsule"],"struct":["ArrowException","PyArrowType","Table"],"trait":["FromPyArrow","IntoPyArrow","ToPyArrow"],"type":["PyArrowException"]};
