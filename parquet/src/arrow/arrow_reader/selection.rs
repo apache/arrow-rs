@@ -271,8 +271,8 @@ impl RowSelection {
         })
     }
 
-    /// Returns true if selectors should be forced, preventing mask materialisation
-    pub(crate) fn should_force_selectors(
+    /// Returns true if bitmasks should be page aware
+    pub(crate) fn requires_page_aware_mask(
         &self,
         projection: &ProjectionMask,
         offset_index: Option<&[OffsetIndexMetaData]>,
@@ -778,8 +778,13 @@ impl MaskCursor {
         self.position >= self.mask.len()
     }
 
-    /// Advance through the mask representation, producing the next chunk summary
-    pub fn next_mask_chunk(&mut self, batch_size: usize) -> Option<MaskChunk> {
+    /// Advance through the mask representation, producing the next chunk summary.
+    /// Optionally clips chunk boundaries to page boundaries.
+    pub fn next_mask_chunk(
+        &mut self,
+        batch_size: usize,
+        page_locations: Option<&[PageLocation]>,
+    ) -> Option<MaskChunk> {
         let (initial_skip, chunk_rows, selected_rows, mask_start, end_position) = {
             let mask = &self.mask;
 
@@ -791,6 +796,7 @@ impl MaskCursor {
             let mut cursor = start_position;
             let mut initial_skip = 0;
 
+            // Skip unselected rows
             while cursor < mask.len() && !mask.value(cursor) {
                 initial_skip += 1;
                 cursor += 1;
@@ -800,14 +806,26 @@ impl MaskCursor {
             let mut chunk_rows = 0;
             let mut selected_rows = 0;
 
-            // Advance until enough rows have been selected to satisfy the batch size,
-            // or until the mask is exhausted. This mirrors the behaviour of the legacy
-            // `RowSelector` queue-based iteration.
-            while cursor < mask.len() && selected_rows < batch_size {
+            let mut page_end = mask.len();
+            if let Some(pages) = page_locations {
+                for loc in pages {
+                    let page_start = loc.first_row_index.try_into().unwrap_or(usize::MAX);
+                    if page_start > mask_start {
+                        page_end = page_start.min(page_end);
+                        break;
+                    }
+                }
+            }
+
+            // Advance until enough rows have been selected to satisfy batch_size,
+            // or until the mask is exhausted or the page boundary is reached.
+            while cursor < mask.len() && cursor < page_end && selected_rows < batch_size {
+                // Increment counters
                 chunk_rows += 1;
                 if mask.value(cursor) {
                     selected_rows += 1;
                 }
+
                 cursor += 1;
             }
 
