@@ -279,8 +279,11 @@ impl BooleanBufferBuilder {
     /// Extends this builder with boolean values.
     ///
     /// This requires `iter` to report an exact size via `size_hint`.
+    /// 
+    /// # Safety
+    /// Callers must ensure that `iter` reports an exact size via `size_hint`.
     #[inline]
-    pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
+    pub unsafe fn extend_trusted_len<I: Iterator<Item = bool>>(&mut self, iter: I) {
         let (lower, upper) = iter.size_hint();
         let len = upper.expect("Iterator must have exact size_hint");
         assert_eq!(lower, len, "Iterator must have exact size_hint");
@@ -657,7 +660,7 @@ mod tests {
     fn test_extend() {
         let mut builder = BooleanBufferBuilder::new(0);
         let bools = vec![true, false, true, true, false, true, true, true, false];
-        builder.extend(bools.clone().into_iter());
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
         assert_eq!(builder.len(), 9);
         let finished = builder.finish();
         for (i, v) in bools.into_iter().enumerate() {
@@ -667,7 +670,7 @@ mod tests {
         // Test > 64 bits
         let mut builder = BooleanBufferBuilder::new(0);
         let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
-        builder.extend(bools.clone().into_iter());
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
         assert_eq!(builder.len(), 100);
         let finished = builder.finish();
         for (i, v) in bools.into_iter().enumerate() {
@@ -683,7 +686,7 @@ mod tests {
             builder.append_n(offset, false);
 
             let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
-            builder.extend(bools.clone().into_iter());
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
             assert_eq!(builder.len(), offset + 100);
 
             let finished = builder.finish();
@@ -701,8 +704,8 @@ mod tests {
         for len in 1..130 {
             let mut builder = BooleanBufferBuilder::new(0);
             let mut bools: Vec<_> = (0..len).map(|i| i % 2 == 0).collect();
-            builder.extend(bools.clone().into_iter());
-            builder.extend(bools.clone().into_iter());
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
             let copy = bools.clone();
             bools.extend(copy);
             assert_eq!(builder.len(), 2 * len);
