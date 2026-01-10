@@ -30,7 +30,9 @@ pub struct StructArrayDecoder {
     is_nullable: bool,
     struct_mode: StructMode,
     field_name_to_index: Option<HashMap<String, usize>>,
-    child_pos: Vec<u32>,
+    /// Reusable buffer of tape positions indexed as `[field_idx * row_count + row_idx]`.
+    /// A value of 0 indicates the field is absent for that row.
+    field_tape_positions: Vec<u32>,
 }
 
 impl StructArrayDecoder {
@@ -74,7 +76,7 @@ impl StructArrayDecoder {
             is_nullable,
             struct_mode,
             field_name_to_index,
-            child_pos: Vec::new(),
+            field_tape_positions: Vec::new(),
         })
     }
 }
@@ -89,23 +91,14 @@ impl ArrayDecoder for StructArrayDecoder {
                 "StructArrayDecoder child position buffer size overflow for rows={row_count} fields={field_count}"
             ))
         })?;
-        if total_len > self.child_pos.len() {
-            self.child_pos
-                .try_reserve(total_len - self.child_pos.len())
-                .map_err(|_| {
-                    ArrowError::JsonError(format!(
-                        "StructArrayDecoder child position buffer allocation failed for rows={row_count} fields={field_count}"
-                    ))
-                })?;
-        }
-        self.child_pos.resize(total_len, 0);
-        self.child_pos.fill(0);
+        self.field_tape_positions.clear();
+        self.field_tape_positions.resize(total_len, 0);
         let mut nulls = self
             .is_nullable
             .then(|| BooleanBufferBuilder::new(pos.len()));
 
         {
-            let child_pos = self.child_pos.as_mut_slice();
+            let child_pos = self.field_tape_positions.as_mut_slice();
             // We avoid having the match on self.struct_mode inside the hot loop for performance
             // TODO: Investigate how to extract duplicated logic.
             match self.struct_mode {
@@ -195,7 +188,7 @@ impl ArrayDecoder for StructArrayDecoder {
             }
         }
 
-        let child_pos = self.child_pos.as_slice();
+        let child_pos = self.field_tape_positions.as_slice();
         let child_data = self
             .decoders
             .iter_mut()
