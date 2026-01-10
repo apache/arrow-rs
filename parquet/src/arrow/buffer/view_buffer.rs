@@ -105,6 +105,10 @@ impl ViewBuffer {
 }
 
 impl ValuesBuffer for ViewBuffer {
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+
     fn pad_nulls(
         &mut self,
         read_offset: usize,
@@ -126,7 +130,7 @@ mod tests {
 
     #[test]
     fn test_view_buffer_empty() {
-        let buffer = ViewBuffer::default();
+        let buffer = ViewBuffer::with_capacity(0);
         let array = buffer.into_array(None, &ArrowType::Utf8View);
         let strings = array
             .as_any()
@@ -137,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_view_buffer_append_view() {
-        let mut buffer = ViewBuffer::default();
+        let mut buffer = ViewBuffer::with_capacity(0);
         let string_buffer = Buffer::from(b"0123456789long string to test string view");
         let block_id = buffer.append_block(string_buffer);
 
@@ -164,7 +168,7 @@ mod tests {
 
     #[test]
     fn test_view_buffer_pad_null() {
-        let mut buffer = ViewBuffer::default();
+        let mut buffer = ViewBuffer::with_capacity(0);
         let string_buffer = Buffer::from(b"0123456789long string to test string view");
         let block_id = buffer.append_block(string_buffer);
 
