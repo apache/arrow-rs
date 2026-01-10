@@ -603,9 +603,17 @@ mod heap_size_tests {
         };
         let size = s.heap_size();
         // Should only count the String, not the Vec
-        assert!(size >= 5, "heap_size should be at least 5 for 'hello', got {}", size);
+        assert!(
+            size >= 5,
+            "heap_size should be at least 5 for 'hello', got {}",
+            size
+        );
         // Should be less than if we counted the Vec too
-        assert!(size < 20, "heap_size should not include ignored Vec, got {}", size);
+        assert!(
+            size < 20,
+            "heap_size should not include ignored Vec, got {}",
+            size
+        );
     }
 
     /// Test #[heap_size(size = N)] attribute
@@ -624,7 +632,11 @@ mod heap_size_tests {
         };
         let size = s.heap_size();
         // Should include 5 bytes for "hello" + 1024 constant
-        assert!(size >= 1029, "heap_size should be at least 1029, got {}", size);
+        assert!(
+            size >= 1029,
+            "heap_size should be at least 1029, got {}",
+            size
+        );
     }
 
     /// Custom function for size_fn attribute test
@@ -648,7 +660,11 @@ mod heap_size_tests {
         };
         let size = s.heap_size();
         // Should include 5 bytes for "hello" + 300 from custom_size_fn
-        assert!(size >= 305, "heap_size should be at least 305, got {}", size);
+        assert!(
+            size >= 305,
+            "heap_size should be at least 305, got {}",
+            size
+        );
     }
 
     /// Test #[heap_size(ignore)] allows Arc fields
@@ -694,7 +710,11 @@ mod heap_size_tests {
         let size = e.heap_size();
         // Should only count "test" (4 bytes)
         assert!(size >= 4, "heap_size should be at least 4, got {}", size);
-        assert!(size < 15, "heap_size should not include ignored Vec, got {}", size);
+        assert!(
+            size < 15,
+            "heap_size should not include ignored Vec, got {}",
+            size
+        );
     }
 
     #[test]
@@ -708,22 +728,24 @@ mod heap_size_tests {
     #[derive(HeapSize)]
     struct TupleWithAttributes(
         String,
-        #[heap_size(ignore)]
-        Vec<u8>,
-        #[heap_size(size = 200)]
-        u32,
+        #[heap_size(ignore)] Vec<u8>,
+        #[heap_size(size = 200)] u32,
     );
 
     #[test]
     fn test_tuple_struct_with_attributes() {
-        let s = TupleWithAttributes(
-            "hello".to_string(),
-            vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
-            42,
-        );
+        let s = TupleWithAttributes("hello".to_string(), vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10], 42);
         let size = s.heap_size();
         // Should be 5 (string) + 0 (ignored) + 200 (constant) = 205
-        assert!(size >= 205, "heap_size should be at least 205, got {}", size);
-        assert!(size < 220, "heap_size should not include ignored Vec, got {}", size);
+        assert!(
+            size >= 205,
+            "heap_size should be at least 205, got {}",
+            size
+        );
+        assert!(
+            size < 220,
+            "heap_size should not include ignored Vec, got {}",
+            size
+        );
     }
 }
