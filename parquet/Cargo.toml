@@ -39,7 +39,6 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 [dependencies]
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
-arrow-cast = { workspace = true, optional = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
@@ -91,6 +90,7 @@ lz4_flex = { version = "0.12", default-features = false, features = ["std", "fra
 zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
+arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
@@ -104,7 +104,7 @@ default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64",
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
-arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable support for arrow canonical extension types
 arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
 # Enable CLI tools
