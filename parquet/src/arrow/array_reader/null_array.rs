@@ -47,8 +47,14 @@ where
     T::T: ArrowNativeType,
 {
     /// Construct null array reader.
-    pub fn new(pages: Box<dyn PageIterator>, column_desc: ColumnDescPtr) -> Result<Self> {
-        let record_reader = RecordReader::<T>::new(column_desc);
+    ///
+    /// `batch_size` is used to pre-allocate internal buffers.
+    pub fn new(
+        pages: Box<dyn PageIterator>,
+        column_desc: ColumnDescPtr,
+        batch_size: usize,
+    ) -> Result<Self> {
+        let record_reader = RecordReader::<T>::new(column_desc, batch_size);
 
         Ok(Self {
             data_type: ArrowType::Null,
