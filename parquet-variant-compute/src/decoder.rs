@@ -48,10 +48,9 @@ impl ArrayDecoder for VariantArrayDecoder {
     }
 }
 
-/// A [`DecoderFactory`] that creates [`VariantArrayDecoder`] instances for Variant-typed fields.
-///
-/// This factory integrates with the Arrow JSON reader to automatically decode JSON values
-/// into Variant arrays when the target field is registered as a [`VariantType`] extension type.
+/// A [`DecoderFactory`] that integrates with the Arrow JSON reader to automatically
+/// decode JSON values into Variant arrays when the target field is registered as a
+/// [`VariantType`] extension type.
 ///
 /// # Example
 ///
@@ -80,11 +79,14 @@ impl DecoderFactory for VariantArrayDecoderFactory {
         _is_nullable: bool,
         _struct_mode: StructMode,
     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
-        if let Some(field) = field
-            && field.extension_type_name() == Some(VariantType::NAME)
+        let field = match field {
+            Some(inner_field) => inner_field,
+            None => return Ok(None),
+        };
+        if field.extension_type_name() == Some(VariantType::NAME)
             && field.try_extension_type::<VariantType>().is_ok()
         {
-            return Ok(Some(Box::new(VariantArrayDecoder)));
+            return Ok(Some(Box::new(VariantArrayDecoder)))
         }
         Ok(None)
     }
@@ -282,7 +284,7 @@ mod tests {
         let mut builder = VariantBuilder::new();
         let mut list_builder = builder.new_list();
         list_builder.append_value(Variant::Int64(1000000000000));
-        list_builder.append_value(Variant::Double(2.718281828459045));
+        list_builder.append_value(Variant::Double(std::f64::consts::E));
         list_builder.finish();
         let (metadata, value) = builder.finish();
         let variant = Variant::try_new(&metadata, &value).unwrap();
