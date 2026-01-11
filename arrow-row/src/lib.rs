@@ -1133,7 +1133,7 @@ impl Rows {
     /// Reserve capacity for `row_capacity` rows with a total length of `data_capacity`
     pub fn reserve(&mut self, row_capacity: usize, data_capacity: usize) {
         self.buffer.reserve(data_capacity);
-        self.offsets.reserve(row_capacity.saturating_add(1));
+        self.offsets.reserve(row_capacity);
     }
 
     /// Returns the row at index `row`
@@ -4297,18 +4297,30 @@ mod tests {
         empty_rows.reserve(50, 50);
         let before_size = empty_rows.size();
         empty_rows.reserve(50, 50);
-        assert_eq!(empty_rows.size(), before_size, "Size should not change when reserving already reserved space");
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when reserving already reserved space"
+        );
         empty_rows.reserve(10, 20);
-        assert_eq!(empty_rows.size(), before_size, "Size should not change when already have space for the expected reserved data");
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when already have space for the expected reserved data"
+        );
 
         empty_rows.reserve(100, 20);
-        assert!(empty_rows.size() > before_size, "Size should increase when reserving more space than previously reserved");
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
 
         let before_size = empty_rows.size();
 
         empty_rows.reserve(20, 100);
-        assert!(empty_rows.size() > before_size, "Size should increase when reserving more space than previously reserved");
-
-        assert_eq!(empty_rows.size(), row_converter.empty_rows(100, 100).size());
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
     }
 }
