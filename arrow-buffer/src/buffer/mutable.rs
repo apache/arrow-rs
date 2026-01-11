@@ -623,7 +623,7 @@ impl MutableBuffer {
         buffer
     }
 
-    /// Extends this builder with boolean values.
+    /// Extends this buffer with boolean values.
     ///
     /// This requires `iter` to report an exact size via `size_hint`.
     /// `offset` indicates the starting offset in bits in this buffer to begin writing to
