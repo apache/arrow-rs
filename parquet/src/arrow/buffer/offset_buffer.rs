@@ -19,7 +19,7 @@ use crate::arrow::buffer::bit_util::iter_set_bits_rev;
 use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::errors::{ParquetError, Result};
 use crate::util::utf8::check_valid_utf8;
-use arrow_array::{make_array, ArrayRef, OffsetSizeTrait};
+use arrow_array::{ArrayRef, OffsetSizeTrait, make_array};
 use arrow_buffer::{ArrowNativeType, Buffer};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::DataType as ArrowType;
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn test_pad_nulls_empty() {
         let mut buffer = OffsetBuffer::<i32>::default();
-        let valid_mask = Buffer::from_iter(std::iter::repeat(false).take(9));
+        let valid_mask = Buffer::from_iter(std::iter::repeat_n(false, 9));
         buffer.pad_nulls(0, 0, 9, valid_mask.as_slice());
 
         let array = buffer.into_array(Some(valid_mask), ArrowType::Utf8);

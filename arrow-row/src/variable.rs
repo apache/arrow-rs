@@ -17,10 +17,11 @@
 
 use crate::null_sentinel;
 use arrow_array::builder::BufferBuilder;
+use arrow_array::types::ByteArrayType;
 use arrow_array::*;
 use arrow_buffer::bit_util::ceil;
-use arrow_buffer::MutableBuffer;
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{ArrowNativeType, MutableBuffer};
+use arrow_data::{ArrayDataBuilder, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{DataType, SortOptions};
 use builder::make_view;
 
@@ -84,6 +85,48 @@ pub fn encode<'a, I: Iterator<Item = Option<&'a [u8]>>>(
     }
 }
 
+/// Calls [`encode`] with optimized iterator for generic byte arrays
+pub(crate) fn encode_generic_byte_array<T: ByteArrayType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    input_array: &GenericByteArray<T>,
+    opts: SortOptions,
+) {
+    let input_offsets = input_array.value_offsets();
+    let bytes = input_array.values().as_slice();
+
+    if let Some(null_buffer) = input_array.nulls().filter(|x| x.null_count() > 0) {
+        let input_iter =
+            input_offsets
+                .windows(2)
+                .zip(null_buffer.iter())
+                .map(|(start_end, is_valid)| {
+                    if is_valid {
+                        let item_range = start_end[0].as_usize()..start_end[1].as_usize();
+                        // SAFETY: the offsets of the input are valid by construction
+                        // so it is ok to use unsafe here
+                        let item = unsafe { bytes.get_unchecked(item_range) };
+                        Some(item)
+                    } else {
+                        None
+                    }
+                });
+
+        encode(data, offsets, input_iter, opts);
+    } else {
+        // Skip null checks
+        let input_iter = input_offsets.windows(2).map(|start_end| {
+            let item_range = start_end[0].as_usize()..start_end[1].as_usize();
+            // SAFETY: the offsets of the input are valid by construction
+            // so it is ok to use unsafe here
+            let item = unsafe { bytes.get_unchecked(item_range) };
+            Some(item)
+        });
+
+        encode(data, offsets, input_iter, opts);
+    }
+}
+
 pub fn encode_null(out: &mut [u8], opts: SortOptions) -> usize {
     out[0] = null_sentinel(opts);
     1
@@ -97,6 +140,7 @@ pub fn encode_empty(out: &mut [u8], opts: SortOptions) -> usize {
     1
 }
 
+#[inline]
 pub fn encode_one(out: &mut [u8], val: Option<&[u8]>, opts: SortOptions) -> usize {
     match val {
         None => encode_null(out, opts),
@@ -249,9 +293,10 @@ pub fn decode_binary<I: OffsetSizeTrait>(
 fn decode_binary_view_inner(
     rows: &mut [&[u8]],
     options: SortOptions,
-    check_utf8: bool,
+    validate_utf8: bool,
 ) -> BinaryViewArray {
     let len = rows.len();
+    let inline_str_max_len = MAX_INLINE_VIEW_LEN as usize;
 
     let mut null_count = 0;
 
@@ -261,13 +306,33 @@ fn decode_binary_view_inner(
         valid
     });
 
-    let values_capacity: usize = rows.iter().map(|row| decoded_len(row, options)).sum();
+    // If we are validating UTF-8, decode all string values (including short strings)
+    // into the values buffer and validate UTF-8 once. If not validating,
+    // we save memory by only copying long strings to the values buffer, as short strings
+    // will be inlined into the view and do not need to be stored redundantly.
+    let values_capacity = if validate_utf8 {
+        // Capacity for all long and short strings
+        rows.iter().map(|row| decoded_len(row, options)).sum()
+    } else {
+        // Capacity for all long strings plus room for one short string
+        rows.iter().fold(0, |acc, row| {
+            let len = decoded_len(row, options);
+            if len > inline_str_max_len {
+                acc + len
+            } else {
+                acc
+            }
+        }) + inline_str_max_len
+    };
     let mut values = MutableBuffer::new(values_capacity);
-    let mut views = BufferBuilder::<u128>::new(len);
 
+    let mut views = BufferBuilder::<u128>::new(len);
     for row in rows {
         let start_offset = values.len();
         let offset = decode_blocks(row, options, |b| values.extend_from_slice(b));
+        // Measure string length via change in values buffer.
+        // Used to check if decoded value should be truncated (short string) when validate_utf8 is false
+        let decoded_len = values.len() - start_offset;
         if row[0] == null_sentinel(options) {
             debug_assert_eq!(offset, 1);
             debug_assert_eq!(start_offset, values.len());
@@ -282,11 +347,16 @@ fn decode_binary_view_inner(
 
             let view = make_view(val, 0, start_offset as u32);
             views.append(view);
+
+            // truncate inline string in values buffer if validate_utf8 is false
+            if !validate_utf8 && decoded_len <= inline_str_max_len {
+                values.truncate(start_offset);
+            }
         }
         *row = &row[offset..];
     }
 
-    if check_utf8 {
+    if validate_utf8 {
         // the values contains all data, no matter if it is short or long
         // we can validate utf8 in one go.
         std::str::from_utf8(values.as_slice()).unwrap();
@@ -332,7 +402,7 @@ pub unsafe fn decode_string<I: OffsetSizeTrait>(
 
     // SAFETY:
     // Row data must have come from a valid UTF-8 array
-    GenericStringArray::from(builder.build_unchecked())
+    GenericStringArray::from(unsafe { builder.build_unchecked() })
 }
 
 /// Decodes a string view array from `rows` with the provided `options`
@@ -346,5 +416,5 @@ pub unsafe fn decode_string_view(
     validate_utf8: bool,
 ) -> StringViewArray {
     let view = decode_binary_view_inner(rows, options, validate_utf8);
-    view.to_string_view_unchecked()
+    unsafe { view.to_string_view_unchecked() }
 }

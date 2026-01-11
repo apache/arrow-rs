@@ -18,9 +18,9 @@
 //! Defines windowing functions, like `shift`ing
 
 use crate::concat::concat;
-use arrow_array::{make_array, new_null_array, Array, ArrayRef};
+use arrow_array::{Array, ArrayRef, make_array, new_null_array};
 use arrow_schema::ArrowError;
-use num::abs;
+use num_traits::abs;
 
 /// Shifts array by defined number of items (to left or right)
 /// A positive value for `offset` shifts the array to the right
@@ -29,7 +29,6 @@ use num::abs;
 /// ```
 /// # use arrow_array::Int32Array;
 /// # use arrow_select::window::shift;
-///
 /// let a: Int32Array = vec![Some(1), None, Some(4)].into();
 ///
 /// // shift array 1 element to the right

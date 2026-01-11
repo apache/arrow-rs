@@ -32,8 +32,8 @@
 //! 2. Low level [tonic] generated [`flight_service_client`] and
 //!    [`flight_service_server`].
 //!
-//! 3. Experimental support for [Flight SQL] in [`sql`]. Requires the
-//!    `flight-sql-experimental` feature of this crate to be activated.
+//! 3. Support for [Flight SQL] in [`sql`]. Requires the
+//!    `flight-sql` feature of this crate to be activated.
 //!
 //! [Flight SQL]: https://arrow.apache.org/docs/format/FlightSql.html
 
@@ -41,7 +41,7 @@
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(rustdoc::invalid_html_tags)]
 #![warn(missing_docs)]
 // The unused_crate_dependencies lint does not work well for crates defining additional examples/bin targets
@@ -51,8 +51,8 @@ use arrow_ipc::{convert, writer, writer::EncodedData, writer::IpcWriteOptions};
 use arrow_schema::{ArrowError, Schema};
 
 use arrow_ipc::convert::try_schema_from_ipc_buffer;
-use base64::prelude::BASE64_STANDARD;
 use base64::Engine;
+use base64::prelude::BASE64_STANDARD;
 use bytes::Bytes;
 use prost_types::Timestamp;
 use std::{fmt, ops::Deref};
@@ -60,7 +60,7 @@ use std::{fmt, ops::Deref};
 type ArrowResult<T> = std::result::Result<T, ArrowError>;
 
 #[allow(clippy::all)]
-mod gen {
+mod r#gen {
     // Since this file is auto-generated, we suppress all warnings
     #![allow(missing_docs)]
     include!("arrow.flight.protocol.rs");
@@ -68,22 +68,22 @@ mod gen {
 
 /// Defines a `Flight` for generation or retrieval.
 pub mod flight_descriptor {
-    use super::gen;
-    pub use gen::flight_descriptor::DescriptorType;
+    use super::r#gen;
+    pub use r#gen::flight_descriptor::DescriptorType;
 }
 
 /// Low Level [tonic] [`FlightServiceClient`](gen::flight_service_client::FlightServiceClient).
 pub mod flight_service_client {
-    use super::gen;
-    pub use gen::flight_service_client::FlightServiceClient;
+    use super::r#gen;
+    pub use r#gen::flight_service_client::FlightServiceClient;
 }
 
 /// Low Level [tonic] [`FlightServiceServer`](gen::flight_service_server::FlightServiceServer)
 /// and [`FlightService`](gen::flight_service_server::FlightService).
 pub mod flight_service_server {
-    use super::gen;
-    pub use gen::flight_service_server::FlightService;
-    pub use gen::flight_service_server::FlightServiceServer;
+    use super::r#gen;
+    pub use r#gen::flight_service_server::FlightService;
+    pub use r#gen::flight_service_server::FlightServiceServer;
 }
 
 /// Mid Level [`FlightClient`]
@@ -101,34 +101,34 @@ pub mod encode;
 /// Common error types
 pub mod error;
 
-pub use gen::Action;
-pub use gen::ActionType;
-pub use gen::BasicAuth;
-pub use gen::CancelFlightInfoRequest;
-pub use gen::CancelFlightInfoResult;
-pub use gen::CancelStatus;
-pub use gen::Criteria;
-pub use gen::Empty;
-pub use gen::FlightData;
-pub use gen::FlightDescriptor;
-pub use gen::FlightEndpoint;
-pub use gen::FlightInfo;
-pub use gen::HandshakeRequest;
-pub use gen::HandshakeResponse;
-pub use gen::Location;
-pub use gen::PollInfo;
-pub use gen::PutResult;
-pub use gen::RenewFlightEndpointRequest;
-pub use gen::Result;
-pub use gen::SchemaResult;
-pub use gen::Ticket;
+pub use r#gen::Action;
+pub use r#gen::ActionType;
+pub use r#gen::BasicAuth;
+pub use r#gen::CancelFlightInfoRequest;
+pub use r#gen::CancelFlightInfoResult;
+pub use r#gen::CancelStatus;
+pub use r#gen::Criteria;
+pub use r#gen::Empty;
+pub use r#gen::FlightData;
+pub use r#gen::FlightDescriptor;
+pub use r#gen::FlightEndpoint;
+pub use r#gen::FlightInfo;
+pub use r#gen::HandshakeRequest;
+pub use r#gen::HandshakeResponse;
+pub use r#gen::Location;
+pub use r#gen::PollInfo;
+pub use r#gen::PutResult;
+pub use r#gen::RenewFlightEndpointRequest;
+pub use r#gen::Result;
+pub use r#gen::SchemaResult;
+pub use r#gen::Ticket;
 
 /// Helper to extract HTTP/gRPC trailers from a tonic stream.
 mod trailers;
 
 pub mod utils;
 
-#[cfg(feature = "flight-sql-experimental")]
+#[cfg(feature = "flight-sql")]
 pub mod sql;
 mod streams;
 
@@ -149,9 +149,7 @@ pub struct IpcMessage(pub Bytes);
 
 fn flight_schema_as_encoded_data(arrow_schema: &Schema, options: &IpcWriteOptions) -> EncodedData {
     let data_gen = writer::IpcDataGenerator::default();
-    #[allow(deprecated)]
-    let mut dict_tracker =
-        writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+    let mut dict_tracker = writer::DictionaryTracker::new(false);
     data_gen.schema_to_bytes_with_dictionary_tracker(arrow_schema, &mut dict_tracker, options)
 }
 
@@ -602,6 +600,12 @@ impl FlightInfo {
     /// Add specific a endpoint for fetching the data
     pub fn with_endpoint(mut self, endpoint: FlightEndpoint) -> Self {
         self.endpoint.push(endpoint);
+        self
+    }
+
+    /// Add endpoints for fetching all data
+    pub fn with_endpoints(mut self, endpoints: Vec<FlightEndpoint>) -> Self {
+        self.endpoint = endpoints;
         self
     }
 

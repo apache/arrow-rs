@@ -16,7 +16,7 @@
 # under the License.
 
 # Documentation can be found here:
-# https://cwiki.apache.org/confluence/pages/viewpage.action?pageId=127405038
+# https://github.com/apache/infrastructure-asfyaml/blob/main/README.md
 
 notifications:
   commits:      commits@arrow.apache.org
@@ -33,6 +33,7 @@ github:
     - rust
   enabled_merge_buttons:
     squash: true
+    squash_commit_message: PR_TITLE_AND_DESC
     merge: false
     rebase: false
   features:
@@ -45,6 +46,9 @@ github:
         strict: true
         # don't require any jobs to pass
         contexts: []
+  pull_requests:
+    # enable updating head branches of pull requests
+    allow_update_branch: true
 
 # publishes the content of the `asf-site` branch to
 # https://arrow.apache.org/rust/

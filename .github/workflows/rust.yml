@@ -30,14 +30,13 @@ on:
   pull_request:
 
 jobs:
-
   # Check workspace wide compile and test with default features for
   # mac
   macos:
     name: Test on Mac
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Install protoc with brew
@@ -51,8 +50,8 @@ jobs:
         run: |
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
-          cargo test
-
+          # PyArrow tests happen in integration.yml.
+          cargo test --workspace
 
   # Check workspace wide compile and test with default features for
   # windows
@@ -60,7 +59,7 @@ jobs:
     name: Test on Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Install protobuf compiler in /d/protoc
@@ -83,8 +82,7 @@ jobs:
           # do not produce debug symbols to keep memory usage down
           export RUSTFLAGS="-C debuginfo=0"
           export PATH=$PATH:/d/protoc/bin
-          cargo test
-
+          cargo test --workspace
 
   # Run cargo fmt for all crates
   lint:
@@ -93,7 +91,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup rustfmt
@@ -115,20 +113,12 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-      - name: Install cargo-msrv
-        run: cargo install cargo-msrv
-      - name: Downgrade arrow-pyarrow-integration-testing dependencies
-        working-directory: arrow-pyarrow-integration-testing
-        # Necessary because half 2.5 requires rust 1.81 or newer
-        run: |
-          cargo update -p half --precise 2.4.0
-      - name: Downgrade workspace dependencies
-        # Necessary because half 2.5 requires rust 1.81 or newer
-        run: |
-          cargo update -p half --precise 2.4.0
+      - name: Install cargo-msrv (if needed)
+        # cargo-msrv binary may be cached by the cargo cache step in setup-builder, and cargo install will error if it is already installed
+        run: if which cargo-msrv ; then echo "using existing cargo-msrv binary" ; else cargo install cargo-msrv ; fi
       - name: Check all packages
         run: |
           # run `cargo msrv verify --manifest-path "path/to/Cargo.toml"` to see problematic dependencies

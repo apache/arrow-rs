@@ -15,9 +15,9 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::data::{count_nulls, ArrayData};
+use crate::data::{ArrayData, count_nulls};
 use arrow_buffer::ArrowNativeType;
-use num::Integer;
+use num_integer::Integer;
 
 use super::equal_range;
 

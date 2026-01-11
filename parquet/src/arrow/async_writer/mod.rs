@@ -61,17 +61,19 @@ mod store;
 pub use store::*;
 
 use crate::{
-    arrow::arrow_writer::ArrowWriterOptions,
     arrow::ArrowWriter,
+    arrow::arrow_writer::ArrowWriterOptions,
     errors::{ParquetError, Result},
-    file::{metadata::RowGroupMetaData, properties::WriterProperties},
-    format::{FileMetaData, KeyValue},
+    file::{
+        metadata::{KeyValue, ParquetMetaData, RowGroupMetaData},
+        properties::WriterProperties,
+    },
 };
 use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use bytes::Bytes;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use std::mem;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 
@@ -245,7 +247,7 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Unlike [`Self::close`] this does not consume self
     ///
     /// Attempting to write after calling finish will result in an error
-    pub async fn finish(&mut self) -> Result<FileMetaData> {
+    pub async fn finish(&mut self) -> Result<ParquetMetaData> {
         let metadata = self.sync_writer.finish()?;
 
         // Force to flush the remaining data.
@@ -258,8 +260,18 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
     /// Close and finalize the writer.
     ///
     /// All the data in the inner buffer will be force flushed.
-    pub async fn close(mut self) -> Result<FileMetaData> {
+    pub async fn close(mut self) -> Result<ParquetMetaData> {
         self.finish().await
+    }
+
+    /// Consumes the [`AsyncArrowWriter`] and returns the underlying [`AsyncFileWriter`]
+    ///
+    /// # Notes
+    ///
+    /// This method does **not** flush or finalize the writer, so buffered data
+    /// will be lost if you have not called [`Self::finish`].
+    pub fn into_inner(self) -> W {
+        self.async_writer
     }
 
     /// Flush the data written by `sync_writer` into the `async_writer`
@@ -282,20 +294,18 @@ impl<W: AsyncFileWriter> AsyncArrowWriter<W> {
 
 #[cfg(test)]
 mod tests {
+    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow_array::{ArrayRef, BinaryArray, Int32Array, Int64Array, RecordBatchReader};
     use bytes::Bytes;
     use std::sync::Arc;
-    use tokio::pin;
-
-    use crate::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
 
     use super::*;
 
     fn get_test_reader() -> ParquetRecordBatchReader {
         let testdata = arrow::util::test_util::parquet_test_data();
         // This test file is large enough to generate multiple row groups.
-        let path = format!("{}/alltypes_tiny_pages_plain.parquet", testdata);
+        let path = format!("{testdata}/alltypes_tiny_pages_plain.parquet");
         let original_data = Bytes::from(std::fs::read(path).unwrap());
         ParquetRecordBatchReaderBuilder::try_new(original_data)
             .unwrap()
@@ -353,49 +363,6 @@ mod tests {
         async_writer.close().await.unwrap();
 
         assert_eq!(sync_buffer, async_buffer);
-    }
-
-    struct TestAsyncSink {
-        sink: Vec<u8>,
-        min_accept_bytes: usize,
-        expect_total_bytes: usize,
-    }
-
-    impl AsyncWrite for TestAsyncSink {
-        fn poll_write(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-            buf: &[u8],
-        ) -> std::task::Poll<std::result::Result<usize, std::io::Error>> {
-            let written_bytes = self.sink.len();
-            if written_bytes + buf.len() < self.expect_total_bytes {
-                assert!(buf.len() >= self.min_accept_bytes);
-            } else {
-                assert_eq!(written_bytes + buf.len(), self.expect_total_bytes);
-            }
-
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_write(cx, buf)
-        }
-
-        fn poll_flush(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_flush(cx)
-        }
-
-        fn poll_shutdown(
-            self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<std::result::Result<(), std::io::Error>> {
-            let sink = &mut self.get_mut().sink;
-            pin!(sink);
-            sink.poll_shutdown(cx)
-        }
     }
 
     #[tokio::test]

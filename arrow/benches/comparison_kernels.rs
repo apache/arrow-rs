@@ -27,8 +27,9 @@ use arrow_buffer::IntervalMonthDayNano;
 use arrow_string::like::*;
 use arrow_string::regexp::regexp_is_match_scalar;
 use criterion::Criterion;
-use rand::rngs::StdRng;
 use rand::Rng;
+use rand::rngs::StdRng;
+use std::hint;
 
 const SIZE: usize = 65536;
 
@@ -53,26 +54,27 @@ fn bench_nilike_utf8_scalar(arr_a: &StringArray, value_b: &str) {
 }
 
 fn bench_stringview_regexp_is_match_scalar(arr_a: &StringViewArray, value_b: &str) {
-    regexp_is_match_scalar(
-        criterion::black_box(arr_a),
-        criterion::black_box(value_b),
-        None,
-    )
-    .unwrap();
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
 }
 
 fn bench_string_regexp_is_match_scalar(arr_a: &StringArray, value_b: &str) {
-    regexp_is_match_scalar(
-        criterion::black_box(arr_a),
-        criterion::black_box(value_b),
-        None,
-    )
-    .unwrap();
+    regexp_is_match_scalar(hint::black_box(arr_a), hint::black_box(value_b), None).unwrap();
 }
 
 fn make_string_array(size: usize, rng: &mut StdRng) -> impl Iterator<Item = Option<String>> + '_ {
     (0..size).map(|_| {
         let len = rng.random_range(0..64);
+        let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
+        Some(String::from_utf8(bytes).unwrap())
+    })
+}
+
+fn make_inlined_string_array(
+    size: usize,
+    rng: &mut StdRng,
+) -> impl Iterator<Item = Option<String>> + '_ {
+    (0..size).map(|_| {
+        let len = rng.random_range(0..12);
         let bytes = (0..len).map(|_| rng.random_range(0..128)).collect();
         Some(String::from_utf8(bytes).unwrap())
     })
@@ -233,6 +235,23 @@ fn add_benchmark(c: &mut Criterion) {
 
     c.bench_function("eq StringViewArray StringViewArray", |b| {
         b.iter(|| eq(&string_view_left, &string_view_right).unwrap())
+    });
+
+    let array_gen = make_inlined_string_array(1024 * 1024 * 8, &mut rng);
+    let string_left = StringArray::from_iter(array_gen);
+    let string_view_inlined_left = StringViewArray::from_iter(string_left.iter());
+
+    let array_gen = make_inlined_string_array(1024 * 1024 * 8, &mut rng);
+    let string_right = StringArray::from_iter(array_gen);
+    let string_view_inlined_right = StringViewArray::from_iter(string_right.iter());
+
+    // Add fast path benchmarks for StringViewArray, both side are inlined views < 12 bytes
+    c.bench_function("eq StringViewArray StringViewArray inlined bytes", |b| {
+        b.iter(|| eq(&string_view_inlined_left, &string_view_inlined_right).unwrap())
+    });
+
+    c.bench_function("lt StringViewArray StringViewArray inlined bytes", |b| {
+        b.iter(|| lt(&string_view_inlined_left, &string_view_inlined_right).unwrap())
     });
 
     // eq benchmarks for long strings with the same prefix

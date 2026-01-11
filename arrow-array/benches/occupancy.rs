@@ -19,8 +19,8 @@ use arrow_array::types::Int32Type;
 use arrow_array::{DictionaryArray, Int32Array};
 use arrow_buffer::NullBuffer;
 use criterion::*;
-use rand::{rng, Rng};
-use std::sync::Arc;
+use rand::{Rng, rng};
+use std::{hint, sync::Arc};
 
 fn gen_dict(
     len: usize,
@@ -45,7 +45,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 let dict = gen_dict(1024, values, occupancy, null_percent);
                 c.bench_function(&format!("occupancy(values: {values}, occupancy: {occupancy}, null_percent: {null_percent})"), |b| {
                     b.iter(|| {
-                        black_box(&dict).occupancy()
+                        hint::black_box(&dict).occupancy()
                     });
                 });
             }

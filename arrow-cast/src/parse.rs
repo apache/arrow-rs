@@ -18,9 +18,9 @@
 //! [`Parser`] implementations for converting strings to Arrow types
 //!
 //! Used by the CSV and JSON readers to convert strings to Arrow types
+use arrow_array::ArrowNativeTypeOp;
 use arrow_array::timezone::Tz;
 use arrow_array::types::*;
-use arrow_array::ArrowNativeTypeOp;
 use arrow_buffer::ArrowNativeType;
 use arrow_schema::ArrowError;
 use chrono::prelude::*;
@@ -794,7 +794,7 @@ fn parse_e_notation<T: DecimalType>(
                 None => {
                     return Err(ArrowError::ParseError(format!(
                         "can't parse the string value {s} to decimal"
-                    )))
+                    )));
                 }
             };
 
@@ -1235,8 +1235,7 @@ impl Interval {
         match (self.months, self.days, self.nanos) {
             (months, days, nanos) if days == 0 && nanos == 0 => Ok(months),
             _ => Err(ArrowError::InvalidArgumentError(format!(
-                "Unable to represent interval with days and nanos as year-months: {:?}",
-                self
+                "Unable to represent interval with days and nanos as year-months: {self:?}"
             ))),
         }
     }
@@ -2690,26 +2689,10 @@ mod tests {
                 0i128,
                 15,
             ),
-            (
-                "1.016744e-320",
-                0i128,
-                15,
-            ),
-            (
-                "-1e3",
-                -1000000000i128,
-                6,
-            ),
-            (
-                "+1e3",
-                1000000000i128,
-                6,
-            ),
-            (
-                "-1e31",
-                -10000000000000000000000000000000000000i128,
-                6,
-            ),
+            ("1.016744e-320", 0i128, 15),
+            ("-1e3", -1000000000i128, 6),
+            ("+1e3", 1000000000i128, 6),
+            ("-1e31", -10000000000000000000000000000000000000i128, 6),
         ];
         for (s, i, scale) in edge_tests_128 {
             let result_128 = parse_decimal::<Decimal128Type>(s, 38, scale);

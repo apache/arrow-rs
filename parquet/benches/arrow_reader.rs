@@ -19,13 +19,13 @@ use arrow::array::Array;
 use arrow::datatypes::DataType;
 use arrow_schema::Field;
 use criterion::measurement::WallTime;
-use criterion::{criterion_group, criterion_main, BenchmarkGroup, Criterion};
+use criterion::{BenchmarkGroup, Criterion, criterion_group, criterion_main};
 use half::f16;
-use num::FromPrimitive;
 use num_bigint::BigInt;
+use num_traits::FromPrimitive;
 use parquet::arrow::array_reader::{
-    make_byte_array_reader, make_byte_view_array_reader, make_fixed_len_byte_array_reader,
-    ListArrayReader,
+    ListArrayReader, make_byte_array_reader, make_byte_view_array_reader,
+    make_fixed_len_byte_array_reader,
 };
 use parquet::basic::Type;
 use parquet::data_type::{ByteArray, FixedLenByteArrayType};
@@ -38,7 +38,7 @@ use parquet::{
     schema::types::{ColumnDescPtr, SchemaDescPtr},
 };
 use rand::distr::uniform::SampleUniform;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::{collections::VecDeque, sync::Arc};
 
 fn build_test_schema() -> SchemaDescPtr {
@@ -76,6 +76,18 @@ fn build_test_schema() -> SchemaDescPtr {
             OPTIONAL FIXED_LEN_BYTE_ARRAY (8) optional_flba8_leaf;
             REQUIRED FIXED_LEN_BYTE_ARRAY (16) mandatory_flba16_leaf;
             OPTIONAL FIXED_LEN_BYTE_ARRAY (16) optional_flba16_leaf;
+            REQUIRED INT32 mandatory_uint8_leaf (INTEGER(8, false));
+            OPTIONAL INT32 optional_uint8_leaf (INTEGER(8, false));
+            REQUIRED INT32 mandatory_uint16_leaf (INTEGER(16, false));
+            OPTIONAL INT32 optional_uint16_leaf (INTEGER(16, false));
+            REQUIRED INT32 mandatory_uint32_leaf (INTEGER(32, false));
+            OPTIONAL INT32 optional_uint32_leaf (INTEGER(32, false));
+            REQUIRED INT32 mandatory_int8_leaf (INTEGER(8, true));
+            OPTIONAL INT32 optional_int8_leaf (INTEGER(8, true));
+            REQUIRED INT32 mandatory_int16_leaf (INTEGER(16, true));
+            OPTIONAL INT32 optional_int16_leaf (INTEGER(16, true));
+            REQUIRED INT64 mandatory_uint64_leaf (INTEGER(64, false));
+            OPTIONAL INT64 optional_uint64_leaf (INTEGER(64, false));
         }
         ";
     parse_message_type(message_type)
@@ -1280,6 +1292,18 @@ fn add_benches(c: &mut Criterion) {
     let string_list_desc = schema.column(14);
     let mandatory_binary_column_desc = schema.column(15);
     let optional_binary_column_desc = schema.column(16);
+    let mandatory_uint8_column_desc = schema.column(27);
+    let optional_uint8_column_desc = schema.column(28);
+    let mandatory_uint16_column_desc = schema.column(29);
+    let optional_uint16_column_desc = schema.column(30);
+    let mandatory_uint32_column_desc = schema.column(31);
+    let optional_uint32_column_desc = schema.column(32);
+    let mandatory_int8_column_desc = schema.column(33);
+    let optional_int8_column_desc = schema.column(34);
+    let mandatory_int16_column_desc = schema.column(35);
+    let optional_int16_column_desc = schema.column(36);
+    let mandatory_uint64_column_desc = schema.column(37);
+    let optional_uint64_column_desc = schema.column(38);
 
     // primitive / int32 benchmarks
     // =============================
@@ -1294,6 +1318,61 @@ fn add_benches(c: &mut Criterion) {
     );
     group.finish();
 
+    // primitive int32 / logical uint8 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/UInt8Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &mandatory_uint8_column_desc,
+        &optional_uint8_column_desc,
+        0,
+        256,
+    );
+    group.finish();
+
+    // primitive int32 / logical int8 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/Int8Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &mandatory_int8_column_desc,
+        &optional_int8_column_desc,
+        0,
+        128,
+    );
+    group.finish();
+
+    // primitive int32 / logical uint16 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/UInt16Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &mandatory_uint16_column_desc,
+        &optional_uint16_column_desc,
+        0,
+        65536,
+    );
+    group.finish();
+
+    // primitive int32 / logical int16 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/Int16Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &mandatory_int16_column_desc,
+        &optional_int16_column_desc,
+        0,
+        32768,
+    );
+    group.finish();
+
+    // primitive int32 / logical uint32 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/UInt32Array");
+    bench_primitive::<Int32Type>(
+        &mut group,
+        &mandatory_uint32_column_desc,
+        &optional_uint32_column_desc,
+        0,
+        1000,
+    );
+    group.finish();
+
     // primitive / int64 benchmarks
     // =============================
 
@@ -1302,6 +1381,17 @@ fn add_benches(c: &mut Criterion) {
         &mut group,
         &mandatory_int64_column_desc,
         &optional_int64_column_desc,
+        0,
+        1000,
+    );
+    group.finish();
+
+    // primitive int64 / logical uint64 benchmarks
+    let mut group = c.benchmark_group("arrow_array_reader/UInt64Array");
+    bench_primitive::<Int64Type>(
+        &mut group,
+        &mandatory_uint64_column_desc,
+        &optional_uint64_column_desc,
         0,
         1000,
     );

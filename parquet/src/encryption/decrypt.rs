@@ -17,10 +17,11 @@
 
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
-use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor};
-use crate::encryption::modules::{create_module_aad, ModuleType};
+use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN};
+use crate::encryption::modules::{ModuleType, create_footer_aad, create_module_aad};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
+use crate::file::metadata::HeapSize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -89,7 +90,7 @@ use std::sync::Arc;
 ///
 /// // Create decryption properties for reading an encrypted file.
 /// // Note that we don't need to specify which columns are encrypted,
-/// // this is determined by the file metadata and the required keys will be retrieved
+/// // this is determined by the file metadata, and the required keys will be retrieved
 /// // dynamically using our key retriever.
 /// let decryption_properties = FileDecryptionProperties::with_key_retriever(key_retriever)
 ///     .build()?;
@@ -142,13 +143,13 @@ impl CryptoContext {
         column_ordinal: usize,
     ) -> Result<Self> {
         let (data_decryptor, metadata_decryptor) = match column_crypto_metadata {
-            ColumnCryptoMetaData::EncryptionWithFooterKey => {
+            ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY => {
                 // TODO: In GCM-CTR mode will this need to be a non-GCM decryptor?
                 let data_decryptor = file_decryptor.get_footer_decryptor()?;
                 let metadata_decryptor = file_decryptor.get_footer_decryptor()?;
                 (data_decryptor, metadata_decryptor)
             }
-            ColumnCryptoMetaData::EncryptionWithColumnKey(column_key_encryption) => {
+            ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(column_key_encryption) => {
                 let key_metadata = &column_key_encryption.key_metadata;
                 let full_column_name;
                 let column_name = if column_key_encryption.path_in_schema.len() == 1 {
@@ -220,6 +221,26 @@ impl CryptoContext {
         )
     }
 
+    pub(crate) fn create_column_index_aad(&self) -> Result<Vec<u8>> {
+        create_module_aad(
+            self.file_aad(),
+            ModuleType::ColumnIndex,
+            self.row_group_idx,
+            self.column_ordinal,
+            self.page_ordinal,
+        )
+    }
+
+    pub(crate) fn create_offset_index_aad(&self) -> Result<Vec<u8>> {
+        create_module_aad(
+            self.file_aad(),
+            ModuleType::OffsetIndex,
+            self.row_group_idx,
+            self.column_ordinal,
+            self.page_ordinal,
+        )
+    }
+
     pub(crate) fn for_dictionary_page(&self) -> Self {
         Self {
             row_group_idx: self.row_group_idx,
@@ -236,6 +257,10 @@ impl CryptoContext {
         &self.data_decryptor
     }
 
+    pub(crate) fn metadata_decryptor(&self) -> &Arc<dyn BlockDecryptor> {
+        &self.metadata_decryptor
+    }
+
     pub(crate) fn file_aad(&self) -> &Vec<u8> {
         &self.file_aad
     }
@@ -245,6 +270,12 @@ impl CryptoContext {
 struct ExplicitDecryptionKeys {
     footer_key: Vec<u8>,
     column_keys: HashMap<String, Vec<u8>>,
+}
+
+impl HeapSize for ExplicitDecryptionKeys {
+    fn heap_size(&self) -> usize {
+        self.footer_key.heap_size() + self.column_keys.heap_size()
+    }
 }
 
 #[derive(Clone)]
@@ -266,10 +297,23 @@ impl PartialEq for DecryptionKeys {
     }
 }
 
+impl HeapSize for DecryptionKeys {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::Explicit(keys) => keys.heap_size(),
+            Self::ViaRetriever(_) => {
+                // The retriever is a user-defined type we don't control,
+                // so we can't determine the heap size.
+                0
+            }
+        }
+    }
+}
+
 /// `FileDecryptionProperties` hold keys and AAD data required to decrypt a Parquet file.
 ///
 /// When reading Arrow data, the `FileDecryptionProperties` should be included in the
-/// [`ArrowReaderOptions`](crate::arrow::arrow_reader::ArrowReaderOptions)  using
+/// [`ArrowReaderOptions`](crate::arrow::arrow_reader::ArrowReaderOptions) using
 /// [`with_file_decryption_properties`](crate::arrow::arrow_reader::ArrowReaderOptions::with_file_decryption_properties).
 ///
 /// # Examples
@@ -307,8 +351,14 @@ impl PartialEq for DecryptionKeys {
 pub struct FileDecryptionProperties {
     keys: DecryptionKeys,
     aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
 }
 
+impl HeapSize for FileDecryptionProperties {
+    fn heap_size(&self) -> usize {
+        self.keys.heap_size() + self.aad_prefix.heap_size()
+    }
+}
 impl FileDecryptionProperties {
     /// Returns a new [`FileDecryptionProperties`] builder that will use the provided key to
     /// decrypt footer metadata.
@@ -318,8 +368,10 @@ impl FileDecryptionProperties {
 
     /// Returns a new [`FileDecryptionProperties`] builder that uses a [`KeyRetriever`]
     /// to get decryption keys based on key metadata.
-    pub fn with_key_retriever(key_retriever: Arc<dyn KeyRetriever>) -> DecryptionPropertiesBuilder {
-        DecryptionPropertiesBuilder::new_with_key_retriever(key_retriever)
+    pub fn with_key_retriever(
+        key_retriever: Arc<dyn KeyRetriever>,
+    ) -> DecryptionPropertiesBuilderWithRetriever {
+        DecryptionPropertiesBuilderWithRetriever::new(key_retriever)
     }
 
     /// AAD prefix string uniquely identifies the file and prevents file swapping
@@ -327,9 +379,14 @@ impl FileDecryptionProperties {
         self.aad_prefix.as_ref()
     }
 
+    /// Returns true if footer signature verification is enabled for files with plaintext footers.
+    pub fn check_plaintext_footer_integrity(&self) -> bool {
+        self.footer_signature_verification
+    }
+
     /// Get the encryption key for decrypting a file's footer,
     /// and also column data if uniform encryption is used.
-    pub fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<Vec<u8>>> {
+    pub fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<'_, Vec<u8>>> {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => Ok(Cow::Borrowed(&keys.footer_key)),
             DecryptionKeys::ViaRetriever(retriever) => {
@@ -344,7 +401,7 @@ impl FileDecryptionProperties {
         &self,
         column_name: &str,
         key_metadata: Option<&[u8]>,
-    ) -> Result<Cow<Vec<u8>>> {
+    ) -> Result<Cow<'_, Vec<u8>>> {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => match keys.column_keys.get(column_name) {
                 None => Err(general_err!(
@@ -387,10 +444,10 @@ impl std::fmt::Debug for FileDecryptionProperties {
 ///
 /// See [`FileDecryptionProperties`] for example usage.
 pub struct DecryptionPropertiesBuilder {
-    footer_key: Option<Vec<u8>>,
-    key_retriever: Option<Arc<dyn KeyRetriever>>,
+    footer_key: Vec<u8>,
     column_keys: HashMap<String, Vec<u8>>,
     aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
 }
 
 impl DecryptionPropertiesBuilder {
@@ -398,49 +455,24 @@ impl DecryptionPropertiesBuilder {
     /// decrypt footer metadata.
     pub fn new(footer_key: Vec<u8>) -> DecryptionPropertiesBuilder {
         Self {
-            footer_key: Some(footer_key),
-            key_retriever: None,
+            footer_key,
             column_keys: HashMap::default(),
             aad_prefix: None,
-        }
-    }
-
-    /// Create a new [`DecryptionPropertiesBuilder`] by providing a [`KeyRetriever`] that
-    /// can be used to get decryption keys based on key metadata.
-    pub fn new_with_key_retriever(
-        key_retriever: Arc<dyn KeyRetriever>,
-    ) -> DecryptionPropertiesBuilder {
-        Self {
-            footer_key: None,
-            key_retriever: Some(key_retriever),
-            column_keys: HashMap::default(),
-            aad_prefix: None,
+            footer_signature_verification: true,
         }
     }
 
     /// Finalize the builder and return created [`FileDecryptionProperties`]
-    pub fn build(self) -> Result<FileDecryptionProperties> {
-        let keys = match (self.footer_key, self.key_retriever) {
-            (Some(footer_key), None) => DecryptionKeys::Explicit(ExplicitDecryptionKeys {
-                footer_key,
-                column_keys: self.column_keys,
-            }),
-            (None, Some(key_retriever)) => {
-                if !self.column_keys.is_empty() {
-                    return Err(general_err!(
-                        "Cannot specify column keys directly when using a key retriever"
-                    ));
-                }
-                DecryptionKeys::ViaRetriever(key_retriever)
-            }
-            _ => {
-                unreachable!()
-            }
-        };
-        Ok(FileDecryptionProperties {
+    pub fn build(self) -> Result<Arc<FileDecryptionProperties>> {
+        let keys = DecryptionKeys::Explicit(ExplicitDecryptionKeys {
+            footer_key: self.footer_key,
+            column_keys: self.column_keys,
+        });
+        Ok(Arc::new(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
-        })
+            footer_signature_verification: self.footer_signature_verification,
+        }))
     }
 
     /// Specify the expected AAD prefix to be used for decryption.
@@ -472,11 +504,64 @@ impl DecryptionPropertiesBuilder {
         }
         Ok(self)
     }
+
+    /// Disable verification of footer tags for files that use plaintext footers.
+    /// Signature verification is enabled by default.
+    pub fn disable_footer_signature_verification(mut self) -> Self {
+        self.footer_signature_verification = false;
+        self
+    }
+}
+
+/// Builder for [`FileDecryptionProperties`] that uses a [`KeyRetriever`]
+///
+/// See the [`KeyRetriever`] documentation for example usage.
+pub struct DecryptionPropertiesBuilderWithRetriever {
+    key_retriever: Arc<dyn KeyRetriever>,
+    aad_prefix: Option<Vec<u8>>,
+    footer_signature_verification: bool,
+}
+
+impl DecryptionPropertiesBuilderWithRetriever {
+    /// Create a new [`DecryptionPropertiesBuilderWithRetriever`] by providing a [`KeyRetriever`] that
+    /// can be used to get decryption keys based on key metadata.
+    pub fn new(key_retriever: Arc<dyn KeyRetriever>) -> DecryptionPropertiesBuilderWithRetriever {
+        Self {
+            key_retriever,
+            aad_prefix: None,
+            footer_signature_verification: true,
+        }
+    }
+
+    /// Finalize the builder and return created [`FileDecryptionProperties`]
+    pub fn build(self) -> Result<Arc<FileDecryptionProperties>> {
+        let keys = DecryptionKeys::ViaRetriever(self.key_retriever);
+        Ok(Arc::new(FileDecryptionProperties {
+            keys,
+            aad_prefix: self.aad_prefix,
+            footer_signature_verification: self.footer_signature_verification,
+        }))
+    }
+
+    /// Specify the expected AAD prefix to be used for decryption.
+    /// This must be set if the file was written with an AAD prefix and the
+    /// prefix is not stored in the file metadata.
+    pub fn with_aad_prefix(mut self, value: Vec<u8>) -> Self {
+        self.aad_prefix = Some(value);
+        self
+    }
+
+    /// Disable verification of footer tags for files that use plaintext footers.
+    /// Signature verification is enabled by default.
+    pub fn disable_footer_signature_verification(mut self) -> Self {
+        self.footer_signature_verification = false;
+        self
+    }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct FileDecryptor {
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
     footer_decryptor: Arc<dyn BlockDecryptor>,
     file_aad: Vec<u8>,
 }
@@ -487,9 +572,24 @@ impl PartialEq for FileDecryptor {
     }
 }
 
+/// Estimate the size in bytes required for the file decryptor.
+/// This is important to track the memory usage of cached Parquet meta data,
+/// and is used via [`crate::file::metadata::ParquetMetaData::memory_size`].
+/// Note that when a [`KeyRetriever`] is used, its heap size won't be included
+/// and the result will be an underestimate.
+/// If the [`FileDecryptionProperties`] are shared between multiple files then the
+/// heap size may also be an overestimate.
+impl HeapSize for FileDecryptor {
+    fn heap_size(&self) -> usize {
+        self.decryption_properties.heap_size()
+            + (Arc::clone(&self.footer_decryptor) as Arc<dyn HeapSize>).heap_size()
+            + self.file_aad.heap_size()
+    }
+}
+
 impl FileDecryptor {
     pub(crate) fn new(
-        decryption_properties: &FileDecryptionProperties,
+        decryption_properties: &Arc<FileDecryptionProperties>,
         footer_key_metadata: Option<&[u8]>,
         aad_file_unique: Vec<u8>,
         aad_prefix: Vec<u8>,
@@ -505,13 +605,32 @@ impl FileDecryptor {
 
         Ok(Self {
             footer_decryptor: Arc::new(footer_decryptor),
-            decryption_properties: decryption_properties.clone(),
+            decryption_properties: Arc::clone(decryption_properties),
             file_aad,
         })
     }
 
     pub(crate) fn get_footer_decryptor(&self) -> Result<Arc<dyn BlockDecryptor>> {
         Ok(self.footer_decryptor.clone())
+    }
+
+    /// Verify the signature of the footer
+    pub(crate) fn verify_plaintext_footer_signature(&self, plaintext_footer: &[u8]) -> Result<()> {
+        // Plaintext footer format is: [plaintext metadata, nonce, authentication tag]
+        let tag = &plaintext_footer[plaintext_footer.len() - TAG_LEN..];
+        let aad = create_footer_aad(self.file_aad())?;
+        let footer_decryptor = self.get_footer_decryptor()?;
+
+        let computed_tag = footer_decryptor.compute_plaintext_tag(&aad, plaintext_footer)?;
+
+        if computed_tag != tag {
+            return Err(general_err!(
+                "Footer signature verification failed. Computed: {:?}, Expected: {:?}",
+                computed_tag,
+                tag
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) fn get_column_data_decryptor(

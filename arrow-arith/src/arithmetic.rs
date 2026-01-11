@@ -25,8 +25,8 @@
 use crate::arity::*;
 use arrow_array::types::*;
 use arrow_array::*;
-use arrow_buffer::i256;
 use arrow_buffer::ArrowNativeType;
+use arrow_buffer::i256;
 use arrow_schema::*;
 use std::cmp::min;
 use std::sync::Arc;
@@ -43,8 +43,7 @@ fn get_fixed_point_info(
 
     if required_scale > product_scale {
         return Err(ArrowError::ComputeError(format!(
-            "Required scale {} is greater than product scale {}",
-            required_scale, product_scale
+            "Required scale {required_scale} is greater than product scale {product_scale}",
         )));
     }
 
@@ -122,7 +121,7 @@ pub fn multiply_fixed_point_checked(
         let mut mul = a.wrapping_mul(b);
         mul = divide_and_round::<Decimal256Type>(mul, divisor);
         mul.to_i128().ok_or_else(|| {
-            ArrowError::ArithmeticOverflow(format!("Overflow happened on: {:?} * {:?}", a, b))
+            ArrowError::ArithmeticOverflow(format!("Overflow happened on: {a:?} * {b:?}"))
         })
     })
     .and_then(|a| a.with_precision_and_scale(precision, required_scale))
@@ -209,9 +208,11 @@ mod tests {
             .unwrap();
 
         let err = mul(&a, &b).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Overflow happened on: 123456789000000000000000000 * 10000000000000000000"));
+        assert!(
+            err.to_string().contains(
+                "Overflow happened on: 123456789000000000000000000 * 10000000000000000000"
+            )
+        );
 
         // Allow precision loss.
         let result = multiply_fixed_point_checked(&a, &b, 28).unwrap();
@@ -279,9 +280,11 @@ mod tests {
 
         // Required scale cannot be larger than the product of the input scales.
         let result = multiply_fixed_point_checked(&a, &b, 5).unwrap_err();
-        assert!(result
-            .to_string()
-            .contains("Required scale 5 is greater than product scale 4"));
+        assert!(
+            result
+                .to_string()
+                .contains("Required scale 5 is greater than product scale 4")
+        );
     }
 
     #[test]
@@ -323,7 +326,10 @@ mod tests {
 
         // `multiply` overflows on this case.
         let err = mul(&a, &b).unwrap_err();
-        assert_eq!(err.to_string(), "Arithmetic overflow: Overflow happened on: 123456789000000000000000000 * 10000000000000000000");
+        assert_eq!(
+            err.to_string(),
+            "Arithmetic overflow: Overflow happened on: 123456789000000000000000000 * 10000000000000000000"
+        );
 
         // Avoid overflow by reducing the scale.
         let result = multiply_fixed_point(&a, &b, 28).unwrap();

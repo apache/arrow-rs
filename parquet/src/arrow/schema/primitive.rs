@@ -18,7 +18,7 @@
 use crate::basic::{ConvertedType, LogicalType, TimeUnit as ParquetTimeUnit, Type as PhysicalType};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::{BasicTypeInfo, Type};
-use arrow_schema::{DataType, IntervalUnit, TimeUnit, DECIMAL128_MAX_PRECISION};
+use arrow_schema::{DECIMAL128_MAX_PRECISION, DataType, IntervalUnit, TimeUnit};
 
 /// Converts [`Type`] to [`DataType`] with an optional `arrow_type_hint`
 /// provided by the arrow schema
@@ -43,6 +43,7 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         (DataType::Int32 | DataType::Int64, DataType::Timestamp(_, _)) => hint,
         (DataType::Int32, DataType::Time32(_)) => hint,
         (DataType::Int64, DataType::Time64(_)) => hint,
+        (DataType::Int64, DataType::Duration(_)) => hint,
 
         // Date64 doesn't have a corresponding LogicalType / ConvertedType
         (DataType::Int64, DataType::Date64) => hint,
@@ -84,7 +85,9 @@ fn apply_hint(parquet: DataType, hint: DataType) -> DataType {
         // Determine interval time unit (#1666)
         (DataType::Interval(_), DataType::Interval(_)) => hint,
 
-        // Promote to Decimal256
+        // Promote to Decimal256 or narrow to Decimal32 or Decimal64
+        (DataType::Decimal128(_, _), DataType::Decimal32(_, _)) => hint,
+        (DataType::Decimal128(_, _), DataType::Decimal64(_, _)) => hint,
         (DataType::Decimal128(_, _), DataType::Decimal256(_, _)) => hint,
 
         // Potentially preserve dictionary encoding
@@ -161,7 +164,7 @@ fn decimal_256_type(scale: i32, precision: i32) -> Result<DataType> {
 }
 
 fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int32),
         (
             Some(
@@ -180,10 +183,12 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             (32, false) => Ok(DataType::UInt32),
             _ => Err(arrow_err!("Cannot create INT32 physical type from {:?}", t)),
         },
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => {
+            decimal_128_type(*scale, *precision)
+        }
         (Some(LogicalType::Date), _) => Ok(DataType::Date32),
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
-            ParquetTimeUnit::MILLIS(_) => Ok(DataType::Time32(TimeUnit::Millisecond)),
+            ParquetTimeUnit::MILLIS => Ok(DataType::Time32(TimeUnit::Millisecond)),
             _ => Err(arrow_err!(
                 "Cannot create INT32 physical type from {:?}",
                 unit
@@ -209,7 +214,7 @@ fn from_int32(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
 }
 
 fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataType> {
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (None, ConvertedType::NONE) => Ok(DataType::Int64),
         (
             Some(LogicalType::Integer {
@@ -222,11 +227,11 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             false => Ok(DataType::UInt64),
         },
         (Some(LogicalType::Time { unit, .. }), _) => match unit {
-            ParquetTimeUnit::MILLIS(_) => {
+            ParquetTimeUnit::MILLIS => {
                 Err(arrow_err!("Cannot create INT64 from MILLIS time unit",))
             }
-            ParquetTimeUnit::MICROS(_) => Ok(DataType::Time64(TimeUnit::Microsecond)),
-            ParquetTimeUnit::NANOS(_) => Ok(DataType::Time64(TimeUnit::Nanosecond)),
+            ParquetTimeUnit::MICROS => Ok(DataType::Time64(TimeUnit::Microsecond)),
+            ParquetTimeUnit::NANOS => Ok(DataType::Time64(TimeUnit::Nanosecond)),
         },
         (
             Some(LogicalType::Timestamp {
@@ -236,11 +241,11 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             _,
         ) => Ok(DataType::Timestamp(
             match unit {
-                ParquetTimeUnit::MILLIS(_) => TimeUnit::Millisecond,
-                ParquetTimeUnit::MICROS(_) => TimeUnit::Microsecond,
-                ParquetTimeUnit::NANOS(_) => TimeUnit::Nanosecond,
+                ParquetTimeUnit::MILLIS => TimeUnit::Millisecond,
+                ParquetTimeUnit::MICROS => TimeUnit::Microsecond,
+                ParquetTimeUnit::NANOS => TimeUnit::Nanosecond,
             },
-            if is_adjusted_to_u_t_c {
+            if *is_adjusted_to_u_t_c {
                 Some("UTC".into())
             } else {
                 None
@@ -257,7 +262,9 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
             TimeUnit::Microsecond,
             Some("UTC".into()),
         )),
-        (Some(LogicalType::Decimal { scale, precision }), _) => decimal_128_type(scale, precision),
+        (Some(LogicalType::Decimal { scale, precision }), _) => {
+            decimal_128_type(*scale, *precision)
+        }
         (None, ConvertedType::DECIMAL) => decimal_128_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet INT64 logical type {:?} or converted type {}",
@@ -268,11 +275,14 @@ fn from_int64(info: &BasicTypeInfo, scale: i32, precision: i32) -> Result<DataTy
 }
 
 fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<DataType> {
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (Some(LogicalType::String), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Json), _) => Ok(DataType::Utf8),
         (Some(LogicalType::Bson), _) => Ok(DataType::Binary),
         (Some(LogicalType::Enum), _) => Ok(DataType::Binary),
+        (Some(LogicalType::Geometry { .. }), _) => Ok(DataType::Binary),
+        (Some(LogicalType::Geography { .. }), _) => Ok(DataType::Binary),
+        (Some(LogicalType::_Unknown { .. }), _) => Ok(DataType::Binary),
         (None, ConvertedType::NONE) => Ok(DataType::Binary),
         (None, ConvertedType::JSON) => Ok(DataType::Utf8),
         (None, ConvertedType::BSON) => Ok(DataType::Binary),
@@ -284,7 +294,7 @@ fn from_byte_array(info: &BasicTypeInfo, precision: i32, scale: i32) -> Result<D
                 precision: p,
             }),
             _,
-        ) => decimal_type(s, p),
+        ) => decimal_type(*s, *p),
         (None, ConvertedType::DECIMAL) => decimal_type(scale, precision),
         (logical, converted) => Err(arrow_err!(
             "Unable to convert parquet BYTE_ARRAY logical type {:?} or converted type {}",
@@ -301,12 +311,12 @@ fn from_fixed_len_byte_array(
     type_length: i32,
 ) -> Result<DataType> {
     // TODO: This should check the type length for the decimal and interval types
-    match (info.logical_type(), info.converted_type()) {
+    match (info.logical_type_ref(), info.converted_type()) {
         (Some(LogicalType::Decimal { scale, precision }), _) => {
             if type_length <= 16 {
-                decimal_128_type(scale, precision)
+                decimal_128_type(*scale, *precision)
             } else {
-                decimal_256_type(scale, precision)
+                decimal_256_type(*scale, *precision)
             }
         }
         (None, ConvertedType::DECIMAL) => {

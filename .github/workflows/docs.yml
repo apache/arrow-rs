@@ -34,28 +34,20 @@ jobs:
   docs:
     name: Rustdocs are clean
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        arch: [ amd64 ]
-        rust: [ nightly ]
     container:
-      image: ${{ matrix.arch }}/rust
+      image: amd64/rust
       env:
         RUSTDOCFLAGS: "-Dwarnings --enable-index-page -Zunstable-options"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
-      - name: Install python dev
-        run: |
-          apt update
-          apt install -y libpython3.11-dev
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          rust-version: ${{ matrix.rust }}
+      - name: Install Nightly Rust
+        run: rustup install nightly
       - name: Run cargo doc
-        run: cargo doc --document-private-items --no-deps --workspace --all-features
+        run: cargo +nightly doc --document-private-items --no-deps --workspace --all-features
       - name: Fix file permissions
         shell: sh
         run: |
@@ -64,7 +56,7 @@ jobs:
               echo "::warning title=Invalid file permissions automatically fixed::$line"
           done
       - name: Upload artifacts
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           name: crate-docs
           path: target/doc
@@ -77,9 +69,9 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Download crate docs
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: crate-docs
           path: website/build

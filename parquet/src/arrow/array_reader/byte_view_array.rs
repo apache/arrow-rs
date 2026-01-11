@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::arrow::array_reader::{read_records, skip_records, ArrayReader};
+use crate::arrow::array_reader::{ArrayReader, read_records, skip_records};
 use crate::arrow::buffer::view_buffer::ViewBuffer;
 use crate::arrow::decoder::{DeltaByteArrayDecoder, DictIndexDecoder};
 use crate::arrow::record_reader::GenericRecordReader;
@@ -28,7 +28,7 @@ use crate::encodings::decoding::{Decoder, DeltaBitPackDecoder};
 use crate::errors::{ParquetError, Result};
 use crate::schema::types::ColumnDescPtr;
 use crate::util::utf8::check_valid_utf8;
-use arrow_array::{builder::make_view, ArrayRef};
+use arrow_array::{ArrayRef, builder::make_view};
 use arrow_buffer::Buffer;
 use arrow_data::ByteView;
 use arrow_schema::DataType as ArrowType;
@@ -236,7 +236,7 @@ impl ByteViewArrayDecoder {
             Encoding::RLE_DICTIONARY | Encoding::PLAIN_DICTIONARY => {
                 ByteViewArrayDecoder::Dictionary(ByteViewArrayDecoderDictionary::new(
                     data, num_levels, num_values,
-                ))
+                )?)
             }
             Encoding::DELTA_LENGTH_BYTE_ARRAY => ByteViewArrayDecoder::DeltaLength(
                 ByteViewArrayDecoderDeltaLength::new(data, validate_utf8)?,
@@ -248,7 +248,7 @@ impl ByteViewArrayDecoder {
                 return Err(general_err!(
                     "unsupported encoding for byte array: {}",
                     encoding
-                ))
+                ));
             }
         };
 
@@ -426,10 +426,10 @@ pub struct ByteViewArrayDecoderDictionary {
 }
 
 impl ByteViewArrayDecoderDictionary {
-    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Self {
-        Self {
-            decoder: DictIndexDecoder::new(data, num_levels, num_values),
-        }
+    fn new(data: Bytes, num_levels: usize, num_values: Option<usize>) -> Result<Self> {
+        Ok(Self {
+            decoder: DictIndexDecoder::new(data, num_levels, num_values)?,
+        })
     }
 
     /// Reads the next indexes from self.decoder

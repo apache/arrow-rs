@@ -18,8 +18,9 @@
 #[macro_use]
 extern crate criterion;
 use criterion::Criterion;
-use rand::distr::{Distribution, StandardUniform, Uniform};
 use rand::Rng;
+use rand::distr::{Distribution, StandardUniform, Uniform};
+use std::hint;
 
 use chrono::DateTime;
 use std::sync::Arc;
@@ -82,6 +83,36 @@ fn build_utf8_date_time_array(size: usize, with_nulls: bool) -> ArrayRef {
     Arc::new(builder.finish())
 }
 
+fn build_decimal32_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
+    let mut rng = seedable_rng();
+    let mut builder = Decimal32Builder::with_capacity(size);
+
+    for _ in 0..size {
+        builder.append_value(rng.random_range::<i32, _>(0..1000000));
+    }
+    Arc::new(
+        builder
+            .finish()
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    )
+}
+
+fn build_decimal64_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
+    let mut rng = seedable_rng();
+    let mut builder = Decimal64Builder::with_capacity(size);
+
+    for _ in 0..size {
+        builder.append_value(rng.random_range::<i64, _>(0..1000000000));
+    }
+    Arc::new(
+        builder
+            .finish()
+            .with_precision_and_scale(precision, scale)
+            .unwrap(),
+    )
+}
+
 fn build_decimal128_array(size: usize, precision: u8, scale: i8) -> ArrayRef {
     let mut rng = seedable_rng();
     let mut builder = Decimal128Builder::with_capacity(size);
@@ -139,7 +170,7 @@ fn build_dict_array(size: usize) -> ArrayRef {
 
 // cast array from specified primitive array type to desired data type
 fn cast_array(array: &ArrayRef, to_type: DataType) {
-    criterion::black_box(cast(array, &to_type).unwrap());
+    hint::black_box(cast(array, &to_type).unwrap());
 }
 
 fn add_benchmark(c: &mut Criterion) {
@@ -158,6 +189,8 @@ fn add_benchmark(c: &mut Criterion) {
     let utf8_date_array = build_utf8_date_array(512, true);
     let utf8_date_time_array = build_utf8_date_time_array(512, true);
 
+    let decimal32_array = build_decimal32_array(512, 9, 3);
+    let decimal64_array = build_decimal64_array(512, 10, 3);
     let decimal128_array = build_decimal128_array(512, 10, 3);
     let decimal256_array = build_decimal256_array(512, 50, 3);
     let string_array = build_string_array(512);
@@ -247,6 +280,22 @@ fn add_benchmark(c: &mut Criterion) {
         b.iter(|| cast_array(&utf8_date_time_array, DataType::Date64))
     });
 
+    c.bench_function("cast decimal32 to decimal32 512", |b| {
+        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(9, 4)))
+    });
+    c.bench_function("cast decimal32 to decimal32 512 lower precision", |b| {
+        b.iter(|| cast_array(&decimal32_array, DataType::Decimal32(6, 5)))
+    });
+    c.bench_function("cast decimal32 to decimal64 512", |b| {
+        b.iter(|| cast_array(&decimal32_array, DataType::Decimal64(11, 5)))
+    });
+    c.bench_function("cast decimal64 to decimal32 512", |b| {
+        b.iter(|| cast_array(&decimal64_array, DataType::Decimal32(9, 2)))
+    });
+    c.bench_function("cast decimal64 to decimal64 512", |b| {
+        b.iter(|| cast_array(&decimal64_array, DataType::Decimal64(12, 4)))
+    });
+
     c.bench_function("cast decimal128 to decimal128 512", |b| {
         b.iter(|| cast_array(&decimal128_array, DataType::Decimal128(30, 5)))
     });
@@ -309,6 +358,46 @@ fn add_benchmark(c: &mut Criterion) {
     });
     c.bench_function("cast binary view to string view", |b| {
         b.iter(|| cast_array(&binary_view_array, DataType::Utf8View))
+    });
+
+    c.bench_function("cast string single run to ree<int32>", |b| {
+        let source_array = StringArray::from(vec!["a"; 8192]);
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast runs of 10 string to ree<int32>", |b| {
+        let source_array: Int32Array = (0..8192).map(|i| i / 10).collect();
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast runs of 1000 int32s to ree<int32>", |b| {
+        let source_array: Int32Array = (0..8192).map(|i| i / 1000).collect();
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
+    });
+
+    c.bench_function("cast no runs of int32s to ree<int32>", |b| {
+        let source_array: Int32Array = (0..8192).collect();
+        let array_ref = Arc::new(source_array) as ArrayRef;
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int32, false)),
+            Arc::new(Field::new("values", DataType::Int32, true)),
+        );
+        b.iter(|| cast(&array_ref, &target_type).unwrap());
     });
 }
 

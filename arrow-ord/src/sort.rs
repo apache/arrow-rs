@@ -17,14 +17,14 @@
 
 //! Defines sort kernel for `ArrayRef`
 
-use crate::ord::{make_comparator, DynComparator};
+use crate::ord::{DynComparator, make_comparator};
 use arrow_array::builder::BufferBuilder;
 use arrow_array::cast::*;
 use arrow_array::types::*;
 use arrow_array::*;
 use arrow_buffer::ArrowNativeType;
 use arrow_buffer::BooleanBufferBuilder;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::{ArrowError, DataType};
 use arrow_select::take::take;
 use std::cmp::Ordering;
@@ -120,7 +120,7 @@ where
     }
 
     Ok(Arc::new(
-        PrimitiveArray::<T>::new(mutable_buffer.into(), null_bit_buffer)
+        PrimitiveArray::<T>::try_new(mutable_buffer.into(), null_bit_buffer)?
             .with_data_type(primitive_values.data_type().clone()),
     ))
 }
@@ -178,16 +178,66 @@ where
     }
 }
 
-// partition indices into valid and null indices
-fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
-    match array.null_count() {
-        // faster path
-        0 => ((0..(array.len() as u32)).collect(), vec![]),
-        _ => {
-            let indices = 0..(array.len() as u32);
-            indices.partition(|index| array.is_valid(*index as usize))
-        }
+/// Partition indices of an Arrow array into two categories:
+/// - `valid`: indices of non-null elements
+/// - `nulls`: indices of null elements
+///
+/// Optimized for performance with fast-path for all-valid arrays
+/// and bit-parallel scan for null-containing arrays.
+#[inline(always)]
+pub fn partition_validity(array: &dyn Array) -> (Vec<u32>, Vec<u32>) {
+    let len = array.len();
+    let null_count = array.null_count();
+
+    // Fast path: if there are no nulls, all elements are valid
+    if null_count == 0 {
+        // Simply return a range of indices [0, len)
+        let valid = (0..len as u32).collect();
+        return (valid, Vec::new());
     }
+
+    // null bitmap exists and some values are null
+    partition_validity_scan(array, len, null_count)
+}
+
+/// Scans the null bitmap and partitions valid/null indices efficiently.
+/// Uses bit-level operations to extract bit positions.
+/// This function is only called when nulls exist.
+#[inline(always)]
+fn partition_validity_scan(
+    array: &dyn Array,
+    len: usize,
+    null_count: usize,
+) -> (Vec<u32>, Vec<u32>) {
+    // SAFETY: Guaranteed by caller that null_count > 0, so bitmap must exist
+    let bitmap = array.nulls().unwrap();
+
+    // Preallocate result vectors with exact capacities (avoids reallocations)
+    let mut valid = Vec::with_capacity(len - null_count);
+    let mut nulls = Vec::with_capacity(null_count);
+
+    unsafe {
+        // 1) Write valid indices (bits == 1)
+        let valid_slice = valid.spare_capacity_mut();
+        for (i, idx) in bitmap.inner().set_indices_u32().enumerate() {
+            valid_slice[i].write(idx);
+        }
+
+        // 2) Write null indices by inverting
+        let inv_buf = !bitmap.inner();
+        let null_slice = nulls.spare_capacity_mut();
+        for (i, idx) in inv_buf.set_indices_u32().enumerate() {
+            null_slice[i].write(idx);
+        }
+
+        // Finalize lengths
+        valid.set_len(len - null_count);
+        nulls.set_len(null_count);
+    }
+
+    assert_eq!(valid.len(), len - null_count);
+    assert_eq!(nulls.len(), null_count);
+    (valid, nulls)
 }
 
 /// Whether `sort_to_indices` can sort an array of given data type.
@@ -254,7 +304,7 @@ pub fn sort_to_indices(
         },
         t => {
             return Err(ArrowError::ComputeError(format!(
-                "Sort not supported for data type {t:?}"
+                "Sort not supported for data type {t}"
             )));
         }
     })
@@ -295,12 +345,88 @@ fn sort_bytes<T: ByteArrayType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
-        .into_iter()
-        .map(|index| (index, values.value(index as usize).as_ref()))
-        .collect::<Vec<(u32, &[u8])>>();
+    // Note: Why do we use 4‑byte prefix?
+    // Compute the 4‑byte prefix in BE order, or left‑pad if shorter.
+    // Most byte‐sequences differ in their first few bytes, so by
+    // comparing up to 4 bytes as a single u32 we avoid the overhead
+    // of a full lexicographical compare for the vast majority of cases.
 
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+    // 1. Build a vector of (index, prefix, length) tuples
+    let mut valids: Vec<(u32, u32, u64)> = value_indices
+        .into_iter()
+        .map(|idx| unsafe {
+            let slice: &[u8] = values.value_unchecked(idx as usize).as_ref();
+            let len = slice.len() as u64;
+            // Compute the 4‑byte prefix in BE order, or left‑pad if shorter
+            let prefix = if slice.len() >= 4 {
+                let raw = std::ptr::read_unaligned(slice.as_ptr() as *const u32);
+                u32::from_be(raw)
+            } else if slice.is_empty() {
+                // Handle empty slice case to avoid shift overflow
+                0u32
+            } else {
+                let mut v = 0u32;
+                for &b in slice {
+                    v = (v << 8) | (b as u32);
+                }
+                // Safe shift: slice.len() is in range [1, 3], so shift is in range [8, 24]
+                v << (8 * (4 - slice.len()))
+            };
+            (idx, prefix, len)
+        })
+        .collect();
+
+    // 2. compute the number of non-null entries to partially sort
+    let vlimit = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(valids.len()),
+        _ => valids.len(),
+    };
+
+    // 3. Comparator: compare prefix, then (when both slices shorter than 4) length, otherwise full slice
+    let cmp_bytes = |a: &(u32, u32, u64), b: &(u32, u32, u64)| unsafe {
+        let (ia, pa, la) = *a;
+        let (ib, pb, lb) = *b;
+        // 3.1 prefix (first 4 bytes)
+        let ord = pa.cmp(&pb);
+        if ord != Ordering::Equal {
+            return ord;
+        }
+        // 3.2 only if both slices had length < 4 (so prefix was padded)
+        if la < 4 || lb < 4 {
+            let ord = la.cmp(&lb);
+            if ord != Ordering::Equal {
+                return ord;
+            }
+        }
+        // 3.3 full lexicographical compare
+        let a_bytes: &[u8] = values.value_unchecked(ia as usize).as_ref();
+        let b_bytes: &[u8] = values.value_unchecked(ib as usize).as_ref();
+        a_bytes.cmp(b_bytes)
+    };
+
+    // 4. Partially sort according to ascending/descending
+    if !options.descending {
+        sort_unstable_by(&mut valids, vlimit, cmp_bytes);
+    } else {
+        sort_unstable_by(&mut valids, vlimit, |x, y| cmp_bytes(x, y).reverse());
+    }
+
+    // 5. Assemble nulls and sorted indices into final output
+    let total = valids.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(out_limit);
+
+    if options.nulls_first {
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(rem));
+    } else {
+        out.extend(valids.iter().map(|&(i, _, _)| i).take(out_limit));
+        let rem = out_limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_byte_view<T: ByteViewType>(
@@ -310,11 +436,92 @@ fn sort_byte_view<T: ByteViewType>(
     options: SortOptions,
     limit: Option<usize>,
 ) -> UInt32Array {
-    let mut valids = value_indices
-        .into_iter()
-        .map(|index| (index, values.value(index as usize).as_ref()))
-        .collect::<Vec<(u32, &[u8])>>();
-    sort_impl(options, &mut valids, &nulls, limit, Ord::cmp).into()
+    // 1. Build a list of (index, raw_view, length)
+    let mut valids: Vec<_>;
+    // 2. Compute the number of non-null entries to partially sort
+    let vlimit: usize = match (limit, options.nulls_first) {
+        (Some(l), true) => l.saturating_sub(nulls.len()).min(value_indices.len()),
+        _ => value_indices.len(),
+    };
+    // 3.a Check if all views are inline (no data buffers)
+    if values.data_buffers().is_empty() {
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                // SAFETY: we know idx < values.len()
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                let inline_key = GenericByteViewArray::<T>::inline_key_fast(raw);
+                (idx, inline_key)
+            })
+            .collect();
+        let cmp_inline = |a: &(u32, u128), b: &(u32, u128)| a.1.cmp(&b.1);
+
+        // Partially sort according to ascending/descending
+        if !options.descending {
+            sort_unstable_by(&mut valids, vlimit, cmp_inline);
+        } else {
+            sort_unstable_by(&mut valids, vlimit, |x, y| cmp_inline(x, y).reverse());
+        }
+    } else {
+        valids = value_indices
+            .into_iter()
+            .map(|idx| {
+                // SAFETY: we know idx < values.len()
+                let raw = unsafe { *values.views().get_unchecked(idx as usize) };
+                (idx, raw)
+            })
+            .collect();
+        // 3.b Mixed comparator: first prefix, then inline vs full comparison
+        let cmp_mixed = |a: &(u32, u128), b: &(u32, u128)| {
+            let (_, raw_a) = *a;
+            let (_, raw_b) = *b;
+            let len_a = raw_a as u32;
+            let len_b = raw_b as u32;
+            // 3.b.1 Both inline (≤12 bytes): compare full 128-bit key including length
+            if len_a <= MAX_INLINE_VIEW_LEN && len_b <= MAX_INLINE_VIEW_LEN {
+                return GenericByteViewArray::<T>::inline_key_fast(raw_a)
+                    .cmp(&GenericByteViewArray::<T>::inline_key_fast(raw_b));
+            }
+
+            // 3.b.2 Compare 4-byte prefix in big-endian order
+            let pref_a = ByteView::from(raw_a).prefix.swap_bytes();
+            let pref_b = ByteView::from(raw_b).prefix.swap_bytes();
+            if pref_a != pref_b {
+                return pref_a.cmp(&pref_b);
+            }
+
+            // 3.b.3 Fallback to full byte-slice comparison
+            let full_a: &[u8] = unsafe { values.value_unchecked(a.0 as usize).as_ref() };
+            let full_b: &[u8] = unsafe { values.value_unchecked(b.0 as usize).as_ref() };
+            full_a.cmp(full_b)
+        };
+
+        // 3.b.4 Partially sort according to ascending/descending
+        if !options.descending {
+            sort_unstable_by(&mut valids, vlimit, cmp_mixed);
+        } else {
+            sort_unstable_by(&mut valids, vlimit, |x, y| cmp_mixed(x, y).reverse());
+        }
+    }
+
+    // 5. Assemble nulls and sorted indices into final output
+    let total = valids.len() + nulls.len();
+    let out_limit = limit.unwrap_or(total).min(total);
+    let mut out = Vec::with_capacity(total);
+
+    if options.nulls_first {
+        // Place null indices first
+        out.extend_from_slice(&nulls[..nulls.len().min(out_limit)]);
+        let rem = out_limit - out.len();
+        out.extend(valids.iter().map(|&(i, _)| i).take(rem));
+    } else {
+        // Place non-null indices first
+        out.extend(valids.iter().map(|&(i, _)| i).take(out_limit));
+        let rem = out_limit - out.len();
+        out.extend_from_slice(&nulls[..rem]);
+    }
+
+    out.into()
 }
 
 fn sort_fixed_size_binary(
@@ -634,12 +841,12 @@ pub struct SortColumn {
 
 /// Sort a list of `ArrayRef` using `SortOptions` provided for each array.
 ///
-/// Performs a stable lexicographical sort on values and indices.
+/// Performs an unstable lexicographical sort on values and indices.
 ///
 /// Returns an `ArrowError::ComputeError(String)` if any of the array type is either unsupported by
 /// `lexsort_to_indices` or `take`.
 ///
-/// Example:
+/// # Example:
 ///
 /// ```
 /// # use std::convert::From;
@@ -648,7 +855,6 @@ pub struct SortColumn {
 /// # use arrow_array::types::Int64Type;
 /// # use arrow_array::cast::AsArray;
 /// # use arrow_ord::sort::{SortColumn, SortOptions, lexsort};
-///
 /// let sorted_columns = lexsort(&vec![
 ///     SortColumn {
 ///         values: Arc::new(PrimitiveArray::<Int64Type>::from(vec![
@@ -724,15 +930,48 @@ pub fn lexsort_to_indices(
         len = limit.min(len);
     }
 
-    let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
-    // uint32 can be sorted unstably
-    sort_unstable_by(&mut value_indices, len, |a, b| {
+    // Instantiate specialized versions of comparisons for small numbers
+    // of columns as it helps the compiler generate better code.
+    match columns.len() {
+        2 => {
+            sort_fixed_column::<2>(columns, &mut value_indices, len)?;
+        }
+        3 => {
+            sort_fixed_column::<3>(columns, &mut value_indices, len)?;
+        }
+        4 => {
+            sort_fixed_column::<4>(columns, &mut value_indices, len)?;
+        }
+        5 => {
+            sort_fixed_column::<5>(columns, &mut value_indices, len)?;
+        }
+        _ => {
+            let lexicographical_comparator = LexicographicalComparator::try_new(columns)?;
+            // uint32 can be sorted unstably
+            sort_unstable_by(&mut value_indices, len, |a, b| {
+                lexicographical_comparator.compare(*a, *b)
+            });
+        }
+    }
+    Ok(UInt32Array::from(
+        value_indices[..len]
+            .iter()
+            .map(|i| *i as u32)
+            .collect::<Vec<_>>(),
+    ))
+}
+
+// Sort a fixed number of columns using FixedLexicographicalComparator
+fn sort_fixed_column<const N: usize>(
+    columns: &[SortColumn],
+    value_indices: &mut [usize],
+    len: usize,
+) -> Result<(), ArrowError> {
+    let lexicographical_comparator = FixedLexicographicalComparator::<N>::try_new(columns)?;
+    sort_unstable_by(value_indices, len, |a, b| {
         lexicographical_comparator.compare(*a, *b)
     });
-
-    Ok(UInt32Array::from_iter_values(
-        value_indices.iter().take(len).map(|i| *i as u32),
-    ))
+    Ok(())
 }
 
 /// It's unstable_sort, may not preserve the order of equal elements
@@ -781,6 +1020,50 @@ impl LexicographicalComparator {
     }
 }
 
+/// A lexicographical comparator that wraps given array data (columns) and can lexicographically compare data
+/// at given two indices. This version of the comparator is for compile-time constant number of columns.
+/// The lifetime is the same at the data wrapped.
+pub struct FixedLexicographicalComparator<const N: usize> {
+    compare_items: [DynComparator; N],
+}
+
+impl<const N: usize> FixedLexicographicalComparator<N> {
+    /// lexicographically compare values at the wrapped columns with given indices.
+    pub fn compare(&self, a_idx: usize, b_idx: usize) -> Ordering {
+        for comparator in &self.compare_items {
+            match comparator(a_idx, b_idx) {
+                Ordering::Equal => continue,
+                r => return r,
+            }
+        }
+        Ordering::Equal
+    }
+
+    /// Create a new lex comparator that will wrap the given sort columns and give comparison
+    /// results with two indices.
+    /// The number of columns should be equal to the compile-time constant N.
+    pub fn try_new(
+        columns: &[SortColumn],
+    ) -> Result<FixedLexicographicalComparator<N>, ArrowError> {
+        let compare_items = columns
+            .iter()
+            .map(|c| {
+                make_comparator(
+                    c.values.as_ref(),
+                    c.values.as_ref(),
+                    c.options.unwrap_or_default(),
+                )
+            })
+            .collect::<Result<Vec<_>, ArrowError>>()?
+            .try_into();
+        let compare_items: [Box<dyn Fn(usize, usize) -> Ordering + Send + Sync + 'static>; N] =
+            compare_items.map_err(|_| {
+                ArrowError::ComputeError("Could not create fixed size array".to_string())
+            })?;
+        Ok(FixedLexicographicalComparator { compare_items })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -788,7 +1071,7 @@ mod tests {
         BooleanBuilder, FixedSizeListBuilder, GenericListBuilder, Int64Builder, ListBuilder,
         PrimitiveRunBuilder,
     };
-    use arrow_buffer::{i256, NullBuffer};
+    use arrow_buffer::{NullBuffer, i256};
     use arrow_schema::Field;
     use half::f16;
     use rand::rngs::StdRng;
@@ -1633,7 +1916,7 @@ mod tests {
                     None => {
                         builder
                             .values()
-                            .extend(std::iter::repeat(None).take(fixed_length as usize));
+                            .extend(std::iter::repeat_n(None, fixed_length as usize));
                         builder.append(false);
                     }
                 }
@@ -2024,6 +2307,16 @@ mod tests {
     }
 
     #[test]
+    fn test_sort_indices_decimal32() {
+        test_sort_indices_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_indices_decimal64() {
+        test_sort_indices_decimal::<Decimal64Type>(17, 5);
+    }
+
+    #[test]
     fn test_sort_indices_decimal128() {
         test_sort_indices_decimal::<Decimal128Type>(23, 6);
     }
@@ -2174,6 +2467,16 @@ mod tests {
             precision,
             scale,
         );
+    }
+
+    #[test]
+    fn test_sort_decimal32() {
+        test_sort_decimal::<Decimal32Type>(8, 3);
+    }
+
+    #[test]
+    fn test_sort_decimal64() {
+        test_sort_decimal::<Decimal64Type>(17, 5);
     }
 
     #[test]
@@ -4498,11 +4801,13 @@ mod tests {
         ]);
 
         assert!(!can_sort_to_indices(struct_array.data_type()));
-        assert!(sort_to_indices(&struct_array, None, None)
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("Sort not supported for data type"));
+        assert!(
+            sort_to_indices(&struct_array, None, None)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("Sort not supported for data type")
+        );
 
         let sort_columns = vec![SortColumn {
             values: Arc::new(struct_array.clone()) as ArrayRef,
@@ -4522,5 +4827,412 @@ mod tests {
         ])) as ArrayRef;
 
         assert_eq!(&sorted[0], &expected_struct_array);
+    }
+
+    /// A simple, correct but slower reference implementation.
+    fn naive_partition(array: &BooleanArray) -> (Vec<u32>, Vec<u32>) {
+        let len = array.len();
+        let mut valid = Vec::with_capacity(len);
+        let mut nulls = Vec::with_capacity(len);
+        for i in 0..len {
+            if array.is_valid(i) {
+                valid.push(i as u32);
+            } else {
+                nulls.push(i as u32);
+            }
+        }
+        (valid, nulls)
+    }
+
+    #[test]
+    fn fuzz_partition_validity() {
+        let mut rng = StdRng::seed_from_u64(0xF00D_CAFE);
+        for _ in 0..1_000 {
+            // build a random BooleanArray with some nulls
+            let len = rng.random_range(0..512);
+            let mut builder = BooleanBuilder::new();
+            for _ in 0..len {
+                if rng.random_bool(0.2) {
+                    builder.append_null();
+                } else {
+                    builder.append_value(rng.random_bool(0.5));
+                }
+            }
+            let array = builder.finish();
+
+            // Test both implementations on the full array
+            let (v1, n1) = partition_validity(&array);
+            let (v2, n2) = naive_partition(&array);
+            assert_eq!(v1, v2, "valid mismatch on full array");
+            assert_eq!(n1, n2, "null  mismatch on full array");
+
+            if len >= 8 {
+                // 1) Random slice within the array
+                let max_offset = len - 4;
+                let offset = rng.random_range(0..=max_offset);
+                let max_slice_len = len - offset;
+                let slice_len = rng.random_range(1..=max_slice_len);
+
+                // Bind the sliced ArrayRef to keep it alive
+                let sliced = array.slice(offset, slice_len);
+                let slice = sliced
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .expect("slice should be a BooleanArray");
+
+                let (sv1, sn1) = partition_validity(slice);
+                let (sv2, sn2) = naive_partition(slice);
+                assert_eq!(
+                    sv1, sv2,
+                    "valid mismatch on random slice at offset {offset} length {slice_len}",
+                );
+                assert_eq!(
+                    sn1, sn2,
+                    "null mismatch on random slice at offset {offset} length {slice_len}",
+                );
+
+                // 2) Ensure we test slices that start beyond one 64-bit chunk boundary
+                if len > 68 {
+                    let offset2 = rng.random_range(65..(len - 3));
+                    let len2 = rng.random_range(1..=(len - offset2));
+
+                    let sliced2 = array.slice(offset2, len2);
+                    let slice2 = sliced2
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .expect("slice2 should be a BooleanArray");
+
+                    let (sv3, sn3) = partition_validity(slice2);
+                    let (sv4, sn4) = naive_partition(slice2);
+                    assert_eq!(
+                        sv3, sv4,
+                        "valid mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                    assert_eq!(
+                        sn3, sn4,
+                        "null mismatch on chunk-crossing slice at offset {offset2} length {len2}",
+                    );
+                }
+            }
+        }
+    }
+
+    // A few small deterministic checks
+    #[test]
+    fn test_partition_edge_cases() {
+        // all valid
+        let array = BooleanArray::from(vec![Some(true), Some(false), Some(true)]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 1, 2]);
+        assert!(nulls.is_empty());
+
+        // all null
+        let array = BooleanArray::from(vec![None, None, None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert!(valid.is_empty());
+        assert_eq!(nulls, vec![0, 1, 2]);
+
+        // alternating
+        let array = BooleanArray::from(vec![Some(true), None, Some(true), None]);
+        let (valid, nulls) = partition_validity(&array);
+        assert_eq!(valid, vec![0, 2]);
+        assert_eq!(nulls, vec![1, 3]);
+    }
+
+    // Test specific edge case strings that exercise the 4-byte prefix logic
+    #[test]
+    fn test_specific_edge_cases() {
+        let test_cases = vec![
+            // Key test cases for lengths 1-4 that test prefix padding
+            "a", "ab", "ba", "baa", "abba", "abbc", "abc", "cda",
+            // Test cases where first 4 bytes are same but subsequent bytes differ
+            "abcd", "abcde", "abcdf", "abcdaaa", "abcdbbb",
+            // Test cases with length < 4 that require padding
+            "z", "za", "zaa", "zaaa", "zaaab", // Empty string
+            "",      // Test various length combinations with same prefix
+            "test", "test1", "test12", "test123", "test1234",
+        ];
+
+        // Use standard library sort as reference
+        let mut expected = test_cases.clone();
+        expected.sort();
+
+        // Use our sorting algorithm
+        let string_array = StringArray::from(test_cases.clone());
+        let indices: Vec<u32> = (0..test_cases.len() as u32).collect();
+        let result = sort_bytes(
+            &string_array,
+            indices,
+            vec![], // no nulls
+            SortOptions::default(),
+            None,
+        );
+
+        // Verify results
+        let sorted_strings: Vec<&str> = result
+            .values()
+            .iter()
+            .map(|&idx| test_cases[idx as usize])
+            .collect();
+
+        assert_eq!(sorted_strings, expected);
+    }
+
+    // Test sorting correctness for different length combinations
+    #[test]
+    fn test_length_combinations() {
+        let test_cases = vec![
+            // Focus on testing strings of length 1-4, as these affect padding logic
+            ("", 0),
+            ("a", 1),
+            ("ab", 2),
+            ("abc", 3),
+            ("abcd", 4),
+            ("abcde", 5),
+            ("b", 1),
+            ("ba", 2),
+            ("bab", 3),
+            ("babc", 4),
+            ("babcd", 5),
+            // Test same prefix with different lengths
+            ("test", 4),
+            ("test1", 5),
+            ("test12", 6),
+            ("test123", 7),
+        ];
+
+        let strings: Vec<&str> = test_cases.iter().map(|(s, _)| *s).collect();
+        let mut expected = strings.clone();
+        expected.sort();
+
+        let string_array = StringArray::from(strings.clone());
+        let indices: Vec<u32> = (0..strings.len() as u32).collect();
+        let result = sort_bytes(&string_array, indices, vec![], SortOptions::default(), None);
+
+        let sorted_strings: Vec<&str> = result
+            .values()
+            .iter()
+            .map(|&idx| strings[idx as usize])
+            .collect();
+
+        assert_eq!(sorted_strings, expected);
+    }
+
+    // Test UTF-8 string handling
+    #[test]
+    fn test_utf8_strings() {
+        let test_cases = vec![
+            "a",
+            "你",       // 3-byte UTF-8 character
+            "你好",     // 6 bytes
+            "你好世界", // 12 bytes
+            "🎉",       // 4-byte emoji
+            "🎉🎊",     // 8 bytes
+            "café",     // Contains accent character
+            "naïve",
+            "Москва", // Cyrillic script
+            "東京",   // Japanese kanji
+            "한국",   // Korean
+        ];
+
+        let mut expected = test_cases.clone();
+        expected.sort();
+
+        let string_array = StringArray::from(test_cases.clone());
+        let indices: Vec<u32> = (0..test_cases.len() as u32).collect();
+        let result = sort_bytes(&string_array, indices, vec![], SortOptions::default(), None);
+
+        let sorted_strings: Vec<&str> = result
+            .values()
+            .iter()
+            .map(|&idx| test_cases[idx as usize])
+            .collect();
+
+        assert_eq!(sorted_strings, expected);
+    }
+
+    // Fuzz testing: generate random UTF-8 strings and verify sort correctness
+    #[test]
+    fn test_fuzz_random_strings() {
+        let mut rng = StdRng::seed_from_u64(42); // Fixed seed for reproducibility
+
+        for _ in 0..100 {
+            // Run 100 rounds of fuzz testing
+            let mut test_strings = Vec::new();
+
+            // Generate 20-50 random strings
+            let num_strings = rng.random_range(20..=50);
+
+            for _ in 0..num_strings {
+                let string = generate_random_string(&mut rng);
+                test_strings.push(string);
+            }
+
+            // Use standard library sort as reference
+            let mut expected = test_strings.clone();
+            expected.sort();
+
+            // Use our sorting algorithm
+            let string_array = StringArray::from(test_strings.clone());
+            let indices: Vec<u32> = (0..test_strings.len() as u32).collect();
+            let result = sort_bytes(&string_array, indices, vec![], SortOptions::default(), None);
+
+            let sorted_strings: Vec<String> = result
+                .values()
+                .iter()
+                .map(|&idx| test_strings[idx as usize].clone())
+                .collect();
+
+            assert_eq!(
+                sorted_strings, expected,
+                "Fuzz test failed with input: {test_strings:?}"
+            );
+        }
+    }
+
+    // Helper function to generate random UTF-8 strings
+    fn generate_random_string(rng: &mut StdRng) -> String {
+        // Bias towards generating short strings, especially length 1-4
+        let length = if rng.random_bool(0.6) {
+            rng.random_range(0..=4) // 60% probability for 0-4 length strings
+        } else {
+            rng.random_range(5..=20) // 40% probability for longer strings
+        };
+
+        if length == 0 {
+            return String::new();
+        }
+
+        let mut result = String::new();
+        let mut current_len = 0;
+
+        while current_len < length {
+            let c = generate_random_char(rng);
+            let char_len = c.len_utf8();
+
+            // Ensure we don't exceed target length
+            if current_len + char_len <= length {
+                result.push(c);
+                current_len += char_len;
+            } else {
+                // If adding this character would exceed length, fill with ASCII
+                let remaining = length - current_len;
+                for _ in 0..remaining {
+                    result.push(rng.random_range('a'..='z'));
+                    current_len += 1;
+                }
+                break;
+            }
+        }
+
+        result
+    }
+
+    // Generate random characters (including various UTF-8 characters)
+    fn generate_random_char(rng: &mut StdRng) -> char {
+        match rng.random_range(0..10) {
+            0..=5 => rng.random_range('a'..='z'), // 60% ASCII lowercase
+            6 => rng.random_range('A'..='Z'),     // 10% ASCII uppercase
+            7 => rng.random_range('0'..='9'),     // 10% digits
+            8 => {
+                // 10% Chinese characters
+                let chinese_chars = ['你', '好', '世', '界', '测', '试', '中', '文'];
+                chinese_chars[rng.random_range(0..chinese_chars.len())]
+            }
+            9 => {
+                // 10% other Unicode characters (single `char`s)
+                let special_chars = ['é', 'ï', '🎉', '🎊', 'α', 'β', 'γ'];
+                special_chars[rng.random_range(0..special_chars.len())]
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // Test descending sort order
+    #[test]
+    fn test_descending_sort() {
+        let test_cases = vec!["a", "ab", "ba", "baa", "abba", "abbc", "abc", "cda"];
+
+        let mut expected = test_cases.clone();
+        expected.sort();
+        expected.reverse(); // Descending order
+
+        let string_array = StringArray::from(test_cases.clone());
+        let indices: Vec<u32> = (0..test_cases.len() as u32).collect();
+        let result = sort_bytes(
+            &string_array,
+            indices,
+            vec![],
+            SortOptions {
+                descending: true,
+                nulls_first: false,
+            },
+            None,
+        );
+
+        let sorted_strings: Vec<&str> = result
+            .values()
+            .iter()
+            .map(|&idx| test_cases[idx as usize])
+            .collect();
+
+        assert_eq!(sorted_strings, expected);
+    }
+
+    // Stress test: large number of strings with same prefix
+    #[test]
+    fn test_same_prefix_stress() {
+        let mut test_cases = Vec::new();
+        let prefix = "same";
+
+        // Generate many strings with the same prefix
+        for i in 0..1000 {
+            test_cases.push(format!("{prefix}{i:04}"));
+        }
+
+        let mut expected = test_cases.clone();
+        expected.sort();
+
+        let string_array = StringArray::from(test_cases.clone());
+        let indices: Vec<u32> = (0..test_cases.len() as u32).collect();
+        let result = sort_bytes(&string_array, indices, vec![], SortOptions::default(), None);
+
+        let sorted_strings: Vec<String> = result
+            .values()
+            .iter()
+            .map(|&idx| test_cases[idx as usize].clone())
+            .collect();
+
+        assert_eq!(sorted_strings, expected);
+    }
+
+    // Test limit parameter
+    #[test]
+    fn test_with_limit() {
+        let test_cases = vec!["z", "y", "x", "w", "v", "u", "t", "s"];
+        let limit = 3;
+
+        let mut expected = test_cases.clone();
+        expected.sort();
+        expected.truncate(limit);
+
+        let string_array = StringArray::from(test_cases.clone());
+        let indices: Vec<u32> = (0..test_cases.len() as u32).collect();
+        let result = sort_bytes(
+            &string_array,
+            indices,
+            vec![],
+            SortOptions::default(),
+            Some(limit),
+        );
+
+        let sorted_strings: Vec<&str> = result
+            .values()
+            .iter()
+            .map(|&idx| test_cases[idx as usize])
+            .collect();
+
+        assert_eq!(sorted_strings, expected);
+        assert_eq!(sorted_strings.len(), limit);
     }
 }

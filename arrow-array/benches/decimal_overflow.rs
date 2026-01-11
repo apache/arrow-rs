@@ -18,6 +18,7 @@
 use arrow_array::builder::{Decimal128Builder, Decimal256Builder};
 use arrow_buffer::i256;
 use criterion::*;
+use std::hint;
 
 fn criterion_benchmark(c: &mut Criterion) {
     let len = 8192;
@@ -36,16 +37,16 @@ fn criterion_benchmark(c: &mut Criterion) {
     let array_256 = builder_256.finish();
 
     c.bench_function("validate_decimal_precision_128", |b| {
-        b.iter(|| black_box(array_128.validate_decimal_precision(8)));
+        b.iter(|| hint::black_box(array_128.validate_decimal_precision(8)));
     });
     c.bench_function("null_if_overflow_precision_128", |b| {
-        b.iter(|| black_box(array_128.null_if_overflow_precision(8)));
+        b.iter(|| hint::black_box(array_128.null_if_overflow_precision(8)));
     });
     c.bench_function("validate_decimal_precision_256", |b| {
-        b.iter(|| black_box(array_256.validate_decimal_precision(8)));
+        b.iter(|| hint::black_box(array_256.validate_decimal_precision(8)));
     });
     c.bench_function("null_if_overflow_precision_256", |b| {
-        b.iter(|| black_box(array_256.null_if_overflow_precision(8)));
+        b.iter(|| hint::black_box(array_256.null_if_overflow_precision(8)));
     });
 }
 

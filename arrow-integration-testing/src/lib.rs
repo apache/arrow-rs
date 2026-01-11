@@ -25,12 +25,12 @@ use serde_json::Value;
 use arrow::array::{Array, StructArray};
 use arrow::datatypes::{DataType, Field, Fields, Schema};
 use arrow::error::{ArrowError, Result};
-use arrow::ffi::{from_ffi_and_data_type, FFI_ArrowArray, FFI_ArrowSchema};
+use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema, from_ffi_and_data_type};
 use arrow::record_batch::RecordBatch;
 use arrow::util::test_util::arrow_test_data;
 use arrow_integration_test::*;
 use std::collections::HashMap;
-use std::ffi::{c_char, c_int, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_int};
 use std::fs::File;
 use std::io::BufReader;
 use std::iter::zip;
@@ -207,8 +207,7 @@ fn cdata_integration_import_schema_and_compare_to_json(
     // compare schemas
     if canonicalize_schema(&json_schema) != canonicalize_schema(&imported_schema) {
         return Err(ArrowError::ComputeError(format!(
-            "Schemas do not match.\n- JSON: {:?}\n- Imported: {:?}",
-            json_schema, imported_schema
+            "Schemas do not match.\n- JSON: {json_schema:?}\n- Imported: {imported_schema:?}",
         )));
     }
     Ok(())
@@ -253,7 +252,7 @@ fn cdata_integration_import_batch_and_compare_to_json(
 fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>) -> *mut c_char {
     match result {
         Ok(_) => ptr::null_mut(),
-        Err(e) => CString::new(format!("{}", e)).unwrap().into_raw(),
+        Err(e) => CString::new(format!("{e}")).unwrap().into_raw(),
     }
 }
 
@@ -262,7 +261,7 @@ fn result_to_c_error<T, E: std::fmt::Display>(result: &std::result::Result<T, E>
 /// # Safety
 ///
 /// The pointer is assumed to have been obtained using CString::into_raw.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut c_char) {
     if !c_error.is_null() {
         drop(unsafe { CString::from_raw(c_error) });
@@ -270,7 +269,7 @@ pub unsafe extern "C" fn arrow_rs_free_error(c_error: *mut c_char) {
 }
 
 /// A C-ABI for exporting an Arrow schema from a JSON file
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
     c_json_name: *const c_char,
     out: *mut FFI_ArrowSchema,
@@ -280,7 +279,7 @@ pub extern "C" fn arrow_rs_cdata_integration_export_schema_from_json(
 }
 
 /// A C-ABI to compare an Arrow schema against a JSON file
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
     c_json_name: *const c_char,
     c_schema: *mut FFI_ArrowSchema,
@@ -290,7 +289,7 @@ pub extern "C" fn arrow_rs_cdata_integration_import_schema_and_compare_to_json(
 }
 
 /// A C-ABI for exporting a RecordBatch from a JSON file
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
     c_json_name: *const c_char,
     batch_num: c_int,
@@ -301,7 +300,7 @@ pub extern "C" fn arrow_rs_cdata_integration_export_batch_from_json(
 }
 
 /// A C-ABI to compare a RecordBatch against a JSON file
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn arrow_rs_cdata_integration_import_batch_and_compare_to_json(
     c_json_name: *const c_char,
     batch_num: c_int,

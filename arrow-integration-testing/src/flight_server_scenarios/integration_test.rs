@@ -31,14 +31,14 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use arrow_flight::{
-    flight_descriptor::DescriptorType, flight_service_server::FlightService,
-    flight_service_server::FlightServiceServer, Action, ActionType, Criteria, Empty, FlightData,
-    FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, IpcMessage,
-    PollInfo, PutResult, SchemaAsIpc, SchemaResult, Ticket,
+    Action, ActionType, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo,
+    HandshakeRequest, HandshakeResponse, IpcMessage, PollInfo, PutResult, SchemaAsIpc,
+    SchemaResult, Ticket, flight_descriptor::DescriptorType, flight_service_server::FlightService,
+    flight_service_server::FlightServiceServer,
 };
-use futures::{channel::mpsc, sink::SinkExt, Stream, StreamExt};
+use futures::{Stream, StreamExt, channel::mpsc, sink::SinkExt};
 use tokio::sync::Mutex;
-use tonic::{transport::Server, Request, Response, Status, Streaming};
+use tonic::{Request, Response, Status, Streaming, transport::Server};
 
 type TonicStream<T> = Pin<Box<dyn Stream<Item = T> + Send + Sync + 'static>>;
 
@@ -119,9 +119,7 @@ impl FlightService for FlightServiceImpl {
             .ok_or_else(|| Status::not_found(format!("Could not find flight. {key}")))?;
 
         let options = arrow::ipc::writer::IpcWriteOptions::default();
-        #[allow(deprecated)]
-        let mut dictionary_tracker =
-            writer::DictionaryTracker::new_with_preserve_dict_id(false, options.preserve_dict_id());
+        let mut dictionary_tracker = writer::DictionaryTracker::new(false);
         let data_gen = writer::IpcDataGenerator::default();
         let data = IpcMessage(
             data_gen
@@ -146,7 +144,12 @@ impl FlightService for FlightServiceImpl {
             .enumerate()
             .flat_map(|(counter, batch)| {
                 let (encoded_dictionaries, encoded_batch) = data_gen
-                    .encoded_batch(batch, &mut dictionary_tracker, &options)
+                    .encode(
+                        batch,
+                        &mut dictionary_tracker,
+                        &options,
+                        &mut Default::default(),
+                    )
                     .expect("DictionaryTracker configured above to not error on replacement");
 
                 let dictionary_flight_data = encoded_dictionaries.into_iter().map(Into::into);
@@ -380,7 +383,7 @@ async fn save_uploaded_chunks(
             ipc::MessageHeader::Schema => {
                 return Err(Status::internal(
                     "Not expecting a schema when messages are read",
-                ))
+                ));
             }
             ipc::MessageHeader::RecordBatch => {
                 send_app_metadata(&mut response_tx, &data.app_metadata).await?;

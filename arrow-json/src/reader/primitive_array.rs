@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use num::NumCast;
+use num_traits::NumCast;
 use std::marker::PhantomData;
 
 use arrow_array::builder::PrimitiveBuilder;
@@ -25,8 +25,8 @@ use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use half::f16;
 
-use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::ArrayDecoder;
+use crate::reader::tape::{Tape, TapeElement};
 
 /// A trait for JSON-specific primitive parsing logic
 ///

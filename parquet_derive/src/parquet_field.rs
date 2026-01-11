@@ -86,7 +86,7 @@ impl Field {
 
         let vals_builder = match &self.ty {
             Type::TypePath(_) => self.copied_direct_vals(),
-            Type::Option(ref first_type) => match **first_type {
+            Type::Option(first_type) => match **first_type {
                 Type::TypePath(_) => self.option_into_vals(),
                 Type::Reference(_, ref second_type) => match **second_type {
                     Type::TypePath(_) => self.option_into_vals(),
@@ -98,7 +98,7 @@ impl Field {
                 },
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
-            Type::Reference(_, ref first_type) => match **first_type {
+            Type::Reference(_, first_type) => match **first_type {
                 Type::TypePath(_) => self.copied_direct_vals(),
                 Type::Option(ref second_type) => match **second_type {
                     Type::TypePath(_) => self.option_into_vals(),
@@ -122,7 +122,7 @@ impl Field {
                 },
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
-            Type::Vec(ref first_type) => match **first_type {
+            Type::Vec(first_type) => match **first_type {
                 Type::TypePath(_) => self.copied_direct_vals(),
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
@@ -131,7 +131,7 @@ impl Field {
 
         let definition_levels = match &self.ty {
             Type::TypePath(_) => None,
-            Type::Option(ref first_type) => match **first_type {
+            Type::Option(first_type) => match **first_type {
                 Type::TypePath(_) => Some(self.optional_definition_levels()),
                 Type::Option(_) => unimplemented!("Unsupported nesting encountered"),
                 Type::Reference(_, ref second_type)
@@ -142,10 +142,10 @@ impl Field {
                     _ => unimplemented!("Unsupported nesting encountered"),
                 },
             },
-            Type::Reference(_, ref first_type)
-            | Type::Vec(ref first_type)
-            | Type::Array(ref first_type, _)
-            | Type::Slice(ref first_type) => match **first_type {
+            Type::Reference(_, first_type)
+            | Type::Vec(first_type)
+            | Type::Array(first_type, _)
+            | Type::Slice(first_type) => match **first_type {
                 Type::TypePath(_) => None,
                 Type::Vec(ref second_type)
                 | Type::Array(ref second_type, _)
@@ -192,7 +192,7 @@ impl Field {
         // this expression just switches between non-nullable and nullable write statements
         let write_batch_expr = if definition_levels.is_some() {
             quote! {
-                if let #column_writer(ref mut typed) = column_writer.untyped() {
+                if let #column_writer(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{#ident})
@@ -200,7 +200,7 @@ impl Field {
             }
         } else {
             quote! {
-                if let #column_writer(ref mut typed) = column_writer.untyped() {
+                if let #column_writer(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None)?;
                 } else {
                     panic!("Schema and struct disagree on type for {}", stringify!{#ident})
@@ -265,7 +265,7 @@ impl Field {
         // it to its field in the corresponding struct
         let vals_writer = match &self.ty {
             Type::TypePath(_) => self.copied_direct_fields(),
-            Type::Reference(_, ref first_type) => match **first_type {
+            Type::Reference(_, first_type) => match **first_type {
                 Type::TypePath(_) => self.copied_direct_fields(),
                 Type::Slice(ref second_type) => match **second_type {
                     Type::TypePath(_) => self.copied_direct_fields(),
@@ -273,7 +273,7 @@ impl Field {
                 },
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
-            Type::Vec(ref first_type) => match **first_type {
+            Type::Vec(first_type) => match **first_type {
                 Type::TypePath(_) => self.copied_direct_fields(),
                 ref f => unimplemented!("Unsupported: {:#?}", f),
             },
@@ -356,7 +356,7 @@ impl Field {
         let binding = if copy_to_vec {
             quote! { let Some(inner) = rec.#field_name }
         } else {
-            quote! { let Some(ref inner) = rec.#field_name }
+            quote! { let Some(inner) = &rec.#field_name }
         };
 
         let some = if is_a_timestamp {
@@ -545,11 +545,11 @@ impl Type {
     fn leaf_type_recursive_helper<'a>(ty: &'a Type, parent_ty: Option<&'a Type>) -> &'a Type {
         match ty {
             Type::TypePath(_) => parent_ty.unwrap_or(ty),
-            Type::Option(ref first_type)
-            | Type::Vec(ref first_type)
-            | Type::Array(ref first_type, _)
-            | Type::Slice(ref first_type)
-            | Type::Reference(_, ref first_type) => {
+            Type::Option(first_type)
+            | Type::Vec(first_type)
+            | Type::Array(first_type, _)
+            | Type::Slice(first_type)
+            | Type::Reference(_, first_type) => {
                 Type::leaf_type_recursive_helper(first_type, Some(ty))
             }
         }
@@ -562,12 +562,12 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::TypePath(ref type_) => type_,
-            Type::Option(ref first_type)
-            | Type::Vec(ref first_type)
-            | Type::Array(ref first_type, _)
-            | Type::Slice(ref first_type)
-            | Type::Reference(_, ref first_type) => match **first_type {
+            Type::TypePath(type_) => type_,
+            Type::Option(first_type)
+            | Type::Vec(first_type)
+            | Type::Array(first_type, _)
+            | Type::Slice(first_type)
+            | Type::Reference(_, first_type) => match **first_type {
                 Type::TypePath(ref type_) => type_,
                 _ => unimplemented!("leaf_type() should only return shallow types"),
             },
@@ -612,14 +612,14 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::Array(ref first_type, _length) => {
+            Type::Array(first_type, _length) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return BasicType::FIXED_LEN_BYTE_ARRAY;
                     }
                 }
             }
-            Type::Vec(ref first_type) | Type::Slice(ref first_type) => {
+            Type::Vec(first_type) | Type::Slice(first_type) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return BasicType::BYTE_ARRAY;
@@ -643,7 +643,7 @@ impl Type {
             }
             "f32" => BasicType::FLOAT,
             "f64" => BasicType::DOUBLE,
-            "String" | "str" => BasicType::BYTE_ARRAY,
+            "String" | "str" | "Arc < str >" => BasicType::BYTE_ARRAY,
             "Uuid" => BasicType::FIXED_LEN_BYTE_ARRAY,
             f => unimplemented!("{} currently is not supported", f),
         }
@@ -654,7 +654,7 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         // `[u8; N]` => Some(N)
-        if let Type::Array(ref first_type, length) = leaf_type {
+        if let Type::Array(first_type, length) = leaf_type {
             if let Type::TypePath(_) = **first_type {
                 if last_part == "u8" {
                     return Some(length.clone());
@@ -674,14 +674,14 @@ impl Type {
         let leaf_type = self.leaf_type_recursive();
 
         match leaf_type {
-            Type::Array(ref first_type, _length) => {
+            Type::Array(first_type, _length) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return quote! { None };
                     }
                 }
             }
-            Type::Vec(ref first_type) | Type::Slice(ref first_type) => {
+            Type::Vec(first_type) | Type::Slice(first_type) => {
                 if let Type::TypePath(_) = **first_type {
                     if last_part == "u8" {
                         return quote! { None };
@@ -733,7 +733,7 @@ impl Type {
             "NaiveDate" => quote! { Some(LogicalType::Date) },
             "NaiveDateTime" => quote! { None },
             "f32" | "f64" => quote! { None },
-            "String" | "str" => quote! { Some(LogicalType::String) },
+            "String" | "str" | "Arc < str >" => quote! { Some(LogicalType::String) },
             "Uuid" => quote! { Some(LogicalType::Uuid) },
             f => unimplemented!("{} currently is not supported", f),
         }
@@ -764,10 +764,10 @@ impl Type {
 
     fn from_type(f: &syn::Field, ty: &syn::Type) -> Self {
         match ty {
-            syn::Type::Path(ref p) => Type::from_type_path(f, p),
-            syn::Type::Reference(ref tr) => Type::from_type_reference(f, tr),
-            syn::Type::Array(ref ta) => Type::from_type_array(f, ta),
-            syn::Type::Slice(ref ts) => Type::from_type_slice(f, ts),
+            syn::Type::Path(p) => Type::from_type_path(f, p),
+            syn::Type::Reference(tr) => Type::from_type_reference(f, tr),
+            syn::Type::Array(ta) => Type::from_type_array(f, ta),
+            syn::Type::Slice(ts) => Type::from_type_slice(f, ts),
             other => unimplemented!(
                 "Unable to derive {:?} - it is currently an unsupported type\n{:#?}",
                 f.ident.as_ref().unwrap(),
@@ -790,7 +790,7 @@ impl Type {
                     let first_arg = &angle_args.args[0];
 
                     match first_arg {
-                        syn::GenericArgument::Type(ref typath) => typath.clone(),
+                        syn::GenericArgument::Type(typath) => typath.clone(),
                         other => unimplemented!("Unsupported: {:#?}", other),
                     }
                 }
@@ -857,7 +857,7 @@ mod test {
                         {
                             let vals : Vec < _ > = records . iter ( ) . map ( | rec | rec . counter as i64 ) . collect ( );
 
-                            if let ColumnWriter::Int64ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                            if let ColumnWriter::Int64ColumnWriter ( typed ) = column_writer.untyped() {
                                 typed . write_batch ( & vals [ .. ] , None , None ) ?;
                             }  else {
                                 panic!("Schema and struct disagree on type for {}" , stringify!{ counter } )
@@ -924,14 +924,14 @@ mod test {
                 let definition_levels : Vec < i16 > = self . iter ( ) . map ( | rec | if rec . optional_str . is_some ( ) { 1 } else { 0 } ) . collect ( ) ;
 
                 let vals: Vec <_> = records.iter().filter_map( |rec| {
-                    if let Some ( ref inner ) = rec . optional_str {
+                    if let Some ( inner ) = &rec . optional_str {
                         Some ( (&inner[..]).into() )
                     } else {
                         None
                     }
                 }).collect();
 
-                if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                if let ColumnWriter::ByteArrayColumnWriter ( typed ) = column_writer.untyped() {
                     typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify ! { optional_str } )
@@ -948,14 +948,14 @@ mod test {
                         let definition_levels : Vec < i16 > = self . iter ( ) . map ( | rec | if rec . optional_string . is_some ( ) { 1 } else { 0 } ) . collect ( ) ;
 
                         let vals: Vec <_> = records.iter().filter_map( |rec| {
-                            if let Some ( ref inner ) = rec . optional_string {
+                            if let Some ( inner ) = &rec . optional_string {
                                 Some ( (&inner[..]).into() )
                             } else {
                                 None
                             }
                         }).collect();
 
-                        if let ColumnWriter::ByteArrayColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::ByteArrayColumnWriter ( typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         } else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_string } )
@@ -978,7 +978,7 @@ mod test {
                             }
                         }).collect();
 
-                        if let ColumnWriter::Int32ColumnWriter ( ref mut typed ) = column_writer.untyped() {
+                        if let ColumnWriter::Int32ColumnWriter ( typed ) = column_writer.untyped() {
                             typed . write_batch ( & vals [ .. ] , Some(&definition_levels[..]) , None ) ? ;
                         }  else {
                             panic!("Schema and struct disagree on type for {}" , stringify ! { optional_dumb_int } )
@@ -1261,7 +1261,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.timestamp_millis() ).collect();
-                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -1281,7 +1281,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ColumnWriter::Int64ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int64ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1335,7 +1335,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.henceforth.signed_duration_since(::chrono::NaiveDate::from_ymd(1970, 1, 1)).num_days() as i32).collect();
-                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ henceforth })
@@ -1355,7 +1355,7 @@ mod test {
                     }
                 }).collect();
 
-                if let ColumnWriter::Int32ColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::Int32ColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_happened })
@@ -1409,7 +1409,7 @@ mod test {
         assert_eq!(when.writer_snippet().to_string(),(quote!{
             {
                 let vals : Vec<_> = records.iter().map(|rec| rec.unique_id.as_bytes().to_vec().into() ).collect();
-                if let ColumnWriter::FixedLenByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::FixedLenByteArrayColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], None, None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ unique_id })
@@ -1422,14 +1422,14 @@ mod test {
             {
                 let definition_levels : Vec<i16> = self.iter().map(|rec| if rec.maybe_unique_id.is_some() { 1 } else { 0 }).collect();
                 let vals : Vec<_> = records.iter().filter_map(|rec| {
-                    if let Some(ref inner) = rec.maybe_unique_id {
+                    if let Some(inner) = &rec.maybe_unique_id {
                         Some((&inner.to_string()[..]).into())
                     } else {
                         None
                     }
                 }).collect();
 
-                if let ColumnWriter::FixedLenByteArrayColumnWriter(ref mut typed) = column_writer.untyped() {
+                if let ColumnWriter::FixedLenByteArrayColumnWriter(typed) = column_writer.untyped() {
                     typed.write_batch(&vals[..], Some(&definition_levels[..]), None) ?;
                 } else {
                     panic!("Schema and struct disagree on type for {}" , stringify!{ maybe_unique_id })

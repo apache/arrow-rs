@@ -19,11 +19,11 @@
 
 use crate::error::FlightError;
 use futures::{
-    channel::oneshot::{Receiver, Sender},
     FutureExt, Stream, StreamExt,
+    channel::oneshot::{Receiver, Sender},
 };
 use std::pin::Pin;
-use std::task::{ready, Poll};
+use std::task::{Poll, ready};
 
 /// Wrapper around a fallible stream (one that returns errors) that makes it infallible.
 ///
@@ -32,7 +32,7 @@ use std::task::{ready, Poll};
 ///
 /// This can be used to accept a stream of `Result<_>` from a client API and send
 /// them to the remote server that wants only the successful results.
-pub(crate) struct FallibleRequestStream<T, E> {
+pub struct FallibleRequestStream<T, E> {
     /// sender to notify error
     sender: Option<Sender<E>>,
     /// fallible stream
@@ -40,7 +40,8 @@ pub(crate) struct FallibleRequestStream<T, E> {
 }
 
 impl<T, E> FallibleRequestStream<T, E> {
-    pub(crate) fn new(
+    /// Create a FallibleRequestStream
+    pub fn new(
         sender: Sender<E>,
         fallible_stream: Pin<Box<dyn Stream<Item = std::result::Result<T, E>> + Send + 'static>>,
     ) -> Self {

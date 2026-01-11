@@ -41,6 +41,7 @@ on:
       - arrow-avro/**
       - arrow-ord/**
       - arrow-pyarrow-integration-testing/**
+      - arrow-pyarrow/**
       - arrow-schema/**
       - arrow-select/**
       - arrow-sort/**
@@ -61,10 +62,11 @@ jobs:
       BUILD_DOCS_CPP: OFF
       ARROW_INTEGRATION_CPP: ON
       ARROW_INTEGRATION_CSHARP: ON
-      ARROW_INTEGRATION_GO: ON
-      ARROW_INTEGRATION_JAVA: ON
-      ARROW_INTEGRATION_JS: ON
       ARCHERY_INTEGRATION_TARGET_IMPLEMENTATIONS: "rust"
+      ARCHERY_INTEGRATION_WITH_DOTNET: "1"
+      ARCHERY_INTEGRATION_WITH_GO: "1"
+      ARCHERY_INTEGRATION_WITH_JAVA: "1"
+      ARCHERY_INTEGRATION_WITH_JS: "1"
       ARCHERY_INTEGRATION_WITH_NANOARROW: "1"
       # https://github.com/apache/arrow/pull/38403/files#r1371281630
       ARCHERY_INTEGRATION_WITH_RUST: "1"
@@ -76,37 +78,111 @@ jobs:
       run:
         shell: bash
     steps:
+      - name: Monitor disk usage - Initial
+        run: |
+          echo "=== Initial Disk Usage ==="
+          df -h /
+          echo ""
+
+      - name: Remove unnecessary preinstalled software
+        run: |
+          echo "=== Cleaning up host disk space ==="
+          echo "Disk space before cleanup:"
+          df -h /
+
+          # Clean apt cache
+          apt-get clean || true
+
+          # Remove GitHub Actions tool cache
+          rm -rf /__t/* || true
+
+          # Remove large packages from host filesystem (mounted at /host/)
+          rm -rf /host/usr/share/dotnet || true
+          rm -rf /host/usr/local/lib/android || true
+          rm -rf /host/usr/local/.ghcup || true
+          rm -rf /host/opt/hostedtoolcache/CodeQL || true
+
+          echo ""
+          echo "Disk space after cleanup:"
+          df -h /
+          echo ""
+
       # This is necessary so that actions/checkout can find git
       - name: Export conda path
         run: echo "/opt/conda/envs/arrow/bin" >> $GITHUB_PATH
       # This is necessary so that Rust can find cargo
       - name: Export cargo path
         run: echo "/root/.cargo/bin" >> $GITHUB_PATH
-      - name: Check rustup
-        run: which rustup
-      - name: Check cmake
-        run: which cmake
+
+      # Checkout repos (using shallow clones with fetch-depth: 1)
       - name: Checkout Arrow
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow
           submodules: true
-          fetch-depth: 0
+          fetch-depth: 1
       - name: Checkout Arrow Rust
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: rust
-          fetch-depth: 0
+          submodules: true
+          fetch-depth: 1
+      - name: Checkout Arrow .NET
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-dotnet
+          path: dotnet
+          fetch-depth: 1
+      - name: Checkout Arrow Go
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-go
+          path: go
+          fetch-depth: 1
+      - name: Checkout Arrow Java
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-java
+          path: java
+          fetch-depth: 1
+      - name: Checkout Arrow JavaScript
+        uses: actions/checkout@v6
+        with:
+          repository: apache/arrow-js
+          path: js
+          fetch-depth: 1
       - name: Checkout Arrow nanoarrow
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: apache/arrow-nanoarrow
           path: nanoarrow
-          fetch-depth: 0
+          fetch-depth: 1
+
+      - name: Monitor disk usage - After checkouts
+        run: |
+          echo "=== After Checkouts ==="
+          df -h /
+          echo ""
+
       - name: Build
         run: conda run --no-capture-output ci/scripts/integration_arrow_build.sh $PWD /build
+
+      - name: Monitor disk usage - After build
+        if: always()
+        run: |
+          echo "=== After Build ==="
+          df -h /
+          echo ""
+
       - name: Run
         run: conda run --no-capture-output ci/scripts/integration_arrow.sh $PWD /build
+
+      - name: Monitor disk usage - After tests
+        if: always()
+        run: |
+          echo "=== After Tests ==="
+          df -h /
+          echo ""
 
   # test FFI against the C-Data interface exposed by pyarrow
   pyarrow-integration-test:
@@ -118,7 +194,7 @@ jobs:
         # PyArrow 15 was the first version to introduce StringView/BinaryView support
         pyarrow: ["15", "16", "17"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -127,17 +203,17 @@ jobs:
           rustup default ${{ matrix.rust }}
           rustup component add rustfmt clippy
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /home/runner/.cargo
           key: cargo-maturin-cache-
       - name: Cache Rust dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: /home/runner/target
           # this key is not equal because maturin uses different compilation flags.
           key: ${{ runner.os }}-${{ matrix.arch }}-target-maturin-cache-${{ matrix.rust }}-
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.8'
       - name: Upgrade pip and setuptools
@@ -150,8 +226,9 @@ jobs:
       - name: Run Rust tests
         run: |
           source venv/bin/activate
-          cargo test -p arrow --test pyarrow --features pyarrow
-      - name: Run tests
+          cd arrow-pyarrow-testing
+          cargo test
+      - name: Run Python tests
         run: |
           source venv/bin/activate
           cd arrow-pyarrow-integration-testing

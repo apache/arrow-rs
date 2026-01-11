@@ -16,14 +16,27 @@
 // under the License.
 
 //! Low-level buffer abstractions for [Apache Arrow Rust](https://docs.rs/arrow)
+//!
+//! # Byte Storage abstractions
+//! - [`MutableBuffer`]: Raw memory buffer that can be mutated and grown
+//! - [`Buffer`]: Immutable buffer that is shared across threads
+//!
+//! # Typed Abstractions
+//!
+//! There are also several wrappers over [`Buffer`] with methods for
+//! easier manipulation:
+//!
+//! - [`BooleanBuffer`][]: Bitmasks (buffer of packed bits)
+//! - [`NullBuffer`][]: Arrow null (validity) bitmaps ([`BooleanBuffer`] with extra utilities)
+//! - [`ScalarBuffer<T>`][]: Typed buffer for primitive types (e.g., `i32`, `f64`)
+//! - [`OffsetBuffer<O>`][]: Offsets used in variable-length types (e.g., strings, lists)
+//! - [`RunEndBuffer<E>`][]: Run-ends used in run-encoded encoded data
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
-// used by [`buffer::mutable::dangling_ptr`]
-#![cfg_attr(miri, feature(strict_provenance))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 
 pub mod alloc;
@@ -48,3 +61,8 @@ mod interval;
 pub use interval::*;
 
 mod arith;
+
+#[cfg(feature = "pool")]
+mod pool;
+#[cfg(feature = "pool")]
+pub use pool::*;

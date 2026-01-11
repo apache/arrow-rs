@@ -21,7 +21,7 @@
 use crate::bit_iterator::BitSliceIterator;
 use arrow_buffer::buffer::{BooleanBuffer, NullBuffer};
 use arrow_buffer::{
-    bit_util, i256, ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
+    ArrowNativeType, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer, bit_util, i256,
 };
 use arrow_schema::{ArrowError, DataType, UnionMode};
 use std::mem;
@@ -83,6 +83,8 @@ pub(crate) fn new_buffers(data_type: &DataType, capacity: usize) -> [MutableBuff
         | DataType::Float16
         | DataType::Float32
         | DataType::Float64
+        | DataType::Decimal32(_, _)
+        | DataType::Decimal64(_, _)
         | DataType::Decimal128(_, _)
         | DataType::Decimal256(_, _)
         | DataType::Date32
@@ -279,7 +281,7 @@ impl ArrayData {
     ) -> Self {
         let mut skip_validation = UnsafeFlag::new();
         // SAFETY: caller responsible for ensuring data is valid
-        skip_validation.set(true);
+        unsafe { skip_validation.set(true) };
 
         ArrayDataBuilder {
             data_type,
@@ -474,21 +476,20 @@ impl ArrayData {
                     result += buffer_size;
                 }
                 BufferSpec::VariableWidth => {
-                    let buffer_len: usize;
-                    match self.data_type {
+                    let buffer_len = match self.data_type {
                         DataType::Utf8 | DataType::Binary => {
                             let offsets = self.typed_offsets::<i32>()?;
-                            buffer_len = (offsets[self.len] - offsets[0] ) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
                         DataType::LargeUtf8 | DataType::LargeBinary => {
                             let offsets = self.typed_offsets::<i64>()?;
-                            buffer_len = (offsets[self.len] - offsets[0]) as usize;
+                            (offsets[self.len] - offsets[0]) as usize
                         }
                         _ => {
                             return Err(ArrowError::NotYetImplemented(format!(
-                            "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
-                            self.data_type
-                            )))
+                                "Invalid data type for VariableWidth buffer. Expected Utf8, LargeUtf8, Binary or LargeBinary. Got {}",
+                                self.data_type
+                            )));
                         }
                     };
                     result += buffer_len;
@@ -552,7 +553,7 @@ impl ArrayData {
         if let DataType::Struct(_) = self.data_type() {
             // Slice into children
             let new_offset = self.offset + offset;
-            let new_data = ArrayData {
+            ArrayData {
                 data_type: self.data_type().clone(),
                 len: length,
                 offset: new_offset,
@@ -564,9 +565,7 @@ impl ArrayData {
                     .map(|data| data.slice(offset, length))
                     .collect(),
                 nulls: self.nulls.as_ref().map(|x| x.slice(offset, length)),
-            };
-
-            new_data
+            }
         } else {
             let mut new_data = self.clone();
 
@@ -616,6 +615,16 @@ impl ArrayData {
                     vec![ArrayData::new_empty(f.data_type())],
                     true,
                 ),
+                DataType::ListView(f) => (
+                    vec![zeroed(len * 4), zeroed(len * 4)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
+                DataType::LargeListView(f) => (
+                    vec![zeroed(len * 8), zeroed(len * 8)],
+                    vec![ArrayData::new_empty(f.data_type())],
+                    true,
+                ),
                 DataType::FixedSizeList(f, list_len) => (
                     vec![],
                     vec![ArrayData::new_null(f.data_type(), *list_len as usize * len)],
@@ -636,7 +645,7 @@ impl ArrayData {
                 ),
                 DataType::Union(f, mode) => {
                     let (id, _) = f.iter().next().unwrap();
-                    let ids = Buffer::from_iter(std::iter::repeat(id).take(len));
+                    let ids = Buffer::from_iter(std::iter::repeat_n(id, len));
                     let buffers = match mode {
                         UnionMode::Sparse => vec![ids],
                         UnionMode::Dense => {
@@ -782,7 +791,10 @@ impl ArrayData {
                     if buffer.len() < min_buffer_size {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Need at least {} bytes in buffers[{}] in array of type {:?}, but got {}",
-                            min_buffer_size, i, self.data_type, buffer.len()
+                            min_buffer_size,
+                            i,
+                            self.data_type,
+                            buffer.len()
                         )));
                     }
 
@@ -790,7 +802,8 @@ impl ArrayData {
                     if align_offset != 0 {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Misaligned buffers[{i}] in array of type {:?}, offset from expected alignment of {alignment} by {}",
-                            self.data_type, align_offset.min(alignment - align_offset)
+                            self.data_type,
+                            align_offset.min(alignment - align_offset)
                         )));
                     }
                 }
@@ -804,7 +817,10 @@ impl ArrayData {
                     if buffer.len() < min_buffer_size {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Need at least {} bytes for bitmap in buffers[{}] in array of type {:?}, but got {}",
-                            min_buffer_size, i, self.data_type, buffer.len()
+                            min_buffer_size,
+                            i,
+                            self.data_type,
+                            buffer.len()
                         )));
                     }
                 }
@@ -884,7 +900,7 @@ impl ArrayData {
     /// entries.
     ///
     /// For an empty array, the `buffer` can also be empty.
-    fn typed_offsets<T: ArrowNativeType + num::Num>(&self) -> Result<&[T], ArrowError> {
+    fn typed_offsets<T: ArrowNativeType + num_traits::Num>(&self) -> Result<&[T], ArrowError> {
         // An empty list-like array can have 0 offsets
         if self.len == 0 && self.buffers[0].is_empty() {
             return Ok(&[]);
@@ -894,7 +910,7 @@ impl ArrayData {
     }
 
     /// Returns a reference to the data in `buffers[idx]` as a typed slice after validating
-    fn typed_buffer<T: ArrowNativeType + num::Num>(
+    fn typed_buffer<T: ArrowNativeType + num_traits::Num>(
         &self,
         idx: usize,
         len: usize,
@@ -918,7 +934,7 @@ impl ArrayData {
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
     /// offsets (of type T) into some other buffer of `values_length` bytes long
-    fn validate_offsets<T: ArrowNativeType + num::Num + std::fmt::Display>(
+    fn validate_offsets<T: ArrowNativeType + num_traits::Num + std::fmt::Display>(
         &self,
         values_length: usize,
     ) -> Result<(), ArrowError> {
@@ -968,13 +984,21 @@ impl ArrayData {
 
     /// Does a cheap sanity check that the `self.len` values in `buffer` are valid
     /// offsets and sizes (of type T) into some other buffer of `values_length` bytes long
-    fn validate_offsets_and_sizes<T: ArrowNativeType + num::Num + std::fmt::Display>(
+    fn validate_offsets_and_sizes<T: ArrowNativeType + num_traits::Num + std::fmt::Display>(
         &self,
         values_length: usize,
     ) -> Result<(), ArrowError> {
         let offsets: &[T] = self.typed_buffer(0, self.len)?;
         let sizes: &[T] = self.typed_buffer(1, self.len)?;
-        for i in 0..values_length {
+        if offsets.len() != sizes.len() {
+            return Err(ArrowError::ComputeError(format!(
+                "ListView offsets len {} does not match sizes len {}",
+                offsets.len(),
+                sizes.len()
+            )));
+        }
+
+        for i in 0..sizes.len() {
             let size = sizes[i].to_usize().ok_or_else(|| {
                 ArrowError::InvalidArgumentError(format!(
                     "Error converting size[{}] ({}) to usize for {}",
@@ -1056,7 +1080,11 @@ impl ArrayData {
                     if field_data.len < self.len {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "{} child array #{} for field {} has length smaller than expected for struct array ({} < {})",
-                            self.data_type, i, field.name(), field_data.len, self.len
+                            self.data_type,
+                            i,
+                            field.name(),
+                            field_data.len,
+                            self.len
                         )));
                     }
                 }
@@ -1088,7 +1116,9 @@ impl ArrayData {
                     if mode == &UnionMode::Sparse && field_data.len < (self.len + self.offset) {
                         return Err(ArrowError::InvalidArgumentError(format!(
                             "Sparse union child array #{} has length smaller than expected for union array ({} < {})",
-                            i, field_data.len, self.len + self.offset
+                            i,
+                            field_data.len,
+                            self.len + self.offset
                         )));
                     }
                 }
@@ -1280,7 +1310,7 @@ impl ArrayData {
                         "non-nullable child of type {} contains nulls not present in parent {}",
                         child.data_type, self.data_type
                     ))),
-                }
+                };
             }
         };
 
@@ -1371,7 +1401,7 @@ impl ArrayData {
     /// function would call `validate([1,2])`, and `validate([2,4])`
     fn validate_each_offset<T, V>(&self, offset_limit: usize, validate: V) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
         V: Fn(usize, Range<usize>) -> Result<(), ArrowError>,
     {
         self.typed_offsets::<T>()?
@@ -1418,7 +1448,7 @@ impl ArrayData {
     /// into `buffers[1]` are valid utf8 sequences
     fn validate_utf8<T>(&self) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
         let values_buffer = &self.buffers[1].as_slice();
         if let Ok(values_str) = std::str::from_utf8(values_buffer) {
@@ -1450,7 +1480,7 @@ impl ArrayData {
     /// between `0` and `offset_limit`
     fn validate_offsets_full<T>(&self, offset_limit: usize) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<usize> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<usize> + num_traits::Num + std::fmt::Display,
     {
         self.validate_each_offset::<T, _>(offset_limit, |_string_index, _range| {
             // No validation applied to each value, but the iteration
@@ -1463,7 +1493,7 @@ impl ArrayData {
     /// is within the range [0, max_value], inclusive
     fn check_bounds<T>(&self, max_value: i64) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
         let required_len = self.len + self.offset;
         let buffer = &self.buffers[0];
@@ -1498,7 +1528,7 @@ impl ArrayData {
     /// Validates that each value in run_ends array is positive and strictly increasing.
     fn check_run_ends<T>(&self) -> Result<(), ArrowError>
     where
-        T: ArrowNativeType + TryInto<i64> + num::Num + std::fmt::Display,
+        T: ArrowNativeType + TryInto<i64> + num_traits::Num + std::fmt::Display,
     {
         let values = self.typed_buffer::<T>(0, self.len)?;
         let mut prev_value: i64 = 0_i64;
@@ -1612,6 +1642,8 @@ pub fn layout(data_type: &DataType) -> DataTypeLayout {
             DataTypeLayout::new_fixed_width::<IntervalMonthDayNano>()
         }
         DataType::Duration(_) => DataTypeLayout::new_fixed_width::<i64>(),
+        DataType::Decimal32(_, _) => DataTypeLayout::new_fixed_width::<i32>(),
+        DataType::Decimal64(_, _) => DataTypeLayout::new_fixed_width::<i64>(),
         DataType::Decimal128(_, _) => DataTypeLayout::new_fixed_width::<i128>(),
         DataType::Decimal256(_, _) => DataTypeLayout::new_fixed_width::<i256>(),
         DataType::FixedSizeBinary(size) => {
@@ -1761,7 +1793,7 @@ impl DataTypeLayout {
                 },
             ],
             can_contain_null_mask: true,
-            variadic: true,
+            variadic: false,
         }
     }
 }
@@ -1984,6 +2016,7 @@ impl ArrayDataBuilder {
     ///
     /// Note: This is shorthand for
     /// ```rust
+    /// # #[expect(unsafe_op_in_unsafe_fn)]
     /// # let mut builder = arrow_data::ArrayDataBuilder::new(arrow_schema::DataType::Null);
     /// # let _ = unsafe {
     /// builder.skip_validation(true).build().unwrap()
@@ -1995,7 +2028,7 @@ impl ArrayDataBuilder {
     /// The same caveats as [`ArrayData::new_unchecked`]
     /// apply.
     pub unsafe fn build_unchecked(self) -> ArrayData {
-        self.skip_validation(true).build().unwrap()
+        unsafe { self.skip_validation(true) }.build().unwrap()
     }
 
     /// Creates an `ArrayData`, consuming `self`
@@ -2094,7 +2127,9 @@ impl ArrayDataBuilder {
     /// If validation is skipped, the buffers must form a valid Arrow array,
     /// otherwise undefined behavior will result
     pub unsafe fn skip_validation(mut self, skip_validation: bool) -> Self {
-        self.skip_validation.set(skip_validation);
+        unsafe {
+            self.skip_validation.set(skip_validation);
+        }
         self
     }
 }
@@ -2443,6 +2478,24 @@ mod tests {
         }
 
         let array = ArrayData::new_null(&DataType::Utf8View, array_len);
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::ListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
+        assert_eq!(array.len(), array_len);
+        for i in 0..array.len() {
+            assert!(array.is_null(i));
+        }
+
+        let array = ArrayData::new_null(
+            &DataType::LargeListView(Arc::new(Field::new_list_field(DataType::Int32, true))),
+            array_len,
+        );
         assert_eq!(array.len(), array_len);
         for i in 0..array.len() {
             assert!(array.is_null(i));

@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Logic for reading into arrow arrays
+//! Logic for reading into arrow arrays: [`ArrayReader`] and [`RowGroups`]
 
 use crate::errors::Result;
 use arrow_array::ArrayRef;
@@ -23,16 +23,18 @@ use arrow_schema::DataType as ArrowType;
 use std::any::Any;
 use std::sync::Arc;
 
-use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::arrow::record_reader::GenericRecordReader;
+use crate::arrow::record_reader::buffer::ValuesBuffer;
 use crate::column::page::PageIterator;
 use crate::column::reader::decoder::ColumnValueDecoder;
+use crate::file::metadata::ParquetMetaData;
 use crate::file::reader::{FilePageIterator, FileReader};
 
 mod builder;
 mod byte_array;
 mod byte_array_dictionary;
 mod byte_view_array;
+mod cached_array_reader;
 mod empty_array;
 mod fixed_len_byte_array;
 mod fixed_size_list_array;
@@ -40,12 +42,16 @@ mod list_array;
 mod map_array;
 mod null_array;
 mod primitive_array;
+mod row_group_cache;
+mod row_number;
 mod struct_array;
 
 #[cfg(test)]
 mod test_util;
 
-pub use builder::build_array_reader;
+// Note that this crate is public under the `experimental` feature flag.
+use crate::file::metadata::RowGroupMetaData;
+pub use builder::{ArrayReaderBuilder, CacheOptions, CacheOptionsBuilder};
 pub use byte_array::make_byte_array_reader;
 pub use byte_array_dictionary::make_byte_array_dictionary_reader;
 #[allow(unused_imports)] // Only used for benchmarks
@@ -57,9 +63,25 @@ pub use list_array::ListArrayReader;
 pub use map_array::MapArrayReader;
 pub use null_array::NullArrayReader;
 pub use primitive_array::PrimitiveArrayReader;
+pub use row_group_cache::RowGroupCache;
 pub use struct_array::StructArrayReader;
 
-/// Array reader reads parquet data into arrow array.
+/// Reads Parquet data into Arrow Arrays.
+///
+/// This is an internal implementation detail of the Parquet reader, and is not
+/// intended for public use.
+///
+/// This is the core trait for reading encoded Parquet data directly into Arrow
+/// Arrays efficiently. There are various specializations of this trait for
+/// different combinations of encodings and arrays, such as
+/// [`PrimitiveArrayReader`], [`ListArrayReader`], etc.
+///
+/// Each `ArrayReader` logically contains the following state
+/// 1. A handle to the encoded Parquet data
+/// 2. An in progress buffered Array
+///
+/// Data can either be read in batches using [`ArrayReader::next_batch`] or
+/// incrementally using [`ArrayReader::read_records`] and [`ArrayReader::skip_records`].
 pub trait ArrayReader: Send {
     // TODO: this function is never used, and the trait is not public. Perhaps this should be
     // removed.
@@ -87,6 +109,12 @@ pub trait ArrayReader: Send {
     fn consume_batch(&mut self) -> Result<ArrayRef>;
 
     /// Skips over `num_records` records, returning the number of rows skipped
+    ///
+    /// Note that calling `skip_records` with large values of `num_records` is
+    /// efficient as it avoids decoding data into the the in-progress array.
+    /// However, there is overhead to calling this function, so for small values of
+    /// `num_records`, it can be more efficient to call read_records and apply
+    /// a filter to the resulting array.
     fn skip_records(&mut self, num_records: usize) -> Result<usize>;
 
     /// If this array has a non-zero definition level, i.e. has a nullable parent
@@ -106,23 +134,42 @@ pub trait ArrayReader: Send {
     fn get_rep_levels(&self) -> Option<&[i16]>;
 }
 
-/// A collection of row groups
+/// Interface for reading data pages from the columns of one or more RowGroups.
 pub trait RowGroups {
     /// Get the number of rows in this collection
     fn num_rows(&self) -> usize;
 
-    /// Returns a [`PageIterator`] for the column chunks with the given leaf column index
+    /// Returns a [`PageIterator`] for all pages in the specified column chunk
+    /// across all row groups in this collection.
     fn column_chunks(&self, i: usize) -> Result<Box<dyn PageIterator>>;
+
+    /// Returns an iterator over the row groups in this collection
+    ///
+    /// Note this may not include all row groups in [`Self::metadata`].
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_>;
+
+    /// Returns the parquet metadata
+    fn metadata(&self) -> &ParquetMetaData;
 }
 
 impl RowGroups for Arc<dyn FileReader> {
     fn num_rows(&self) -> usize {
-        self.metadata().file_metadata().num_rows() as usize
+        FileReader::metadata(self.as_ref())
+            .file_metadata()
+            .num_rows() as usize
     }
 
     fn column_chunks(&self, column_index: usize) -> Result<Box<dyn PageIterator>> {
         let iterator = FilePageIterator::new(column_index, Arc::clone(self))?;
         Ok(Box::new(iterator))
+    }
+
+    fn row_groups(&self) -> Box<dyn Iterator<Item = &RowGroupMetaData> + '_> {
+        Box::new(FileReader::metadata(self.as_ref()).row_groups().iter())
+    }
+
+    fn metadata(&self) -> &ParquetMetaData {
+        FileReader::metadata(self.as_ref())
     }
 }
 
