@@ -162,6 +162,7 @@ impl<'a> ArrayReaderBuilder<'a> {
                         col_idx,
                         cache_options.role,
                         self.metrics.clone(), // cheap clone
+                        field.def_level > 0,  // needs_def_levels: true if has nullable ancestors
                     ))))
                 } else {
                     Ok(Some(reader))

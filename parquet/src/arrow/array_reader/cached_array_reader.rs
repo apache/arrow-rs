@@ -91,16 +91,31 @@ pub struct CachedArrayReader {
     def_levels_buffer: Option<Vec<i16>>,
     /// Repetition levels for the last consume_batch() output
     rep_levels_buffer: Option<Vec<i16>>,
+    /// Whether this reader needs definition levels (def_level > 0, i.e., has nullable ancestors)
+    /// When false, we skip copying definition levels to avoid unnecessary allocations.
+    needs_def_levels: bool,
 }
 
 impl CachedArrayReader {
     /// Creates a new cached array reader with the specified role
+    ///
+    /// # Arguments
+    /// * `inner` - The underlying array reader
+    /// * `cache` - Shared cache for this row group
+    /// * `column_idx` - Column index for cache key generation
+    /// * `role` - Producer or Consumer role
+    /// * `metrics` - Statistics to report on cache behavior
+    /// * `needs_def_levels` - Whether this column needs definition levels (def_level > 0).
+    ///   When false, definition levels are not copied to avoid unnecessary allocations.
+    ///   Note: repetition levels are never copied for cached columns since caching is
+    ///   only enabled for columns with rep_level == 0.
     pub fn new(
         inner: Box<dyn ArrayReader>,
         cache: Arc<Mutex<RowGroupCache>>,
         column_idx: usize,
         role: CacheRole,
         metrics: ArrowReaderMetrics,
+        needs_def_levels: bool,
     ) -> Self {
         let batch_size = cache.lock().unwrap().batch_size();
 
@@ -117,6 +132,7 @@ impl CachedArrayReader {
             metrics,
             def_levels_buffer: None,
             rep_levels_buffer: None,
+            needs_def_levels,
         }
     }
 
@@ -152,9 +168,17 @@ impl CachedArrayReader {
 
         let array = self.inner.consume_batch()?;
 
-        // Capture definition and repetition levels from inner reader before they are cleared
-        let def_levels = self.inner.get_def_levels().map(|l| l.to_vec());
-        let rep_levels = self.inner.get_rep_levels().map(|l| l.to_vec());
+        // Capture definition levels from inner reader only when needed (def_level > 0).
+        // This avoids unnecessary allocations for columns without nullable ancestors.
+        // Repetition levels are never copied because caching is only enabled for
+        // columns with rep_level == 0 (non-nested, non-repeated columns).
+        let def_levels = if self.needs_def_levels {
+            self.inner.get_def_levels().map(|l| l.to_vec())
+        } else {
+            None
+        };
+        // rep_levels always None for cached columns (rep_level == 0 per builder.rs)
+        let rep_levels = None;
         let cached_batch = CachedBatch::with_levels(array, def_levels, rep_levels);
 
         // Store in both shared cache and local cache
@@ -506,6 +530,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics,
+            false, // needs_def_levels: basic test doesn't use levels
         );
 
         // Read 3 records
@@ -534,6 +559,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            false, // needs_def_levels: basic test doesn't use levels
         );
 
         let read1 = cached_reader.read_records(2).unwrap();
@@ -568,6 +594,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            false, // needs_def_levels
         );
 
         // Multiple reads should accumulate
@@ -595,6 +622,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            false, // needs_def_levels
         );
 
         // Try to read more than available
@@ -625,6 +653,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics.clone(),
+            false, // needs_def_levels
         );
 
         cached_reader1.read_records(3).unwrap();
@@ -639,6 +668,7 @@ mod tests {
             1,
             CacheRole::Consumer,
             metrics.clone(),
+            false, // needs_def_levels
         );
 
         cached_reader2.read_records(2).unwrap();
@@ -661,6 +691,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            false, // needs_def_levels
         );
 
         // Read first batch (positions 0-2, batch 0)
@@ -714,6 +745,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics,
+            false, // needs_def_levels
         );
 
         // Read first batch (positions 0-2)
@@ -747,6 +779,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            false, // needs_def_levels
         );
 
         // Read records which should populate both shared and local cache
@@ -784,6 +817,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            false, // needs_def_levels
         );
 
         // Read records which should populate both shared and local cache
@@ -811,6 +845,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics.clone(),
+            false, // needs_def_levels
         );
 
         // Populate cache with first batch (1, 2, 3)
@@ -824,6 +859,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            false, // needs_def_levels
         );
 
         // - We want to read 4 records starting from position 0
@@ -928,6 +964,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics,
+            true, // needs_def_levels: test level propagation
         );
 
         // Read all 5 records
@@ -937,14 +974,15 @@ mod tests {
         let array = cached_reader.consume_batch().unwrap();
         assert_eq!(array.len(), 5);
 
-        // Verify levels are captured
+        // Verify definition levels are captured
         let def_levels = cached_reader.get_def_levels();
         assert!(def_levels.is_some());
         assert_eq!(def_levels.unwrap(), &[1, 1, 0, 1, 1]);
 
+        // Repetition levels are not copied because caching is only enabled
+        // for columns with rep_level == 0 (non-nested columns)
         let rep_levels = cached_reader.get_rep_levels();
-        assert!(rep_levels.is_some());
-        assert_eq!(rep_levels.unwrap(), &[0, 1, 1, 0, 1]);
+        assert!(rep_levels.is_none());
     }
 
     #[test]
@@ -963,6 +1001,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics,
+            true, // needs_def_levels: test level propagation
         );
 
         // Read 2 records
@@ -985,14 +1024,14 @@ mod tests {
         let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(int32_array.values(), &[1, 2, 5, 6]);
 
-        // Verify levels match the selected values
+        // Verify definition levels match the selected values
         let def_levels = cached_reader.get_def_levels();
         assert!(def_levels.is_some());
         assert_eq!(def_levels.unwrap(), &[1, 1, 1, 0]); // def_levels for positions 0, 1, 4, 5
 
+        // Repetition levels are not copied (rep_level == 0 for cached columns)
         let rep_levels = cached_reader.get_rep_levels();
-        assert!(rep_levels.is_some());
-        assert_eq!(rep_levels.unwrap(), &[0, 1, 1, 1]); // rep_levels for positions 0, 1, 4, 5
+        assert!(rep_levels.is_none());
     }
 
     #[test]
@@ -1011,6 +1050,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics,
+            true, // needs_def_levels: test level propagation
         );
 
         // Read all 6 records (spanning 2 batches)
@@ -1020,14 +1060,14 @@ mod tests {
         let array = cached_reader.consume_batch().unwrap();
         assert_eq!(array.len(), 6);
 
-        // Verify levels are correctly concatenated from both batches
+        // Verify definition levels are correctly concatenated from both batches
         let def_levels = cached_reader.get_def_levels();
         assert!(def_levels.is_some());
         assert_eq!(def_levels.unwrap(), &[1, 0, 1, 1, 0, 1]);
 
+        // Repetition levels are not copied (rep_level == 0 for cached columns)
         let rep_levels = cached_reader.get_rep_levels();
-        assert!(rep_levels.is_some());
-        assert_eq!(rep_levels.unwrap(), &[0, 0, 1, 0, 0, 1]);
+        assert!(rep_levels.is_none());
     }
 
     #[test]
@@ -1042,6 +1082,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics,
+            false, // needs_def_levels: false since inner reader has no levels
         );
 
         let records_read = cached_reader.read_records(3).unwrap();
@@ -1049,7 +1090,7 @@ mod tests {
 
         let _array = cached_reader.consume_batch().unwrap();
 
-        // Should return None since inner reader has no levels
+        // Should return None since inner reader has no levels and needs_def_levels is false
         assert!(cached_reader.get_def_levels().is_none());
         assert!(cached_reader.get_rep_levels().is_none());
     }
@@ -1072,6 +1113,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics.clone(),
+            true, // needs_def_levels: test level propagation
         );
 
         // Producer reads and populates cache
@@ -1090,6 +1132,7 @@ mod tests {
             0, // Same column index
             CacheRole::Consumer,
             metrics,
+            true, // needs_def_levels: test level propagation
         );
 
         consumer.read_records(5).unwrap();
@@ -1099,9 +1142,10 @@ mod tests {
         let int32_array = array.as_any().downcast_ref::<Int32Array>().unwrap();
         assert_eq!(int32_array.values(), &[1, 2, 3, 4, 5]);
 
-        // Should get original levels from cache
+        // Should get original definition levels from cache
         assert_eq!(consumer.get_def_levels().unwrap(), &[1, 0, 1, 1, 0]);
-        assert_eq!(consumer.get_rep_levels().unwrap(), &[0, 1, 0, 1, 1]);
+        // Repetition levels are not cached (rep_level == 0 for cached columns)
+        assert!(consumer.get_rep_levels().is_none());
     }
 
     #[test]
@@ -1121,6 +1165,7 @@ mod tests {
             0,
             CacheRole::Producer,
             metrics.clone(),
+            true, // needs_def_levels: test level propagation
         );
 
         producer.read_records(4).unwrap();
@@ -1138,6 +1183,7 @@ mod tests {
             0,
             CacheRole::Consumer,
             metrics,
+            true, // needs_def_levels: test level propagation
         );
 
         let skipped = consumer.skip_records(4).unwrap();
@@ -1146,9 +1192,11 @@ mod tests {
         let array = consumer.consume_batch().unwrap();
         assert_eq!(array.len(), 0);
 
+        // Definition levels should be empty (not None) after skip
         let def_levels = consumer.get_def_levels().map(|l| l.to_vec());
         assert_eq!(def_levels, Some(vec![]));
-        let rep_levels = consumer.get_rep_levels().map(|l| l.to_vec());
-        assert_eq!(rep_levels, Some(vec![]));
+        // Repetition levels are not cached (rep_level == 0 for cached columns)
+        let rep_levels = consumer.get_rep_levels();
+        assert!(rep_levels.is_none());
     }
 }
