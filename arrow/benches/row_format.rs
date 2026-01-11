@@ -163,48 +163,48 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     // but if we look at number of iterations.
     // columnar based: for each column
 
-    // for nulls in [0.0, 0.1, 0.2, 0.5] {
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
     // for nulls in [0.0, 0.0, 0.0, 0.0] {
-    //     seed += 1;
-    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int8Type>(
-    //         batch_size, nulls, seed,
-    //     )) as ArrayRef);
-    // }
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int8Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
     //
-    // // for nulls in [0.0, 0.1, 0.2, 0.5] {
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
     // for nulls in [0.0, 0.0, 0.0, 0.0] {
-    //     seed += 1;
-    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int32Type>(
-    //         batch_size, nulls, seed,
-    //     )) as ArrayRef);
-    // }
-    //
-    // // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    // for nulls in [0.0, 0.0, 0.0, 0.0] {
-    //
-    //     seed += 1;
-    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
-    //         batch_size, nulls, seed,
-    //     )) as ArrayRef);
-    // }
-    //
-    // for _ in 0..10 {
-    //     seed += 1;
-    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
-    //         batch_size, 0.0, seed,
-    //     )) as ArrayRef);
-    // }
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int32Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
 
-    // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    //     for nulls in [0.0, 0.0, 0.0, 0.0] {
-    //
-    //     seed += 1;
-    //     cols.push(Arc::new(
-    //         create_string_array_with_len_range_and_prefix_and_seed::<i32>(
-    //             batch_size, nulls, 0, 50, "", seed,
-    //         ),
-    //     ));
-    // }
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+    // for nulls in [0.0, 0.0, 0.0, 0.0] {
+
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, nulls, seed,
+        )) as ArrayRef);
+    }
+
+    for _ in 0..10 {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, 0.3, seed,
+        )) as ArrayRef);
+    }
+
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        // for nulls in [0.0, 0.0, 0.0, 0.0] {
+
+        seed += 1;
+        cols.push(Arc::new(
+            create_string_array_with_len_range_and_prefix_and_seed::<i32>(
+                batch_size, nulls, 0, 50, "", seed,
+            ),
+        ));
+    }
     //
     for _ in 0..3 {
         seed += 1;
@@ -231,28 +231,28 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
         ));
     }
 
-    // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    //     for nulls in [0.0, 0.0, 0.0, 0.0] {
-    //
-    //     seed += 1;
-    //     cols.push(Arc::new(create_boolean_array_with_seed(
-    //         batch_size, nulls, 0.5, seed,
-    //     )));
-    // }
-
-    // for _ in 0..10 {
-    //     seed += 1;
-    //     cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
-    //         batch_size, 0.0, seed,
-    //     )) as ArrayRef);
-    // }
-
-    // for nulls in [0.0, 0.1, 0.2, 0.5] {
-        for nulls in [0.0, 0.0, 0.0, 0.0] {
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        // for nulls in [0.0, 0.0, 0.0, 0.0] {
 
         seed += 1;
-        cols.push(Arc::new(create_f64_array_with_seed(batch_size, nulls, seed)) as ArrayRef);
+        cols.push(Arc::new(create_boolean_array_with_seed(
+            batch_size, nulls, 0.5, seed,
+        )));
     }
+
+    for _ in 0..10 {
+        seed += 1;
+        cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
+            batch_size, 0.0, seed,
+        )) as ArrayRef);
+    }
+
+    // for nulls in [0.0, 0.1, 0.2, 0.5] {
+    //     // for nulls in [0.0, 0.0, 0.0, 0.0] {
+    //
+    //     seed += 1;
+    //     cols.push(Arc::new(create_f64_array_with_seed(batch_size, nulls, seed)) as ArrayRef);
+    // }
 
     do_bench(c, format!("{batch_size} lot of columns").as_str(), cols);
 }

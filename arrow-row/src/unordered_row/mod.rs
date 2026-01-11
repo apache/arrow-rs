@@ -963,6 +963,10 @@ impl UnorderedRowConverter {
                 arrays: &'a [&'a dyn Array],
                 encoders: Vec<Encoder<'a>>,
             },
+            ContinuesSamePrimitiveTypeWithNulls {
+                arrays: &'a [&'a dyn Array],
+                encoders: Vec<Encoder<'a>>,
+            },
             SingleColumn {
                 array: &'a dyn Array,
                 encoder: Encoder<'a>,
@@ -979,12 +983,20 @@ impl UnorderedRowConverter {
 
         for slice in subslices {
             // If all the same type
-            if slice[0].data_type().is_primitive() && slice[0].null_count() == 0 && slice.len() > 1 {
-                let encoders = encoders_iter.by_ref().take(slice.len()).collect::<Vec<_>>();
-                chunks.push(ColumnChunk::ContinuesSamePrimitiveType {
-                    encoders,
-                    arrays: slice,
-                });
+            if slice[0].data_type().is_primitive() && slice.len() > 1 {
+                if slice[0].null_count() == 0 {
+                    let encoders = encoders_iter.by_ref().take(slice.len()).collect::<Vec<_>>();
+                    chunks.push(ColumnChunk::ContinuesSamePrimitiveType {
+                        encoders,
+                        arrays: slice,
+                    });
+                } else {
+                    let encoders = encoders_iter.by_ref().take(slice.len()).collect::<Vec<_>>();
+                    chunks.push(ColumnChunk::ContinuesSamePrimitiveTypeWithNulls {
+                        encoders,
+                        arrays: slice,
+                    });
+                }
             } else {
                 slice.iter().for_each(|&array| {
                     chunks.push(ColumnChunk::SingleColumn {
@@ -1007,7 +1019,7 @@ impl UnorderedRowConverter {
 
                     fn find_matching_size<T>(rows: &mut UnorderedRows, write_offset: usize, arrays: &[&dyn Array])
                     where T: ArrowPrimitiveType,
-                    <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
+                          <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
                     {
                         let data = &mut rows.buffer;
                         let offsets = &mut rows.offsets[write_offset..];
@@ -1042,6 +1054,73 @@ impl UnorderedRowConverter {
 
                                 iter.for_each(|chunk| {
                                     encode_column_fixed::<4, T>(
+                                        data,
+                                        offsets,
+                                        chunk,
+                                    )
+                                });
+
+                                find_matching_size::<T>(rows, write_offset, remainder);
+                            }
+                        }
+                    }
+
+                    macro_rules! decode_primitive_helper {
+                        ($t:ty) => {
+                            find_matching_size::<$t>(rows, write_offset, arrays)
+                        };
+                    }
+
+                    downcast_primitive! {
+                        arrays[0].data_type() => (decode_primitive_helper),
+
+                        _ => unreachable!("unsupported data type: {}", arrays[0].data_type()),
+                    }
+
+                }
+                ColumnChunk::ContinuesSamePrimitiveTypeWithNulls {
+                    encoders,
+                    arrays,
+                } => {
+                    let column1 = &arrays[0];
+
+                    fn find_matching_size<T>(rows: &mut UnorderedRows, write_offset: usize, arrays: &[&dyn Array])
+                    where T: ArrowPrimitiveType,
+                          <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
+                    {
+                        let data = &mut rows.buffer;
+                        let offsets = &mut rows.offsets[write_offset..];
+                        match arrays.len() {
+                            0 => {},
+                            1 => {
+                                encode_column_nulls_fixed::<1, T>(
+                                    data,
+                                    offsets,
+                                    arrays,
+                                )
+                            }
+                            2 => encode_column_nulls_fixed::<2, T>(
+                                data,
+                                offsets,
+                                arrays,
+                            ),
+                            3 => encode_column_nulls_fixed::<3, T>(
+                                data,
+                                offsets,
+                                arrays,
+                            ),
+                            // 4 => encode_column_nulls_fixed::<4, T>(
+                            //     data,
+                            //     offsets,
+                            //     arrays,
+                            // ),
+                            _ => {
+                                //
+                                let iter = arrays.chunks_exact(4);
+                                let remainder = iter.remainder();
+
+                                iter.for_each(|chunk| {
+                                    encode_column_nulls_fixed::<4, T>(
                                         data,
                                         offsets,
                                         chunk,
@@ -2168,6 +2247,31 @@ fn encode_column_fixed<const N: usize, T: ArrowPrimitiveType>(
     let values = columns_arr.map(|col| col.as_primitive::<T>());
 
     fixed::encode_not_null_fixed::<N, T>(
+        data,
+        offsets,
+        values
+    )
+}
+/// Encodes a column to the provided [`UnorderedRows`] incrementing the offsets as it progresses
+fn encode_column_nulls_fixed<const N: usize, T: ArrowPrimitiveType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    columns: &[&dyn Array],
+) where
+  <T as arrow_array::ArrowPrimitiveType>::Native: fixed::FixedLengthEncoding,
+{
+    for col in columns {
+        assert_ne!(col.null_count(), 0);
+    }
+    if N == 1 {
+        fixed::encode(data, offsets, columns[0].as_primitive::<T>().values(), columns[0].nulls().unwrap());
+        return;
+    }
+
+    let columns_arr: [&dyn Array; N] = columns.to_vec().try_into().unwrap();
+    let values = columns_arr.map(|col| col.as_primitive::<T>());
+
+    fixed::encode_fixed::<N, T>(
         data,
         offsets,
         values

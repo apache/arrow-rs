@@ -65,6 +65,9 @@ fn get_number_of_bytes_for_nulls_from_metadata(
     metadata: MetadataEncodingType,
     number_of_columns: usize,
 ) -> usize {
+    if number_of_columns == 1 {
+        return 1;
+    }
     match metadata {
         MetadataEncodingType::None => bit_util::ceil(number_of_columns, 8),
         MetadataEncodingType::FullByte => 1 + bit_util::ceil(number_of_columns, 8),
@@ -98,7 +101,7 @@ fn encode_nulls_to_slice<const METADATA_TYPE: u8>(
             index += 1;
         }
 
-        let byte = merge_iter.next().unwrap();
+        let byte = unsafe { merge_iter.next().unwrap_unchecked() } ;
         // Unused bytes are set to u8::MAX as well
         are_all_valid = are_all_valid && byte == u8::MAX;
         output[index] = byte;
@@ -122,6 +125,7 @@ fn encode_nulls_to_slice<const METADATA_TYPE: u8>(
 
 struct MergeIter<'a> {
     inner: [Option<Chain<BitChunkIterator<'a>, Once<u64>>>; 8],
+    scratch: [u8; 8],
     current: [u64; 8],
     bit_index: usize,
     number_of_bits_remaining: usize,
@@ -180,6 +184,7 @@ impl<'a> MergeIter<'a> {
             current,
             bit_index: 0,
             number_of_bits_remaining: len,
+            scratch: [0; 8],
         }
     }
 
@@ -199,7 +204,7 @@ impl<'a> MergeIter<'a> {
                         assert_eq!(current, &u64::MAX);
                     }
                     Some(inner) => {
-                        *current = inner.next().unwrap();
+                        *current = unsafe { inner.next().unwrap_unchecked() };
                     }
                 }
             });
@@ -216,12 +221,13 @@ impl<'a> Iterator for MergeIter<'a> {
         if self.number_of_bits_remaining == 0 {
             return None;
         }
+        self.number_of_bits_remaining -= 1;
 
         if self.bit_index > 63 {
             self.advance_to_next_iter();
         }
 
-        let item = fetch_and_shift(self.current, self.bit_index);
+        let item = fetch_and_shift(self.current, self.bit_index, &mut self.scratch);
 
         self.bit_index += 1;
 
@@ -541,7 +547,7 @@ pub fn decode_packed_nulls_in_rows_with_metadata_type<const METADATA_TYPE: u8>(
                 );
 
                 let byte_builders;
-                (byte_builders, builders_slice) = builders_slice.split_at_mut(8);
+                (byte_builders, builders_slice) = builders_slice.split_at_mut(7);
 
                 decode_to_builder::<
                     // Has metadata bit as we are in the first byte
@@ -604,7 +610,7 @@ fn decode_to_builder<const HAS_METADATA_BIT: bool>(
 /// Create a bit packed from 8 u64 items at bit index
 ///
 /// This is carefully done to be vectorized
-pub fn fetch_and_shift(bitpacked: [u64; 8], bit_index: usize) -> u8 {
+pub fn fetch_and_shift(bitpacked: [u64; 8], bit_index: usize, scratch: &mut [u8; 8]) -> u8 {
     // Each bit should be shift by bit_index
 
     const SHIFT: [u8; 8] = [0, 1, 2, 3, 4, 5, 6, 7];
@@ -616,13 +622,14 @@ pub fn fetch_and_shift(bitpacked: [u64; 8], bit_index: usize) -> u8 {
     // and then OR with the rest of the items.
 
     // Not doing manual loop as it will not be vectorized
-    let a = bitpacked
+    bitpacked
         .iter()
         .map(|&item| ((item >> bit_index) & 1) as u8)
         .zip(SHIFT)
         .map(|(item, shift)| item << shift)
         // Collecting as the fold break the vectorization
-        .collect::<Vec<_>>();
+      .zip(scratch.iter_mut())
+      .for_each(|(item, scratch)| *scratch = item);
 
-    a.into_iter().fold(0, |acc, item| acc | item)
+    scratch.iter().fold(0, |acc, item| acc | item)
 }

@@ -18,7 +18,7 @@
 use super::null_sentinel;
 use crate::array::PrimitiveArray;
 use arrow_array::builder::BufferBuilder;
-use arrow_array::{ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
+use arrow_array::{Array, ArrowPrimitiveType, BooleanArray, FixedSizeBinaryArray};
 use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, IntervalDayTime, IntervalMonthDayNano, MutableBuffer,
     NullBuffer, bit_util, i256,
@@ -48,17 +48,12 @@ pub trait FixedLengthEncoding: Copy {
 
     fn encode(self) -> Self::Encoded;
 
-    fn encode_to_box(self) -> Box<[u8]> {
-        self.encode().as_ref().to_vec().into_boxed_slice()
-    }
-
-    fn encode_to_large(self) -> [u8; 32] {
-        let encoded = self.encode();
-        let encoded = encoded.as_ref();
-        let mut out = [0_u8; 32];
-        out[..encoded.len()].copy_from_slice(encoded);
-
-        out
+    fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+        if is_valid {
+            self.encode()
+        } else {
+            unimplemented!("encode_with_null not implemented for this type")
+        }
     }
 
     fn decode(encoded: Self::Encoded) -> Self;
@@ -69,16 +64,16 @@ macro_rules! encode_signed {
         impl FixedLengthEncoding for $t {
             type Encoded = [u8; $n];
 
+            fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+                (self * (is_valid as $t)).encode()
+            }
+
             fn encode(self) -> [u8; $n] {
                 let mut b = self.to_be_bytes();
-                // Toggle top "sign" bit to ensure consistent sort order
-                b[0] ^= 0x80;
                 b
             }
 
             fn decode(mut encoded: Self::Encoded) -> Self {
-                // Toggle top "sign" bit
-                encoded[0] ^= 0x80;
                 Self::from_be_bytes(encoded)
             }
         }
@@ -90,7 +85,22 @@ encode_signed!(2, i16);
 encode_signed!(4, i32);
 encode_signed!(8, i64);
 encode_signed!(16, i128);
-encode_signed!(32, i256);
+// encode_signed!(32, i256);
+impl FixedLengthEncoding for i256 {
+    type Encoded = [u8; 32];
+
+    fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+        (self * (i256::usize_as(is_valid as usize))).encode()
+    }
+
+    fn encode(self) -> [u8; 32] {
+        self.to_be_bytes()
+    }
+
+    fn decode(mut encoded: Self::Encoded) -> Self {
+        Self::from_be_bytes(encoded)
+    }
+}
 // impl FixedLengthEncoding for i32 {
 //     type Encoded = [u8; 4];
 //
@@ -115,6 +125,10 @@ macro_rules! encode_unsigned {
 
             fn encode(self) -> [u8; $n] {
                 self.to_be_bytes()
+            }
+
+            fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+                (self * (is_valid as $t)).encode()
             }
 
             fn decode(encoded: Self::Encoded) -> Self {
@@ -237,18 +251,141 @@ pub fn encode<T: FixedLengthEncoding>(
     values: &[T],
     nulls: &NullBuffer,
 ) {
-    for (value_idx, is_valid) in nulls.iter().enumerate() {
-        let offset = &mut offsets[value_idx + 1];
+    for ((value, is_valid), offset) in values.iter().zip(nulls.iter()).zip(offsets.iter_mut().skip(1)) {
         let end_offset = *offset + T::ENCODED_LEN;
         if is_valid {
             let to_write = &mut data[*offset..end_offset];
-            let mut encoded = values[value_idx].encode();
+            let mut encoded = (value).encode_with_null(is_valid);
             to_write.copy_from_slice(encoded.as_ref());
-        } else {
-            debug_assert_eq!(data[*offset..end_offset].iter().all(|b| *b == 0), true, "all bytes should be 0");
         }
         *offset = end_offset;
     }
+}
+
+
+
+/// Encoding for non-nullable primitive arrays.
+/// Iterates directly over the `values`, and skips NULLs-checking.
+pub fn encode_fixed<const N: usize, T: ArrowPrimitiveType>(
+    data: &mut [u8],
+    offsets: &mut [usize],
+    arrays: [&PrimitiveArray<T>; N],
+    // iters: [impl ExactSizeIterator<Item = T>; N],
+) where
+  T::Native: FixedLengthEncoding,
+{
+    let iters = arrays.map(|a| a.values().iter().copied().zip(a.nulls().unwrap().iter()));
+    match N {
+        0 => panic!("N must be greater than 0"),
+        1 => unimplemented!(),
+        2 => {
+            let iter = iters[0].clone().zip(iters[1].clone());
+            for (value_idx, ((val1, is_valid1), (val2, is_valid2))) in iter.enumerate() {
+                let offset = &mut offsets[value_idx + 1];
+                let end_offset = *offset + T::Native::ENCODED_LEN * N;
+
+                let to_write = &mut data[*offset..end_offset];
+                {
+                    let mut encoded = val1.encode_with_null(is_valid1);
+                    to_write[..T::Native::ENCODED_LEN].copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val2.encode_with_null(is_valid2);
+                    to_write[T::Native::ENCODED_LEN..].copy_from_slice(encoded.as_ref());
+                }
+
+                *offset = end_offset;
+            }
+        }
+        3 => {
+            let iter = iters[0].clone().zip(iters[1].clone()).zip(iters[2].clone());
+            for (value_idx, (((val1, is_valid_1), (val2, is_valid_2)), (val3, is_valid_3))) in iter.enumerate() {
+                let offset = &mut offsets[value_idx + 1];
+                let end_offset = *offset + T::Native::ENCODED_LEN * N;
+
+                let to_write = &mut data[*offset..end_offset];
+
+                {
+                    let mut encoded = val1.encode_with_null(is_valid_1);
+                    to_write[T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1]
+                      .copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val2.encode_with_null(is_valid_2);
+                    to_write[T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2]
+                      .copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val3.encode_with_null(is_valid_3);
+                    to_write[T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3]
+                      .copy_from_slice(encoded.as_ref());
+                }
+
+                *offset = end_offset;
+            }
+        }
+        4 => {
+            let iter = iters[0]
+              .clone()
+              .zip(iters[1].clone())
+              .zip(iters[2].clone())
+              .zip(iters[3].clone());
+            for (value_idx, ((((val1, is_valid_1), (val2, is_valid_2)), (val3, is_valid_3)), (val4, is_valid_4))) in iter.enumerate() {
+                let offset = &mut offsets[value_idx + 1];
+                let end_offset = *offset + T::Native::ENCODED_LEN * N;
+
+                let to_write = &mut data[*offset..end_offset];
+
+                {
+                    let mut encoded = val1.encode_with_null(is_valid_1);
+                    to_write[T::Native::ENCODED_LEN * 0..T::Native::ENCODED_LEN * 1]
+                      .copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val2.encode_with_null(is_valid_2);
+                    to_write[T::Native::ENCODED_LEN * 1..T::Native::ENCODED_LEN * 2]
+                      .copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val3.encode_with_null(is_valid_3);
+                    to_write[T::Native::ENCODED_LEN * 2..T::Native::ENCODED_LEN * 3]
+                      .copy_from_slice(encoded.as_ref());
+                }
+
+                {
+                    let mut encoded = val4.encode_with_null(is_valid_4);
+                    to_write[T::Native::ENCODED_LEN * 3..T::Native::ENCODED_LEN * 4]
+                      .copy_from_slice(encoded.as_ref());
+                }
+
+                *offset = end_offset;
+            }
+        }
+        _ => panic!("N must be less than or equal to 8"),
+    }
+    //
+    // let zip_iter = zip_array::<_, N>(arrays.map(|a| a.values().iter().copied()));
+    // for (value_idx, array) in zip_iter.enumerate() {
+    //     let offset = &mut offsets[value_idx + 1];
+    //     let end_offset = *offset + (T::Native::ENCODED_LEN - 1) * N;
+    //
+    //     let to_write = &mut data[*offset..end_offset];
+    //     // for i in 0..N {
+    //     //     to_write[i * T::Native::ENCODED_LEN] = 1;
+    //     // }
+    //     to_write[0] = valid_bits;
+    //     for (i, val) in array.iter().enumerate() {
+    //         let mut encoded = val.encode();
+    //         to_write[1 + i * (T::Native::ENCODED_LEN - 1)..(i + 1) * (T::Native::ENCODED_LEN - 1) + 1].copy_from_slice(encoded.as_ref());
+    //     }
+    //
+    //     *offset = end_offset;
+    // }
 }
 
 /// Encoding for non-nullable primitive arrays.
