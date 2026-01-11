@@ -18,7 +18,7 @@
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, ArrayRef, StructArray, builder::BooleanBufferBuilder};
-use arrow_buffer::{NullBuffer};
+use arrow_buffer::NullBuffer;
 use arrow_schema::{DataType as ArrowType, DataType};
 use std::any::Any;
 use std::sync::Arc;
