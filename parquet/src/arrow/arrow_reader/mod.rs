@@ -304,6 +304,36 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
     /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
+    ///
+    /// For a running example see `parquet/examples/read_with_row_filter.rs`.
+    /// See <https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive/>
+    /// for a technical explanation of late materialization.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use std::fs::File;
+    /// # use arrow_array::Int32Array;
+    /// # use parquet::arrow::ProjectionMask;
+    /// # use parquet::arrow::arrow_reader::{ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter};
+    /// # fn main() -> Result<(), parquet::errors::ParquetError> {
+    /// # let testdata = arrow::util::test_util::parquet_test_data();
+    /// # let path = format!("{testdata}/alltypes_plain.parquet");
+    /// # let file = File::open(&path)?;
+    /// let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    /// let schema_desc = builder.metadata().file_metadata().schema_descr_ptr();
+    ///
+    /// // Create predicate: column id > 4. This col has index 0.
+    /// let projection = ProjectionMask::leaves(&schema_desc, [0]);
+    /// let predicate = ArrowPredicateFn::new(projection, |batch| {
+    ///     let id_col = batch.column(0);
+    ///     arrow::compute::kernels::cmp::gt(id_col, &Int32Array::new_scalar(4))
+    /// });
+    ///
+    /// let row_filter = RowFilter::new(vec![Box::new(predicate)]);
+    /// let _reader = builder.with_row_filter(row_filter).build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
