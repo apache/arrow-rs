@@ -623,22 +623,6 @@ impl MutableBuffer {
         buffer
     }
 
-    /// Advances the buffer by `additional` bits without initializing the new bytes.
-    ///
-    /// # Safety
-    /// Callers must ensure that all newly added bits are written before the buffer is read.
-    #[inline]
-    unsafe fn advance_uninit(&mut self, additional: usize) {
-        let new_len = self.len + additional;
-        let new_len_bytes = bit_util::ceil(new_len, 8);
-        if new_len_bytes > self.len() {
-            self.reserve(new_len_bytes - self.len());
-            // SAFETY: caller will initialize all newly exposed bytes
-            unsafe { self.set_len(new_len_bytes) };
-        }
-        self.len = new_len;
-    }
-
     /// Extends this builder with boolean values.
     ///
     /// This requires `iter` to report an exact size via `size_hint`.
@@ -663,7 +647,13 @@ impl MutableBuffer {
         let end_bit = start_len + len;
 
         // SAFETY: we will initialize all newly exposed bytes before they are read
-        unsafe { self.advance_uninit(len) };
+        let new_len_bytes = bit_util::ceil(end_bit, 8);
+        if new_len_bytes > self.len {
+            self.reserve(new_len_bytes - self.len);
+            // SAFETY: caller will initialize all newly exposed bytes before they are read
+            unsafe { self.set_len(new_len_bytes) };
+        }
+
         let slice = self.as_slice_mut();
 
         let mut iter = iter;
