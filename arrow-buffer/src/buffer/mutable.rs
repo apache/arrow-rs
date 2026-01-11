@@ -634,7 +634,7 @@ impl MutableBuffer {
     #[inline]
     pub unsafe fn extend_bool_trusted_len<I: Iterator<Item = bool>>(
         &mut self,
-        iter: I,
+        mut iter: I,
         offset: usize,
     ) {
         let (lower, upper) = iter.size_hint();
@@ -662,7 +662,6 @@ impl MutableBuffer {
 
         let slice = self.as_slice_mut();
 
-        let mut iter = iter;
         let mut bit_idx = start_len;
 
         // ---- Unaligned prefix: advance to the next 64-bit boundary ----
