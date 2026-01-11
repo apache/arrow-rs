@@ -626,7 +626,8 @@ impl MutableBuffer {
     /// Extends this builder with boolean values.
     ///
     /// This requires `iter` to report an exact size via `size_hint`.
-    ///
+    /// `offset` indicates the starting offset in bits in this buffer to begin writing to
+    /// and must be less than or equal to the current length of this buffer.
     /// # Safety
     /// Callers must ensure that `iter` reports an exact size via `size_hint`.
     #[inline]
@@ -638,6 +639,7 @@ impl MutableBuffer {
         let (lower, upper) = iter.size_hint();
         let len = upper.expect("Iterator must have exact size_hint");
         assert_eq!(lower, len, "Iterator must have exact size_hint");
+        debug_assert!(offset <= self.len * 8, "offset must be <= buffer length in bits");
 
         if len == 0 {
             return;
