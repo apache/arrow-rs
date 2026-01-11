@@ -18,7 +18,7 @@
 use crate::arrow::array_reader::ArrayReader;
 use crate::errors::{ParquetError, Result};
 use arrow_array::{Array, ArrayRef, StructArray, builder::BooleanBufferBuilder};
-use arrow_buffer::NullBuffer;
+use arrow_buffer::{NullBuffer};
 use arrow_schema::{DataType as ArrowType, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -167,7 +167,7 @@ impl ArrayReader for StructArrayReader {
             if bitmap_builder.len() != children_array_len {
                 return Err(general_err!("Failed to decode level data for struct array"));
             }
-            nulls = Some(NullBuffer::new(bitmap_builder.finish()));
+            nulls = Some(NullBuffer::from(bitmap_builder));
         }
 
         // Safety: checked above that all children array data have same
