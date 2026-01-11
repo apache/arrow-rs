@@ -628,6 +628,7 @@ impl MutableBuffer {
     /// This requires `iter` to report an exact size via `size_hint`.
     /// `offset` indicates the starting offset in bits in this buffer to begin writing to
     /// and must be less than or equal to the current length of this buffer.
+    /// All bits not written to (but readable due to byte alignment) will be zeroed out.
     /// # Safety
     /// Callers must ensure that `iter` reports an exact size via `size_hint`.
     #[inline]
