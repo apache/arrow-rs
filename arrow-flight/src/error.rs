@@ -78,6 +78,12 @@ impl From<tonic::Status> for FlightError {
     }
 }
 
+impl From<prost::DecodeError> for FlightError {
+    fn from(error: prost::DecodeError) -> Self {
+        Self::DecodeError(error.to_string())
+    }
+}
+
 impl From<ArrowError> for FlightError {
     fn from(value: ArrowError) -> Self {
         Self::Arrow(value)
