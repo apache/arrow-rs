@@ -23,7 +23,7 @@ use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt};
 use arrow_array::cast::AsArray;
 use arrow_array::types::Int64Type;
-use arrow_array::{RecordBatch, StringArray, StringViewArray, StructArray};
+use arrow_array::{Array, RecordBatch, StringArray, StringViewArray, StructArray};
 use arrow_schema::{DataType, Field};
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -386,6 +386,171 @@ async fn test_struct_field_projections_filter_on_bb() {
     }
 }
 
+/// Test that List->Struct fields are NOT cached (rep_level > 0).
+///
+/// Schema:
+/// - id: Int64 (leaf 0, rep_level=0 - CAN be cached)
+/// - list_col: List<Struct { struct_field_a: String, struct_field_b: Int32 }>
+///   - struct_field_a (leaf 1, rep_level=1 - NOT cached)
+///   - struct_field_b (leaf 2, rep_level=1 - NOT cached)
+///
+/// Filter: `id > 50` (filter mask includes only `id`)
+/// Expected: 49 rows (id 51-99)
+///
+/// Cache behavior:
+/// - Only `id` (leaf 0) is cached because rep_level=0
+/// - List struct fields (leaves 1,2) are NOT cached because rep_level > 0
+#[tokio::test]
+async fn test_list_struct_fields_not_cached_filter_on_id() {
+    const EXPECTED_ROWS: usize = 49;
+
+    // Test cases: (projection_leaves, expected_cache_reads, description)
+    // Filter mask = [id] (leaf 0), so only id can be cached
+    let test_cases: &[(&[usize], usize, &str)] = &[
+        (
+            &[0, 1, 2],
+            EXPECTED_ROWS,
+            "[id, list_col]: only id cached (rep_level=0)",
+        ),
+        (
+            &[1, 2],
+            0,
+            "[list_col]: nothing cached (rep_level > 0 for list fields)",
+        ),
+        (&[0], EXPECTED_ROWS, "[id]: id cached (rep_level=0)"),
+        (&[1], 0, "[struct_field_a]: not cached (rep_level > 0)"),
+        (&[2], 0, "[struct_field_b]: not cached (rep_level > 0)"),
+    ];
+
+    for (projection_leaves, expected_cache, description) in test_cases {
+        let test = ParquetPredicateCacheTest::new_list_struct();
+        let async_builder = test.async_builder().await;
+        let schema_descr = async_builder.metadata().file_metadata().schema_descr_ptr();
+
+        // Filter on id only: id > 50
+        let filter_mask = ProjectionMask::leaves(&schema_descr, [0]); // only id
+        let row_filter = ArrowPredicateFn::new(filter_mask, |batch: RecordBatch| {
+            let id = batch.column(0).as_primitive::<Int64Type>();
+            gt(id, &Int64Array::new_scalar(50))
+        });
+
+        let projection = ProjectionMask::leaves(&schema_descr, projection_leaves.iter().copied());
+        let async_builder = async_builder
+            .with_projection(projection)
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter)]));
+
+        let metrics = ArrowReaderMetrics::enabled();
+        let mut stream = async_builder.with_metrics(metrics.clone()).build().unwrap();
+        let mut total_rows = 0;
+        while let Some(batch) = stream.next().await {
+            total_rows += batch.expect("Error").num_rows();
+        }
+
+        let cache_reads = metrics.records_read_from_cache().unwrap();
+        eprintln!(
+            "List struct filter id>50, projection {:?}: rows={total_rows}, cache={cache_reads} ({})",
+            projection_leaves, description
+        );
+
+        assert_eq!(
+            total_rows, EXPECTED_ROWS,
+            "Expected {EXPECTED_ROWS} rows for {description}"
+        );
+        assert_eq!(
+            cache_reads, *expected_cache,
+            "Cache reads mismatch for {description}"
+        );
+    }
+}
+
+/// Test that filtering on List->Struct fields also results in 0 cache hits.
+///
+/// Filter: on struct_field_b (field inside list->struct)
+/// Filter mask: [list_col] (includes leaves 1,2)
+///
+/// Since all leaves in the filter mask have rep_level > 0, nothing is cached.
+#[tokio::test]
+async fn test_list_struct_fields_not_cached_filter_on_struct_field() {
+    // Filter on struct_field_b > 500 (i.e., rows where i*10 + j > 500, so i > 50)
+    // This selects rows with id >= 51, so ~49 rows
+
+    // Test cases: (projection_leaves, description)
+    // All should have 0 cache reads because filter mask leaves have rep_level > 0
+    let test_cases: &[(&[usize], &str)] = &[
+        (&[0, 1, 2], "[id, list_col]: filter mask has rep_level > 0"),
+        (&[1, 2], "[list_col]: filter mask has rep_level > 0"),
+        (
+            &[0],
+            "[id]: id not in filter mask, filter leaves have rep_level > 0",
+        ),
+        (&[1], "[struct_field_a]: rep_level > 0"),
+        (&[2], "[struct_field_b]: rep_level > 0"),
+    ];
+
+    for (projection_leaves, description) in test_cases {
+        let test = ParquetPredicateCacheTest::new_list_struct();
+        let async_builder = test.async_builder().await;
+        let schema_descr = async_builder.metadata().file_metadata().schema_descr_ptr();
+
+        // Filter on struct_field_b: check if any element has struct_field_b > 500
+        // Filter mask includes the entire list_col (leaves 1, 2)
+        let filter_mask = ProjectionMask::leaves(&schema_descr, [1, 2]);
+        let row_filter = ArrowPredicateFn::new(filter_mask, |batch: RecordBatch| {
+            // batch.column(0) is list_col
+            let list = batch.column(0).as_list::<i32>();
+
+            let result: Vec<bool> = (0..batch.num_rows())
+                .map(|row| {
+                    if list.is_null(row) {
+                        return false;
+                    }
+                    let struct_array = list.value(row);
+                    let struct_arr = struct_array.as_struct();
+                    let field_b = struct_arr
+                        .column_by_name("struct_field_b")
+                        .unwrap()
+                        .as_primitive::<arrow_array::types::Int32Type>();
+
+                    // Check if any element has struct_field_b > 500
+                    (0..field_b.len()).any(|i| !field_b.is_null(i) && field_b.value(i) > 500)
+                })
+                .collect();
+
+            Ok(arrow_array::BooleanArray::from(result))
+        });
+
+        let projection = ProjectionMask::leaves(&schema_descr, projection_leaves.iter().copied());
+        let async_builder = async_builder
+            .with_projection(projection)
+            .with_row_filter(RowFilter::new(vec![Box::new(row_filter)]));
+
+        let metrics = ArrowReaderMetrics::enabled();
+        let mut stream = async_builder.with_metrics(metrics.clone()).build().unwrap();
+        let mut total_rows = 0;
+        while let Some(batch) = stream.next().await {
+            total_rows += batch.expect("Error").num_rows();
+        }
+
+        let cache_reads = metrics.records_read_from_cache().unwrap();
+        eprintln!(
+            "List struct filter on struct_field_b, projection {:?}: rows={total_rows}, cache={cache_reads} ({})",
+            projection_leaves, description
+        );
+
+        // All cases should have 0 cache reads because filter mask leaves have rep_level > 0
+        assert_eq!(
+            cache_reads, 0,
+            "Expected 0 cache reads for {description}, got {cache_reads}"
+        );
+
+        // Should have some rows (those where any struct_field_b > 500)
+        assert!(
+            total_rows > 0,
+            "Expected some rows for {description}, got {total_rows}"
+        );
+    }
+}
+
 // --  Begin test infrastructure --
 
 /// A test parquet file
@@ -428,6 +593,16 @@ impl ParquetPredicateCacheTest {
     fn new_nested_nullable() -> Self {
         Self {
             bytes: NESTED_NULLABLE_TEST_FILE_DATA.clone(),
+            expected_records_read_from_cache: 0,
+        }
+    }
+
+    /// Create a new test file with List containing Struct elements.
+    ///
+    /// See [`LIST_STRUCT_TEST_FILE_DATA`] for data details.
+    fn new_list_struct() -> Self {
+        Self {
+            bytes: LIST_STRUCT_TEST_FILE_DATA.clone(),
             expected_records_read_from_cache: 0,
         }
     }
@@ -641,6 +816,72 @@ static NESTED_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
     let writer_options = None;
     let mut writer =
         ArrowWriter::try_new(&mut output, input_batch.schema(), writer_options).unwrap();
+    writer.write(&input_batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(output)
+});
+
+/// Build a ParquetFile with a List containing Struct elements.
+///
+/// Schema:
+/// * `id: Int64` (leaf 0, rep_level=0 - CAN be cached)
+/// * `list_col: List<Struct { struct_field_a: String, struct_field_b: Int32 }>`
+///   - struct_field_a (leaf 1, rep_level=1 - NOT cached)
+///   - struct_field_b (leaf 2, rep_level=1 - NOT cached)
+///
+/// Data:
+/// - 100 rows (id 0..99)
+/// - Each row has (i % 3 + 1) list elements (1-3 elements per row)
+/// - struct_field_a = "val_{i}_{j}" where i=row, j=element index
+/// - struct_field_b = i * 10 + j
+static LIST_STRUCT_TEST_FILE_DATA: LazyLock<Bytes> = LazyLock::new(|| {
+    use arrow_array::builder::{Int32Builder, ListBuilder, StringBuilder, StructBuilder};
+
+    const NUM_ROWS: usize = 100;
+
+    // id column
+    let id: Int64Array = (0..NUM_ROWS as i64).collect();
+
+    // Build list of structs
+    let struct_fields = vec![
+        Field::new("struct_field_a", DataType::Utf8, true),
+        Field::new("struct_field_b", DataType::Int32, true),
+    ];
+    let mut list_builder = ListBuilder::new(StructBuilder::new(
+        struct_fields.clone(),
+        vec![
+            Box::new(StringBuilder::new()) as Box<dyn arrow_array::builder::ArrayBuilder>,
+            Box::new(Int32Builder::new()) as Box<dyn arrow_array::builder::ArrayBuilder>,
+        ],
+    ));
+
+    for i in 0..NUM_ROWS {
+        let num_elements = (i % 3) + 1; // 1, 2, or 3 elements
+        for j in 0..num_elements {
+            let struct_builder = list_builder.values();
+            struct_builder
+                .field_builder::<StringBuilder>(0)
+                .unwrap()
+                .append_value(format!("val_{}_{}", i, j));
+            struct_builder
+                .field_builder::<Int32Builder>(1)
+                .unwrap()
+                .append_value((i * 10 + j) as i32);
+            struct_builder.append(true);
+        }
+        list_builder.append(true);
+    }
+
+    let list_col = list_builder.finish();
+
+    let input_batch = RecordBatch::try_from_iter([
+        ("id", Arc::new(id) as ArrayRef),
+        ("list_col", Arc::new(list_col) as ArrayRef),
+    ])
+    .unwrap();
+
+    let mut output = Vec::new();
+    let mut writer = ArrowWriter::try_new(&mut output, input_batch.schema(), None).unwrap();
     writer.write(&input_batch).unwrap();
     writer.close().unwrap();
     Bytes::from(output)
