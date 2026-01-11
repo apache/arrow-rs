@@ -85,8 +85,6 @@
 //! This macro will emit a compile error if any field contains `Arc` or `Rc`
 //! types (unless the field is ignored), as the semantics for shared references
 //! are complex and should be handled manually.
-//!
-//! [`HeapSize`]: arrow_memory_size::HeapSize
 
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/apache/arrow-rs/refs/heads/main/docs/source/_static/images/Arrow-logo_hex_black-txt_transparent-bg.svg",
@@ -208,8 +206,6 @@ impl FieldAttr {
 /// };
 /// println!("Heap size: {} bytes", s.heap_size());
 /// ```
-///
-/// [`HeapSize`]: arrow_memory_size::HeapSize
 #[proc_macro_derive(HeapSize, attributes(heap_size))]
 pub fn heap_size_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
     let input: DeriveInput = parse_macro_input!(input as DeriveInput);
