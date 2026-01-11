@@ -640,7 +640,10 @@ impl MutableBuffer {
         let (lower, upper) = iter.size_hint();
         let len = upper.expect("Iterator must have exact size_hint");
         assert_eq!(lower, len, "Iterator must have exact size_hint");
-        debug_assert!(offset <= self.len * 8, "offset must be <= buffer length in bits");
+        debug_assert!(
+            offset <= self.len * 8,
+            "offset must be <= buffer length in bits"
+        );
 
         if len == 0 {
             return;
