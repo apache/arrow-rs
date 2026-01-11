@@ -28,129 +28,47 @@ use crate::{
     StringViewArray, StructArray, UnionArray,
 };
 
+// Note: A blanket implementation `impl<T: Array> HeapSize for T` would be ideal,
+// but is not possible due to Rust's orphan rules (E0210) since HeapSize is defined
+// in a separate crate.
+//
 // Note: HeapSize cannot be implemented for ArrayRef (Arc<dyn Array>) here due to
 // Rust's orphan rules. Use array.get_buffer_memory_size() directly instead.
 
-// =============================================================================
-// Primitive and Boolean Arrays
-// =============================================================================
+/// Implements HeapSize for array types that delegate to get_buffer_memory_size()
+macro_rules! impl_heap_size {
+    ($($ty:ty),*) => {
+        $(
+            impl HeapSize for $ty {
+                fn heap_size(&self) -> usize {
+                    self.get_buffer_memory_size()
+                }
+            }
+        )*
+    };
+}
+
+impl_heap_size!(
+    BooleanArray,
+    NullArray,
+    StringArray,
+    LargeStringArray,
+    BinaryArray,
+    LargeBinaryArray,
+    StringViewArray,
+    BinaryViewArray,
+    FixedSizeBinaryArray,
+    ListArray,
+    LargeListArray,
+    ListViewArray,
+    LargeListViewArray,
+    FixedSizeListArray,
+    StructArray,
+    MapArray,
+    UnionArray
+);
 
 impl<T: ArrowPrimitiveType> HeapSize for PrimitiveArray<T> {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for BooleanArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for NullArray {
-    fn heap_size(&self) -> usize {
-        // NullArray has no buffers
-        0
-    }
-}
-
-// =============================================================================
-// String and Binary Arrays
-// =============================================================================
-
-impl HeapSize for StringArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for LargeStringArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for BinaryArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for LargeBinaryArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for StringViewArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for BinaryViewArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for FixedSizeBinaryArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-// =============================================================================
-// List Arrays
-// =============================================================================
-
-impl HeapSize for ListArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for LargeListArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for ListViewArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for LargeListViewArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for FixedSizeListArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-// =============================================================================
-// Complex/Nested Arrays
-// =============================================================================
-
-impl HeapSize for StructArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for MapArray {
-    fn heap_size(&self) -> usize {
-        self.get_buffer_memory_size()
-    }
-}
-
-impl HeapSize for UnionArray {
     fn heap_size(&self) -> usize {
         self.get_buffer_memory_size()
     }
