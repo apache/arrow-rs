@@ -484,7 +484,7 @@ impl<'a> Parser<'a> {
             fields.push(field);
         }
         Ok(DataType::Union(
-            UnionFields::new(type_ids, fields),
+            UnionFields::try_new(type_ids, fields)?,
             union_mode,
         ))
     }
@@ -1109,49 +1109,40 @@ mod test {
                 2,
             ),
             DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![
-                        Field::new("Int32", DataType::Int32, false),
-                        Field::new("Utf8", DataType::Utf8, true),
-                    ],
-                ),
+                UnionFields::from_fields(vec![
+                    Field::new("Int32", DataType::Int32, false),
+                    Field::new("Utf8", DataType::Utf8, true),
+                ]),
                 UnionMode::Sparse,
             ),
             DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![
-                        Field::new("Int32", DataType::Int32, false),
-                        Field::new("Utf8", DataType::Utf8, true),
-                    ],
-                ),
+                UnionFields::from_fields(vec![
+                    Field::new("Int32", DataType::Int32, false),
+                    Field::new("Utf8", DataType::Utf8, true),
+                ]),
                 UnionMode::Dense,
             ),
             DataType::Union(
-                UnionFields::new(
-                    vec![0, 1],
-                    vec![
-                        Field::new_union(
-                            "nested_union",
-                            vec![0, 1],
-                            vec![
-                                Field::new("Int32", DataType::Int32, false),
-                                Field::new("Utf8", DataType::Utf8, true),
-                            ],
-                            UnionMode::Dense,
-                        ),
-                        Field::new("Utf8", DataType::Utf8, true),
-                    ],
-                ),
+                UnionFields::from_fields(vec![
+                    Field::new_union(
+                        "nested_union",
+                        vec![0, 1],
+                        vec![
+                            Field::new("Int32", DataType::Int32, false),
+                            Field::new("Utf8", DataType::Utf8, true),
+                        ],
+                        UnionMode::Dense,
+                    ),
+                    Field::new("Utf8", DataType::Utf8, true),
+                ]),
                 UnionMode::Sparse,
             ),
             DataType::Union(
-                UnionFields::new(vec![0], vec![Field::new("Int32", DataType::Int32, false)]),
+                UnionFields::from_fields(vec![Field::new("Int32", DataType::Int32, false)]),
                 UnionMode::Dense,
             ),
             DataType::Union(
-                UnionFields::new(Vec::<i8>::new(), Vec::<Field>::new()),
+                UnionFields::try_new(Vec::<i8>::new(), Vec::<Field>::new()).unwrap(),
                 UnionMode::Sparse,
             ),
             DataType::Map(Arc::new(Field::new("Int64", DataType::Int64, true)), true),

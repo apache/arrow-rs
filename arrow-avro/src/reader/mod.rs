@@ -7847,35 +7847,38 @@ mod test {
         let uuid1 = uuid16_from_str("fe7bc30b-4ce8-4c5e-b67c-2234a2d38e66");
         let uuid2 = uuid16_from_str("0826cc06-d2e3-4599-b4ad-af5fa6905cdb");
         let item_name = Field::LIST_FIELD_DEFAULT_NAME;
-        let uf_tri = UnionFields::new(
+        let uf_tri = UnionFields::try_new(
             vec![0, 1, 2],
             vec![
                 Field::new("int", DataType::Int32, false),
                 Field::new("string", DataType::Utf8, false),
                 Field::new("boolean", DataType::Boolean, false),
             ],
-        );
-        let uf_arr_items = UnionFields::new(
+        )
+        .unwrap();
+        let uf_arr_items = UnionFields::try_new(
             vec![0, 1, 2],
             vec![
                 Field::new("null", DataType::Null, false),
                 Field::new("string", DataType::Utf8, false),
                 Field::new("long", DataType::Int64, false),
             ],
-        );
+        )
+        .unwrap();
         let arr_items_field = Arc::new(Field::new(
             item_name,
             DataType::Union(uf_arr_items.clone(), UnionMode::Dense),
             true,
         ));
-        let uf_map_vals = UnionFields::new(
+        let uf_map_vals = UnionFields::try_new(
             vec![0, 1, 2],
             vec![
                 Field::new("string", DataType::Utf8, false),
                 Field::new("double", DataType::Float64, false),
                 Field::new("null", DataType::Null, false),
             ],
-        );
+        )
+        .unwrap();
         let map_entries_field = Arc::new(Field::new(
             "entries",
             DataType::Struct(Fields::from(vec![
@@ -7936,7 +7939,7 @@ mod test {
             );
             m
         };
-        let uf_union_big = UnionFields::new(
+        let uf_union_big = UnionFields::try_new(
             vec![0, 1, 2, 3, 4],
             vec![
                 Field::new(
@@ -7968,7 +7971,8 @@ mod test {
                 )
                 .with_metadata(enum_md_color.clone()),
             ],
-        );
+        )
+        .unwrap();
         let fx4_md = {
             let mut m = HashMap::<String, String>::new();
             m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx4".to_string());
@@ -7978,7 +7982,7 @@ mod test {
             );
             m
         };
-        let uf_date_fixed4 = UnionFields::new(
+        let uf_date_fixed4 = UnionFields::try_new(
             vec![0, 1],
             vec![
                 Field::new(
@@ -7989,7 +7993,8 @@ mod test {
                 .with_metadata(fx4_md.clone()),
                 Field::new("date", DataType::Date32, false),
             ],
-        );
+        )
+        .unwrap();
         let dur12u_md = {
             let mut m = HashMap::<String, String>::new();
             m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Dur12U".to_string());
@@ -7999,7 +8004,7 @@ mod test {
             );
             m
         };
-        let uf_dur_or_str = UnionFields::new(
+        let uf_dur_or_str = UnionFields::try_new(
             vec![0, 1],
             vec![
                 Field::new("string", DataType::Utf8, false),
@@ -8010,7 +8015,8 @@ mod test {
                 )
                 .with_metadata(dur12u_md.clone()),
             ],
-        );
+        )
+        .unwrap();
         let fx10_md = {
             let mut m = HashMap::<String, String>::new();
             m.insert(AVRO_NAME_METADATA_KEY.to_string(), "Fx10".to_string());
@@ -8020,7 +8026,7 @@ mod test {
             );
             m
         };
-        let uf_uuid_or_fx10 = UnionFields::new(
+        let uf_uuid_or_fx10 = UnionFields::try_new(
             vec![0, 1],
             vec![
                 Field::new(
@@ -8031,15 +8037,17 @@ mod test {
                 .with_metadata(fx10_md.clone()),
                 add_uuid_ext_union(Field::new("uuid", DataType::FixedSizeBinary(16), false)),
             ],
-        );
-        let uf_kv_val = UnionFields::new(
+        )
+        .unwrap();
+        let uf_kv_val = UnionFields::try_new(
             vec![0, 1, 2],
             vec![
                 Field::new("null", DataType::Null, false),
                 Field::new("int", DataType::Int32, false),
                 Field::new("long", DataType::Int64, false),
             ],
-        );
+        )
+        .unwrap();
         let kv_fields = Fields::from(vec![
             Field::new("key", DataType::Utf8, false),
             Field::new(
@@ -8061,7 +8069,7 @@ mod test {
             ])),
             false,
         ));
-        let uf_map_or_array = UnionFields::new(
+        let uf_map_or_array = UnionFields::try_new(
             vec![0, 1],
             vec![
                 Field::new(
@@ -8071,7 +8079,8 @@ mod test {
                 ),
                 Field::new("map", DataType::Map(map_int_entries.clone(), false), false),
             ],
-        );
+        )
+        .unwrap();
         let mut enum_md_status = {
             let mut m = HashMap::<String, String>::new();
             m.insert(

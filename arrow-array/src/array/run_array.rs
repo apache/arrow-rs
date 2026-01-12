@@ -30,16 +30,15 @@ use crate::{
     types::{Int16Type, Int32Type, Int64Type, RunEndIndexType},
 };
 
-/// An array of [run-end encoded values](https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout)
+/// An array of [run-end encoded values].
 ///
-/// This encoding is variation on [run-length encoding (RLE)](https://en.wikipedia.org/wiki/Run-length_encoding)
-/// and is good for representing data containing same values repeated consecutively.
+/// This encoding is variation on [run-length encoding (RLE)] and is good for representing
+/// data containing the same values repeated consecutively.
 ///
-/// [`RunArray`] contains `run_ends` array and `values` array of same length.
-/// The `run_ends` array stores the indexes at which the run ends. The `values` array
-/// stores the value of each run. Below example illustrates how a logical array is represented in
-/// [`RunArray`]
-///
+/// A [`RunArray`] consists of a `run_ends` buffer and a `values` array of equivalent
+/// lengths. The `run_ends` buffer stores the indexes at which the run ends. The
+/// `values` array stores the corresponding value of each run. The below example
+/// illustrates how a logical array is represented by a [`RunArray`]:
 ///
 /// ```text
 /// ┌ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─┐
@@ -60,6 +59,9 @@ use crate::{
 ///                                             Logical array
 ///                                                Contents
 /// ```
+///
+/// [run-end encoded values]: https://arrow.apache.org/docs/format/Columnar.html#run-end-encoded-layout
+/// [run-length encoding (RLE)]: https://en.wikipedia.org/wiki/Run-length_encoding
 pub struct RunArray<R: RunEndIndexType> {
     data_type: DataType,
     run_ends: RunEndBuffer<R::Native>,
@@ -77,8 +79,8 @@ impl<R: RunEndIndexType> Clone for RunArray<R> {
 }
 
 impl<R: RunEndIndexType> RunArray<R> {
-    /// Calculates the logical length of the array encoded
-    /// by the given run_ends array.
+    /// Calculates the logical length of the array encoded by treating the `run_ends`
+    /// array as if it were a [`RunEndBuffer`].
     pub fn logical_len(run_ends: &PrimitiveArray<R>) -> usize {
         let len = run_ends.len();
         if len == 0 {
@@ -87,9 +89,13 @@ impl<R: RunEndIndexType> RunArray<R> {
         run_ends.value(len - 1).as_usize()
     }
 
-    /// Attempts to create RunArray using given run_ends (index where a run ends)
-    /// and the values (value of the run). Returns an error if the given data is not compatible
-    /// with RunEndEncoded specification.
+    /// Attempts to create a [`RunArray`] using the given `run_ends` and `values`.
+    ///
+    /// # Errors
+    ///
+    /// - If `run_ends` and `values` have different lengths
+    /// - If `run_ends` has any null values
+    /// - If `run_ends` doesn't consist of strictly increasing positive integers
     pub fn try_new(run_ends: &PrimitiveArray<R>, values: &dyn Array) -> Result<Self, ArrowError> {
         let run_ends_type = run_ends.data_type().clone();
         let values_type = values.data_type().clone();
@@ -117,25 +123,29 @@ impl<R: RunEndIndexType> RunArray<R> {
         Ok(array_data.into())
     }
 
-    /// Returns a reference to [`RunEndBuffer`]
+    /// Returns a reference to the [`RunEndBuffer`].
     pub fn run_ends(&self) -> &RunEndBuffer<R::Native> {
         &self.run_ends
     }
 
-    /// Returns a reference to values array
+    /// Returns a reference to the values array.
     ///
-    /// Note: any slicing of this [`RunArray`] array is not applied to the returned array
-    /// and must be handled separately
+    /// Any slicing of this [`RunArray`] array is **not** applied to the returned
+    /// values here and must be handled separately.
     pub fn values(&self) -> &ArrayRef {
         &self.values
     }
 
     /// Returns the physical index at which the array slice starts.
+    ///
+    /// See [`RunEndBuffer::get_start_physical_index`].
     pub fn get_start_physical_index(&self) -> usize {
         self.run_ends.get_start_physical_index()
     }
 
     /// Returns the physical index at which the array slice ends.
+    ///
+    /// See [`RunEndBuffer::get_end_physical_index`].
     pub fn get_end_physical_index(&self) -> usize {
         self.run_ends.get_end_physical_index()
     }
@@ -152,7 +162,6 @@ impl<R: RunEndIndexType> RunArray<R> {
     /// assert_eq!(typed.value(1), "b");
     /// assert!(typed.values().is_null(2));
     /// ```
-    ///
     pub fn downcast<V: 'static>(&self) -> Option<TypedRunArray<'_, R, V>> {
         let values = self.values.as_any().downcast_ref()?;
         Some(TypedRunArray {
@@ -161,89 +170,37 @@ impl<R: RunEndIndexType> RunArray<R> {
         })
     }
 
-    /// Returns index to the physical array for the given index to the logical array.
-    /// This function adjusts the input logical index based on `ArrayData::offset`
-    /// Performs a binary search on the run_ends array for the input index.
+    /// Calls [`RunEndBuffer::get_physical_index`].
     ///
     /// The result is arbitrary if `logical_index >= self.len()`
     pub fn get_physical_index(&self, logical_index: usize) -> usize {
         self.run_ends.get_physical_index(logical_index)
     }
 
-    /// Returns the physical indices of the input logical indices. Returns error if any of the logical
-    /// index cannot be converted to physical index. The logical indices are sorted and iterated along
-    /// with run_ends array to find matching physical index. The approach used here was chosen over
-    /// finding physical index for each logical index using binary search using the function
-    /// `get_physical_index`. Running benchmarks on both approaches showed that the approach used here
-    /// scaled well for larger inputs.
-    /// See <https://github.com/apache/arrow-rs/pull/3622#issuecomment-1407753727> for more details.
+    /// Returns the physical indices corresponding to the provided logical indices.
+    ///
+    /// See [`RunEndBuffer::get_physical_indices`] for more details.
     #[inline]
     pub fn get_physical_indices<I>(&self, logical_indices: &[I]) -> Result<Vec<usize>, ArrowError>
     where
         I: ArrowNativeType,
     {
-        let len = self.run_ends().len();
-        let offset = self.run_ends().offset();
-
-        let indices_len = logical_indices.len();
-
-        if indices_len == 0 {
-            return Ok(vec![]);
-        }
-
-        // `ordered_indices` store index into `logical_indices` and can be used
-        // to iterate `logical_indices` in sorted order.
-        let mut ordered_indices: Vec<usize> = (0..indices_len).collect();
-
-        // Instead of sorting `logical_indices` directly, sort the `ordered_indices`
-        // whose values are index of `logical_indices`
-        ordered_indices.sort_unstable_by(|lhs, rhs| {
-            logical_indices[*lhs]
-                .partial_cmp(&logical_indices[*rhs])
-                .unwrap()
-        });
-
-        // Return early if all the logical indices cannot be converted to physical indices.
-        let largest_logical_index = logical_indices[*ordered_indices.last().unwrap()].as_usize();
-        if largest_logical_index >= len {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {largest_logical_index}.",
-            )));
-        }
-
-        // Skip some physical indices based on offset.
-        let skip_value = self.get_start_physical_index();
-
-        let mut physical_indices = vec![0; indices_len];
-
-        let mut ordered_index = 0_usize;
-        for (physical_index, run_end) in self.run_ends.values().iter().enumerate().skip(skip_value)
-        {
-            // Get the run end index (relative to offset) of current physical index
-            let run_end_value = run_end.as_usize() - offset;
-
-            // All the `logical_indices` that are less than current run end index
-            // belongs to current physical index.
-            while ordered_index < indices_len
-                && logical_indices[ordered_indices[ordered_index]].as_usize() < run_end_value
-            {
-                physical_indices[ordered_indices[ordered_index]] = physical_index;
-                ordered_index += 1;
-            }
-        }
-
-        // If there are input values >= run_ends.last_value then we'll not be able to convert
-        // all logical indices to physical indices.
-        if ordered_index < logical_indices.len() {
-            let logical_index = logical_indices[ordered_indices[ordered_index]].as_usize();
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "Cannot convert all logical indices to physical indices. The logical index cannot be converted is {logical_index}.",
-            )));
-        }
-        Ok(physical_indices)
+        self.run_ends()
+            .get_physical_indices(logical_indices)
+            .map_err(|index| {
+                ArrowError::InvalidArgumentError(format!(
+                    "Logical index {} is out of bounds for RunArray of length {}",
+                    index.as_usize(),
+                    self.len()
+                ))
+            })
     }
 
     /// Returns a zero-copy slice of this array with the indicated offset and length.
+    ///
+    /// # Panics
+    ///
+    /// - Specified slice (`offset` + `length`) exceeds existing length
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
             data_type: self.data_type.clone(),
@@ -302,6 +259,8 @@ impl<R: RunEndIndexType> From<RunArray<R>> for ArrayData {
         unsafe { builder.build_unchecked() }
     }
 }
+
+impl<T: RunEndIndexType> super::private::Sealed for RunArray<T> {}
 
 impl<T: RunEndIndexType> Array for RunArray<T> {
     fn as_any(&self) -> &dyn Any {
@@ -561,6 +520,8 @@ impl<'a, R: RunEndIndexType, V> TypedRunArray<'a, R, V> {
         self.run_array
     }
 }
+
+impl<R: RunEndIndexType, V: Sync> super::private::Sealed for TypedRunArray<'_, R, V> {}
 
 impl<R: RunEndIndexType, V: Sync> Array for TypedRunArray<'_, R, V> {
     fn as_any(&self) -> &dyn Any {

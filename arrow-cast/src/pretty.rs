@@ -1108,6 +1108,7 @@ mod tests {
             Some(IntervalDayTime::new(0, 1)),
             Some(IntervalDayTime::new(0, 10)),
             Some(IntervalDayTime::new(0, 100)),
+            Some(IntervalDayTime::new(0, 0)),
         ]));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1130,6 +1131,7 @@ mod tests {
             "| 0.001 secs       |",
             "| 0.010 secs       |",
             "| 0.100 secs       |",
+            "| 0 secs           |",
             "+------------------+",
         ];
 
@@ -1154,6 +1156,7 @@ mod tests {
             Some(IntervalMonthDayNano::new(0, 0, 10_000_000)),
             Some(IntervalMonthDayNano::new(0, 0, 100_000_000)),
             Some(IntervalMonthDayNano::new(0, 0, 1_000_000_000)),
+            Some(IntervalMonthDayNano::new(0, 0, 0)),
         ]));
 
         let schema = Arc::new(Schema::new(vec![Field::new(
@@ -1183,6 +1186,7 @@ mod tests {
             "| 0.010000000 secs         |",
             "| 0.100000000 secs         |",
             "| 1.000000000 secs         |",
+            "| 0 secs                   |",
             "+--------------------------+",
         ];
 
@@ -1610,10 +1614,11 @@ mod tests {
             extension::EXTENSION_TYPE_NAME_KEY.to_owned(),
             "my_money".to_owned(),
         )]);
-        let fields = UnionFields::new(
+        let fields = UnionFields::try_new(
             vec![0],
             vec![Field::new("income", DataType::Int32, true).with_metadata(money_metadata.clone())],
-        );
+        )
+        .unwrap();
 
         // Create nested data and construct it with the correct metadata
         let mut array_builder = UnionBuilder::new_dense();

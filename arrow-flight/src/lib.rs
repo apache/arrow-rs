@@ -603,6 +603,12 @@ impl FlightInfo {
         self
     }
 
+    /// Add endpoints for fetching all data
+    pub fn with_endpoints(mut self, endpoints: Vec<FlightEndpoint>) -> Self {
+        self.endpoint = endpoints;
+        self
+    }
+
     /// Add a [`FlightDescriptor`] describing what this data is
     pub fn with_descriptor(mut self, flight_descriptor: FlightDescriptor) -> Self {
         self.flight_descriptor = Some(flight_descriptor);

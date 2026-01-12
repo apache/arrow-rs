@@ -342,6 +342,13 @@ impl Field {
     /// - `type_ids`: the union type ids
     /// - `fields`: the union fields
     /// - `mode`: the union mode
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// - any type ID is negative
+    /// - type IDs contain duplicates
+    /// - the number of type IDs does not equal the number of fields
     pub fn new_union<S, F, T>(name: S, type_ids: T, fields: F, mode: UnionMode) -> Self
     where
         S: Into<String>,
@@ -351,7 +358,10 @@ impl Field {
     {
         Self::new(
             name,
-            DataType::Union(UnionFields::new(type_ids, fields), mode),
+            DataType::Union(
+                UnionFields::try_new(type_ids, fields).expect("Invalid UnionField"),
+                mode,
+            ),
             false, // Unions cannot be nullable
         )
     }
@@ -708,6 +718,8 @@ impl Field {
             DataType::Union(fields, _) => fields.iter().flat_map(|(_, f)| f.fields()).collect(),
             DataType::List(field)
             | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field)
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => field.fields(),
             DataType::Dictionary(_, value_field) => Field::_fields(value_field.as_ref()),
@@ -1373,13 +1385,14 @@ mod test {
         let field1 = Field::new(
             "field1",
             DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![1, 2],
                     vec![
                         Field::new("field1", DataType::UInt8, true),
                         Field::new("field3", DataType::Utf8, false),
                     ],
-                ),
+                )
+                .unwrap(),
                 UnionMode::Dense,
             ),
             true,
@@ -1387,13 +1400,14 @@ mod test {
         let field2 = Field::new(
             "field1",
             DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![1, 3],
                     vec![
                         Field::new("field1", DataType::UInt8, false),
                         Field::new("field3", DataType::Utf8, false),
                     ],
-                ),
+                )
+                .unwrap(),
                 UnionMode::Dense,
             ),
             true,
@@ -1404,13 +1418,14 @@ mod test {
         let field1 = Field::new(
             "field1",
             DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![1, 2],
                     vec![
                         Field::new("field1", DataType::UInt8, true),
                         Field::new("field3", DataType::Utf8, false),
                     ],
-                ),
+                )
+                .unwrap(),
                 UnionMode::Dense,
             ),
             true,
@@ -1418,13 +1433,14 @@ mod test {
         let field2 = Field::new(
             "field1",
             DataType::Union(
-                UnionFields::new(
+                UnionFields::try_new(
                     vec![1, 2],
                     vec![
                         Field::new("field1", DataType::UInt8, false),
                         Field::new("field3", DataType::Utf8, false),
                     ],
-                ),
+                )
+                .unwrap(),
                 UnionMode::Dense,
             ),
             true,
@@ -1434,10 +1450,8 @@ mod test {
 
     #[cfg(feature = "serde")]
     fn assert_binary_serde_round_trip(field: Field) {
-        let config = bincode::config::legacy();
-        let serialized = bincode::serde::encode_to_vec(&field, config).unwrap();
-        let (deserialized, _): (Field, _) =
-            bincode::serde::decode_from_slice(&serialized, config).unwrap();
+        let serialized = postcard::to_stdvec(&field).unwrap();
+        let deserialized: Field = postcard::from_bytes(&serialized).unwrap();
         assert_eq!(field, deserialized)
     }
 
