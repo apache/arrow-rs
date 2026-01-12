@@ -221,11 +221,12 @@ impl<'a> Iterator for MergeIter<'a> {
         if self.number_of_bits_remaining == 0 {
             return None;
         }
-        self.number_of_bits_remaining -= 1;
 
         if self.bit_index > 63 {
             self.advance_to_next_iter();
         }
+
+        self.number_of_bits_remaining -= 1;
 
         let item = fetch_and_shift(self.current, self.bit_index, &mut self.scratch);
 

@@ -4411,7 +4411,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
-        #[derive(Debug)]
+        #[derive(Debug, PartialEq)]
         enum Nulls {
             /// Keep the generated array as is
             HaveNulls,

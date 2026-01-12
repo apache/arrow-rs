@@ -153,6 +153,11 @@ impl FixedLengthEncoding for f16 {
         val.encode()
     }
 
+    fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+        let value = if is_valid { self } else { f16::ZERO };
+        value.encode()
+    }
+
     fn decode(encoded: Self::Encoded) -> Self {
         let bits = i16::decode(encoded);
         let val = bits ^ (((bits >> 15) as u16) >> 1) as i16;
@@ -170,6 +175,11 @@ impl FixedLengthEncoding for f32 {
         val.encode()
     }
 
+    fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+        let value = if is_valid { self } else { 0.0 };
+        value.encode()
+    }
+
     fn decode(encoded: Self::Encoded) -> Self {
         let bits = i32::decode(encoded);
         let val = bits ^ (((bits >> 31) as u32) >> 1) as i32;
@@ -185,6 +195,10 @@ impl FixedLengthEncoding for f64 {
         let s = self.to_bits() as i64;
         let val = s ^ (((s >> 63) as u64) >> 1) as i64;
         val.encode()
+    }
+    fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+        let value = if is_valid { self } else { 0.0 };
+        value.encode()
     }
 
     fn decode(encoded: Self::Encoded) -> Self {
@@ -204,6 +218,11 @@ impl FixedLengthEncoding for IntervalDayTime {
         out
     }
 
+    fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+        let value = if is_valid { self } else { Self::ZERO };
+        value.encode()
+    }
+
     fn decode(encoded: Self::Encoded) -> Self {
         Self {
             days: i32::decode(encoded[..4].try_into().unwrap()),
@@ -221,6 +240,10 @@ impl FixedLengthEncoding for IntervalMonthDayNano {
         out[4..8].copy_from_slice(&self.days.encode());
         out[8..].copy_from_slice(&self.nanoseconds.encode());
         out
+    }
+    fn encode_with_null(self, is_valid: bool) -> Self::Encoded {
+        let value = if is_valid { self } else { Self::ZERO };
+        value.encode()
     }
 
     fn decode(encoded: Self::Encoded) -> Self {
