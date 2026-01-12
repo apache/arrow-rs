@@ -6,14 +6,14 @@ use std::io::SeekFrom;
 use std::ops::Range;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
-/// The asynchronous interface used by [`AsyncAvroFileReader`] to read parquet files
+/// The asynchronous interface used by [`AsyncAvroFileReader`] to read avro files
 ///
 /// Notes:
 ///
 /// 1. There is a default implementation for types that implement [`AsyncRead`]
 ///    and [`AsyncSeek`], for example [`tokio::fs::File`].
 ///
-/// 2. [`ParquetObjectReader`], available when the `object_store` crate feature
+/// 2. [`AvroObjectReader`], available when the `object_store` crate feature
 ///    is enabled, implements this interface for [`ObjectStore`].
 ///
 /// [`ObjectStore`]: object_store::ObjectStore
