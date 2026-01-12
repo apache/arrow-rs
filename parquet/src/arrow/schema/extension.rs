@@ -172,7 +172,7 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary(_field: &Field) -> Option<LogicalType> {
     None
 }
 
@@ -182,6 +182,6 @@ pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType>
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary_view(_field: &Field) -> Option<LogicalType> {
     None
 }

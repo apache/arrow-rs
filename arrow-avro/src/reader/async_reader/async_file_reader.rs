@@ -1,18 +1,78 @@
-use crate::reader::async_reader::DataFetchFutureBoxed;
+use arrow_schema::ArrowError;
+use bytes::Bytes;
+use futures::FutureExt;
+use futures::future::BoxFuture;
+use std::io::SeekFrom;
 use std::ops::Range;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeek, AsyncSeekExt};
 
-/// A broad generic trait definition allowing fetching bytes from any source asynchronously.
-/// This trait has very few limitations, mostly in regard to ownership and lifetime,
-/// but it must return a boxed Future containing [`bytes::Bytes`] or an error.
-pub trait AsyncFileReader: Send + Unpin {
-    /// Fetch a range of bytes asynchronously using a custom reading method
-    fn fetch_range(&mut self, range: Range<u64>) -> DataFetchFutureBoxed;
+/// The asynchronous interface used by [`AsyncAvroFileReader`] to read parquet files
+///
+/// Notes:
+///
+/// 1. There is a default implementation for types that implement [`AsyncRead`]
+///    and [`AsyncSeek`], for example [`tokio::fs::File`].
+///
+/// 2. [`ParquetObjectReader`], available when the `object_store` crate feature
+///    is enabled, implements this interface for [`ObjectStore`].
+///
+/// [`ObjectStore`]: object_store::ObjectStore
+///
+/// [`tokio::fs::File`]: https://docs.rs/tokio/latest/tokio/fs/struct.File.html
+pub trait AsyncFileReader: Send {
+    /// Retrieve the bytes in `range`
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>>;
 
-    /// Fetch a range that is beyond the originally provided file range,
-    /// such as reading the header before reading the file,
-    /// or fetching the remainder of the block in case the range ended before the block's end.
-    /// By default, this will simply point to the fetch_range function.
-    fn fetch_extra_range(&mut self, range: Range<u64>) -> DataFetchFutureBoxed {
-        self.fetch_range(range)
+    /// Retrieve multiple byte ranges. The default implementation will call `get_bytes` sequentially
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, Result<Vec<Bytes>, ArrowError>> {
+        async move {
+            let mut result = Vec::with_capacity(ranges.len());
+
+            for range in ranges.into_iter() {
+                let data = self.get_bytes(range).await?;
+                result.push(data);
+            }
+
+            Ok(result)
+        }
+        .boxed()
+    }
+}
+
+/// This allows Box<dyn AsyncFileReader + '_> to be used as an AsyncFileReader,
+impl AsyncFileReader for Box<dyn AsyncFileReader + '_> {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>> {
+        self.as_mut().get_bytes(range)
+    }
+
+    fn get_byte_ranges(
+        &mut self,
+        ranges: Vec<Range<u64>>,
+    ) -> BoxFuture<'_, Result<Vec<Bytes>, ArrowError>> {
+        self.as_mut().get_byte_ranges(ranges)
+    }
+}
+
+impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
+    fn get_bytes(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ArrowError>> {
+        async move {
+            self.seek(SeekFrom::Start(range.start)).await?;
+
+            let to_read = range.end - range.start;
+            let mut buffer = Vec::with_capacity(to_read as usize);
+            let read = self.take(to_read).read_to_end(&mut buffer).await?;
+            if read as u64 != to_read {
+                return Err(ArrowError::AvroError(format!(
+                    "expected to read {} bytes, got {}",
+                    to_read, read
+                )));
+            }
+
+            Ok(buffer.into())
+        }
+        .boxed()
     }
 }

@@ -2,23 +2,36 @@ use crate::codec::AvroFieldBuilder;
 use crate::reader::async_reader::ReaderState;
 use crate::reader::header::{Header, HeaderDecoder};
 use crate::reader::record::RecordDecoder;
-use crate::reader::{AsyncAvroReader, AsyncFileReader, Decoder};
+use crate::reader::{AsyncAvroFileReader, AsyncFileReader, Decoder};
 use crate::schema::{AvroSchema, FingerprintAlgorithm};
-use arrow_schema::{ArrowError, SchemaRef};
+use arrow_schema::ArrowError;
 use indexmap::IndexMap;
 use std::ops::Range;
 
+const DEFAULT_HEADER_SIZE_HINT: u64 = 64 * 1024; // 64 KB
+
 /// Builder for an asynchronous Avro file reader.
-pub struct AsyncAvroReaderBuilder<R: AsyncFileReader> {
-    pub(super) reader: R,
-    pub(super) file_size: u64,
-    pub(super) schema: SchemaRef,
-    pub(super) batch_size: usize,
-    pub(super) range: Option<Range<u64>>,
-    pub(super) reader_schema: Option<AvroSchema>,
+pub struct AsyncAvroFileReaderBuilder<R: AsyncFileReader> {
+    reader: R,
+    file_size: u64,
+    batch_size: usize,
+    range: Option<Range<u64>>,
+    reader_schema: Option<AvroSchema>,
+    header_size_hint: Option<u64>,
 }
 
-impl<R: AsyncFileReader> AsyncAvroReaderBuilder<R> {
+impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
+    pub(super) fn new(reader: R, file_size: u64, batch_size: usize) -> Self {
+        Self {
+            reader,
+            file_size,
+            batch_size,
+            range: None,
+            reader_schema: None,
+            header_size_hint: None,
+        }
+    }
+
     /// Specify a byte range to read from the Avro file.
     /// If this is provided, the reader will read all the blocks within the specified range,
     /// if the range ends mid-block, it will attempt to fetch the remaining bytes to complete the block,
@@ -41,20 +54,27 @@ impl<R: AsyncFileReader> AsyncAvroReaderBuilder<R> {
         }
     }
 
+    /// Provide a hint for the expected size of the Avro header in bytes.
+    /// This can help optimize the initial read operation when fetching the header.
+    pub fn with_header_size_hint(self, hint: u64) -> Self {
+        Self {
+            header_size_hint: Some(hint),
+            ..self
+        }
+    }
+
     async fn read_header(&mut self) -> Result<(Header, u64), ArrowError> {
         let mut decoder = HeaderDecoder::default();
         let mut position = 0;
         loop {
-            let range_to_fetch = position..(position + 64 * 1024).min(self.file_size);
-            let current_data = self
-                .reader
-                .fetch_extra_range(range_to_fetch)
-                .await
-                .map_err(|err| {
-                    ArrowError::AvroError(format!(
-                        "Error fetching Avro header from object store: {err}"
-                    ))
-                })?;
+            let range_to_fetch = position
+                ..(position + self.header_size_hint.unwrap_or(DEFAULT_HEADER_SIZE_HINT))
+                    .min(self.file_size);
+            let current_data = self.reader.get_bytes(range_to_fetch).await.map_err(|err| {
+                ArrowError::AvroError(format!(
+                    "Error fetching Avro header from object store: {err}"
+                ))
+            })?;
             if current_data.is_empty() {
                 break;
             }
@@ -75,7 +95,7 @@ impl<R: AsyncFileReader> AsyncAvroReaderBuilder<R> {
 
     /// Build the asynchronous Avro reader with the provided parameters.
     /// This reads the header first to initialize the reader state.
-    pub async fn try_build(mut self) -> Result<AsyncAvroReader<R>, ArrowError> {
+    pub async fn try_build(mut self) -> Result<AsyncAvroFileReader<R>, ArrowError> {
         if self.file_size == 0 {
             return Err(ArrowError::AvroError("File size cannot be 0".into()));
         }
@@ -91,18 +111,11 @@ impl<R: AsyncFileReader> AsyncAvroReaderBuilder<R> {
 
         let root = {
             let field_builder = AvroFieldBuilder::new(&writer_schema);
-            match self.reader_schema.as_ref() {
-                None => {
-                    let devised_avro_schema = AvroSchema::try_from(self.schema.as_ref())?;
-                    let devised_reader_schema = devised_avro_schema.schema()?;
-                    field_builder
-                        .with_reader_schema(&devised_reader_schema)
-                        .build()
-                }
-                Some(provided_schema) => {
-                    let reader_schema = provided_schema.schema()?;
-                    field_builder.with_reader_schema(&reader_schema).build()
-                }
+            if let Some(provided_schema) = self.reader_schema.as_ref() {
+                let reader_schema = provided_schema.schema()?;
+                field_builder.with_reader_schema(&reader_schema).build()
+            } else {
+                field_builder.build()
             }
         }?;
 
@@ -131,13 +144,14 @@ impl<R: AsyncFileReader> AsyncAvroReaderBuilder<R> {
         let reader_state = if range.start == range.end {
             ReaderState::Finished
         } else {
-            ReaderState::Idle
+            ReaderState::Idle {
+                reader: self.reader,
+            }
         };
         let codec = header.compression()?;
         let sync_marker = header.sync();
 
-        Ok(AsyncAvroReader::new(
-            self.reader,
+        Ok(AsyncAvroFileReader::new(
             range,
             self.file_size,
             decoder,
