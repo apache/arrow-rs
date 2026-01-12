@@ -918,7 +918,8 @@ impl Date32Type {
     ///
     /// Returns `Some(NaiveDate)` if it fits, `None` otherwise.
     pub fn to_naive_date_opt(i: <Date32Type as ArrowPrimitiveType>::Native) -> Option<NaiveDate> {
-        NaiveDate::from_epoch_days(i)
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        Duration::try_days(i as i64).and_then(|d| epoch.checked_add_signed(d))
     }
 
     /// Converts a chrono::NaiveDate into an arrow Date32Type
@@ -927,7 +928,8 @@ impl Date32Type {
     ///
     /// * `d` - The NaiveDate to convert
     pub fn from_naive_date(d: NaiveDate) -> <Date32Type as ArrowPrimitiveType>::Native {
-        d.to_epoch_days()
+        let epoch = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+        d.sub(epoch).num_days() as <Date32Type as ArrowPrimitiveType>::Native
     }
 
     /// Adds the given IntervalYearMonthType to an arrow Date32Type
