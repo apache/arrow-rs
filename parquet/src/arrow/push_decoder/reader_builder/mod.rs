@@ -590,6 +590,8 @@ impl RowGroupReaderBuilder {
                     )
                 }) {
                     self.row_group_offset_index(row_group_idx)
+                        .and_then(|columns| columns.first())
+                        .map(|column| column.page_locations())
                 } else {
                     None
                 };
@@ -609,7 +611,8 @@ impl RowGroupReaderBuilder {
                         .build_array_reader(self.fields.as_deref(), &self.projection)
                 }?;
 
-                let reader = ParquetRecordBatchReader::new(array_reader, plan, page_offsets);
+                let reader =
+                    ParquetRecordBatchReader::new(array_reader, plan, page_offsets.cloned());
                 NextState::result(RowGroupDecoderState::Finished, DecodeResult::Data(reader))
             }
             RowGroupDecoderState::Finished => {

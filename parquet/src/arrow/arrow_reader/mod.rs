@@ -44,7 +44,7 @@ use crate::file::metadata::{
     PageIndexPolicy, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataReader,
     ParquetStatisticsPolicy, RowGroupMetaData,
 };
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
+use crate::file::page_index::offset_index::PageLocation;
 use crate::file::reader::{ChunkReader, SerializedPageReader};
 use crate::schema::types::SchemaDescriptor;
 
@@ -1186,7 +1186,7 @@ pub struct ParquetRecordBatchReader {
     array_reader: Box<dyn ArrayReader>,
     schema: SchemaRef,
     read_plan: ReadPlan,
-    page_offsets: Option<Arc<Vec<OffsetIndexMetaData>>>,
+    page_offsets: Option<Vec<PageLocation>>,
 }
 
 impl Debug for ParquetRecordBatchReader {
@@ -1225,10 +1225,7 @@ impl ParquetRecordBatchReader {
             RowSelectionCursor::Mask(mask_cursor) => {
                 // Stream the record batch reader using contiguous segments of the selection
                 // mask, avoiding the need to materialize intermediate `RowSelector` ranges.
-                let page_locations = self.page_offsets.as_ref().map(|columns| {
-                    // Use only the first column as the global guide
-                    &columns[0].page_locations()[..]
-                });
+                let page_locations = self.page_offsets.as_deref();
 
                 while !mask_cursor.is_empty() {
                     let Some(mask_chunk) = mask_cursor.next_mask_chunk(batch_size, page_locations)
@@ -1409,7 +1406,7 @@ impl ParquetRecordBatchReader {
     pub(crate) fn new(
         array_reader: Box<dyn ArrayReader>,
         read_plan: ReadPlan,
-        page_offsets: Option<&[OffsetIndexMetaData]>,
+        page_offsets: Option<Vec<PageLocation>>,
     ) -> Self {
         let schema = match array_reader.get_data_type() {
             ArrowType::Struct(fields) => Schema::new(fields.clone()),
@@ -1420,7 +1417,7 @@ impl ParquetRecordBatchReader {
             array_reader,
             schema: Arc::new(schema),
             read_plan,
-            page_offsets: page_offsets.map(|slice| Arc::new(slice.to_vec())),
+            page_offsets: page_offsets,
         }
     }
 
