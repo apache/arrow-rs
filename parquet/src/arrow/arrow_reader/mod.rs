@@ -2320,22 +2320,21 @@ pub(crate) mod tests {
                 encodings,
             );
 
-            // https://github.com/apache/arrow-rs/issues/1179
-            // let data_type = ArrowDataType::Dictionary(
-            //     Box::new(key.clone()),
-            //     Box::new(ArrowDataType::LargeUtf8),
-            // );
-            //
-            // run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
-            //     2,
-            //     ConvertedType::UTF8,
-            //     Some(data_type.clone()),
-            //     move |vals| {
-            //         let vals = string_converter::<i64>(vals);
-            //         arrow::compute::cast(&vals, &data_type).unwrap()
-            //     },
-            //     encodings,
-            // );
+            let data_type = ArrowDataType::Dictionary(
+                Box::new(key.clone()),
+                Box::new(ArrowDataType::LargeUtf8),
+            );
+
+            run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
+                2,
+                ConvertedType::UTF8,
+                Some(data_type.clone()),
+                move |vals| {
+                    let vals = string_converter::<i64>(vals);
+                    arrow::compute::cast(&vals, &data_type).unwrap()
+                },
+                encodings,
+            );
         }
     }
 
