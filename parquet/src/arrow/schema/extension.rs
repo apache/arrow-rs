@@ -35,7 +35,7 @@ use arrow_schema::Field;
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
 pub(crate) fn try_add_extension_type(
-    #[cfg_attr(all(not(feature = "variant_experimental"), not(feature = "arrow_canonical_extension_types")), allow(unused_mut))]
+    #[cfg_attr(all(not(feature = "variant_experimental"), not(feature = "arrow_canonical_extension_types"), not(feature = "geospatial")), allow(unused_mut))]
     mut arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
