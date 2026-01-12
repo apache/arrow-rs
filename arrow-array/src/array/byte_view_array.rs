@@ -967,15 +967,16 @@ impl<'a, T: ByteViewType + ?Sized> IntoIterator for &'a GenericByteViewArray<T> 
 }
 
 impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
-    fn from(value: ArrayData) -> Self {
-        let views = value.buffers()[0].clone();
-        let views = ScalarBuffer::new(views, value.offset(), value.len());
-        let buffers = value.buffers()[1..].to_vec().into();
+    fn from(data: ArrayData) -> Self {
+        let (_data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
+        let views = buffers.remove(0); // need to maintain order of remaining buffers
+        let buffers = Arc::from(buffers);
+        let views = ScalarBuffer::new(views, offset, len);
         Self {
             data_type: T::DATA_TYPE,
             views,
             buffers,
-            nulls: value.nulls().cloned(),
+            nulls,
             phantom: Default::default(),
         }
     }
