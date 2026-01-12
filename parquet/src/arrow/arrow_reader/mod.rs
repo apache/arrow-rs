@@ -1417,7 +1417,7 @@ impl ParquetRecordBatchReader {
             array_reader,
             schema: Arc::new(schema),
             read_plan,
-            page_offsets: page_offsets,
+            page_offsets,
         }
     }
 
