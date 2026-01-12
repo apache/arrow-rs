@@ -133,8 +133,14 @@ struct MergeIter<'a> {
 
 impl<'a> MergeIter<'a> {
     fn new(nulls: &'a [Option<&'a NullBuffer>], len: usize) -> Self {
+        Self::new_with_offset_all_valid(nulls, len, 0)
+    }
+
+
+    /// Having offset and not getting a vector to make it simpler with the lifetimes
+    fn new_with_offset_all_valid(nulls: &'a [Option<&'a NullBuffer>], len: usize, offset: usize) -> Self {
         assert!(
-            nulls.len() <= 8,
+            nulls.len() + offset <= 8,
             "MergeIter only supports up to 8 null buffers"
         );
         assert_ne!(nulls.len(), 0, "Must have columns nulls to encode");
@@ -145,36 +151,39 @@ impl<'a> MergeIter<'a> {
         );
 
         let normalized_iterators = nulls
-            .iter()
-            .map(|n| match n {
-                None => None,
-                Some(null_buffer) => Some(null_buffer.inner().bit_chunks()),
-            })
-            .map(|n| {
-                n.map(|bit_chunks| {
-                    bit_chunks
-                        .iter()
-                        .chain(std::iter::once(bit_chunks.remainder_bits()))
-                })
-            })
-            .collect::<Vec<_>>();
+          .iter()
+          .map(|n| match n {
+              None => None,
+              Some(null_buffer) => Some(null_buffer.inner().bit_chunks()),
+          })
+          .map(|n| {
+              n.map(|bit_chunks| {
+                  bit_chunks
+                    .iter()
+                    .chain(std::iter::once(bit_chunks.remainder_bits()))
+              })
+          })
+          .collect::<Vec<_>>();
 
         let mut inner = [const { None }; 8];
         for (i, it) in normalized_iterators.into_iter().enumerate() {
-            inner[i] = it;
+            inner[i + offset] = it;
         }
 
         let mut current = {
             let mut current = [0; 8];
-            inner.iter_mut().zip(current.iter_mut()).for_each(|(inner, current)| {
-                *current = match inner {
-                    None => u64::MAX,
-                    Some(it) => {
-                        // We already asserted that length cannot be 0
-                        it.next().unwrap()
-                    }
-                }
-            });
+            inner
+              .iter_mut()
+              .zip(current.iter_mut())
+              .for_each(|(inner, current)| {
+                  *current = match inner {
+                      None => u64::MAX,
+                      Some(it) => {
+                          // We already asserted that length cannot be 0
+                          it.next().unwrap()
+                      }
+                  }
+              });
 
             current
         };
