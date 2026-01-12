@@ -806,29 +806,25 @@ impl MaskCursor {
             let mut chunk_rows = 0;
             let mut selected_rows = 0;
 
+            let max_chunk_rows = page_locations
+                .and_then(|pages| {
+                    let next_idx =
+                        pages.partition_point(|loc| loc.first_row_index as usize <= mask_start);
+                    pages.get(next_idx).and_then(|loc| {
+                        let page_start = loc.first_row_index as usize;
+                        (page_start > mask_start).then_some(page_start - mask_start)
+                    })
+                })
+                .unwrap_or(usize::MAX);
+
             // Advance until enough rows have been selected to satisfy batch_size,
-            // or until the mask is exhausted.
-            while cursor < mask.len() && selected_rows < batch_size {
+            // or until the mask is exhausted or until a page boundary.
+            while cursor < mask.len() && selected_rows < batch_size && chunk_rows < max_chunk_rows {
                 // Increment counters
                 chunk_rows += 1;
                 if mask.value(cursor) {
                     selected_rows += 1;
                 }
-
-                // If page boundaries are provided, clip the chunk at the first boundary
-                if let Some(pages) = page_locations {
-                    for loc in pages {
-                        // Convert first_row_index safely to usize
-                        let page_start = loc.first_row_index.try_into().unwrap_or(usize::MAX);
-                        if page_start > mask_start && page_start < mask_start + chunk_rows {
-                            // shrink chunk_rows to page boundary
-                            chunk_rows = page_start - mask_start;
-                            // stop checking further pages
-                            break;
-                        }
-                    }
-                }
-
                 cursor += 1;
             }
 
