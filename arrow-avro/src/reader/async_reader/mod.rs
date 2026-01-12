@@ -330,6 +330,7 @@ impl<R: AsyncFileReader + Unpin + 'static> Stream for AsyncAvroFileReader<R> {
 mod tests {
     use super::*;
     use crate::schema::{AvroSchema, SCHEMA_METADATA_KEY};
+    use arrow_array::cast::AsArray;
     use arrow_array::*;
     use arrow_schema::{DataType, Field, Schema, SchemaRef, TimeUnit};
     use futures::{StreamExt, TryStreamExt};
@@ -1028,5 +1029,129 @@ mod tests {
 
         // Should clamp to file size
         assert_eq!(batch.num_rows(), 8);
+    }
+
+    #[tokio::test]
+    async fn test_roundtrip_write_then_async_read() {
+        use crate::writer::AvroWriter;
+        use arrow_array::{Float64Array, StringArray};
+        use std::fs::File;
+        use std::io::BufWriter;
+        use tempfile::tempdir;
+
+        // Schema with nullable and non-nullable fields of various types
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("name", DataType::Utf8, true),
+            Field::new("score", DataType::Float64, true),
+            Field::new("count", DataType::Int64, false),
+        ]));
+
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("roundtrip_test.avro");
+
+        // Write multiple batches with nulls
+        {
+            let file = File::create(&file_path).unwrap();
+            let writer = BufWriter::new(file);
+            let mut avro_writer = AvroWriter::new(writer, schema.as_ref().clone()).unwrap();
+
+            // First batch: 3 rows with some nulls
+            let batch1 = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![1, 2, 3])),
+                    Arc::new(StringArray::from(vec![
+                        Some("alice"),
+                        None,
+                        Some("charlie"),
+                    ])),
+                    Arc::new(Float64Array::from(vec![Some(95.5), Some(87.3), None])),
+                    Arc::new(Int64Array::from(vec![10, 20, 30])),
+                ],
+            )
+            .unwrap();
+            avro_writer.write(&batch1).unwrap();
+
+            // Second batch: 2 rows
+            let batch2 = RecordBatch::try_new(
+                schema.clone(),
+                vec![
+                    Arc::new(Int32Array::from(vec![4, 5])),
+                    Arc::new(StringArray::from(vec![Some("diana"), Some("eve")])),
+                    Arc::new(Float64Array::from(vec![None, Some(88.0)])),
+                    Arc::new(Int64Array::from(vec![40, 50])),
+                ],
+            )
+            .unwrap();
+            avro_writer.write(&batch2).unwrap();
+
+            avro_writer.finish().unwrap();
+        }
+
+        // Read back with small batch size to produce multiple output batches
+        let store: Arc<dyn ObjectStore> = Arc::new(LocalFileSystem::new());
+        let location = Path::from_filesystem_path(&file_path).unwrap();
+        let file_size = store.head(&location).await.unwrap().size;
+
+        let file_reader = AvroObjectReader::new(store, location);
+        let reader = AsyncAvroFileReader::builder(file_reader, file_size, 2)
+            .try_build()
+            .await
+            .unwrap();
+
+        let batches: Vec<RecordBatch> = reader.try_collect().await.unwrap();
+
+        // Verify we got multiple output batches due to small batch_size
+        assert!(
+            batches.len() > 1,
+            "Expected multiple batches with batch_size=2"
+        );
+
+        // Verify total row count
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+        assert_eq!(total_rows, 5);
+
+        // Concatenate all batches to verify data
+        let combined = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+        assert_eq!(combined.num_rows(), 5);
+        assert_eq!(combined.num_columns(), 4);
+
+        // Check id column (non-nullable)
+        let id_array = combined
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap();
+        assert_eq!(id_array.values(), &[1, 2, 3, 4, 5]);
+
+        // Check name column (nullable) - verify nulls are preserved
+        // Avro strings are read as Binary by default
+        let name_col = combined.column(1);
+        let name_array = name_col.as_string::<i32>();
+        assert_eq!(name_array.value(0), "alice");
+        assert!(name_col.is_null(1)); // second row has null name
+        assert_eq!(name_array.value(2), "charlie");
+
+        // Check score column (nullable) - verify nulls are preserved
+        let score_array = combined
+            .column(2)
+            .as_any()
+            .downcast_ref::<Float64Array>()
+            .unwrap();
+        assert!(!score_array.is_null(0));
+        assert!((score_array.value(0) - 95.5).abs() < f64::EPSILON);
+        assert!(score_array.is_null(2)); // third row has null score
+        assert!(score_array.is_null(3)); // fourth row has null score
+        assert!(!score_array.is_null(4));
+        assert!((score_array.value(4) - 88.0).abs() < f64::EPSILON);
+
+        // Check count column (non-nullable)
+        let count_array = combined
+            .column(3)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(count_array.values(), &[10, 20, 30, 40, 50]);
     }
 }
