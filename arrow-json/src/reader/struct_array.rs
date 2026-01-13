@@ -23,6 +23,51 @@ use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Fields};
 use std::collections::HashMap;
 
+/// Reusable buffer for tape positions, indexed by (field_idx, row_idx).
+/// A value of 0 indicates the field is absent for that row.
+struct FieldTapePositions {
+    data: Vec<u32>,
+    row_count: usize,
+}
+
+impl FieldTapePositions {
+    fn new() -> Self {
+        Self {
+            data: Vec::new(),
+            row_count: 0,
+        }
+    }
+
+    fn resize(&mut self, field_count: usize, row_count: usize) -> Result<(), ArrowError> {
+        let total_len = field_count.checked_mul(row_count).ok_or_else(|| {
+            ArrowError::JsonError(format!(
+                "FieldTapePositions buffer size overflow for rows={row_count} fields={field_count}"
+            ))
+        })?;
+        self.data.clear();
+        self.data.resize(total_len, 0);
+        self.row_count = row_count;
+        Ok(())
+    }
+
+    fn try_set(&mut self, field_idx: usize, row_idx: usize, pos: u32) -> Option<()> {
+        let idx = field_idx
+            .checked_mul(self.row_count)?
+            .checked_add(row_idx)?;
+        *self.data.get_mut(idx)? = pos;
+        Some(())
+    }
+
+    fn set(&mut self, field_idx: usize, row_idx: usize, pos: u32) {
+        self.data[field_idx * self.row_count + row_idx] = pos;
+    }
+
+    fn field_positions(&self, field_idx: usize) -> &[u32] {
+        let start = field_idx * self.row_count;
+        &self.data[start..start + self.row_count]
+    }
+}
+
 pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
@@ -30,9 +75,7 @@ pub struct StructArrayDecoder {
     is_nullable: bool,
     struct_mode: StructMode,
     field_name_to_index: Option<HashMap<String, usize>>,
-    /// Reusable buffer of tape positions indexed as `[field_idx * row_count + row_idx]`.
-    /// A value of 0 indicates the field is absent for that row.
-    field_tape_positions: Vec<u32>,
+    field_tape_positions: FieldTapePositions,
 }
 
 impl StructArrayDecoder {
@@ -76,7 +119,7 @@ impl StructArrayDecoder {
             is_nullable,
             struct_mode,
             field_name_to_index,
-            field_tape_positions: Vec::new(),
+            field_tape_positions: FieldTapePositions::new(),
         })
     }
 }
@@ -86,19 +129,12 @@ impl ArrayDecoder for StructArrayDecoder {
         let fields = struct_fields(&self.data_type);
         let row_count = pos.len();
         let field_count = fields.len();
-        let total_len = field_count.checked_mul(row_count).ok_or_else(|| {
-            ArrowError::JsonError(format!(
-                "StructArrayDecoder child position buffer size overflow for rows={row_count} fields={field_count}"
-            ))
-        })?;
-        self.field_tape_positions.clear();
-        self.field_tape_positions.resize(total_len, 0);
+        self.field_tape_positions.resize(field_count, row_count)?;
         let mut nulls = self
             .is_nullable
             .then(|| BooleanBufferBuilder::new(pos.len()));
 
         {
-            let child_pos = self.field_tape_positions.as_mut_slice();
             // We avoid having the match on self.struct_mode inside the hot loop for performance
             // TODO: Investigate how to extract duplicated logic.
             match self.struct_mode {
@@ -132,7 +168,7 @@ impl ArrayDecoder for StructArrayDecoder {
                             };
                             match field_idx {
                                 Some(field_idx) => {
-                                    child_pos[field_idx * row_count + row] = cur_idx + 1;
+                                    self.field_tape_positions.set(field_idx, row, cur_idx + 1);
                                 }
                                 None => {
                                     if self.strict_mode {
@@ -165,13 +201,14 @@ impl ArrayDecoder for StructArrayDecoder {
                         let mut cur_idx = *p + 1;
                         let mut entry_idx = 0;
                         while cur_idx < end_idx {
-                            if entry_idx >= fields.len() {
-                                return Err(ArrowError::JsonError(format!(
-                                    "found extra columns for {} fields",
-                                    fields.len()
-                                )));
-                            }
-                            child_pos[entry_idx * row_count + row] = cur_idx;
+                            self.field_tape_positions
+                                .try_set(entry_idx, row, cur_idx)
+                                .ok_or_else(|| {
+                                    ArrowError::JsonError(format!(
+                                        "found extra columns for {} fields",
+                                        fields.len()
+                                    ))
+                                })?;
                             entry_idx += 1;
                             // Advance to next field
                             cur_idx = tape.next(cur_idx, "field value")?;
@@ -188,16 +225,13 @@ impl ArrayDecoder for StructArrayDecoder {
             }
         }
 
-        let child_pos = self.field_tape_positions.as_slice();
         let child_data = self
             .decoders
             .iter_mut()
             .enumerate()
             .zip(fields)
             .map(|((field_idx, d), f)| {
-                let start = field_idx * row_count;
-                let end = start + row_count;
-                let pos = &child_pos[start..end];
+                let pos = self.field_tape_positions.field_positions(field_idx);
                 d.decode(tape, pos).map_err(|e| match e {
                     ArrowError::JsonError(s) => {
                         ArrowError::JsonError(format!("whilst decoding field '{}': {s}", f.name()))
@@ -243,6 +277,7 @@ fn struct_fields(data_type: &DataType) -> &Fields {
 }
 
 fn build_field_index(fields: &Fields) -> Option<HashMap<String, usize>> {
+    // Heuristic threshold: for small field counts, linear scan avoids HashMap overhead.
     const FIELD_INDEX_LINEAR_THRESHOLD: usize = 16;
     if fields.len() < FIELD_INDEX_LINEAR_THRESHOLD {
         return None;
