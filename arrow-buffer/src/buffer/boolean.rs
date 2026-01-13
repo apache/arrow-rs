@@ -373,108 +373,11 @@ impl BooleanBuffer {
             return start;
         }
 
-        let mut remaining = n;
-
-        // Get the underlying buffer and interpret as u64 chunks for fast iteration
-        let inner = self.inner();
-        let (prefix, chunks, suffix) = unsafe { inner.as_slice().align_to::<u64>() };
-
-        // Handle prefix bytes (before alignment)
-        let prefix_bits = prefix.len() * 8;
-        if start < prefix_bits {
-            for (byte_idx, &byte) in prefix.iter().enumerate().skip(start / 8) {
-                let masked_byte = if byte_idx == start / 8 {
-                    byte & (!0u8 << (start % 8))
-                } else {
-                    byte
-                };
-                let ones = masked_byte.count_ones() as usize;
-                if ones >= remaining {
-                    let mut bits = masked_byte;
-                    for bit_pos in 0..8 {
-                        if bits & 1 != 0 {
-                            remaining -= 1;
-                            if remaining == 0 {
-                                return (byte_idx * 8 + bit_pos + 1).min(self.len());
-                            }
-                        }
-                        bits >>= 1;
-                    }
-                } else {
-                    remaining -= ones;
-                }
-            }
-        }
-
-        // Handle aligned u64 chunks
-        let chunk_start = if start <= prefix_bits {
-            0
-        } else {
-            (start - prefix_bits) / 64
-        };
-
-        for (chunk_idx, &chunk) in chunks.iter().enumerate().skip(chunk_start) {
-            let global_bit_pos = prefix_bits + chunk_idx * 64;
-
-            // Mask off bits before our start position in the first relevant chunk
-            let masked_chunk = if global_bit_pos < start && start < global_bit_pos + 64 {
-                chunk & (!0u64 << (start - global_bit_pos))
-            } else if global_bit_pos < start {
-                continue;
-            } else {
-                chunk
-            };
-
-            let ones = masked_chunk.count_ones() as usize;
-
-            if ones >= remaining {
-                // The n-th bit is in this chunk - find exact position
-                let mut bits = masked_chunk;
-                for bit_pos in 0..64 {
-                    if bits & 1 != 0 {
-                        remaining -= 1;
-                        if remaining == 0 {
-                            return (global_bit_pos + bit_pos + 1).min(self.len());
-                        }
-                    }
-                    bits >>= 1;
-                }
-            } else {
-                remaining -= ones;
-            }
-        }
-
-        // Handle suffix bytes (after alignment)
-        let suffix_start = prefix_bits + chunks.len() * 64;
-        for (byte_idx, &byte) in suffix.iter().enumerate() {
-            let global_byte_pos = suffix_start + byte_idx * 8;
-            if global_byte_pos + 8 <= start {
-                continue;
-            }
-            let masked_byte = if global_byte_pos < start {
-                byte & (!0u8 << (start - global_byte_pos))
-            } else {
-                byte
-            };
-            let ones = masked_byte.count_ones() as usize;
-            if ones >= remaining {
-                let mut bits = masked_byte;
-                for bit_pos in 0..8 {
-                    if bits & 1 != 0 {
-                        remaining -= 1;
-                        if remaining == 0 {
-                            return (global_byte_pos + bit_pos + 1).min(self.len());
-                        }
-                    }
-                    bits >>= 1;
-                }
-            } else {
-                remaining -= ones;
-            }
-        }
-
-        // Fewer than n set bits found, return end of array
-        self.len()
+        self.slice(start, self.bit_len - start)
+            .set_indices()
+            .nth(n - 1)
+            .map(|idx| start + idx + 1)
+            .unwrap_or(self.bit_len)
     }
 
     /// Returns a [`BitChunks`] instance which can be used to iterate over
@@ -981,5 +884,20 @@ mod tests {
         assert_eq!(slice.clone().find_nth_set_bit_position(0, 2), 3);
         assert_eq!(slice.clone().find_nth_set_bit_position(0, 3), 4);
         assert_eq!(slice.clone().find_nth_set_bit_position(0, 4), 6);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_all_set() {
+        let buffer = BooleanBuffer::new_set(100);
+        for i in 1..=100 {
+            assert_eq!(buffer.clone().find_nth_set_bit_position(0, i), i);
+        }
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 101), 100);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_none_set() {
+        let buffer = BooleanBuffer::new_unset(100);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 100);
     }
 }
