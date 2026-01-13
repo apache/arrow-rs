@@ -366,6 +366,117 @@ impl BooleanBuffer {
             .count_set_bits_offset(self.bit_offset, self.bit_len)
     }
 
+    /// Finds the position of the n-th set bit (1-based) starting from `start` index.
+    /// If fewer than `n` set bits are found, returns the length of the buffer.
+    pub fn find_nth_set_bit_position(self, start: usize, n: usize) -> usize {
+        if n == 0 {
+            return start;
+        }
+
+        let mut remaining = n;
+
+        // Get the underlying buffer and interpret as u64 chunks for fast iteration
+        let inner = self.inner();
+        let (prefix, chunks, suffix) = unsafe { inner.as_slice().align_to::<u64>() };
+
+        // Handle prefix bytes (before alignment)
+        let prefix_bits = prefix.len() * 8;
+        if start < prefix_bits {
+            for (byte_idx, &byte) in prefix.iter().enumerate().skip(start / 8) {
+                let masked_byte = if byte_idx == start / 8 {
+                    byte & (!0u8 << (start % 8))
+                } else {
+                    byte
+                };
+                let ones = masked_byte.count_ones() as usize;
+                if ones >= remaining {
+                    let mut bits = masked_byte;
+                    for bit_pos in 0..8 {
+                        if bits & 1 != 0 {
+                            remaining -= 1;
+                            if remaining == 0 {
+                                return (byte_idx * 8 + bit_pos + 1).min(self.len());
+                            }
+                        }
+                        bits >>= 1;
+                    }
+                } else {
+                    remaining -= ones;
+                }
+            }
+        }
+
+        // Handle aligned u64 chunks
+        let chunk_start = if start <= prefix_bits {
+            0
+        } else {
+            (start - prefix_bits) / 64
+        };
+
+        for (chunk_idx, &chunk) in chunks.iter().enumerate().skip(chunk_start) {
+            let global_bit_pos = prefix_bits + chunk_idx * 64;
+
+            // Mask off bits before our start position in the first relevant chunk
+            let masked_chunk = if global_bit_pos < start && start < global_bit_pos + 64 {
+                chunk & (!0u64 << (start - global_bit_pos))
+            } else if global_bit_pos < start {
+                continue;
+            } else {
+                chunk
+            };
+
+            let ones = masked_chunk.count_ones() as usize;
+
+            if ones >= remaining {
+                // The n-th bit is in this chunk - find exact position
+                let mut bits = masked_chunk;
+                for bit_pos in 0..64 {
+                    if bits & 1 != 0 {
+                        remaining -= 1;
+                        if remaining == 0 {
+                            return (global_bit_pos + bit_pos + 1).min(self.len());
+                        }
+                    }
+                    bits >>= 1;
+                }
+            } else {
+                remaining -= ones;
+            }
+        }
+
+        // Handle suffix bytes (after alignment)
+        let suffix_start = prefix_bits + chunks.len() * 64;
+        for (byte_idx, &byte) in suffix.iter().enumerate() {
+            let global_byte_pos = suffix_start + byte_idx * 8;
+            if global_byte_pos + 8 <= start {
+                continue;
+            }
+            let masked_byte = if global_byte_pos < start {
+                byte & (!0u8 << (start - global_byte_pos))
+            } else {
+                byte
+            };
+            let ones = masked_byte.count_ones() as usize;
+            if ones >= remaining {
+                let mut bits = masked_byte;
+                for bit_pos in 0..8 {
+                    if bits & 1 != 0 {
+                        remaining -= 1;
+                        if remaining == 0 {
+                            return (global_byte_pos + bit_pos + 1).min(self.len());
+                        }
+                    }
+                    bits >>= 1;
+                }
+            } else {
+                remaining -= ones;
+            }
+        }
+
+        // Fewer than n set bits found, return end of array
+        self.len()
+    }
+
     /// Returns a [`BitChunks`] instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
     #[inline]
@@ -822,5 +933,53 @@ mod tests {
         for (i, v) in bools.into_iter().chain(std::iter::once(true)).enumerate() {
             assert_eq!(finished.value(i), v, "at index {}", i);
         }
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position() {
+        let bools = vec![true, false, true, true, false, true];
+        let buffer = BooleanBuffer::from(bools);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 1);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 2), 3);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 3), 4);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 4), 6);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 5), 6);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(1, 1), 3);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(3, 1), 4);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(3, 2), 6);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_large() {
+        let mut bools = vec![false; 1000];
+        bools[100] = true;
+        bools[500] = true;
+        bools[999] = true;
+        let buffer = BooleanBuffer::from(bools);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 101);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 2), 501);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 3), 1000);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 4), 1000);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(101, 1), 501);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_sliced() {
+        let bools = vec![false, true, false, true, true, false, true]; // [F, T, F, T, T, F, T]
+        let buffer = BooleanBuffer::from(bools);
+        let slice = buffer.slice(1, 6); // [T, F, T, T, F, T]
+
+        assert_eq!(slice.len(), 6);
+        // Logical indices: 0, 1, 2, 3, 4, 5
+        // Logical values: T, F, T, T, F, T
+
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 1), 1);
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 2), 3);
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 3), 4);
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 4), 6);
     }
 }
