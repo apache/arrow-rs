@@ -305,9 +305,9 @@ impl<T> ArrowReaderBuilder<T> {
     /// It is recommended to enable reading the page index if using this functionality, to allow
     /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
     ///
-    /// For a running example see `parquet/examples/read_with_row_filter.rs`.
-    /// See <https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive/>
-    /// for a technical explanation of late materialization.
+    /// See the [blog post on late materialization] for a more technical explanation.
+    ///
+    /// [blog post on late materialization]: https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive
     ///
     /// # Example
     /// ```rust
@@ -321,16 +321,19 @@ impl<T> ArrowReaderBuilder<T> {
     /// # let file = File::open(&path)?;
     /// let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     /// let schema_desc = builder.metadata().file_metadata().schema_descr_ptr();
-    ///
-    /// // Create predicate: column id > 4. This col has index 0.
+    /// // Create predicate that evaluates `int_col != 0`.
+    /// // `int_col` column has index 4 (zero based) in the schema
     /// let projection = ProjectionMask::leaves(&schema_desc, [0]);
+    /// // Only the projection columns are passed to the predicate so
+    /// // int_col is column 0 in the predicate
     /// let predicate = ArrowPredicateFn::new(projection, |batch| {
-    ///     let id_col = batch.column(0);
-    ///     arrow::compute::kernels::cmp::gt(id_col, &Int32Array::new_scalar(4))
+    ///     let int_col = batch.column(0);
+    ///     arrow::compute::kernels::cmp::neq(int_col, &Int32Array::new_scalar(4))
     /// });
-    ///
     /// let row_filter = RowFilter::new(vec![Box::new(predicate)]);
-    /// let _reader = builder.with_row_filter(row_filter).build()?;
+    /// // The filter will be invoked during the reading process
+    /// let reader = builder.with_row_filter(row_filter).build()?;
+    /// # for b in reader { let _ = b?; }
     /// # Ok(())
     /// # }
     /// ```
