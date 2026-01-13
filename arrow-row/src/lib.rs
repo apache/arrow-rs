@@ -1161,22 +1161,12 @@ impl Rows {
         }
     }
 
-    /// Returns the length of the row at index `row` in bytes
+    /// Returns the number of bytes the row at index `row` is occupying,
+    /// that is, what is the length of the returned [`Row::data`] will be.
     pub fn row_len(&self, row: usize) -> usize {
         assert!(row + 1 < self.offsets.len());
 
-        unsafe { self.row_len_unchecked(row) }
-    }
-
-    /// Returns the length of the row at `index` in bytes without bounds checking
-    ///
-    /// # Safety
-    /// Caller must ensure that `index` is less than the number of offsets (#rows + 1)
-    pub unsafe fn row_len_unchecked(&self, index: usize) -> usize {
-        let end = unsafe { self.offsets.get_unchecked(index + 1) };
-        let start = unsafe { self.offsets.get_unchecked(index) };
-
-        end - start
+        self.offsets[row + 1] - self.offsets[row]
     }
 
     /// Get an iterator over the lengths of each row in this [`Rows`]
