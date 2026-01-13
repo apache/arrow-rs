@@ -1183,7 +1183,7 @@ impl ReaderBuilder {
     /// The provided `projection` is a list of indices into the **top-level record** fields.
     /// The output schema will contain only these fields, in the specified order.
     ///
-    /// Internally this is implemented by pruning the effective Avro *reader schema*:
+    /// Internally, this is implemented by pruning the effective Avro *reader schema*:
     ///
     /// * If a reader schema is provided via `Self::with_reader_schema`, that schema is pruned.
     /// * Otherwise, a reader schema is derived from the writer schema and then pruned.
@@ -1797,8 +1797,8 @@ mod test {
         assert_eq!(out.schema().field(0).name(), "is_active");
         assert_eq!(out.schema().field(1).name(), "id");
         let is_active = out.column(0).as_boolean();
-        assert_eq!(is_active.value(0), true);
-        assert_eq!(is_active.value(1), false);
+        assert!(is_active.value(0));
+        assert!(!is_active.value(1));
         let id = out.column(1).as_primitive::<Int32Type>();
         assert_eq!(id.value(0), 1);
         assert_eq!(id.value(1), 2);
@@ -1847,8 +1847,8 @@ mod test {
         assert_eq!(full_name.value(0), "a");
         assert_eq!(full_name.value(1), "b");
         let is_active = out.column(1).as_boolean();
-        assert_eq!(is_active.value(0), true);
-        assert_eq!(is_active.value(1), true);
+        assert!(is_active.value(0));
+        assert!(is_active.value(1));
         Ok(())
     }
 
@@ -1870,13 +1870,13 @@ mod test {
             .with_projection(vec![2])
             .build(Cursor::new(bytes.clone()))
             .unwrap_err();
-        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+        assert!(matches!(err, ArrowError::AvroError(_)));
         assert!(err.to_string().contains("out of bounds"));
         let err = ReaderBuilder::new()
             .with_projection(vec![0, 0])
             .build(Cursor::new(bytes))
             .unwrap_err();
-        assert!(matches!(err, ArrowError::InvalidArgumentError(_)));
+        assert!(matches!(err, ArrowError::AvroError(_)));
         assert!(err.to_string().contains("Duplicate projection index"));
         Ok(())
     }
@@ -1936,8 +1936,6 @@ mod test {
     fn test_alltypes_plain_with_projection() {
         use std::fs::File;
         use std::io::BufReader;
-        // Read alltypes_plain.avro with a projection that selects columns [2, 0, 5]
-        // (tinyint_col, id, bigint_col) in that order
         let path = arrow_test_data("avro/alltypes_plain.avro");
         let file = File::open(&path).expect("open avro/alltypes_plain.avro");
         let reader = ReaderBuilder::new()
@@ -1946,7 +1944,6 @@ mod test {
             .build(BufReader::new(file))
             .expect("build reader with projection");
         let schema = reader.schema();
-        // Verify the projected schema has exactly 3 fields in the correct order
         assert_eq!(schema.fields().len(), 3);
         assert_eq!(schema.field(0).name(), "tinyint_col");
         assert_eq!(schema.field(1).name(), "id");
@@ -1956,11 +1953,6 @@ mod test {
         let batch = &batches[0];
         assert_eq!(batch.num_rows(), 8);
         assert_eq!(batch.num_columns(), 3);
-        // Build expected batch with exact values
-        // The alltypes_plain.avro file has 8 rows with:
-        // - id values: [4, 5, 6, 7, 2, 3, 0, 1]
-        // - tinyint_col values: [0, 1, 0, 1, 0, 1, 0, 1] (i.e., row_index % 2)
-        // - bigint_col values: [0, 10, 0, 10, 0, 10, 0, 10] (i.e., (row_index % 2) * 10)
         let expected = RecordBatch::try_from_iter_with_nullable([
             (
                 "tinyint_col",
@@ -1987,7 +1979,6 @@ mod test {
 
     #[test]
     fn writer_string_reader_nullable_with_alias() -> Result<(), Box<dyn std::error::Error>> {
-        // Writer: { id: long, name: string }
         let writer_schema = Schema::new(vec![
             Field::new("id", DataType::Int64, false),
             Field::new("name", DataType::Utf8, false),
@@ -2014,11 +2005,9 @@ mod test {
             .with_reader_schema(AvroSchema::new(reader_json.to_string()))
             .build(Cursor::new(bytes))?;
         let out = reader.next().unwrap()?;
-        // Evolved aliased field should be non-null and match original writer values
         let full_name = out.column(1).as_string::<i32>();
         assert_eq!(full_name.value(0), "a");
         assert_eq!(full_name.value(1), "b");
-
         Ok(())
     }
 
@@ -2569,46 +2558,38 @@ mod test {
             r#"{"type":"record","name":"E","fields":[{"name":"a","type":"long"},{"name":"b","type":"string"},{"name":"c","type":"int"}]}"#
                 .to_string(),
         );
-
         let mut store = SchemaStore::new();
         let fp1 = store.register(writer_v1)?;
         let fp2 = store.register(writer_v2)?;
-
-        // Project only the second field (index 1) => "b" for both writer schemas
         let mut decoder = ReaderBuilder::new()
             .with_writer_schema_store(store)
             .with_active_fingerprint(fp1)
             .with_batch_size(8)
             .with_projection(vec![1])
             .build_decoder()?;
-
         // Message for v1: {a:1, b:"x"}
         let mut msg1 = make_prefix(fp1);
         msg1.extend_from_slice(&encode_zigzag(1)); // a = 1
-        msg1.push((1u8) << 1); // string length = 1 (zigzag)
+        msg1.push((1u8) << 1);
         msg1.extend_from_slice(b"x");
-
         // Message for v2: {a:2, b:"y", c:7}
         let mut msg2 = make_prefix(fp2);
         msg2.extend_from_slice(&encode_zigzag(2)); // a = 2
-        msg2.push((1u8) << 1); // string length = 1 (zigzag)
+        msg2.push((1u8) << 1);
         msg2.extend_from_slice(b"y");
         msg2.extend_from_slice(&encode_zigzag(7)); // c = 7
-
         decoder.decode(&msg1)?;
         let batch1 = decoder.flush()?.expect("batch1");
         assert_eq!(batch1.num_columns(), 1);
         assert_eq!(batch1.schema().field(0).name(), "b");
         let b1 = batch1.column(0).as_string::<i32>();
         assert_eq!(b1.value(0), "x");
-
         decoder.decode(&msg2)?;
         let batch2 = decoder.flush()?.expect("batch2");
         assert_eq!(batch2.num_columns(), 1);
         assert_eq!(batch2.schema().field(0).name(), "b");
         let b2 = batch2.column(0).as_string::<i32>();
         assert_eq!(b2.value(0), "y");
-
         Ok(())
     }
 

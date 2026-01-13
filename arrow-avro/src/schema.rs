@@ -397,53 +397,58 @@ impl AvroSchema {
 
     pub(crate) fn project(&self, projection: &[usize]) -> Result<Self, ArrowError> {
         let mut value: Value = serde_json::from_str(&self.json_string)
-            .map_err(|e| ArrowError::ParseError(format!("Invalid Avro schema JSON: {e}")))?;
+            .map_err(|e| ArrowError::AvroError(format!("Invalid Avro schema JSON: {e}")))?;
         let obj = value.as_object_mut().ok_or_else(|| {
-            ArrowError::SchemaError(
+            ArrowError::AvroError(
                 "Projected schema must be a JSON object Avro record schema".to_string(),
             )
         })?;
         match obj.get("type").and_then(|v| v.as_str()) {
             Some("record") => {}
             Some(other) => {
-                return Err(ArrowError::SchemaError(format!(
+                return Err(ArrowError::AvroError(format!(
                     "Projected schema must be an Avro record, found type '{other}'"
                 )));
             }
             None => {
-                return Err(ArrowError::SchemaError(
+                return Err(ArrowError::AvroError(
                     "Projected schema missing required 'type' field".to_string(),
                 ));
             }
         }
         let fields_val = obj.get_mut("fields").ok_or_else(|| {
-            ArrowError::SchemaError("Avro record schema missing required 'fields'".to_string())
+            ArrowError::AvroError("Avro record schema missing required 'fields'".to_string())
         })?;
         let projected_fields = {
-            let fields = fields_val.as_array().ok_or_else(|| {
-                ArrowError::SchemaError("Avro record schema 'fields' must be an array".to_string())
-            })?;
-            let len = fields.len();
+            let mut original_fields = match fields_val {
+                Value::Array(arr) => std::mem::take(arr),
+                _ => {
+                    return Err(ArrowError::AvroError(
+                        "Avro record schema 'fields' must be an array".to_string(),
+                    ));
+                }
+            };
+            let len = original_fields.len();
             let mut seen: HashSet<usize> = HashSet::with_capacity(projection.len());
             let mut out: Vec<Value> = Vec::with_capacity(projection.len());
             for &i in projection {
                 if i >= len {
-                    return Err(ArrowError::InvalidArgumentError(format!(
+                    return Err(ArrowError::AvroError(format!(
                         "Projection index {i} out of bounds for record with {len} fields"
                     )));
                 }
                 if !seen.insert(i) {
-                    return Err(ArrowError::InvalidArgumentError(format!(
+                    return Err(ArrowError::AvroError(format!(
                         "Duplicate projection index {i}"
                     )));
                 }
-                out.push(fields[i].clone());
+                out.push(std::mem::replace(&mut original_fields[i], Value::Null));
             }
             out
         };
         *fields_val = Value::Array(projected_fields);
         let json_string = serde_json::to_string(&value).map_err(|e| {
-            ArrowError::SchemaError(format!(
+            ArrowError::AvroError(format!(
                 "Failed to serialize projected Avro schema JSON: {e}"
             ))
         })?;
