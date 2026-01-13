@@ -512,17 +512,16 @@ impl ArrowReaderOptions {
     /// # use arrow_schema::{DataType, Field, Schema, TimeUnit};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
-    /// #
-    /// # // Write data - schema is inferred from the data to be Int32
-    /// # let mut file = Vec::new();
-    /// # let batch = RecordBatch::try_from_iter(vec![
-    /// #     ("col_1", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
-    /// # ]).unwrap();
-    /// # let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
-    /// # writer.write(&batch).unwrap();
-    /// # writer.close().unwrap();
-    /// # let file = Bytes::from(file);
-    /// #
+    /// // Write data - schema is inferred from the data to be Int32
+    /// let mut file = Vec::new();
+    /// let batch = RecordBatch::try_from_iter(vec![
+    ///     ("col_1", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
+    /// ]).unwrap();
+    /// let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
+    /// writer.write(&batch).unwrap();
+    /// writer.close().unwrap();
+    /// let file = Bytes::from(file);
+    ///
     /// // Read the file back.
     /// // Supply a schema that interprets the Int32 column as a Timestamp.
     /// let supplied_schema = Arc::new(Schema::new(vec![
@@ -552,20 +551,19 @@ impl ArrowReaderOptions {
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
-    /// #
-    /// # // Write a Parquet file with string data
-    /// # let mut file = Vec::new();
-    /// # let schema = Arc::new(Schema::new(vec![
-    /// #     Field::new("city", DataType::Utf8, false)
-    /// # ]));
-    /// # let cities = StringArray::from(vec!["Berlin", "Berlin", "Paris", "Berlin", "Paris"]);
-    /// # let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(cities)]).unwrap();
-    /// #
-    /// # let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
-    /// # writer.write(&batch).unwrap();
-    /// # writer.close().unwrap();
-    /// # let file = Bytes::from(file);
-    /// #
+    /// // Write a Parquet file with string data
+    /// let mut file = Vec::new();
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("city", DataType::Utf8, false)
+    /// ]));
+    /// let cities = StringArray::from(vec!["Berlin", "Berlin", "Paris", "Berlin", "Paris"]);
+    /// let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(cities)]).unwrap();
+    ///
+    /// let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
+    /// writer.write(&batch).unwrap();
+    /// writer.close().unwrap();
+    /// let file = Bytes::from(file);
+    ///
     /// // Read the file back, requesting dictionary encoding preservation
     /// let dict_schema = Arc::new(Schema::new(vec![
     ///     Field::new("city", DataType::Dictionary(
