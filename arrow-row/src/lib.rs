@@ -164,7 +164,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow_array::cast::*;
-use arrow_array::types::ArrowDictionaryKeyType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -1131,6 +1131,12 @@ impl Rows {
         self.offsets.push(self.buffer.len())
     }
 
+    /// Reserve capacity for `row_capacity` rows with a total length of `data_capacity`
+    pub fn reserve(&mut self, row_capacity: usize, data_capacity: usize) {
+        self.buffer.reserve(data_capacity);
+        self.offsets.reserve(row_capacity);
+    }
+
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
         assert!(row + 1 < self.offsets.len());
@@ -1550,11 +1556,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                             .iter()
                             .map(|slice| variable::encoded_len(slice))
                     ),
-                    DataType::BinaryView => tracker.push_variable(
-                        array.as_binary_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
+                    DataType::BinaryView => push_byte_view_array_lengths(&mut tracker, array.as_binary_view()),
                     DataType::Utf8 => tracker.push_variable(
                         array.as_string::<i32>()
                             .iter()
@@ -1565,11 +1567,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                             .iter()
                             .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
                     ),
-                    DataType::Utf8View => tracker.push_variable(
-                        array.as_string_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
+                    DataType::Utf8View => push_byte_view_array_lengths(&mut tracker, array.as_string_view()),
                     DataType::FixedSizeBinary(len) => {
                         let len = len.to_usize().unwrap();
                         tracker.push_fixed(1 + len)
@@ -1657,6 +1655,34 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
     }
 
     tracker
+}
+
+/// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteViewArray`]
+fn push_byte_view_array_lengths<T: ByteViewType>(
+    tracker: &mut LengthTracker,
+    array: &GenericByteViewArray<T>,
+) {
+    if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+        tracker.push_variable(
+            array
+                .lengths()
+                .zip(nulls.iter())
+                .map(|(length, is_valid)| {
+                    if is_valid {
+                        Some(length as usize)
+                    } else {
+                        None
+                    }
+                })
+                .map(variable::padded_length),
+        )
+    } else {
+        tracker.push_variable(
+            array
+                .lengths()
+                .map(|len| variable::padded_length(Some(len as usize))),
+        )
+    }
 }
 
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
@@ -4282,6 +4308,40 @@ mod tests {
         assert!(
             empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
             "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
+        );
+    }
+
+    #[test]
+    fn reserve_should_increase_capacity_to_the_requested_size() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+        let mut empty_rows = row_converter.empty_rows(0, 0);
+        empty_rows.reserve(50, 50);
+        let before_size = empty_rows.size();
+        empty_rows.reserve(50, 50);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when reserving already reserved space"
+        );
+        empty_rows.reserve(10, 20);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when already have space for the expected reserved data"
+        );
+
+        empty_rows.reserve(100, 20);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
+
+        let before_size = empty_rows.size();
+
+        empty_rows.reserve(20, 100);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
         );
     }
 }

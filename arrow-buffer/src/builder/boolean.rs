@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::bit_util::apply_bitwise_binary_op;
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_util};
+use crate::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
@@ -286,6 +286,14 @@ impl From<BooleanBufferBuilder> for BooleanBuffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
         BooleanBuffer::new(builder.buffer.into(), 0, builder.len)
+    }
+}
+
+impl From<BooleanBufferBuilder> for NullBuffer {
+    #[inline]
+    fn from(builder: BooleanBufferBuilder) -> Self {
+        let boolean_buffer = BooleanBuffer::from(builder);
+        NullBuffer::new(boolean_buffer)
     }
 }
 
