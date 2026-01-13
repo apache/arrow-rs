@@ -21,7 +21,7 @@ extern crate core;
 
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
-use arrow::row::{RowConverter, SortField};
+use arrow::row::{RowConverter, SortField, unordered_row::UnorderedRowConverter};
 use arrow::util::bench_util::{
     create_boolean_array, create_boolean_array_with_seed, create_dict_from_values,
     create_f64_array_with_seed, create_primitive_array, create_primitive_array_with_seed,
@@ -32,24 +32,30 @@ use arrow::util::bench_util::{
 use arrow::util::data_gen::create_random_array;
 use arrow_array::Array;
 use arrow_array::types::{Int8Type, Int32Type};
-use arrow_schema::{DataType, Field};
+use arrow_schema::{DataType, Field, Fields};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
-        .iter()
-        .map(|x| SortField::new(x.data_type().clone()))
-        .collect();
+      .iter()
+      .enumerate()
+      .map(|x| Field::new(
+          format!("c{}", x.0).as_str(),
+          x.1.data_type().clone(),
+          x.1.null_count() > 0,
+      ))
+      .collect();
+    let fields: Fields = fields.into();
 
     c.bench_function(&format!("convert_columns {name}"), |b| {
         b.iter(|| {
-            let converter = RowConverter::new(fields.clone()).unwrap();
+            let converter = UnorderedRowConverter::new(fields.clone()).unwrap();
             hint::black_box(converter.convert_columns(&cols).unwrap())
         });
     });
 
-    let converter = RowConverter::new(fields).unwrap();
+    let converter = UnorderedRowConverter::new(fields).unwrap();
     let rows = converter.convert_columns(&cols).unwrap();
     // using a pre-prepared row converter should be faster than the first time
     c.bench_function(&format!("convert_columns_prepared {name}"), |b| {
@@ -75,8 +81,8 @@ fn bench_iter(c: &mut Criterion) {
     let col = create_string_view_array_with_len(4096, 0., 100, false);
     let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
     let rows = converter
-        .convert_columns(&[Arc::new(col) as ArrayRef])
-        .unwrap();
+      .convert_columns(&[Arc::new(col) as ArrayRef])
+      .unwrap();
 
     c.bench_function("iterate rows", |b| {
         b.iter(|| {
@@ -296,7 +302,7 @@ fn row_bench(c: &mut Criterion) {
             0.,
             1.0,
         )
-        .unwrap(),
+          .unwrap(),
     ];
     do_bench(c, "4096 list(0) of u64(0)", cols);
 
@@ -311,7 +317,7 @@ fn row_bench(c: &mut Criterion) {
             0.,
             1.0,
         )
-        .unwrap(),
+          .unwrap(),
     ];
     do_bench(c, "4096 large_list(0) of u64(0)", cols);
 
@@ -326,7 +332,7 @@ fn row_bench(c: &mut Criterion) {
             0.,
             1.0,
         )
-        .unwrap(),
+          .unwrap(),
     ];
     do_bench(c, "10 list(0) of u64(0)", cols);
 
@@ -341,7 +347,7 @@ fn row_bench(c: &mut Criterion) {
             0.,
             1.0,
         )
-        .unwrap(),
+          .unwrap(),
     ];
     do_bench(c, "10 large_list(0) of u64(0)", cols);
 
@@ -356,8 +362,8 @@ fn row_bench(c: &mut Criterion) {
             0.,
             1.0,
         )
-        .unwrap()
-        .slice(10, 20),
+          .unwrap()
+          .slice(10, 20),
     ];
     do_bench(c, "4096 list(0) sliced to 10 of u64(0)", cols);
 
@@ -372,8 +378,8 @@ fn row_bench(c: &mut Criterion) {
             0.,
             1.0,
         )
-        .unwrap()
-        .slice(10, 20),
+          .unwrap()
+          .slice(10, 20),
     ];
     do_bench(c, "4096 large_list(0) sliced to 10 of u64(0)", cols);
 
