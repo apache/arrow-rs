@@ -1659,8 +1659,7 @@ fn push_generic_byte_array_lengths<T: ByteArrayType>(
             array
                 .offsets()
                 .lengths()
-                .map(Some)
-                .map(variable::padded_length),
+                .map(variable::non_null_padded_length),
         )
     }
 }
