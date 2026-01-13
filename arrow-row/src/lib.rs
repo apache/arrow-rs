@@ -1130,6 +1130,12 @@ impl Rows {
         self.offsets.push(self.buffer.len())
     }
 
+    /// Reserve capacity for `row_capacity` rows with a total length of `data_capacity`
+    pub fn reserve(&mut self, row_capacity: usize, data_capacity: usize) {
+        self.buffer.reserve(data_capacity);
+        self.offsets.reserve(row_capacity);
+    }
+
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
         assert!(row + 1 < self.offsets.len());
@@ -4281,6 +4287,40 @@ mod tests {
         assert!(
             empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
             "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
+        );
+    }
+
+    #[test]
+    fn reserve_should_increase_capacity_to_the_requested_size() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+        let mut empty_rows = row_converter.empty_rows(0, 0);
+        empty_rows.reserve(50, 50);
+        let before_size = empty_rows.size();
+        empty_rows.reserve(50, 50);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when reserving already reserved space"
+        );
+        empty_rows.reserve(10, 20);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when already have space for the expected reserved data"
+        );
+
+        empty_rows.reserve(100, 20);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
+
+        let before_size = empty_rows.size();
+
+        empty_rows.reserve(20, 100);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
         );
     }
 }
