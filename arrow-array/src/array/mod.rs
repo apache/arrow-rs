@@ -757,8 +757,36 @@ impl<R: RunEndIndexType> PartialEq for RunArray<R> {
     }
 }
 
-/// Constructs an array using the input `data`.
-/// Returns a reference-counted `Array` instance.
+/// Constructs an [`ArrayRef`] from an [`ArrayData`].
+///
+/// # Notes:
+///
+/// It is more efficient to directly construct the concrete array type rather
+/// than using this function as creating an `ArrayData` requires at least one
+/// additional allocation (the Vec of buffers).
+///
+/// # Example:
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_data::ArrayData;
+/// # use arrow_array::{make_array, ArrayRef, Int32Array};
+/// # use arrow_buffer::{Buffer, ScalarBuffer};
+/// # use arrow_schema::DataType;
+/// // Create an Int32Array with values [1, 2, 3]
+/// let values_buffer = Buffer::from_slice_ref(&[1, 2, 3]);
+/// // ArrayData can be constructed using ArrayDataBuilder
+///  let builder = ArrayData::builder(DataType::Int32)
+///    .len(3)
+///    .add_buffer(values_buffer.clone());
+/// let array_data = builder.build().unwrap();
+/// // Create the ArrayRef from the ArrayData
+/// let array = make_array(array_data);
+///
+/// // It is equivalent to directly constructing the Int32Array
+/// let scalar_buffer = ScalarBuffer::from(values_buffer);
+/// let int32_array: ArrayRef = Arc::new(Int32Array::new(scalar_buffer, None));
+/// assert_eq!(&array, &int32_array);
+/// ```
 pub fn make_array(data: ArrayData) -> ArrayRef {
     match data.data_type() {
         DataType::Boolean => Arc::new(BooleanArray::from(data)) as ArrayRef,
