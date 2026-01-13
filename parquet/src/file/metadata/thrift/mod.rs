@@ -411,10 +411,14 @@ fn read_column_metadata<'a>(
 
     let mut skip_pes = false;
     let mut pes_mask = true;
+    let mut skip_col_stats = false;
+    let mut skip_size_stats = false;
 
     if let Some(opts) = options {
         skip_pes = opts.skip_encoding_stats(col_index);
         pes_mask = opts.encoding_stats_as_mask();
+        skip_col_stats = opts.skip_column_stats(col_index);
+        skip_size_stats = opts.skip_size_stats(col_index);
     }
 
     // struct ColumnMetaData {
@@ -483,7 +487,7 @@ fn read_column_metadata<'a>(
             11 => {
                 column.dictionary_page_offset = Some(i64::read_thrift(&mut *prot)?);
             }
-            12 => {
+            12 if !skip_col_stats => {
                 column.statistics =
                     convert_stats(column_descr, Some(Statistics::read_thrift(&mut *prot)?))?;
             }
@@ -503,7 +507,7 @@ fn read_column_metadata<'a>(
             15 => {
                 column.bloom_filter_length = Some(i32::read_thrift(&mut *prot)?);
             }
-            16 => {
+            16 if !skip_size_stats => {
                 let val = SizeStatistics::read_thrift(&mut *prot)?;
                 column.unencoded_byte_array_data_bytes = val.unencoded_byte_array_data_bytes;
                 column.repetition_level_histogram =
