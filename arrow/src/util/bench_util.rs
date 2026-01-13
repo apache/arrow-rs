@@ -117,6 +117,29 @@ where
         .collect()
 }
 
+/// Creates a random array of a given size and null density based on the provided seed
+pub fn create_boolean_array_with_seed(
+    size: usize,
+    null_density: f32,
+    true_density: f32,
+    seed: u64,
+) -> BooleanArray
+where
+    StandardUniform: Distribution<bool>,
+{
+    let mut rng = StdRng::seed_from_u64(seed);
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let value = rng.random::<f32>() < true_density;
+                Some(value)
+            }
+        })
+        .collect()
+}
+
 /// Creates a random (but fixed-seeded) string array of a given size and null density.
 ///
 /// Strings have a random length
@@ -203,6 +226,33 @@ pub fn create_string_array_with_len_range_and_prefix_and_seed<Offset: OffsetSize
                         .map(char::from),
                 );
 
+                Some(value)
+            }
+        })
+        .collect()
+}
+/// Creates a string view array of a given range, null density and length
+///
+/// Arguments:
+/// - `size`: number of  string view array
+/// - `null_density`: density of nulls in the string view array
+/// - `range`: range size of each string in the string view array
+/// - `seed`: seed for the random number generator
+pub fn create_string_view_array_with_len_range_and_seed(
+    size: usize,
+    null_density: f32,
+    range: Range<usize>,
+    seed: u64,
+) -> StringViewArray {
+    let rng = &mut StdRng::seed_from_u64(seed);
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < null_density {
+                None
+            } else {
+                let str_len = rng.random_range(range.clone());
+                let value = rng.sample_iter(&Alphanumeric).take(str_len).collect();
+                let value = String::from_utf8(value).unwrap();
                 Some(value)
             }
         })
@@ -696,6 +746,21 @@ pub fn create_f32_array(size: usize, nan_density: f32) -> Float32Array {
 /// Creates a random (but fixed-seeded) f64 array of a given size and nan-value density
 pub fn create_f64_array(size: usize, nan_density: f32) -> Float64Array {
     let mut rng = seedable_rng();
+
+    (0..size)
+        .map(|_| {
+            if rng.random::<f32>() < nan_density {
+                Some(f64::NAN)
+            } else {
+                Some(rng.random())
+            }
+        })
+        .collect()
+}
+
+/// Creates a random f64 array of a given size and nan-value density based on a given seed
+pub fn create_f64_array_with_seed(size: usize, nan_density: f32, seed: u64) -> Float64Array {
+    let mut rng = StdRng::seed_from_u64(seed);
 
     (0..size)
         .map(|_| {

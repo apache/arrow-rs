@@ -164,7 +164,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use arrow_array::cast::*;
-use arrow_array::types::ArrowDictionaryKeyType;
+use arrow_array::types::{ArrowDictionaryKeyType, ByteViewType};
 use arrow_array::*;
 use arrow_buffer::{ArrowNativeType, Buffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
@@ -415,6 +415,41 @@ mod variable;
 ///
 ///```
 ///
+/// ## Union Encoding
+///
+/// A union value is encoded as a single type-id byte followed by the row encoding of the selected child value.
+/// The type-id byte is always present; union arrays have no top-level null marker, so nulls are represented by the child encoding.
+///
+/// For example, given a union of Int32 (type_id = 0) and Utf8 (type_id = 1):
+///
+/// ```text
+///                           ┌──┬──────────────┐
+///  3                        │00│01│80│00│00│03│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (non-null)
+///                            └──── type_id
+///
+///                           ┌──┬────────────────────────────────┐
+/// "abc"                     │01│02│'a'│'b'│'c'│00│00│00│00│00│03│
+///                           └──┴────────────────────────────────┘
+///                            │  └─ string encoding (non-null)
+///                            └──── type_id
+///
+///                           ┌──┬──────────────┐
+/// null Int32                │00│00│00│00│00│00│
+///                           └──┴──────────────┘
+///                            │  └─ signed integer encoding (null)
+///                            └──── type_id
+///
+///                           ┌──┬──┐
+/// null Utf8                 │01│00│
+///                           └──┴──┘
+///                            │  └─ string encoding (null)
+///                            └──── type_id
+/// ```
+///
+/// See [`UnionArray`] for more details on union types.
+///
 /// # Ordering
 ///
 /// ## Float Ordering
@@ -430,6 +465,12 @@ mod variable;
 ///
 /// The encoding described above will order nulls first, this can be inverted by representing
 /// nulls as `0xFF_u8` instead of `0_u8`
+///
+/// ## Union Ordering
+///
+/// Values of the same type are ordered according to the ordering of that type.
+/// Values of different types are ordered by their type id.
+/// The type_id is negated when descending order is specified.
 ///
 /// ## Reverse Column Ordering
 ///
@@ -892,7 +933,7 @@ impl RowConverter {
         // and therefore must be valid
         let result = unsafe { self.convert_raw(&mut rows, validate_utf8) }?;
 
-        if cfg!(test) {
+        if cfg!(debug_assertions) {
             for (i, row) in rows.iter().enumerate() {
                 if !row.is_empty() {
                     return Err(ArrowError::InvalidArgumentError(format!(
@@ -1089,6 +1130,12 @@ impl Rows {
         self.offsets.push(self.buffer.len())
     }
 
+    /// Reserve capacity for `row_capacity` rows with a total length of `data_capacity`
+    pub fn reserve(&mut self, row_capacity: usize, data_capacity: usize) {
+        self.buffer.reserve(data_capacity);
+        self.offsets.reserve(row_capacity);
+    }
+
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> Row<'_> {
         assert!(row + 1 < self.offsets.len());
@@ -1131,8 +1178,8 @@ impl Rows {
     pub fn size(&self) -> usize {
         // Size of fields is accounted for as part of RowConverter
         std::mem::size_of::<Self>()
-            + self.buffer.len()
-            + self.offsets.len() * std::mem::size_of::<usize>()
+            + self.buffer.capacity()
+            + self.offsets.capacity() * std::mem::size_of::<usize>()
     }
 
     /// Create a [BinaryArray] from the [Rows] data without reallocating the
@@ -1508,11 +1555,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                             .iter()
                             .map(|slice| variable::encoded_len(slice))
                     ),
-                    DataType::BinaryView => tracker.push_variable(
-                        array.as_binary_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice))
-                    ),
+                    DataType::BinaryView => push_byte_view_array_lengths(&mut tracker, array.as_binary_view()),
                     DataType::Utf8 => tracker.push_variable(
                         array.as_string::<i32>()
                             .iter()
@@ -1523,11 +1566,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                             .iter()
                             .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
                     ),
-                    DataType::Utf8View => tracker.push_variable(
-                        array.as_string_view()
-                            .iter()
-                            .map(|slice| variable::encoded_len(slice.map(|x| x.as_bytes())))
-                    ),
+                    DataType::Utf8View => push_byte_view_array_lengths(&mut tracker, array.as_string_view()),
                     DataType::FixedSizeBinary(len) => {
                         let len = len.to_usize().unwrap();
                         tracker.push_fixed(1 + len)
@@ -1617,6 +1656,34 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
     tracker
 }
 
+/// Add to [`LengthTracker`] the encoded length of each item in the [`GenericByteViewArray`]
+fn push_byte_view_array_lengths<T: ByteViewType>(
+    tracker: &mut LengthTracker,
+    array: &GenericByteViewArray<T>,
+) {
+    if let Some(nulls) = array.nulls().filter(|n| n.null_count() > 0) {
+        tracker.push_variable(
+            array
+                .lengths()
+                .zip(nulls.iter())
+                .map(|(length, is_valid)| {
+                    if is_valid {
+                        Some(length as usize)
+                    } else {
+                        None
+                    }
+                })
+                .map(variable::padded_length),
+        )
+    } else {
+        tracker.push_variable(
+            array
+                .lengths()
+                .map(|len| variable::padded_length(Some(len as usize))),
+        )
+    }
+}
+
 /// Encodes a column to the provided [`Rows`] incrementing the offsets as it progresses
 fn encode_column(
     data: &mut [u8],
@@ -1644,24 +1711,22 @@ fn encode_column(
                     }
                 }
                 DataType::Binary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i32>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i32>(column), opts)
                 }
                 DataType::BinaryView => {
                     variable::encode(data, offsets, column.as_binary_view().iter(), opts)
                 }
                 DataType::LargeBinary => {
-                    variable::encode(data, offsets, as_generic_binary_array::<i64>(column).iter(), opts)
+                    variable::encode_generic_byte_array(data, offsets, as_generic_binary_array::<i64>(column), opts)
                 }
-                DataType::Utf8 => variable::encode(
+                DataType::Utf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i32>().iter().map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i32>(),
                     opts,
                 ),
-                DataType::LargeUtf8 => variable::encode(
+                DataType::LargeUtf8 => variable::encode_generic_byte_array(
                     data, offsets,
-                    column.as_string::<i64>()
-                        .iter()
-                        .map(|x| x.map(|x| x.as_bytes())),
+                    column.as_string::<i64>(),
                     opts,
                 ),
                 DataType::Utf8View => variable::encode(
@@ -1903,12 +1968,9 @@ unsafe fn decode_column(
 
                 let child_row = &row[1..];
                 rows_by_field[field_idx].push((idx, child_row));
-
-                *row = &row[row.len()..];
             }
 
             let mut child_arrays: Vec<ArrayRef> = Vec::with_capacity(converters.len());
-
             let mut offsets = (*mode == UnionMode::Dense).then(|| Vec::with_capacity(len));
 
             for (field_idx, converter) in converters.iter().enumerate() {
@@ -1929,6 +1991,14 @@ unsafe fn decode_column(
 
                         let child_array =
                             unsafe { converter.convert_raw(&mut child_data, validate_utf8) }?;
+
+                        // advance row slices by the bytes consumed
+                        for ((row_idx, original_bytes), remaining_bytes) in
+                            field_rows.iter().zip(child_data)
+                        {
+                            let consumed_length = 1 + original_bytes.len() - remaining_bytes.len();
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
+                        }
 
                         child_arrays.push(child_array.into_iter().next().unwrap());
                     }
@@ -1951,6 +2021,14 @@ unsafe fn decode_column(
 
                         let child_array =
                             unsafe { converter.convert_raw(&mut sparse_data, validate_utf8) }?;
+
+                        // advance row slices by the bytes consumed for rows that belong to this field
+                        for (row_idx, child_row) in field_rows.iter() {
+                            let remaining_len = sparse_data[*row_idx].len();
+                            let consumed_length = 1 + child_row.len() - remaining_len;
+                            rows[*row_idx] = &rows[*row_idx][consumed_length..];
+                        }
+
                         child_arrays.push(child_array.into_iter().next().unwrap());
                     }
                 }
@@ -4049,5 +4127,220 @@ mod tests {
         // among strigns
         // "a" < "z"
         assert!(rows.row(3) < rows.row(1));
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_many_union_columns() {
+        // col 1: Union(Int32, Utf8) [67, "hello"]
+        let fields1 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array1 = Int32Array::from(vec![Some(67), None]);
+        let string_array1 = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids1 = vec![0i8, 1].into();
+
+        let union_array1 = UnionArray::try_new(
+            fields1.clone(),
+            type_ids1,
+            None,
+            vec![
+                Arc::new(int_array1) as ArrayRef,
+                Arc::new(string_array1) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // col 2: Union(Int32, Utf8) [100, "world"]
+        let fields2 = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array2 = Int32Array::from(vec![Some(100), None]);
+        let string_array2 = StringArray::from(vec![None::<&str>, Some("world")]);
+        let type_ids2 = vec![0i8, 1].into();
+
+        let union_array2 = UnionArray::try_new(
+            fields2.clone(),
+            type_ids2,
+            None,
+            vec![
+                Arc::new(int_array2) as ArrayRef,
+                Arc::new(string_array2) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        // create a row converter with 2 union columns
+        let field1 = Field::new("col1", DataType::Union(fields1, UnionMode::Sparse), true);
+        let field2 = Field::new("col2", DataType::Union(fields2, UnionMode::Sparse), true);
+
+        let sort_field1 = SortField::new(field1.data_type().clone());
+        let sort_field2 = SortField::new(field2.data_type().clone());
+
+        let converter = RowConverter::new(vec![sort_field1, sort_field2]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[
+                Arc::new(union_array1.clone()) as ArrayRef,
+                Arc::new(union_array2.clone()) as ArrayRef,
+            ])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1, col2] = out.as_slice() else {
+            panic!("expected 2 columns")
+        };
+
+        let col1 = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        let col2 = col2.as_any().downcast_ref::<UnionArray>().unwrap();
+
+        for (expected, got) in [union_array1, union_array2].iter().zip([col1, col2]) {
+            assert_eq!(expected.len(), got.len());
+            assert_eq!(expected.type_ids(), got.type_ids());
+
+            for i in 0..expected.len() {
+                assert_eq!(expected.value(i).as_ref(), got.value(i).as_ref());
+            }
+        }
+    }
+
+    #[test]
+    fn test_row_converter_roundtrip_with_one_union_column() {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("int", DataType::Int32, true),
+                Field::new("string", DataType::Utf8, true),
+            ],
+        )
+        .unwrap();
+
+        let int_array = Int32Array::from(vec![Some(67), None]);
+        let string_array = StringArray::from(vec![None::<&str>, Some("hello")]);
+        let type_ids = vec![0i8, 1].into();
+
+        let union_array = UnionArray::try_new(
+            fields.clone(),
+            type_ids,
+            None,
+            vec![
+                Arc::new(int_array) as ArrayRef,
+                Arc::new(string_array) as ArrayRef,
+            ],
+        )
+        .unwrap();
+
+        let field = Field::new("col", DataType::Union(fields, UnionMode::Sparse), true);
+        let sort_field = SortField::new(field.data_type().clone());
+        let converter = RowConverter::new(vec![sort_field]).unwrap();
+
+        let rows = converter
+            .convert_columns(&[Arc::new(union_array.clone()) as ArrayRef])
+            .unwrap();
+
+        // roundtrip
+        let out = converter.convert_rows(&rows).unwrap();
+
+        let [col1] = out.as_slice() else {
+            panic!("expected 1 column")
+        };
+
+        let col = col1.as_any().downcast_ref::<UnionArray>().unwrap();
+        assert_eq!(col.len(), union_array.len());
+        assert_eq!(col.type_ids(), union_array.type_ids());
+
+        for i in 0..col.len() {
+            assert_eq!(col.value(i).as_ref(), union_array.value(i).as_ref());
+        }
+    }
+
+    #[test]
+    fn rows_size_should_count_for_capacity() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+
+        let empty_rows_size_with_preallocate_rows_and_data = {
+            let rows = row_converter.empty_rows(1000, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_rows = {
+            let rows = row_converter.empty_rows(1000, 0);
+
+            rows.size()
+        };
+        let empty_rows_size_with_preallocate_data = {
+            let rows = row_converter.empty_rows(0, 1000);
+
+            rows.size()
+        };
+        let empty_rows_size_without_preallocate = {
+            let rows = row_converter.empty_rows(0, 0);
+
+            rows.size()
+        };
+
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_rows,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_rows}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows_and_data > empty_rows_size_with_preallocate_data,
+            "{empty_rows_size_with_preallocate_rows_and_data} should be larger than {empty_rows_size_with_preallocate_data}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_rows > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_rows} should be larger than {empty_rows_size_without_preallocate}"
+        );
+        assert!(
+            empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
+            "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
+        );
+    }
+
+    #[test]
+    fn reserve_should_increase_capacity_to_the_requested_size() {
+        let row_converter = RowConverter::new(vec![SortField::new(DataType::UInt8)]).unwrap();
+        let mut empty_rows = row_converter.empty_rows(0, 0);
+        empty_rows.reserve(50, 50);
+        let before_size = empty_rows.size();
+        empty_rows.reserve(50, 50);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when reserving already reserved space"
+        );
+        empty_rows.reserve(10, 20);
+        assert_eq!(
+            empty_rows.size(),
+            before_size,
+            "Size should not change when already have space for the expected reserved data"
+        );
+
+        empty_rows.reserve(100, 20);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
+
+        let before_size = empty_rows.size();
+
+        empty_rows.reserve(20, 100);
+        assert!(
+            empty_rows.size() > before_size,
+            "Size should increase when reserving more space than previously reserved"
+        );
     }
 }

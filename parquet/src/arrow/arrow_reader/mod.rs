@@ -304,6 +304,36 @@ impl<T> ArrowReaderBuilder<T> {
     ///
     /// It is recommended to enable reading the page index if using this functionality, to allow
     /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
+    ///
+    /// For a running example see `parquet/examples/read_with_row_filter.rs`.
+    /// See <https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive/>
+    /// for a technical explanation of late materialization.
+    ///
+    /// # Example
+    /// ```rust
+    /// # use std::fs::File;
+    /// # use arrow_array::Int32Array;
+    /// # use parquet::arrow::ProjectionMask;
+    /// # use parquet::arrow::arrow_reader::{ArrowPredicateFn, ParquetRecordBatchReaderBuilder, RowFilter};
+    /// # fn main() -> Result<(), parquet::errors::ParquetError> {
+    /// # let testdata = arrow::util::test_util::parquet_test_data();
+    /// # let path = format!("{testdata}/alltypes_plain.parquet");
+    /// # let file = File::open(&path)?;
+    /// let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    /// let schema_desc = builder.metadata().file_metadata().schema_descr_ptr();
+    ///
+    /// // Create predicate: column id > 4. This col has index 0.
+    /// let projection = ProjectionMask::leaves(&schema_desc, [0]);
+    /// let predicate = ArrowPredicateFn::new(projection, |batch| {
+    ///     let id_col = batch.column(0);
+    ///     arrow::compute::kernels::cmp::gt(id_col, &Int32Array::new_scalar(4))
+    /// });
+    ///
+    /// let row_filter = RowFilter::new(vec![Box::new(predicate)]);
+    /// let _reader = builder.with_row_filter(row_filter).build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_row_filter(self, filter: RowFilter) -> Self {
         Self {
             filter: Some(filter),
@@ -508,6 +538,59 @@ impl ArrowReaderOptions {
     /// let mut reader = builder.build().unwrap();
     /// let _batch = reader.next().unwrap().unwrap();
     /// ```
+    ///
+    /// # Example: Preserving Dictionary Encoding
+    ///
+    /// By default, Parquet string columns are read as `Utf8Array` (or `LargeUtf8Array`),
+    /// even if the underlying Parquet data uses dictionary encoding. You can preserve
+    /// the dictionary encoding by specifying a `Dictionary` type in the schema hint:
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use tempfile::tempfile;
+    /// use arrow_array::{ArrayRef, RecordBatch, StringArray};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// use parquet::arrow::ArrowWriter;
+    ///
+    /// // Write a Parquet file with string data
+    /// let file = tempfile().unwrap();
+    /// let schema = Arc::new(Schema::new(vec![
+    ///     Field::new("city", DataType::Utf8, false)
+    /// ]));
+    /// let cities = StringArray::from(vec!["Berlin", "Berlin", "Paris", "Berlin", "Paris"]);
+    /// let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(cities)]).unwrap();
+    ///
+    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// writer.write(&batch).unwrap();
+    /// writer.close().unwrap();
+    ///
+    /// // Read the file back, requesting dictionary encoding preservation
+    /// let dict_schema = Arc::new(Schema::new(vec![
+    ///     Field::new("city", DataType::Dictionary(
+    ///         Box::new(DataType::Int32),
+    ///         Box::new(DataType::Utf8)
+    ///     ), false)
+    /// ]));
+    /// let options = ArrowReaderOptions::new().with_schema(dict_schema);
+    /// let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+    ///     file.try_clone().unwrap(),
+    ///     options
+    /// ).unwrap();
+    ///
+    /// let mut reader = builder.build().unwrap();
+    /// let batch = reader.next().unwrap().unwrap();
+    ///
+    /// // The column is now a DictionaryArray
+    /// assert!(matches!(
+    ///     batch.column(0).data_type(),
+    ///     DataType::Dictionary(_, _)
+    /// ));
+    /// ```
+    ///
+    /// **Note**: Dictionary encoding preservation works best when:
+    /// 1. The original column was dictionary encoded (the default for string columns)
+    /// 2. There are a small number of distinct values
     pub fn with_schema(self, schema: SchemaRef) -> Self {
         Self {
             supplied_schema: Some(schema),
@@ -578,6 +661,24 @@ impl ArrowReaderOptions {
     /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L917
     pub fn with_encoding_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
         self.metadata_options.set_encoding_stats_policy(policy);
+        self
+    }
+
+    /// Sets the decoding policy for [`statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L912
+    pub fn with_column_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_column_stats_policy(policy);
+        self
+    }
+
+    /// Sets the decoding policy for [`size_statistics`] in the Parquet `ColumnMetaData`.
+    ///
+    /// [`size_statistics`]:
+    /// https://github.com/apache/parquet-format/blob/786142e26740487930ddc3ec5e39d780bd930907/src/main/thrift/parquet.thrift#L936
+    pub fn with_size_stats_policy(mut self, policy: ParquetStatisticsPolicy) -> Self {
+        self.metadata_options.set_size_stats_policy(policy);
         self
     }
 
@@ -1524,14 +1625,15 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_page_encoding_stats_skipped() {
+    fn test_stats_stats_skipped() {
         let testdata = arrow::util::test_util::parquet_test_data();
         let path = format!("{testdata}/alltypes_tiny_pages.parquet");
         let file = File::open(path).unwrap();
 
         // test skipping all
-        let arrow_options =
-            ArrowReaderOptions::new().with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll);
+        let arrow_options = ArrowReaderOptions::new()
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::SkipAll)
+            .with_column_stats_policy(ParquetStatisticsPolicy::SkipAll);
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,
@@ -1542,12 +1644,14 @@ pub(crate) mod tests {
         for column in row_group_metadata.columns() {
             assert!(column.page_encoding_stats().is_none());
             assert!(column.page_encoding_stats_mask().is_none());
+            assert!(column.statistics().is_none());
         }
 
         // test skipping all but one column and converting to mask
         let arrow_options = ArrowReaderOptions::new()
             .with_encoding_stats_as_mask(true)
-            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]));
+            .with_encoding_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]))
+            .with_column_stats_policy(ParquetStatisticsPolicy::skip_except(&[0]));
         let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
             file.try_clone().unwrap(),
             arrow_options,
@@ -1558,6 +1662,47 @@ pub(crate) mod tests {
         for (idx, column) in row_group_metadata.columns().iter().enumerate() {
             assert!(column.page_encoding_stats().is_none());
             assert_eq!(column.page_encoding_stats_mask().is_some(), idx == 0);
+            assert_eq!(column.statistics().is_some(), idx == 0);
+        }
+    }
+
+    #[test]
+    fn test_size_stats_stats_skipped() {
+        let testdata = arrow::util::test_util::parquet_test_data();
+        let path = format!("{testdata}/repeated_primitive_no_list.parquet");
+        let file = File::open(path).unwrap();
+
+        // test skipping all
+        let arrow_options =
+            ArrowReaderOptions::new().with_size_stats_policy(ParquetStatisticsPolicy::SkipAll);
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.try_clone().unwrap(),
+            arrow_options,
+        )
+        .unwrap();
+
+        let row_group_metadata = builder.metadata.row_group(0);
+        for column in row_group_metadata.columns() {
+            assert!(column.repetition_level_histogram().is_none());
+            assert!(column.definition_level_histogram().is_none());
+            assert!(column.unencoded_byte_array_data_bytes().is_none());
+        }
+
+        // test skipping all but one column and converting to mask
+        let arrow_options = ArrowReaderOptions::new()
+            .with_encoding_stats_as_mask(true)
+            .with_size_stats_policy(ParquetStatisticsPolicy::skip_except(&[1]));
+        let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            file.try_clone().unwrap(),
+            arrow_options,
+        )
+        .unwrap();
+
+        let row_group_metadata = builder.metadata.row_group(0);
+        for (idx, column) in row_group_metadata.columns().iter().enumerate() {
+            assert_eq!(column.repetition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.definition_level_histogram().is_some(), idx == 1);
+            assert_eq!(column.unencoded_byte_array_data_bytes().is_some(), idx == 1);
         }
     }
 
@@ -2320,22 +2465,21 @@ pub(crate) mod tests {
                 encodings,
             );
 
-            // https://github.com/apache/arrow-rs/issues/1179
-            // let data_type = ArrowDataType::Dictionary(
-            //     Box::new(key.clone()),
-            //     Box::new(ArrowDataType::LargeUtf8),
-            // );
-            //
-            // run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
-            //     2,
-            //     ConvertedType::UTF8,
-            //     Some(data_type.clone()),
-            //     move |vals| {
-            //         let vals = string_converter::<i64>(vals);
-            //         arrow::compute::cast(&vals, &data_type).unwrap()
-            //     },
-            //     encodings,
-            // );
+            let data_type = ArrowDataType::Dictionary(
+                Box::new(key.clone()),
+                Box::new(ArrowDataType::LargeUtf8),
+            );
+
+            run_single_column_reader_tests::<ByteArrayType, _, RandUtf8Gen>(
+                2,
+                ConvertedType::UTF8,
+                Some(data_type.clone()),
+                move |vals| {
+                    let vals = string_converter::<i64>(vals);
+                    arrow::compute::cast(&vals, &data_type).unwrap()
+                },
+                encodings,
+            );
         }
     }
 

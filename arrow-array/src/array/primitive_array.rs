@@ -859,11 +859,7 @@ impl<T: ArrowPrimitiveType> PrimitiveArray<T> {
     where
         K: ArrowPrimitiveType<Native = T::Native>,
     {
-        let d = self.to_data().into_builder().data_type(K::DATA_TYPE);
-
-        // SAFETY:
-        // Native type is the same
-        PrimitiveArray::from(unsafe { d.build_unchecked() })
+        PrimitiveArray::new(self.values.clone(), self.nulls.clone())
     }
 
     /// Applies a unary infallible function to a primitive array, producing a
@@ -1189,6 +1185,8 @@ impl<T: ArrowPrimitiveType> From<PrimitiveArray<T>> for ArrayData {
         unsafe { builder.build_unchecked() }
     }
 }
+
+impl<T: ArrowPrimitiveType> super::private::Sealed for PrimitiveArray<T> {}
 
 impl<T: ArrowPrimitiveType> Array for PrimitiveArray<T> {
     fn as_any(&self) -> &dyn Any {

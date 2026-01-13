@@ -114,7 +114,7 @@ use std::sync::Arc;
 /// ```
 ///
 /// [`StringArray`]: crate::array::StringArray
-/// [fixed size arrays](https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout)
+/// [fixed length lists]: https://arrow.apache.org/docs/format/Columnar.html#fixed-size-list-layout
 #[derive(Clone)]
 pub struct FixedSizeListArray {
     data_type: DataType, // Must be DataType::FixedSizeList(value_length)
@@ -461,6 +461,8 @@ impl From<FixedSizeListArray> for ArrayData {
         unsafe { builder.build_unchecked() }
     }
 }
+
+impl super::private::Sealed for FixedSizeListArray {}
 
 impl Array for FixedSizeListArray {
     fn as_any(&self) -> &dyn Any {
