@@ -999,7 +999,7 @@ impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
         let buffers = Arc::from(buffers);
         let views = ScalarBuffer::new(views, offset, len);
         Self {
-            data_type: T::DATA_TYPE,
+            data_type,
             views,
             buffers,
             nulls,
