@@ -22,118 +22,70 @@ extern crate core;
 use arrow::array::ArrayRef;
 use arrow::datatypes::{Int64Type, UInt64Type};
 use arrow::row::{RowConverter, SortField};
-use arrow::util::bench_util::{create_boolean_array, create_dict_from_values, create_primitive_array, create_primitive_array_with_seed, create_string_array_with_len, create_string_array_with_len_range_and_prefix_and_seed, create_string_dict_array, create_string_view_array_with_len, create_string_view_array_with_max_len};
+use arrow::util::bench_util::{
+    create_boolean_array, create_boolean_array_with_seed, create_dict_from_values,
+    create_f64_array_with_seed, create_primitive_array, create_primitive_array_with_seed,
+    create_string_array_with_len, create_string_array_with_len_range_and_prefix_and_seed,
+    create_string_dict_array, create_string_view_array_with_len,
+    create_string_view_array_with_max_len,
+};
 use arrow::util::data_gen::create_random_array;
-use arrow_array::{Array, BooleanArray, Float64Array};
-use arrow_array::types::{Int32Type, Int8Type, UInt32Type, UInt8Type};
-use arrow_schema::{DataType, Field, Fields};
+use arrow_array::Array;
+use arrow_array::types::{Int8Type, Int32Type};
+use arrow_schema::{DataType, Field};
 use criterion::Criterion;
 use std::{hint, sync::Arc};
-use rand::distr::{Distribution, StandardUniform};
-use rand::prelude::StdRng;
-use rand::{Rng, SeedableRng};
-use arrow_row::unordered_row::UnorderedRowConverter;
 
 fn do_bench(c: &mut Criterion, name: &str, cols: Vec<ArrayRef>) {
     let fields: Vec<_> = cols
-      .iter()
-      .map(|x| SortField::new(x.data_type().clone()))
-      .collect();
-    let unordered_fields: Fields = cols
-      .iter()
-      .enumerate()
-      .map(|(index, x)| Field::new(format!("col_{index}"), x.data_type().clone(), true))
-      .collect();
+        .iter()
+        .map(|x| SortField::new(x.data_type().clone()))
+        .collect();
 
-    {
-        let mut group = c.benchmark_group(&format!("convert_columns {name}"));
-
-        group.bench_function("RowConverter", |b| {
-            b.iter(|| {
-                let converter = RowConverter::new(fields.clone()).unwrap();
-                hint::black_box(converter.convert_columns(&cols).unwrap())
-            });
+    c.bench_function(&format!("convert_columns {name}"), |b| {
+        b.iter(|| {
+            let converter = RowConverter::new(fields.clone()).unwrap();
+            hint::black_box(converter.convert_columns(&cols).unwrap())
         });
-
-        group.bench_function("UnorderedRowConverter", |b| {
-            b.iter(|| {
-                let converter = UnorderedRowConverter::new(unordered_fields.clone()).unwrap();
-                hint::black_box(converter.convert_columns(&cols).unwrap())
-            });
-        });
-
-        group.finish();
-    }
+    });
 
     let converter = RowConverter::new(fields).unwrap();
     let rows = converter.convert_columns(&cols).unwrap();
-
-    let unordered_converter = UnorderedRowConverter::new(unordered_fields).unwrap();
-    let unordered_rows = unordered_converter.convert_columns(&cols).unwrap();
-
-
     // using a pre-prepared row converter should be faster than the first time
-    {
-        let mut group = c.benchmark_group(&format!("convert_columns_prepared {name}"));
+    c.bench_function(&format!("convert_columns_prepared {name}"), |b| {
+        b.iter(|| hint::black_box(converter.convert_columns(&cols).unwrap()));
+    });
 
-        group.bench_function("RowConverter", |b| {
-            b.iter(|| hint::black_box(converter.convert_columns(&cols).unwrap()));
+    c.bench_function(&format!("convert_rows {name}"), |b| {
+        b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
+    });
 
+    let mut rows = converter.empty_rows(0, 0);
+    c.bench_function(&format!("append_rows {name}"), |b| {
+        let cols = cols.clone();
+        b.iter(|| {
+            rows.clear();
+            converter.append(&mut rows, &cols).unwrap();
+            hint::black_box(&mut rows);
         });
-
-        group.bench_function("UnorderedRowConverter", |b| {
-            b.iter(|| hint::black_box(unordered_converter.convert_columns(&cols).unwrap()));
-        });
-
-        group.finish();
-    }
-
-    // using a pre-prepared row converter should be faster than the first time
-    {
-        let mut group = c.benchmark_group(&format!("convert_rows {name}"));
-
-        group.bench_function("RowConverter", |b| {
-            b.iter(|| hint::black_box(converter.convert_rows(&rows).unwrap()));
-
-        });
-
-        group.bench_function("UnorderedRowConverter", |b| {
-            b.iter(|| hint::black_box(unordered_converter.convert_rows(&unordered_rows).unwrap()));
-        });
-
-        group.finish();
-    }
-
-    {
-
-        let mut group = c.benchmark_group(&format!("append_rows {name}"));
-
-        let mut rows = converter.empty_rows(0, 0);
-
-        group.bench_function("RowConverter", |b| {
-            let cols = cols.clone();
-            b.iter(|| {
-                rows.clear();
-                converter.append(&mut rows, &cols).unwrap();
-                hint::black_box(&mut rows);
-            });
-        });
-
-        let mut rows = unordered_converter.empty_rows(0, 0);
-
-        group.bench_function("UnorderedRowConverter", |b| {
-            let cols = cols.clone();
-            b.iter(|| {
-                rows.clear();
-                unordered_converter.append(&mut rows, &cols).unwrap();
-                hint::black_box(&mut rows);
-            });
-        });
-
-        group.finish();
-    }
+    });
 }
 
+fn bench_iter(c: &mut Criterion) {
+    let col = create_string_view_array_with_len(4096, 0., 100, false);
+    let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
+    let rows = converter
+        .convert_columns(&[Arc::new(col) as ArrayRef])
+        .unwrap();
+
+    c.bench_function("iterate rows", |b| {
+        b.iter(|| {
+            for r in rows.iter() {
+                hint::black_box(r.as_ref());
+            }
+        })
+    });
+}
 
 /// A single benchmark with a medium number of columns (around 50) without nested columns for real-world use cases
 /// This also makes sure there is a large gap between each value in the column and how it is laid out in the row format.
@@ -145,34 +97,15 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     let mut seed = 0;
 
     let mut cols: Vec<ArrayRef> = vec![];
-    // columnar vs row
-
-    // columnar:
-    // going column, column and for each value writing in a partition
-    // so if we have a column in L1, we partition write in different memory locations having cache misses?
-
-    // If we write in row format, we write all values for a row in one go but we still write in different location and the partitioning have cache misses
-    //
-    // the current columnar based implementation don't use the column right away but only in the end
-    // which means that we need to fetch it again from memory.
-    // and when we tested in rows I think we converted to rows right away and stored the rows.
-    // and then the partitioning of the rows is much small copies and more larger ones.
-    //
-    // But converting to row-based still copies around small pieces of memory, except it is sequentially.
-    //
-    // but if we look at number of iterations.
-    // columnar based: for each column
 
     for nulls in [0.0, 0.1, 0.2, 0.5] {
-    // for nulls in [0.0, 0.0, 0.0, 0.0] {
         seed += 1;
         cols.push(Arc::new(create_primitive_array_with_seed::<Int8Type>(
             batch_size, nulls, seed,
         )) as ArrayRef);
     }
-    //
+
     for nulls in [0.0, 0.1, 0.2, 0.5] {
-    // for nulls in [0.0, 0.0, 0.0, 0.0] {
         seed += 1;
         cols.push(Arc::new(create_primitive_array_with_seed::<Int32Type>(
             batch_size, nulls, seed,
@@ -180,8 +113,6 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     }
 
     for nulls in [0.0, 0.1, 0.2, 0.5] {
-    // for nulls in [0.0, 0.0, 0.0, 0.0] {
-
         seed += 1;
         cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
             batch_size, nulls, seed,
@@ -191,13 +122,11 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     for _ in 0..10 {
         seed += 1;
         cols.push(Arc::new(create_primitive_array_with_seed::<Int64Type>(
-            batch_size, 0.3, seed,
+            batch_size, 0.0, seed,
         )) as ArrayRef);
     }
 
     for nulls in [0.0, 0.1, 0.2, 0.5] {
-        // for nulls in [0.0, 0.0, 0.0, 0.0] {
-
         seed += 1;
         cols.push(Arc::new(
             create_string_array_with_len_range_and_prefix_and_seed::<i32>(
@@ -205,7 +134,7 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
             ),
         ));
     }
-    //
+
     for _ in 0..3 {
         seed += 1;
         cols.push(Arc::new(
@@ -232,8 +161,6 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
     }
 
     for nulls in [0.0, 0.1, 0.2, 0.5] {
-        // for nulls in [0.0, 0.0, 0.0, 0.0] {
-
         seed += 1;
         cols.push(Arc::new(create_boolean_array_with_seed(
             batch_size, nulls, 0.5, seed,
@@ -247,97 +174,16 @@ fn run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(
         )) as ArrayRef);
     }
 
-    // for nulls in [0.0, 0.1, 0.2, 0.5] {
-    //     // for nulls in [0.0, 0.0, 0.0, 0.0] {
-    //
-    //     seed += 1;
-    //     cols.push(Arc::new(create_f64_array_with_seed(batch_size, nulls, seed)) as ArrayRef);
-    // }
+    for nulls in [0.0, 0.1, 0.2, 0.5] {
+        seed += 1;
+        cols.push(Arc::new(create_f64_array_with_seed(batch_size, nulls, seed)) as ArrayRef);
+    }
 
-    do_bench(c, format!("{batch_size} lot of columns").as_str(), cols);
-}
-
-fn bench_iter(c: &mut Criterion) {
-    let col = create_string_view_array_with_len(4096, 0., 100, false);
-    let converter = RowConverter::new(vec![SortField::new(col.data_type().clone())]).unwrap();
-    let rows = converter
-        .convert_columns(&[Arc::new(col) as ArrayRef])
-        .unwrap();
-
-    c.bench_function("iterate rows", |b| {
-        b.iter(|| {
-            for r in rows.iter() {
-                hint::black_box(r.as_ref());
-            }
-        })
-    });
-}
-
-/// Creates a random array of a given size and null density based on the provided seed
-pub fn create_boolean_array_with_seed(
-    size: usize,
-    null_density: f32,
-    true_density: f32,
-    seed: u64,
-) -> BooleanArray
-where
-  StandardUniform: Distribution<bool>,
-{
-    let mut rng = StdRng::seed_from_u64(seed);
-    (0..size)
-      .map(|_| {
-          if rng.random::<f32>() < null_density {
-              None
-          } else {
-              let value = rng.random::<f32>() < true_density;
-              Some(value)
-          }
-      })
-      .collect()
-}
-
-
-/// Creates a random f64 array of a given size and nan-value density based on a given seed
-pub fn create_f64_array_with_seed(size: usize, nan_density: f32, seed: u64) -> Float64Array {
-    let mut rng = StdRng::seed_from_u64(seed);
-
-    (0..size)
-      .map(|_| {
-          if rng.random::<f32>() < nan_density {
-              Some(f64::NAN)
-          } else {
-              Some(rng.random())
-          }
-      })
-      .collect()
+    assert_eq!(cols.len(), 53);
+    do_bench(c, format!("{batch_size} 53 columns").as_str(), cols);
 }
 
 fn row_bench(c: &mut Criterion) {
-    // let cols = vec![
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 1)) as ArrayRef,
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 2)) as ArrayRef,
-    // ];
-    // do_bench(c, "4096 u64(0) u64(0)", cols);
-
-    // let cols = vec![
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 1)) as ArrayRef,
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 2)) as ArrayRef,
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 3)) as ArrayRef,
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 4)) as ArrayRef,
-    // ];
-    // do_bench(c, "4096 u64(0) u64(0) u64(0) u64(0)", cols);
-
-    // let cols = vec![
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 1)) as ArrayRef,
-    //     Arc::new(create_primitive_array_with_seed::<UInt32Type>(4096, 0., 2)) as ArrayRef,
-    //     Arc::new(create_primitive_array_with_seed::<UInt64Type>(4096, 0., 3)) as ArrayRef,
-    //     Arc::new(create_primitive_array_with_seed::<UInt8Type>(4096, 0., 4)) as ArrayRef,
-    // ];
-    // do_bench(c, "4096 u64(0) u32(0) u64(0) u8(0)", cols);
-
-    // run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
-    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(8192, c);
-
     let cols = vec![Arc::new(create_primitive_array::<UInt64Type>(4096, 0.)) as ArrayRef];
     do_bench(c, "4096 u64(0)", cols);
 
@@ -530,6 +376,9 @@ fn row_bench(c: &mut Criterion) {
         .slice(10, 20),
     ];
     do_bench(c, "4096 large_list(0) sliced to 10 of u64(0)", cols);
+
+    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(4096, c);
+    run_benchmark_on_medium_amount_and_types_of_columns_without_nesting(8192, c);
 
     bench_iter(c);
 }
