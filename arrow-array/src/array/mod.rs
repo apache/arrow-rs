@@ -944,7 +944,7 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
 /// # Safety
 ///
 /// - buffer must contain valid arrow offsets ( [`OffsetBuffer`] ) for the
-/// given length and offset.
+///   given length and offset.
 unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
     buffer: Buffer,
     offset: usize,
