@@ -1861,7 +1861,7 @@ mod tests {
         ]);
         assert!(from_utf8(array.value(0)).is_ok());
         assert!(from_utf8(array.value(1)).is_err()); // value 1 is invalid utf8
-        assert!(from_utf8(array.value(0)).is_ok());
+        assert!(from_utf8(array.value(2)).is_ok());
         array
     }
 }
