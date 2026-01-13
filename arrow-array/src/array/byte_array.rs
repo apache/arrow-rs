@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::array::{get_offsets, print_long_array};
+use crate::array::{get_offsets_from_buffer, print_long_array};
 use crate::builder::GenericByteBuilder;
 use crate::iterator::ArrayIter;
 use crate::types::ByteArrayType;
@@ -564,11 +564,11 @@ impl<T: ByteArrayType> From<ArrayData> for GenericByteArray<T> {
 
         // SAFETY:
         // ArrayData is valid, and verified type above
-        let value_offsets = unsafe { get_offsets(offset_buffer, offset, len) };
+        let value_offsets = unsafe { get_offsets_from_buffer(offset_buffer, offset, len) };
         Self {
             value_offsets,
             value_data,
-            data_type: T::DATA_TYPE,
+            data_type,
             nulls,
         }
     }
