@@ -209,8 +209,7 @@ impl NullBufferBuilder {
     ///
     /// This consumes the builder. Use [`Self::finish`] to reuse it.
     pub fn build(self) -> Option<NullBuffer> {
-        self.bitmap_builder
-            .map(|mut builder| NullBuffer::new(builder.finish()))
+        self.bitmap_builder.map(NullBuffer::from)
     }
 
     /// Builds the [NullBuffer] without resetting the builder.
