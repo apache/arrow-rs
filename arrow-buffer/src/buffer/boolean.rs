@@ -800,4 +800,27 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_extend_trusted_len_sets_byte_len() {
+        // Ensures extend_trusted_len keeps the underlying byte length in sync with bit length.
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools: Vec<_> = (0..10).map(|i| i % 2 == 0).collect();
+        unsafe { builder.extend_trusted_len(bools.into_iter()) };
+        assert_eq!(builder.as_slice().len(), bit_util::ceil(builder.len(), 8));
+    }
+
+    #[test]
+    fn test_extend_trusted_len_then_append() {
+        // Exercises append after extend_trusted_len to validate byte length and values.
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools: Vec<_> = (0..9).map(|i| i % 3 == 0).collect();
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+        builder.append(true);
+        assert_eq!(builder.as_slice().len(), bit_util::ceil(builder.len(), 8));
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().chain(std::iter::once(true)).enumerate() {
+            assert_eq!(finished.value(i), v, "at index {}", i);
+        }
+    }
 }
