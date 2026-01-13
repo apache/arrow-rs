@@ -11705,9 +11705,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "assertion `left == right` failed\n  left: ScalarBuffer([1, 1, 2])\n right: [2, 2, 3]"]
-    // TODO: fix cast of RunArrays to account for sliced RunArray's
-    // https://github.com/apache/arrow-rs/issues/9018
     fn test_sliced_run_end_encoded_to_primitive() {
         let run_ends = Int32Array::from(vec![2, 5, 6]);
         let values = Int32Array::from(vec![1, 2, 3]);
