@@ -12451,4 +12451,32 @@ mod tests {
             assert_eq!(casted.as_ref(), &expected);
         }
     }
+
+    #[test]
+    fn test_cast_between_sliced_run_end_encoded() {
+        let run_ends = Int16Array::from(vec![2, 5, 8]);
+        let values = StringArray::from(vec!["a", "b", "c"]);
+
+        let ree_array = RunArray::<Int16Type>::try_new(&run_ends, &values).unwrap();
+        let ree_array = ree_array.slice(1, 2);
+        let array_ref = Arc::new(ree_array) as ArrayRef;
+
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("run_ends", DataType::Int64, false)),
+            Arc::new(Field::new("values", DataType::Utf8, true)),
+        );
+        let cast_options = CastOptions {
+            safe: false,
+            format_options: FormatOptions::default(),
+        };
+
+        let result = cast_with_options(&array_ref, &target_type, &cast_options).unwrap();
+        let run_array = result.as_run::<Int64Type>();
+        let run_array = run_array.downcast::<StringArray>().unwrap();
+
+        let expected = vec!["a", "b"];
+        let actual = run_array.into_iter().flatten().collect::<Vec<_>>();
+
+        assert_eq!(expected, actual);
+    }
 }
