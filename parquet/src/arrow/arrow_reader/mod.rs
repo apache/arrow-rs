@@ -5622,6 +5622,14 @@ pub(crate) mod tests {
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         let result = concat_batches(&schema, &batches).unwrap();
         assert_eq!(result.num_rows(), 2);
+        assert_eq!(
+            result.column(0).as_ref(),
+            &Int64Array::from(vec![first_value, last_value])
+        );
+        assert_eq!(
+            result.column(1).as_ref(),
+            &Int64Array::from(vec![first_value, last_value])
+        );
     }
 
     #[test]
