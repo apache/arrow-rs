@@ -16,8 +16,13 @@
 // under the License.
 
 use crate::{LengthTracker, RowConverter, Rows, SortField, fixed, null_sentinel};
-use arrow_array::{Array, FixedSizeListArray, GenericListArray, OffsetSizeTrait, new_null_array};
-use arrow_buffer::{ArrowNativeType, Buffer, MutableBuffer};
+use arrow_array::{
+    Array, FixedSizeListArray, GenericListArray, GenericListViewArray, OffsetSizeTrait,
+    new_null_array,
+};
+use arrow_buffer::{
+    ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, ScalarBuffer,
+};
 use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, SortOptions};
 use std::{ops::Range, sync::Arc};
@@ -322,4 +327,164 @@ pub unsafe fn decode_fixed_size_list(
     Ok(FixedSizeListArray::from(unsafe {
         builder.build_unchecked()
     }))
+}
+
+/// Computes the encoded lengths for a `GenericListViewArray`
+///
+/// `rows` should contain the encoded child elements
+pub fn compute_lengths_list_view<O: OffsetSizeTrait>(
+    lengths: &mut [usize],
+    rows: &Rows,
+    array: &GenericListViewArray<O>,
+    shift: usize,
+) {
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+
+    lengths.iter_mut().enumerate().for_each(|(idx, length)| {
+        let start = offsets[idx].as_usize() - shift;
+        let size = sizes[idx].as_usize();
+        let range = array.is_valid(idx).then_some(start..start + size);
+        *length += encoded_len(rows, range);
+    });
+}
+
+/// Encodes the provided `GenericListViewArray` to `out` with the provided `SortOptions`
+///
+/// `rows` should contain the encoded child elements
+pub fn encode_list_view<O: OffsetSizeTrait>(
+    data: &mut [u8],
+    out_offsets: &mut [usize],
+    rows: &Rows,
+    opts: SortOptions,
+    array: &GenericListViewArray<O>,
+    shift: usize,
+) {
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+
+    out_offsets
+        .iter_mut()
+        .skip(1)
+        .enumerate()
+        .for_each(|(idx, offset)| {
+            let start = offsets[idx].as_usize() - shift;
+            let size = sizes[idx].as_usize();
+            let range = array.is_valid(idx).then_some(start..start + size);
+            let out = &mut data[*offset..];
+            *offset += encode_one(out, rows, range, opts)
+        });
+}
+
+/// Decodes a `GenericListViewArray` from `rows` with the provided `options`
+///
+/// # Safety
+///
+/// `rows` must contain valid data for the provided `converter`
+pub unsafe fn decode_list_view<O: OffsetSizeTrait>(
+    converter: &RowConverter,
+    rows: &mut [&[u8]],
+    field: &SortField,
+    validate_utf8: bool,
+) -> Result<GenericListViewArray<O>, ArrowError> {
+    let opts = field.options;
+
+    let mut values_bytes = 0;
+
+    let mut child_count = 0usize;
+    let mut list_sizes: Vec<O> = Vec::with_capacity(rows.len());
+
+    // First pass: count children and compute sizes
+    for row in rows.iter_mut() {
+        let mut row_offset = 0;
+        let mut list_size = 0usize;
+        loop {
+            let decoded = super::variable::decode_blocks(&row[row_offset..], opts, |x| {
+                values_bytes += x.len();
+            });
+            if decoded <= 1 {
+                list_sizes.push(O::usize_as(list_size));
+                break;
+            }
+            row_offset += decoded;
+            child_count += 1;
+            list_size += 1;
+        }
+    }
+    O::from_usize(child_count).expect("overflow");
+
+    let mut null_count = 0;
+    let nulls = MutableBuffer::collect_bool(rows.len(), |x| {
+        let valid = rows[x][0] != null_sentinel(opts);
+        null_count += !valid as usize;
+        valid
+    });
+
+    let mut values_offsets_vec = Vec::with_capacity(child_count);
+    let mut values_bytes = Vec::with_capacity(values_bytes);
+    for row in rows.iter_mut() {
+        let mut row_offset = 0;
+        loop {
+            let decoded = super::variable::decode_blocks(&row[row_offset..], opts, |x| {
+                values_bytes.extend_from_slice(x)
+            });
+            row_offset += decoded;
+            if decoded <= 1 {
+                break;
+            }
+            values_offsets_vec.push(values_bytes.len());
+        }
+        *row = &row[row_offset..];
+    }
+
+    if opts.descending {
+        values_bytes.iter_mut().for_each(|o| *o = !*o);
+    }
+
+    let mut last_value_offset = 0;
+    let mut child_rows: Vec<_> = values_offsets_vec
+        .into_iter()
+        .map(|offset| {
+            let v = &values_bytes[last_value_offset..offset];
+            last_value_offset = offset;
+            v
+        })
+        .collect();
+
+    let child = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
+    assert_eq!(child.len(), 1);
+
+    let child_data = child[0].to_data();
+
+    // Technically ListViews don't have to have offsets follow each other precisely, but can be
+    // reused. However, because we cannot preserve that sharing within the row format, this is the
+    // best we can do.
+    let mut list_offsets: Vec<O> = Vec::with_capacity(rows.len());
+    let mut current_offset = O::usize_as(0);
+    for size in &list_sizes {
+        list_offsets.push(current_offset);
+        current_offset += *size;
+    }
+
+    // Since RowConverter flattens certain data types (i.e. Dictionary),
+    // we need to use updated data type instead of original field
+    let corrected_inner_field = match &field.data_type {
+        DataType::ListView(inner_field) | DataType::LargeListView(inner_field) => Arc::new(
+            inner_field
+                .as_ref()
+                .clone()
+                .with_data_type(child_data.data_type().clone()),
+        ),
+        _ => unreachable!(),
+    };
+
+    let null_buffer = NullBuffer::new(BooleanBuffer::new(nulls.into(), 0, rows.len()));
+
+    GenericListViewArray::try_new(
+        corrected_inner_field,
+        ScalarBuffer::from(list_offsets),
+        ScalarBuffer::from(list_sizes),
+        child[0].clone(),
+        Some(null_buffer).filter(|n| n.null_count() > 0),
+    )
 }

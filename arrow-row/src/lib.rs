@@ -179,6 +179,39 @@ use crate::variable::{decode_binary, decode_string};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
 mod fixed;
+
+/// Computes the minimum offset and maximum end (offset + size) for a ListView array.
+/// Returns (min_offset, max_end) which can be used to slice the values array.
+fn compute_list_view_bounds<O: OffsetSizeTrait>(array: &GenericListViewArray<O>) -> (usize, usize) {
+    if array.is_empty() {
+        return (0, 0);
+    }
+
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+
+    let mut min_offset = usize::MAX;
+    let mut max_end = 0usize;
+
+    for i in 0..array.len() {
+        let offset = offsets[i].as_usize();
+        let size = sizes[i].as_usize();
+        let end = offset + size;
+
+        if size > 0 {
+            min_offset = min_offset.min(offset);
+            max_end = max_end.max(end);
+        }
+    }
+
+    if min_offset == usize::MAX {
+        // All lists are empty
+        (0, 0)
+    } else {
+        (min_offset, max_end)
+    }
+}
+
 mod list;
 mod run;
 mod variable;
@@ -535,7 +568,10 @@ impl Codec {
                 Ok(Self::RunEndEncoded(converter))
             }
             d if !d.is_nested() => Ok(Self::Stateless),
-            DataType::List(f) | DataType::LargeList(f) => {
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f) => {
                 // The encoded contents will be inverted if descending is set to true
                 // As such we set `descending` to false and negate nulls first if it
                 // it set to true
@@ -645,6 +681,20 @@ impl Codec {
                         list_array
                             .values()
                             .slice(first_offset, last_offset - first_offset)
+                    }
+                    DataType::ListView(_) => {
+                        let list_view_array = array.as_list_view::<i32>();
+                        let (min_offset, max_end) = compute_list_view_bounds(list_view_array);
+                        list_view_array
+                            .values()
+                            .slice(min_offset, max_end - min_offset)
+                    }
+                    DataType::LargeListView(_) => {
+                        let list_view_array = array.as_list_view::<i64>();
+                        let (min_offset, max_end) = compute_list_view_bounds(list_view_array);
+                        list_view_array
+                            .values()
+                            .slice(min_offset, max_end - min_offset)
                     }
                     DataType::FixedSizeList(_, _) => {
                         as_fixed_size_list_array(array).values().clone()
@@ -783,9 +833,11 @@ impl RowConverter {
     fn supports_datatype(d: &DataType) -> bool {
         match d {
             _ if !d.is_nested() => true,
-            DataType::List(f) | DataType::LargeList(f) | DataType::FixedSizeList(f, _) => {
-                Self::supports_datatype(f.data_type())
-            }
+            DataType::List(f)
+            | DataType::LargeList(f)
+            | DataType::ListView(f)
+            | DataType::LargeListView(f)
+            | DataType::FixedSizeList(f, _) => Self::supports_datatype(f.data_type()),
             DataType::Struct(f) => f.iter().all(|x| Self::supports_datatype(x.data_type())),
             DataType::RunEndEncoded(_, values) => Self::supports_datatype(values.data_type()),
             DataType::Union(fs, _mode) => fs
@@ -1603,6 +1655,26 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 DataType::LargeList(_) => {
                     list::compute_lengths(tracker.materialized(), rows, as_large_list_array(array))
                 }
+                DataType::ListView(_) => {
+                    let list_view = array.as_list_view::<i32>();
+                    let (min_offset, _) = compute_list_view_bounds(list_view);
+                    list::compute_lengths_list_view(
+                        tracker.materialized(),
+                        rows,
+                        list_view,
+                        min_offset,
+                    )
+                }
+                DataType::LargeListView(_) => {
+                    let list_view = array.as_list_view::<i64>();
+                    let (min_offset, _) = compute_list_view_bounds(list_view);
+                    list::compute_lengths_list_view(
+                        tracker.materialized(),
+                        rows,
+                        list_view,
+                        min_offset,
+                    )
+                }
                 DataType::FixedSizeList(_, _) => compute_lengths_fixed_size_list(
                     &mut tracker,
                     rows,
@@ -1796,6 +1868,16 @@ fn encode_column(
             DataType::LargeList(_) => {
                 list::encode(data, offsets, rows, opts, as_large_list_array(column))
             }
+            DataType::ListView(_) => {
+                let list_view = column.as_list_view::<i32>();
+                let (min_offset, _) = compute_list_view_bounds(list_view);
+                list::encode_list_view(data, offsets, rows, opts, list_view, min_offset)
+            }
+            DataType::LargeListView(_) => {
+                let list_view = column.as_list_view::<i64>();
+                let (min_offset, _) = compute_list_view_bounds(list_view);
+                list::encode_list_view(data, offsets, rows, opts, list_view, min_offset)
+            }
             DataType::FixedSizeList(_, _) => {
                 encode_fixed_size_list(data, offsets, rows, opts, as_fixed_size_list_array(column))
             }
@@ -1945,6 +2027,12 @@ unsafe fn decode_column(
             DataType::LargeList(_) => {
                 Arc::new(unsafe { list::decode::<i64>(converter, rows, field, validate_utf8) }?)
             }
+            DataType::ListView(_) => Arc::new(unsafe {
+                list::decode_list_view::<i32>(converter, rows, field, validate_utf8)
+            }?),
+            DataType::LargeListView(_) => Arc::new(unsafe {
+                list::decode_list_view::<i64>(converter, rows, field, validate_utf8)
+            }?),
             DataType::FixedSizeList(_, value_length) => Arc::new(unsafe {
                 list::decode_fixed_size_list(
                     converter,
@@ -3130,6 +3218,143 @@ mod tests {
     fn test_large_list() {
         test_single_list::<i64>();
         test_nested_list::<i64>();
+    }
+
+    fn test_single_list_view<O: OffsetSizeTrait>() {
+        let mut builder = GenericListViewBuilder::<O, _>::new(Int32Builder::new());
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(32);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.values().append_value(12);
+        builder.append(true);
+        builder.values().append_value(32);
+        builder.values().append_value(52);
+        builder.append(true);
+        builder.values().append_value(32); // MASKED
+        builder.values().append_value(52); // MASKED
+        builder.append(false);
+        builder.values().append_value(32);
+        builder.values().append_null();
+        builder.append(true);
+        builder.append(true);
+        builder.values().append_value(17); // MASKED
+        builder.values().append_null(); // MASKED
+        builder.append(false);
+
+        let list = Arc::new(builder.finish()) as ArrayRef;
+        let d = list.data_type().clone();
+
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 52] < [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 52]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify the content matches (ListView may have different physical layout but same logical content)
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        let options = SortOptions::default().asc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) > rows.row(1)); // [32, 52, 32] > [32, 52, 12]
+        assert!(rows.row(2) < rows.row(1)); // [32, 52] < [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 52]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
+        assert!(rows.row(5) < rows.row(2)); // [] < [32, 52]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let options = SortOptions::default().desc().with_nulls_first(false);
+        let field = SortField::new_with_options(d.clone(), options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 52] > [32, 52, 12]
+        assert!(rows.row(3) > rows.row(2)); // null > [32, 52]
+        assert!(rows.row(4) > rows.row(2)); // [32, null] > [32, 52]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
+        assert!(rows.row(3) > rows.row(5)); // null > []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let options = SortOptions::default().desc().with_nulls_first(true);
+        let field = SortField::new_with_options(d, options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        assert!(rows.row(0) < rows.row(1)); // [32, 52, 32] < [32, 52, 12]
+        assert!(rows.row(2) > rows.row(1)); // [32, 52] > [32, 52, 12]
+        assert!(rows.row(3) < rows.row(2)); // null < [32, 52]
+        assert!(rows.row(4) < rows.row(2)); // [32, null] < [32, 52]
+        assert!(rows.row(5) > rows.row(2)); // [] > [32, 52]
+        assert!(rows.row(3) < rows.row(5)); // null < []
+        assert_eq!(rows.row(3), rows.row(6)); // null = null (different masked values)
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        let sliced_list = list.slice(1, 5);
+        let rows_on_sliced_list = converter
+            .convert_columns(&[Arc::clone(&sliced_list)])
+            .unwrap();
+
+        assert!(rows_on_sliced_list.row(1) > rows_on_sliced_list.row(0)); // [32, 52] > [32, 52, 12]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(1)); // null < [32, 52]
+        assert!(rows_on_sliced_list.row(3) < rows_on_sliced_list.row(1)); // [32, null] < [32, 52]
+        assert!(rows_on_sliced_list.row(4) > rows_on_sliced_list.row(1)); // [] > [32, 52]
+        assert!(rows_on_sliced_list.row(2) < rows_on_sliced_list.row(4)); // null < []
+
+        let back = converter.convert_rows(&rows_on_sliced_list).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_list_view() {
+        test_single_list_view::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_view() {
+        test_single_list_view::<i64>();
     }
 
     #[test]
