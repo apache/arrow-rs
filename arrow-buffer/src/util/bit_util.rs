@@ -226,7 +226,7 @@ pub fn apply_bitwise_binary_op<F>(
             let right_byte_offset = right_offset_in_bits / 8;
 
             // Read the same amount of bits from the right buffer
-            let right_first_byte: u8 = crate::util::bit_util::read_up_to_byte_from_offset(
+            let right_first_byte: u8 = read_up_to_byte_from_offset(
                 &right.as_ref()[right_byte_offset..],
                 bits_to_next_byte,
                 // Right bit offset
