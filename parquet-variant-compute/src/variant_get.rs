@@ -346,7 +346,6 @@ mod test {
     use arrow::compute::CastOptions;
     use arrow::datatypes::DataType::{Int16, Int32, Int64};
     use arrow::datatypes::i256;
-    use arrow::util::display::FormatOptions;
     use arrow_schema::DataType::{Boolean, Float32, Float64, Int8};
     use arrow_schema::{DataType, Field, FieldRef, Fields, IntervalUnit, TimeUnit};
     use chrono::DateTime;
@@ -1286,7 +1285,7 @@ mod test {
             .with_as_type(Some(FieldRef::from(field)))
             .with_cast_options(CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             });
 
         let result = variant_get(&array, options);
