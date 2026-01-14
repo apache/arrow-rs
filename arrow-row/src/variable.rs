@@ -55,11 +55,20 @@ pub fn encoded_len(a: Option<&[u8]>) -> usize {
 #[inline]
 pub fn padded_length(a: Option<usize>) -> usize {
     match a {
-        Some(a) if a <= BLOCK_SIZE => 1 + ceil(a, MINI_BLOCK_SIZE) * (MINI_BLOCK_SIZE + 1),
+        Some(a) => non_null_padded_length(a),
+        None => 1,
+    }
+}
+
+/// Returns the padded length of the encoded length of the given length
+#[inline]
+pub(crate) fn non_null_padded_length(len: usize) -> usize {
+    if len <= BLOCK_SIZE {
+        1 + ceil(len, MINI_BLOCK_SIZE) * (MINI_BLOCK_SIZE + 1)
+    } else {
         // Each miniblock ends with a 1 byte continuation, therefore add
         // `(MINI_BLOCK_COUNT - 1)` additional bytes over non-miniblock size
-        Some(a) => MINI_BLOCK_COUNT + ceil(a, BLOCK_SIZE) * (BLOCK_SIZE + 1),
-        None => 1,
+        MINI_BLOCK_COUNT + ceil(len, BLOCK_SIZE) * (BLOCK_SIZE + 1)
     }
 }
 
