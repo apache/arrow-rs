@@ -264,7 +264,7 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice_mut()
     }
 
-    /// Creates a [`BooleanBuffer`].
+    /// Resets this builder and returns a [`BooleanBuffer`].
     ///
     /// Use [`Self::build`] when you don't need to reuse this builder.
     #[inline]

@@ -202,7 +202,7 @@ impl NullBufferBuilder {
     /// when you don't need to reuse this builder.
     pub fn finish(&mut self) -> Option<NullBuffer> {
         self.len = 0;
-        Some(NullBuffer::new(self.bitmap_builder.take()?.finish()))
+        Some(NullBuffer::new(self.bitmap_builder.take()?.build()))
     }
 
     /// Builds the [`NullBuffer`] without resetting the builder.
