@@ -39,24 +39,30 @@ ahash = { version = "0.8", default-features = false, features = ["runtime-rng"] 
 [dependencies]
 arrow-array = { workspace = true, optional = true }
 arrow-buffer = { workspace = true, optional = true }
-arrow-cast = { workspace = true, optional = true }
 arrow-csv = { workspace = true, optional = true }
 arrow-data = { workspace = true, optional = true }
 arrow-schema = { workspace = true, optional = true }
 arrow-select = { workspace = true, optional = true }
 arrow-ipc = { workspace = true, optional = true }
+parquet-geospatial = { workspace = true, optional = true }
+parquet-variant = { workspace = true, optional = true }
+parquet-variant-json = { workspace = true, optional = true }
+parquet-variant-compute = { workspace = true, optional = true }
+
 object_store = { version = "0.12.0", default-features = false, optional = true }
 
 bytes = { version = "1.1", default-features = false, features = ["std"] }
 thrift = { version = "0.17", default-features = false }
 snap = { version = "1.0", default-features = false, optional = true }
 brotli = { version = "8.0", default-features = false, features = ["std"], optional = true }
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"], optional = true }
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"], optional = true }
+# To use `flate2` you must enable either the `flate2-zlib-rs` or `flate2-rust_backened` backends
+flate2 = { version = "1.1", default-features = false, optional = true }
+lz4_flex = { version = "0.12", default-features = false, features = ["std", "frame"], optional = true }
 zstd = { version = "0.13", optional = true, default-features = false }
 chrono = { workspace = true }
-num = { version = "0.4", default-features = false }
 num-bigint = { version = "0.4", default-features = false }
+num-integer = { version = "0.1.46", default-features = false, features = ["std"] }
+num-traits = { version = "0.2.19", default-features = false, features = ["std"] }
 base64 = { version = "0.22", default-features = false, features = ["std", ], optional = true }
 clap = { version = "4.1", default-features = false, features = ["std", "derive", "env", "help", "error-context", "usage"], optional = true }
 serde = { version = "1.0", default-features = false, features = ["derive"], optional = true }
@@ -64,39 +70,41 @@ serde_json = { version = "1.0", default-features = false, features = ["std"], op
 seq-macro = { version = "0.3", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std"], optional = true }
 tokio = { version = "1.0", optional = true, default-features = false, features = ["macros", "rt", "io-util"] }
-hashbrown = { version = "0.15", default-features = false }
+hashbrown = { version = "0.16", default-features = false }
 twox-hash = { version = "2.0", default-features = false, features = ["xxhash64"] }
 paste = { version = "1.0" }
 half = { version = "2.1", default-features = false, features = ["num-traits"] }
 crc32fast = { version = "1.4.2", optional = true, default-features = false }
-simdutf8 = { version = "0.1.5", optional = true, default-features = false }
+simdutf8 = { workspace = true , optional = true }
 ring = { version = "0.17", default-features = false, features = ["std"], optional = true }
 
 [dev-dependencies]
 base64 = { version = "0.22", default-features = false, features = ["std"] }
-criterion = { version = "0.5", default-features = false, features = ["async_futures"]  }
+criterion = { workspace = true, default-features = false, features = ["async_futures"]  }
 snap = { version = "1.0", default-features = false }
 tempfile = { version = "3.0", default-features = false }
+insta = "1.43.1"
 brotli = { version = "8.0", default-features = false, features = ["std"] }
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
-lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
+lz4_flex = { version = "0.12", default-features = false, features = ["std", "frame"] }
 zstd = { version = "0.13", default-features = false }
 serde_json = { version = "1.0", features = ["std"], default-features = false }
 arrow = { workspace = true, features = ["ipc", "test_utils", "prettyprint", "json"] }
+arrow-cast = { workspace = true }
 tokio = { version = "1.0", default-features = false, features = ["macros", "rt-multi-thread", "io-util", "fs"] }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
 object_store = { version = "0.12.0", default-features = false, features = ["azure", "fs"] }
-sysinfo = { version = "0.35.0", default-features = false, features = ["system"] }
+sysinfo = { version = "0.37.1", default-features = false, features = ["system"] }
 
 [package.metadata.docs.rs]
 all-features = true
 
 [features]
-default = ["arrow", "snap", "brotli", "flate2", "lz4", "zstd", "base64", "simdutf8"]
+default = ["arrow", "snap", "brotli", "flate2-zlib-rs", "lz4", "zstd", "base64", "simdutf8"]
 # Enable lz4
 lz4 = ["lz4_flex"]
 # Enable arrow reader/writer APIs
-arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-cast", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
+arrow = ["base64", "arrow-array", "arrow-buffer", "arrow-data", "arrow-schema", "arrow-select", "arrow-ipc"]
 # Enable support for arrow canonical extension types
 arrow_canonical_extension_types = ["arrow-schema?/canonical_extension_types"]
 # Enable CLI tools
@@ -106,7 +114,7 @@ json = ["serde_json", "base64"]
 # Enable internal testing APIs
 test_common = ["arrow/test_utils"]
 # Experimental, unstable functionality primarily used for testing
-experimental = []
+experimental = ["variant_experimental"]
 # Enable async APIs
 async = ["futures", "tokio"]
 # Enable object_store integration
@@ -119,6 +127,13 @@ crc = ["dep:crc32fast"]
 simdutf8 = ["dep:simdutf8"]
 # Enable Parquet modular encryption support
 encryption = ["dep:ring"]
+# Explicitely enabling rust_backend and zlib-rs features for flate2
+flate2-rust_backened = ["flate2/rust_backend"]
+flate2-zlib-rs = ["flate2/zlib-rs"]
+# Enable parquet variant support
+variant_experimental = ["arrow", "parquet-variant", "parquet-variant-json", "parquet-variant-compute"]
+# Enable geospatial support
+geospatial = ["parquet-geospatial"]
 
 
 [[example]]
@@ -142,6 +157,11 @@ required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
 
 [[example]]
+name = "read_with_row_filter"
+required-features = ["arrow"]
+path = "./examples/read_with_row_filter.rs"
+
+[[example]]
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
@@ -159,6 +179,11 @@ path = "./tests/arrow_reader/mod.rs"
 name = "encryption"
 required-features = ["arrow"]
 path = "./tests/encryption/mod.rs"
+
+[[test]]
+name = "variant_integration"
+required-features = ["arrow", "variant_experimental", "serde"]
+path = "./tests/variant_integration.rs"
 
 [[bin]]
 name = "parquet-read"
@@ -236,7 +261,17 @@ name = "metadata"
 harness = false
 
 [[bench]]
+name = "parquet_round_trip"
+required-features = ["arrow"]
+harness = false
+
+[[bench]]
 name = "row_selector"
+harness = false
+required-features = ["arrow"]
+
+[[bench]]
+name = "row_selection_cursor"
 harness = false
 required-features = ["arrow"]
 

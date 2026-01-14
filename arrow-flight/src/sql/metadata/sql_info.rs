@@ -30,7 +30,7 @@ use std::sync::Arc;
 use arrow_arith::boolean::or;
 use arrow_array::array::{Array, UInt32Array, UnionArray};
 use arrow_array::builder::{
-    ArrayBuilder, BooleanBuilder, Int32Builder, Int64Builder, Int8Builder, ListBuilder, MapBuilder,
+    ArrayBuilder, BooleanBuilder, Int8Builder, Int32Builder, Int64Builder, ListBuilder, MapBuilder,
     StringBuilder, UInt32Builder,
 };
 use arrow_array::{RecordBatch, Scalar};
@@ -196,10 +196,7 @@ static UNION_TYPE: Lazy<DataType> = Lazy::new(|| {
         ),
     ];
 
-    // create "type ids", one for each type, assume they go from 0 .. num_fields
-    let type_ids: Vec<i8> = (0..fields.len()).map(|v| v as i8).collect();
-
-    DataType::Union(UnionFields::new(type_ids, fields), UnionMode::Dense)
+    DataType::Union(UnionFields::from_fields(fields), UnionMode::Dense)
 });
 
 impl SqlInfoUnionBuilder {
@@ -444,7 +441,7 @@ pub struct GetSqlInfoBuilder<'a> {
 
 impl CommandGetSqlInfo {
     /// Create a builder suitable for constructing a response
-    pub fn into_builder(self, infos: &SqlInfoData) -> GetSqlInfoBuilder {
+    pub fn into_builder(self, infos: &SqlInfoData) -> GetSqlInfoBuilder<'_> {
         GetSqlInfoBuilder {
             info: self.info,
             infos,

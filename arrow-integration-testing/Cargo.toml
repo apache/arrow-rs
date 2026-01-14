@@ -39,11 +39,10 @@ arrow-flight = { path = "../arrow-flight", default-features = false }
 arrow-integration-test = { path = "../arrow-integration-test", default-features = false }
 clap = { version = "4", default-features = false, features = ["std", "derive", "help", "error-context", "usage"] }
 futures = { version = "0.3", default-features = false }
-prost = { version = "0.13", default-features = false }
-serde = { version = "1.0", default-features = false, features = ["rc", "derive"] }
+prost = { version = "0.14.1", default-features = false }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 tokio = { version = "1.0", default-features = false, features = [ "rt-multi-thread"] }
-tonic = { version = "0.12", default-features = false }
+tonic = { version = "0.14.1", default-features = false }
 tracing-subscriber = { version = "0.3.1", default-features = false, features = ["fmt"], optional = true }
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 

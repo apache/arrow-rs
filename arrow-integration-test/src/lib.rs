@@ -15,22 +15,30 @@
 // specific language governing permissions and limitations
 // under the License.
 
-//! Support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
+//! Partial support for the [Apache Arrow JSON test data format](https://github.com/apache/arrow/blob/master/docs/source/format/Integration.rst#json-test-data-format)
 //!
 //! These utilities define structs that read the integration JSON format for integration testing purposes.
 //!
 //! This is not a canonical format, but provides a human-readable way of verifying language implementations
+//!
+//! <div class="warning">
+//!
+//! This crate is **only intended for integration testing the
+//! [Arrow project](https://github.com/apache/arrow-rs)**. It is not [intended for usage outside of
+//! this context](https://github.com/apache/arrow-rs/issues/8684#issuecomment-3433193158).
+//!
+//! </div>
 
 #![doc(
     html_logo_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_white-bg.svg",
     html_favicon_url = "https://arrow.apache.org/img/arrow-logo_chevrons_black-txt_transparent-bg.svg"
 )]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(missing_docs)]
 use arrow_buffer::{IntervalDayTime, IntervalMonthDayNano, ScalarBuffer};
 use hex::decode;
-use num::BigInt;
-use num::Signed;
+use num_bigint::BigInt;
+use num_traits::Signed;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map as SJMap, Value};
 use std::collections::HashMap;
@@ -794,13 +802,13 @@ pub fn array_from_json(
         DataType::Dictionary(key_type, value_type) => {
             #[allow(deprecated)]
             let dict_id = field.dict_id().ok_or_else(|| {
-                ArrowError::JsonError(format!("Unable to find dict_id for field {field:?}"))
+                ArrowError::JsonError(format!("Unable to find dict_id for field {field}"))
             })?;
             // find dictionary
             let dictionary = dictionaries
                 .ok_or_else(|| {
                     ArrowError::JsonError(format!(
-                        "Unable to find any dictionaries for field {field:?}"
+                        "Unable to find any dictionaries for field {field}"
                     ))
                 })?
                 .get(&dict_id);
@@ -814,9 +822,45 @@ pub fn array_from_json(
                     dictionaries,
                 ),
                 None => Err(ArrowError::JsonError(format!(
-                    "Unable to find dictionary for field {field:?}"
+                    "Unable to find dictionary for field {field}"
                 ))),
             }
+        }
+        DataType::Decimal32(precision, scale) => {
+            let mut b = Decimal32Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i32>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
+        }
+        DataType::Decimal64(precision, scale) => {
+            let mut b = Decimal64Builder::with_capacity(json_col.count);
+            for (is_valid, value) in json_col
+                .validity
+                .as_ref()
+                .unwrap()
+                .iter()
+                .zip(json_col.data.unwrap())
+            {
+                match is_valid {
+                    1 => b.append_value(value.as_str().unwrap().parse::<i64>().unwrap()),
+                    _ => b.append_null(),
+                };
+            }
+            Ok(Arc::new(
+                b.finish().with_precision_and_scale(*precision, *scale)?,
+            ))
         }
         DataType::Decimal128(precision, scale) => {
             let mut b = Decimal128Builder::with_capacity(json_col.count);
@@ -910,7 +954,7 @@ pub fn array_from_json(
             Ok(Arc::new(array))
         }
         t => Err(ArrowError::JsonError(format!(
-            "data type {t:?} not supported"
+            "data type {t} not supported"
         ))),
     }
 }
@@ -1007,6 +1051,16 @@ fn create_null_buf(json_col: &ArrowJsonColumn) -> Buffer {
 
 impl ArrowJsonBatch {
     /// Convert a [`RecordBatch`] to an [`ArrowJsonBatch`]
+    ///
+    /// <div class="warning">
+    ///
+    /// This function is **deliberately incomplete**! As noted in the crate-level documentation,
+    /// this crate is only intended for use within the Arrow project itself.
+    ///
+    /// Right now, this function only supports `DataType::Int8` columns. Other data types will lead
+    /// to an empty `ArrowJsonColumn`.
+    ///
+    /// </div>
     pub fn from_batch(batch: &RecordBatch) -> ArrowJsonBatch {
         let mut json_batch = ArrowJsonBatch {
             count: batch.num_rows(),

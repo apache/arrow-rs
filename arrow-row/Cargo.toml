@@ -47,4 +47,3 @@ half = { version = "2.1", default-features = false }
 arrow-cast = { workspace = true }
 arrow-ord = { workspace = true }
 rand = { version = "0.9", default-features = false, features = ["std", "std_rng", "thread_rng"] }
-

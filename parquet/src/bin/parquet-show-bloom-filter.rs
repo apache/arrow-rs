@@ -49,7 +49,9 @@ use std::{fs::File, path::Path};
 struct Args {
     #[clap(help("Path to the parquet file"))]
     file_name: String,
-    #[clap(help("Check the bloom filter indexes for the given column. Only string typed columns or columns with an Int32 or Int64 physical type are supported"))]
+    #[clap(help(
+        "Check the bloom filter indexes for the given column. Only string typed columns or columns with an Int32 or Int64 physical type are supported"
+    ))]
     column: String,
     #[clap(
         help(
@@ -128,13 +130,13 @@ fn check_filter(sbbf: &Sbbf, value: &String, column: &ColumnChunkMetaData) -> Re
         Type::INT32 => {
             let value: i32 = value
                 .parse()
-                .map_err(|e| format!("Unable to parse value '{}' to i32: {}", value, e))?;
+                .map_err(|e| format!("Unable to parse value '{value}' to i32: {e}"))?;
             Ok(sbbf.check(&value))
         }
         Type::INT64 => {
             let value: i64 = value
                 .parse()
-                .map_err(|e| format!("Unable to parse value '{}' to i64: {}", value, e))?;
+                .map_err(|e| format!("Unable to parse value '{value}' to i64: {e}"))?;
             Ok(sbbf.check(&value))
         }
         Type::BYTE_ARRAY => Ok(sbbf.check(&value.as_str())),

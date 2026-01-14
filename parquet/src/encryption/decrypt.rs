@@ -18,9 +18,10 @@
 //! Configuration and utilities for decryption of files using Parquet Modular Encryption
 
 use crate::encryption::ciphers::{BlockDecryptor, RingGcmBlockDecryptor, TAG_LEN};
-use crate::encryption::modules::{create_footer_aad, create_module_aad, ModuleType};
+use crate::encryption::modules::{ModuleType, create_footer_aad, create_module_aad};
 use crate::errors::{ParquetError, Result};
 use crate::file::column_crypto_metadata::ColumnCryptoMetaData;
+use crate::file::metadata::HeapSize;
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Formatter;
@@ -142,13 +143,13 @@ impl CryptoContext {
         column_ordinal: usize,
     ) -> Result<Self> {
         let (data_decryptor, metadata_decryptor) = match column_crypto_metadata {
-            ColumnCryptoMetaData::EncryptionWithFooterKey => {
+            ColumnCryptoMetaData::ENCRYPTION_WITH_FOOTER_KEY => {
                 // TODO: In GCM-CTR mode will this need to be a non-GCM decryptor?
                 let data_decryptor = file_decryptor.get_footer_decryptor()?;
                 let metadata_decryptor = file_decryptor.get_footer_decryptor()?;
                 (data_decryptor, metadata_decryptor)
             }
-            ColumnCryptoMetaData::EncryptionWithColumnKey(column_key_encryption) => {
+            ColumnCryptoMetaData::ENCRYPTION_WITH_COLUMN_KEY(column_key_encryption) => {
                 let key_metadata = &column_key_encryption.key_metadata;
                 let full_column_name;
                 let column_name = if column_key_encryption.path_in_schema.len() == 1 {
@@ -271,6 +272,12 @@ struct ExplicitDecryptionKeys {
     column_keys: HashMap<String, Vec<u8>>,
 }
 
+impl HeapSize for ExplicitDecryptionKeys {
+    fn heap_size(&self) -> usize {
+        self.footer_key.heap_size() + self.column_keys.heap_size()
+    }
+}
+
 #[derive(Clone)]
 enum DecryptionKeys {
     Explicit(ExplicitDecryptionKeys),
@@ -286,6 +293,19 @@ impl PartialEq for DecryptionKeys {
             }
             (DecryptionKeys::ViaRetriever(_), DecryptionKeys::ViaRetriever(_)) => true,
             _ => false,
+        }
+    }
+}
+
+impl HeapSize for DecryptionKeys {
+    fn heap_size(&self) -> usize {
+        match self {
+            Self::Explicit(keys) => keys.heap_size(),
+            Self::ViaRetriever(_) => {
+                // The retriever is a user-defined type we don't control,
+                // so we can't determine the heap size.
+                0
+            }
         }
     }
 }
@@ -334,6 +354,11 @@ pub struct FileDecryptionProperties {
     footer_signature_verification: bool,
 }
 
+impl HeapSize for FileDecryptionProperties {
+    fn heap_size(&self) -> usize {
+        self.keys.heap_size() + self.aad_prefix.heap_size()
+    }
+}
 impl FileDecryptionProperties {
     /// Returns a new [`FileDecryptionProperties`] builder that will use the provided key to
     /// decrypt footer metadata.
@@ -361,7 +386,7 @@ impl FileDecryptionProperties {
 
     /// Get the encryption key for decrypting a file's footer,
     /// and also column data if uniform encryption is used.
-    pub fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<Vec<u8>>> {
+    pub fn footer_key(&self, key_metadata: Option<&[u8]>) -> Result<Cow<'_, Vec<u8>>> {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => Ok(Cow::Borrowed(&keys.footer_key)),
             DecryptionKeys::ViaRetriever(retriever) => {
@@ -376,7 +401,7 @@ impl FileDecryptionProperties {
         &self,
         column_name: &str,
         key_metadata: Option<&[u8]>,
-    ) -> Result<Cow<Vec<u8>>> {
+    ) -> Result<Cow<'_, Vec<u8>>> {
         match &self.keys {
             DecryptionKeys::Explicit(keys) => match keys.column_keys.get(column_name) {
                 None => Err(general_err!(
@@ -438,16 +463,16 @@ impl DecryptionPropertiesBuilder {
     }
 
     /// Finalize the builder and return created [`FileDecryptionProperties`]
-    pub fn build(self) -> Result<FileDecryptionProperties> {
+    pub fn build(self) -> Result<Arc<FileDecryptionProperties>> {
         let keys = DecryptionKeys::Explicit(ExplicitDecryptionKeys {
             footer_key: self.footer_key,
             column_keys: self.column_keys,
         });
-        Ok(FileDecryptionProperties {
+        Ok(Arc::new(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
-        })
+        }))
     }
 
     /// Specify the expected AAD prefix to be used for decryption.
@@ -509,13 +534,13 @@ impl DecryptionPropertiesBuilderWithRetriever {
     }
 
     /// Finalize the builder and return created [`FileDecryptionProperties`]
-    pub fn build(self) -> Result<FileDecryptionProperties> {
+    pub fn build(self) -> Result<Arc<FileDecryptionProperties>> {
         let keys = DecryptionKeys::ViaRetriever(self.key_retriever);
-        Ok(FileDecryptionProperties {
+        Ok(Arc::new(FileDecryptionProperties {
             keys,
             aad_prefix: self.aad_prefix,
             footer_signature_verification: self.footer_signature_verification,
-        })
+        }))
     }
 
     /// Specify the expected AAD prefix to be used for decryption.
@@ -536,7 +561,7 @@ impl DecryptionPropertiesBuilderWithRetriever {
 
 #[derive(Clone, Debug)]
 pub(crate) struct FileDecryptor {
-    decryption_properties: FileDecryptionProperties,
+    decryption_properties: Arc<FileDecryptionProperties>,
     footer_decryptor: Arc<dyn BlockDecryptor>,
     file_aad: Vec<u8>,
 }
@@ -547,9 +572,24 @@ impl PartialEq for FileDecryptor {
     }
 }
 
+/// Estimate the size in bytes required for the file decryptor.
+/// This is important to track the memory usage of cached Parquet meta data,
+/// and is used via [`crate::file::metadata::ParquetMetaData::memory_size`].
+/// Note that when a [`KeyRetriever`] is used, its heap size won't be included
+/// and the result will be an underestimate.
+/// If the [`FileDecryptionProperties`] are shared between multiple files then the
+/// heap size may also be an overestimate.
+impl HeapSize for FileDecryptor {
+    fn heap_size(&self) -> usize {
+        self.decryption_properties.heap_size()
+            + (Arc::clone(&self.footer_decryptor) as Arc<dyn HeapSize>).heap_size()
+            + self.file_aad.heap_size()
+    }
+}
+
 impl FileDecryptor {
     pub(crate) fn new(
-        decryption_properties: &FileDecryptionProperties,
+        decryption_properties: &Arc<FileDecryptionProperties>,
         footer_key_metadata: Option<&[u8]>,
         aad_file_unique: Vec<u8>,
         aad_prefix: Vec<u8>,
@@ -565,7 +605,7 @@ impl FileDecryptor {
 
         Ok(Self {
             footer_decryptor: Arc::new(footer_decryptor),
-            decryption_properties: decryption_properties.clone(),
+            decryption_properties: Arc::clone(decryption_properties),
             file_aad,
         })
     }

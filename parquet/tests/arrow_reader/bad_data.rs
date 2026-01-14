@@ -80,17 +80,16 @@ fn test_invalid_files() {
 #[test]
 fn test_parquet_1481() {
     let err = read_file("PARQUET-1481.parquet").unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "Parquet error: unexpected parquet type: -7"
-    );
+    assert_eq!(err.to_string(), "Parquet error: Unexpected Type -7");
 }
 
 #[test]
-#[should_panic(expected = "assertion failed: self.current_value.is_some()")]
 fn test_arrow_gh_41321() {
     let err = read_file("ARROW-GH-41321.parquet").unwrap_err();
-    assert_eq!(err.to_string(), "TBD (currently panics)");
+    assert_eq!(
+        err.to_string(),
+        "External: Parquet argument error: Parquet error: Invalid or corrupted RLE bit width 254. Max allowed is 32"
+    );
 }
 
 #[test]
@@ -98,7 +97,7 @@ fn test_arrow_gh_41317() {
     let err = read_file("ARROW-GH-41317.parquet").unwrap_err();
     assert_eq!(
         err.to_string(),
-        "External: Parquet argument error: External: bad data"
+        "External: Parquet argument error: Parquet error: StructArrayReader out of sync in read_records, expected 5 read, got 2"
     );
 }
 
@@ -135,7 +134,7 @@ fn test_arrow_rs_gh_45185_dict_levels() {
 /// Returns an error if the file is invalid
 fn read_file(name: &str) -> Result<usize, ParquetError> {
     let path = bad_data_dir().join(name);
-    println!("Reading file: {:?}", path);
+    println!("Reading file: {path:?}");
 
     let file = std::fs::File::open(&path).unwrap();
     let reader = ArrowReaderBuilder::try_new(file)?.build()?;
@@ -150,6 +149,7 @@ fn read_file(name: &str) -> Result<usize, ParquetError> {
 
 #[cfg(feature = "async")]
 #[tokio::test]
+#[allow(deprecated)]
 async fn bad_metadata_err() {
     use bytes::Bytes;
     use parquet::file::metadata::ParquetMetaDataReader;

@@ -16,8 +16,13 @@
 // under the License.
 
 use arrow_schema::ArrowError;
-use std::io;
-use std::io::Read;
+#[cfg(any(
+    feature = "deflate",
+    feature = "zstd",
+    feature = "bzip2",
+    feature = "xz"
+))]
+use std::io::{Read, Write};
 
 /// The metadata key used for storing the JSON encoded [`CompressionCodec`]
 pub const CODEC_METADATA_KEY: &str = "avro.codec";
@@ -34,9 +39,14 @@ pub enum CompressionCodec {
     Snappy,
     /// ZStandard compression
     ZStandard,
+    /// Bzip2 compression
+    Bzip2,
+    /// Xz compression
+    Xz,
 }
 
 impl CompressionCodec {
+    #[allow(unused_variables)]
     pub(crate) fn decompress(&self, block: &[u8]) -> Result<Vec<u8>, ArrowError> {
         match self {
             #[cfg(feature = "deflate")]
@@ -83,6 +93,102 @@ impl CompressionCodec {
             #[cfg(not(feature = "zstd"))]
             CompressionCodec::ZStandard => Err(ArrowError::ParseError(
                 "ZStandard codec requires zstd feature".to_string(),
+            )),
+            #[cfg(feature = "bzip2")]
+            CompressionCodec::Bzip2 => {
+                let mut decoder = bzip2::read::BzDecoder::new(block);
+                let mut out = Vec::new();
+                decoder.read_to_end(&mut out)?;
+                Ok(out)
+            }
+            #[cfg(not(feature = "bzip2"))]
+            CompressionCodec::Bzip2 => Err(ArrowError::ParseError(
+                "Bzip2 codec requires bzip2 feature".to_string(),
+            )),
+            #[cfg(feature = "xz")]
+            CompressionCodec::Xz => {
+                let mut decoder = xz::read::XzDecoder::new(block);
+                let mut out = Vec::new();
+                decoder.read_to_end(&mut out)?;
+                Ok(out)
+            }
+            #[cfg(not(feature = "xz"))]
+            CompressionCodec::Xz => Err(ArrowError::ParseError(
+                "XZ codec requires xz feature".to_string(),
+            )),
+        }
+    }
+
+    #[allow(unused_variables)]
+    pub(crate) fn compress(&self, data: &[u8]) -> Result<Vec<u8>, ArrowError> {
+        match self {
+            #[cfg(feature = "deflate")]
+            CompressionCodec::Deflate => {
+                let mut encoder =
+                    flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+                encoder.write_all(data)?;
+                let compressed = encoder.finish()?;
+                Ok(compressed)
+            }
+            #[cfg(not(feature = "deflate"))]
+            CompressionCodec::Deflate => Err(ArrowError::ParseError(
+                "Deflate codec requires deflate feature".to_string(),
+            )),
+
+            #[cfg(feature = "snappy")]
+            CompressionCodec::Snappy => {
+                let mut encoder = snap::raw::Encoder::new();
+                // Allocate and compress in one step for efficiency
+                let mut compressed = encoder
+                    .compress_vec(data)
+                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+                // Compute CRC32 (ISO‑HDLC poly) of **uncompressed** data
+                let crc_val = crc::Crc::<u32>::new(&crc::CRC_32_ISO_HDLC).checksum(data);
+                compressed.extend_from_slice(&crc_val.to_be_bytes());
+                Ok(compressed)
+            }
+            #[cfg(not(feature = "snappy"))]
+            CompressionCodec::Snappy => Err(ArrowError::ParseError(
+                "Snappy codec requires snappy feature".to_string(),
+            )),
+
+            #[cfg(feature = "zstd")]
+            CompressionCodec::ZStandard => {
+                let mut encoder = zstd::Encoder::new(Vec::new(), 0)
+                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+                encoder.write_all(data)?;
+                let compressed = encoder
+                    .finish()
+                    .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
+                Ok(compressed)
+            }
+            #[cfg(not(feature = "zstd"))]
+            CompressionCodec::ZStandard => Err(ArrowError::ParseError(
+                "ZStandard codec requires zstd feature".to_string(),
+            )),
+
+            #[cfg(feature = "bzip2")]
+            CompressionCodec::Bzip2 => {
+                let mut encoder =
+                    bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+                encoder.write_all(data)?;
+                let compressed = encoder.finish()?;
+                Ok(compressed)
+            }
+            #[cfg(not(feature = "bzip2"))]
+            CompressionCodec::Bzip2 => Err(ArrowError::ParseError(
+                "Bzip2 codec requires bzip2 feature".to_string(),
+            )),
+            #[cfg(feature = "xz")]
+            CompressionCodec::Xz => {
+                let mut encoder = xz::write::XzEncoder::new(Vec::new(), 6);
+                encoder.write_all(data)?;
+                let compressed = encoder.finish()?;
+                Ok(compressed)
+            }
+            #[cfg(not(feature = "xz"))]
+            CompressionCodec::Xz => Err(ArrowError::ParseError(
+                "XZ codec requires xz feature".to_string(),
             )),
         }
     }

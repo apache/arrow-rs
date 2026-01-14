@@ -35,7 +35,7 @@ use arrow::compute::{like, nlike, or};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 use arrow_array::{ArrayRef, ArrowPrimitiveType, BooleanArray, PrimitiveArray, StringViewArray};
 use arrow_schema::{ArrowError, DataType, Schema};
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, criterion_group, criterion_main};
 use futures::StreamExt;
 use parquet::arrow::arrow_reader::{
     ArrowPredicate, ArrowPredicateFn, ArrowReaderMetadata, ArrowReaderOptions,
@@ -580,14 +580,13 @@ fn hits_1() -> &'static Path {
 
     let current_dir = std::env::current_dir().expect("Failed to get current directory");
     println!(
-        "Looking for ClickBench files starting in current_dir and all parent directories: {:?}",
-        current_dir
+        "Looking for ClickBench files starting in current_dir and all parent directories: {current_dir:?}"
+
     );
 
     let Some(hits_1_path) = find_file_if_exists(current_dir.clone(), "hits_1.parquet") else {
         eprintln!(
-            "Could not find hits_1.parquet in directory or parents: {:?}. Download it via",
-            current_dir
+            "Could not find hits_1.parquet in directory or parents: {current_dir:?}. Download it via",
         );
         eprintln!();
         eprintln!("wget --continue https://datasets.clickhouse.com/hits_compatible/athena_partitioned/hits_1.parquet");

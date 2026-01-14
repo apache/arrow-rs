@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::array::print_long_array;
-use crate::{make_array, new_null_array, Array, ArrayRef, RecordBatch};
+use crate::{Array, ArrayRef, RecordBatch, make_array, new_null_array};
 use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, Field, FieldRef, Fields};
@@ -108,7 +108,7 @@ impl StructArray {
         arrays: Vec<ArrayRef>,
         nulls: Option<NullBuffer>,
     ) -> Result<Self, ArrowError> {
-        let len = arrays.first().map(|x| x.len()).ok_or_else(||ArrowError::InvalidArgumentError("use StructArray::try_new_with_length or StructArray::new_empty to create a struct array with no fields so that the length can be set correctly".to_string()))?;
+        let len = arrays.first().map(|x| x.len()).ok_or_else(||ArrowError::InvalidArgumentError("use StructArray::try_new_with_length or StructArray::new_empty_fields to create a struct array with no fields so that the length can be set correctly".to_string()))?;
 
         Self::try_new_with_length(fields, arrays, nulls, len)
     }
@@ -347,25 +347,26 @@ impl StructArray {
 
 impl From<ArrayData> for StructArray {
     fn from(data: ArrayData) -> Self {
-        let parent_offset = data.offset();
-        let parent_len = data.len();
+        let (data_type, len, nulls, offset, _buffers, child_data) = data.into_parts();
 
-        let fields = data
-            .child_data()
-            .iter()
+        let parent_offset = offset;
+        let parent_len = len;
+
+        let fields = child_data
+            .into_iter()
             .map(|cd| {
                 if parent_offset != 0 || parent_len != cd.len() {
                     make_array(cd.slice(parent_offset, parent_len))
                 } else {
-                    make_array(cd.clone())
+                    make_array(cd)
                 }
             })
             .collect();
 
         Self {
-            len: data.len(),
-            data_type: data.data_type().clone(),
-            nulls: data.nulls().cloned(),
+            len,
+            data_type,
+            nulls,
             fields,
         }
     }
@@ -400,6 +401,8 @@ impl TryFrom<Vec<(&str, ArrayRef)>> for StructArray {
         StructArray::try_new(fields.into(), arrays, None)
     }
 }
+
+impl super::private::Sealed for StructArray {}
 
 impl Array for StructArray {
     fn as_any(&self) -> &dyn Any {
@@ -986,7 +989,10 @@ mod tests {
                 (0..30).map(|i| i % 2 == 0).collect::<Vec<_>>(),
             ))),
         );
-        assert_eq!(format!("{arr:?}"), "StructArray\n-- validity:\n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]")
+        assert_eq!(
+            format!("{arr:?}"),
+            "StructArray\n-- validity:\n[\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  ...10 elements...,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n  valid,\n  null,\n]\n[\n-- child 0: \"c\" (Int32)\nPrimitiveArray<Int32>\n[\n  0,\n  1,\n  2,\n  3,\n  4,\n  5,\n  6,\n  7,\n  8,\n  9,\n  ...10 elements...,\n  20,\n  21,\n  22,\n  23,\n  24,\n  25,\n  26,\n  27,\n  28,\n  29,\n]\n]"
+        )
     }
 
     #[test]

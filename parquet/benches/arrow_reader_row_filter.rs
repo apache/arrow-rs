@@ -57,11 +57,11 @@ use arrow::compute::and;
 use arrow::compute::kernels::cmp::{eq, gt, lt, neq};
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
-use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use arrow_array::StringViewArray;
+use arrow_array::builder::{ArrayBuilder, StringViewBuilder};
 use arrow_cast::pretty::pretty_format_batches;
 use bytes::Bytes;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use futures::future::BoxFuture;
 use futures::{FutureExt, StreamExt};
 use parquet::arrow::arrow_reader::{
@@ -70,9 +70,9 @@ use parquet::arrow::arrow_reader::{
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::arrow::{ArrowWriter, ParquetRecordBatchStreamBuilder, ProjectionMask};
 use parquet::basic::Compression;
-use parquet::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
+use parquet::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
 use parquet::file::properties::WriterProperties;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -341,7 +341,7 @@ impl std::fmt::Display for FilterType {
             FilterType::Composite => "float64 > 99.0 AND ts >= 9000",
             FilterType::Utf8ViewNonEmpty => "utf8View <> ''",
         };
-        write!(f, "{}", s)
+        write!(f, "{s}")
     }
 }
 
@@ -461,7 +461,7 @@ fn benchmark_filters_and_projections(c: &mut Criterion) {
             let projection_mask = ProjectionMask::roots(schema_descr, output_projection.clone());
             let pred_mask = ProjectionMask::roots(schema_descr, filter_col.clone());
 
-            let benchmark_name = format!("{filter_type:?}/{proj_case}",);
+            let benchmark_name = format!("{filter_type}/{proj_case}",);
 
             // run the benchmark for the async reader
             let bench_id = BenchmarkId::new(benchmark_name.clone(), "async");
@@ -550,7 +550,8 @@ struct InMemoryReader {
 
 impl InMemoryReader {
     fn try_new(inner: &Bytes) -> parquet::errors::Result<Self> {
-        let mut metadata_reader = ParquetMetaDataReader::new().with_page_indexes(true);
+        let mut metadata_reader =
+            ParquetMetaDataReader::new().with_page_index_policy(PageIndexPolicy::Required);
         metadata_reader.try_parse(inner)?;
         let metadata = metadata_reader.finish().map(Arc::new)?;
 

@@ -18,13 +18,13 @@
 use crate::array::{get_offsets, make_array, print_long_array};
 use crate::builder::{GenericListBuilder, PrimitiveBuilder};
 use crate::{
-    iterator::GenericListArrayIter, new_empty_array, Array, ArrayAccessor, ArrayRef,
-    ArrowPrimitiveType, FixedSizeListArray,
+    Array, ArrayAccessor, ArrayRef, ArrowPrimitiveType, FixedSizeListArray,
+    iterator::GenericListArrayIter, new_empty_array,
 };
 use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
-use num::Integer;
+use num_integer::Integer;
 use std::any::Any;
 use std::sync::Arc;
 
@@ -37,7 +37,9 @@ use std::sync::Arc;
 /// [`LargeBinaryArray`]: crate::array::LargeBinaryArray
 /// [`StringArray`]: crate::array::StringArray
 /// [`LargeStringArray`]: crate::array::LargeStringArray
-pub trait OffsetSizeTrait: ArrowNativeType + std::ops::AddAssign + Integer {
+pub trait OffsetSizeTrait:
+    ArrowNativeType + std::ops::AddAssign + Integer + num_traits::CheckedAdd
+{
     /// True for 64 bit offset size and false for 32 bit offset size
     const IS_LARGE: bool;
     /// Prefix for the offset size
@@ -108,21 +110,21 @@ impl OffsetSizeTrait for i64 {
 ///  ┌─────────────┐  ┌───────┐             │     ┌───┐   ┌───┐       ┌───┐ ┌───┐
 ///  │   [A,B,C]   │  │ (0,3) │                   │ 1 │   │ 0 │     │ │ 1 │ │ A │ │ 0  │
 ///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
-///  │      []     │  │ (3,3) │                   │ 1 │   │ 3 │     │ │ 1 │ │ B │ │ 1  │
+///  │ [] (empty)  │  │ (3,3) │                   │ 1 │   │ 3 │     │ │ 1 │ │ B │ │ 1  │
 ///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
-///  │    NULL     │  │ (3,4) │                   │ 0 │   │ 3 │     │ │ 1 │ │ C │ │ 2  │
+///  │    NULL     │  │ (3,3) │                   │ 0 │   │ 3 │     │ │ 1 │ │ C │ │ 2  │
 ///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
-///  │     [D]     │  │ (4,5) │                   │ 1 │   │ 4 │     │ │ ? │ │ ? │ │ 3  │
+///  │     [D]     │  │ (3,4) │                   │ 1 │   │ 3 │     │ │ 1 │ │ D │ │ 3  │
 ///  ├─────────────┤  ├───────┤             │     ├───┤   ├───┤       ├───┤ ├───┤
-///  │  [NULL, F]  │  │ (5,7) │                   │ 1 │   │ 5 │     │ │ 1 │ │ D │ │ 4  │
+///  │  [NULL, F]  │  │ (4,6) │                   │ 1 │   │ 4 │     │ │ 0 │ │ ? │ │ 4  │
 ///  └─────────────┘  └───────┘             │     └───┘   ├───┤       ├───┤ ├───┤
-///                                                       │ 7 │     │ │ 0 │ │ ? │ │ 5  │
-///                                         │  Validity   └───┘       ├───┤ ├───┤
-///     Logical       Logical                  (nulls)   Offsets    │ │ 1 │ │ F │ │ 6  │
-///      Values       Offsets               │                         └───┘ └───┘
-///                                                                 │    Values   │    │
-///                 (offsets[i],            │   ListArray               (Array)
-///                offsets[i+1])                                    └ ─ ─ ─ ─ ─ ─ ┘    │
+///                                                       │ 6 │     │ │ 1 │ │ F │ │ 5  │
+///                                         │  Validity   └───┘       └───┘ └───┘
+///     Logical       Logical                  (nulls)   Offsets    │    Values   │    │
+///      Values       Offsets               │                           (Array)
+///                                                                 └ ─ ─ ─ ─ ─ ─ ┘    │
+///                 (offsets[i],            │   ListArray
+///                offsets[i+1])                                                       │
 ///                                         └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
 /// ```
 ///
@@ -145,19 +147,19 @@ impl OffsetSizeTrait for i64 {
 ///  ┌─────────────┐  ┌───────┐     │     ┌───┐   ┌───┐       ╠═══╣ ╠═══╣
 ///  │ [] (empty)  │  │ (3,3) │           │ 1 │   │ 3 │     │ ║ 1 ║ ║ B ║ │ 1  │
 ///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╠═══╣ ╠═══╣
-///  │    NULL     │  │ (3,4) │           │ 0 │   │ 3 │     │ ║ 1 ║ ║ C ║ │ 2  │
-///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╠───╣ ╠───╣
-///  │     [D]     │  │ (4,5) │           │ 1 │   │ 4 │     │ │ 0 │ │ ? │ │ 3  │
-///  └─────────────┘  └───────┘     │     └───┘   ├───┤       ├───┤ ├───┤
-///                                               │ 5 │     │ │ 1 │ │ D │ │ 4  │
-///                                 │             └───┘       ├───┤ ├───┤
-///                                                         │ │ 0 │ │ ? │ │ 5  │
-///                                 │  Validity               ╠═══╣ ╠═══╣
-///     Logical       Logical          (nulls)   Offsets    │ ║ 1 ║ ║ F ║ │ 6  │
-///      Values       Offsets       │                         ╚═══╝ ╚═══╝
-///                                                         │    Values   │    │
-///                 (offsets[i],    │   ListArray               (Array)
-///                offsets[i+1])                            └ ─ ─ ─ ─ ─ ─ ┘    │
+///  │    NULL     │  │ (3,3) │           │ 0 │   │ 3 │     │ ║ 1 ║ ║ C ║ │ 2  │
+///  ├─────────────┤  ├───────┤     │     ├───┤   ├───┤       ╚═══╝ ╚═══╝
+///  │     [D]     │  │ (3,4) │           │ 1 │   │ 3 │     │ │ 1 │ │ D │ │ 3  │
+///  └─────────────┘  └───────┘     │     └───┘   ├───┤       ╔═══╗ ╔═══╗
+///                                               │ 4 │     │ ║ 0 ║ ║ ? ║ │ 4  │
+///                                 │             └───┘       ╠═══╣ ╠═══╣
+///                                                         │ ║ 1 ║ ║ F ║ │ 5  │
+///                                 │  Validity               ╚═══╝ ╚═══╝
+///     Logical       Logical          (nulls)   Offsets    │    Values   │    │
+///      Values       Offsets       │                           (Array)
+///                                                         └ ─ ─ ─ ─ ─ ─ ┘    │
+///                 (offsets[i],    │   ListArray
+///                offsets[i+1])                                               │
 ///                                 └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
 /// ```
 ///
@@ -327,15 +329,25 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// Caller must ensure that the index is within the array bounds
     pub unsafe fn value_unchecked(&self, i: usize) -> ArrayRef {
-        let end = self.value_offsets().get_unchecked(i + 1).as_usize();
-        let start = self.value_offsets().get_unchecked(i).as_usize();
+        let end = unsafe { self.value_offsets().get_unchecked(i + 1).as_usize() };
+        let start = unsafe { self.value_offsets().get_unchecked(i).as_usize() };
         self.values.slice(start, end - start)
     }
 
     /// Returns ith value of this list array.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// (but still well-defined) if [`is_null`](Self::is_null) returns true for the index.
+    ///
+    /// # Panics
+    /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> ArrayRef {
         let end = self.value_offsets()[i + 1].as_usize();
         let start = self.value_offsets()[i].as_usize();
@@ -454,7 +466,7 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListArray<
             _ => unreachable!(),
         };
 
-        let offsets = OffsetBuffer::from_lengths(std::iter::repeat(size).take(value.len()));
+        let offsets = OffsetBuffer::from_repeated_length(size, value.len());
 
         Self {
             data_type: Self::DATA_TYPE_CONSTRUCTOR(field.clone()),
@@ -512,6 +524,8 @@ impl<OffsetSize: OffsetSizeTrait> GenericListArray<OffsetSize> {
         })
     }
 }
+
+impl<OffsetSize: OffsetSizeTrait> super::private::Sealed for GenericListArray<OffsetSize> {}
 
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
@@ -623,7 +637,7 @@ mod tests {
     use crate::cast::AsArray;
     use crate::types::Int32Type;
     use crate::{Int32Array, Int64Array};
-    use arrow_buffer::{bit_util, Buffer, ScalarBuffer};
+    use arrow_buffer::{Buffer, ScalarBuffer, bit_util};
     use arrow_schema::Field;
 
     fn create_from_buffers() -> ListArray {
@@ -1271,5 +1285,12 @@ mod tests {
         let values = builder.build().unwrap();
         let field = Arc::new(Field::new("element", values.data_type().clone(), false));
         ListArray::new(field.clone(), offsets, Arc::new(values), None);
+    }
+
+    #[test]
+    fn test_list_new_null_len() {
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let array = ListArray::new_null(field, 5);
+        assert_eq!(array.len(), 5);
     }
 }

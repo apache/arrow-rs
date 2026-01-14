@@ -19,7 +19,7 @@ use crate::array::print_long_array;
 use crate::builder::BooleanBuilder;
 use crate::iterator::BooleanIter;
 use crate::{Array, ArrayAccessor, ArrayRef, Scalar};
-use arrow_buffer::{bit_util, BooleanBuffer, Buffer, MutableBuffer, NullBuffer};
+use arrow_buffer::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::DataType;
 use std::any::Any;
@@ -178,13 +178,20 @@ impl BooleanArray {
 
     /// Returns the boolean value at index `i`.
     ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Safety
     /// This doesn't check bounds, the caller must ensure that index < self.len()
     pub unsafe fn value_unchecked(&self, i: usize) -> bool {
-        self.values.value_unchecked(i)
+        unsafe { self.values.value_unchecked(i) }
     }
 
     /// Returns the boolean value at index `i`.
+    ///
+    /// Note: This method does not check for nulls and the value is arbitrary
+    /// if [`is_null`](Self::is_null) returns true for the index.
+    ///
     /// # Panics
     /// Panics if index `i` is out of bounds
     pub fn value(&self, i: usize) -> bool {
@@ -215,7 +222,7 @@ impl BooleanArray {
         &'a self,
         indexes: impl Iterator<Item = Option<usize>> + 'a,
     ) -> impl Iterator<Item = Option<bool>> + 'a {
-        indexes.map(|opt_index| opt_index.map(|index| self.value_unchecked(index)))
+        indexes.map(|opt_index| opt_index.map(|index| unsafe { self.value_unchecked(index) }))
     }
 
     /// Create a [`BooleanArray`] by evaluating the operation for
@@ -278,6 +285,8 @@ impl BooleanArray {
         (self.values, self.nulls)
     }
 }
+
+impl super::private::Sealed for BooleanArray {}
 
 impl Array for BooleanArray {
     fn as_any(&self) -> &dyn Any {
@@ -348,7 +357,7 @@ impl ArrayAccessor for &BooleanArray {
     }
 
     unsafe fn value_unchecked(&self, index: usize) -> Self::Item {
-        BooleanArray::value_unchecked(self, index)
+        unsafe { BooleanArray::value_unchecked(self, index) }
     }
 }
 
@@ -429,11 +438,84 @@ impl<'a> BooleanArray {
     }
 }
 
-impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray {
+/// An optional boolean value
+///
+/// This struct is used as an adapter when creating `BooleanArray` from an iterator.
+/// `FromIterator` for `BooleanArray` takes an iterator where the elements can be `into`
+/// this struct. So once implementing `From` or `Into` trait for a type, an iterator of
+/// the type can be collected to `BooleanArray`.
+///
+/// See also [NativeAdapter](crate::array::NativeAdapter).
+#[derive(Debug)]
+struct BooleanAdapter {
+    /// Corresponding Rust native type if available
+    pub native: Option<bool>,
+}
+
+impl From<bool> for BooleanAdapter {
+    fn from(value: bool) -> Self {
+        BooleanAdapter {
+            native: Some(value),
+        }
+    }
+}
+
+impl From<&bool> for BooleanAdapter {
+    fn from(value: &bool) -> Self {
+        BooleanAdapter {
+            native: Some(*value),
+        }
+    }
+}
+
+impl From<Option<bool>> for BooleanAdapter {
+    fn from(value: Option<bool>) -> Self {
+        BooleanAdapter { native: value }
+    }
+}
+
+impl From<&Option<bool>> for BooleanAdapter {
+    fn from(value: &Option<bool>) -> Self {
+        BooleanAdapter { native: *value }
+    }
+}
+
+impl<Ptr: Into<BooleanAdapter>> FromIterator<Ptr> for BooleanArray {
     fn from_iter<I: IntoIterator<Item = Ptr>>(iter: I) -> Self {
         let iter = iter.into_iter();
-        let (_, data_len) = iter.size_hint();
-        let data_len = data_len.expect("Iterator must be sized"); // panic if no upper bound.
+        let capacity = match iter.size_hint() {
+            (lower, Some(upper)) if lower == upper => lower,
+            _ => 0,
+        };
+        let mut builder = BooleanBuilder::with_capacity(capacity);
+        builder.extend(iter.map(|item| item.into().native));
+        builder.finish()
+    }
+}
+
+impl BooleanArray {
+    /// Creates a [`BooleanArray`] from an iterator of trusted length.
+    ///
+    /// # Safety
+    ///
+    /// The iterator must be [`TrustedLen`](https://doc.rust-lang.org/std/iter/trait.TrustedLen.html).
+    /// I.e. that `size_hint().1` correctly reports its length. Note that this is a stronger
+    /// guarantee that `ExactSizeIterator` provides which could still report a wrong length.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the iterator does not report an upper bound on `size_hint()`.
+    #[inline]
+    #[allow(
+        private_bounds,
+        reason = "We will expose BooleanAdapter if there is a need"
+    )]
+    pub unsafe fn from_trusted_len_iter<I, P>(iter: I) -> Self
+    where
+        P: Into<BooleanAdapter>,
+        I: ExactSizeIterator<Item = P>,
+    {
+        let data_len = iter.len();
 
         let num_bytes = bit_util::ceil(data_len, 8);
         let mut null_builder = MutableBuffer::from_len_zeroed(num_bytes);
@@ -443,10 +525,14 @@ impl<Ptr: std::borrow::Borrow<Option<bool>>> FromIterator<Ptr> for BooleanArray 
 
         let null_slice = null_builder.as_slice_mut();
         iter.enumerate().for_each(|(i, item)| {
-            if let Some(a) = item.borrow() {
-                bit_util::set_bit(null_slice, i);
-                if *a {
-                    bit_util::set_bit(data, i);
+            if let Some(a) = item.into().native {
+                unsafe {
+                    // SAFETY: There will be enough space in the buffers due to the trusted len size
+                    // hint
+                    bit_util::set_bit_raw(null_slice.as_mut_ptr(), i);
+                    if a {
+                        bit_util::set_bit_raw(data.as_mut_ptr(), i);
+                    }
                 }
             }
         });
@@ -479,7 +565,7 @@ impl From<BooleanBuffer> for BooleanArray {
 mod tests {
     use super::*;
     use arrow_buffer::Buffer;
-    use rand::{rng, Rng};
+    use rand::{Rng, rng};
 
     #[test]
     fn test_boolean_fmt_debug() {
@@ -593,6 +679,20 @@ mod tests {
     }
 
     #[test]
+    fn test_boolean_array_from_non_nullable_iter() {
+        let v = vec![true, false, true];
+        let arr = v.into_iter().collect::<BooleanArray>();
+        assert_eq!(3, arr.len());
+        assert_eq!(0, arr.offset());
+        assert_eq!(0, arr.null_count());
+        assert!(arr.nulls().is_none());
+
+        assert!(arr.value(0));
+        assert!(!arr.value(1));
+        assert!(arr.value(2));
+    }
+
+    #[test]
     fn test_boolean_array_from_nullable_iter() {
         let v = vec![Some(true), None, Some(false), None];
         let arr = v.into_iter().collect::<BooleanArray>();
@@ -608,6 +708,29 @@ mod tests {
 
         assert!(arr.value(0));
         assert!(!arr.value(2));
+    }
+
+    #[test]
+    fn test_boolean_array_from_nullable_trusted_len_iter() {
+        // Should exhibit the same behavior as `from_iter`, which is tested above.
+        let v = vec![Some(true), None, Some(false), None];
+        let expected = v.clone().into_iter().collect::<BooleanArray>();
+        let actual = unsafe {
+            // SAFETY: `v` has trusted length
+            BooleanArray::from_trusted_len_iter(v.into_iter())
+        };
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_boolean_array_from_iter_with_larger_upper_bound() {
+        // See https://github.com/apache/arrow-rs/issues/8505
+        // This returns an upper size hint of 4
+        let iterator = vec![Some(true), None, Some(false), None]
+            .into_iter()
+            .filter(Option::is_some);
+        let arr = iterator.collect::<BooleanArray>();
+        assert_eq!(2, arr.len());
     }
 
     #[test]
@@ -707,5 +830,33 @@ mod tests {
         let (values, nulls) = boolean_array.into_parts();
         assert_eq!(values.values(), &[0b1000_0000]);
         assert!(nulls.is_none());
+    }
+
+    #[test]
+    fn test_new_null_array() {
+        let arr = BooleanArray::new_null(5);
+
+        assert_eq!(arr.len(), 5);
+        assert_eq!(arr.null_count(), 5);
+        assert_eq!(arr.true_count(), 0);
+        assert_eq!(arr.false_count(), 0);
+
+        for i in 0..5 {
+            assert!(arr.is_null(i));
+            assert!(!arr.is_valid(i));
+        }
+    }
+
+    #[test]
+    fn test_slice_with_nulls() {
+        let arr = BooleanArray::from(vec![Some(true), None, Some(false)]);
+        let sliced = arr.slice(1, 2);
+
+        assert_eq!(sliced.len(), 2);
+        assert_eq!(sliced.null_count(), 1);
+
+        assert!(sliced.is_null(0));
+        assert!(sliced.is_valid(1));
+        assert!(!sliced.value(1));
     }
 }

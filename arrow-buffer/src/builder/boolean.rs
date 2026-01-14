@@ -15,7 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use crate::{bit_mask, bit_util, BooleanBuffer, Buffer, MutableBuffer};
+use crate::bit_util::apply_bitwise_binary_op;
+use crate::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
@@ -139,7 +140,6 @@ impl BooleanBufferBuilder {
 
     /// Reserve space to at least `additional` new bits.
     /// Capacity will be `>= self.len() + additional`.
-    /// New bytes are uninitialized and reading them is undefined behavior.
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         let capacity = self.len + additional;
@@ -218,13 +218,16 @@ impl BooleanBufferBuilder {
     pub fn append_packed_range(&mut self, range: Range<usize>, to_set: &[u8]) {
         let offset_write = self.len;
         let len = range.end - range.start;
+        // allocate new bits as 0
         self.advance(len);
-        bit_mask::set_bits(
+        // copy bits from to_set into self.buffer a word at a time
+        apply_bitwise_binary_op(
             self.buffer.as_slice_mut(),
-            to_set,
             offset_write,
+            to_set,
             range.start,
             len,
+            |_a, b| b, // copy bits from to_set
         );
     }
 
@@ -256,6 +259,20 @@ impl BooleanBufferBuilder {
     pub fn finish_cloned(&self) -> BooleanBuffer {
         BooleanBuffer::new(Buffer::from_slice_ref(self.as_slice()), 0, self.len)
     }
+
+    /// Extends the builder from a trusted length iterator of booleans.
+    /// # Safety
+    /// Callers must ensure that `iter` reports an exact size via `size_hint`.
+    ///
+    #[inline]
+    pub unsafe fn extend_trusted_len<I>(&mut self, iterator: I)
+    where
+        I: Iterator<Item = bool>,
+    {
+        let len = iterator.size_hint().0;
+        unsafe { self.buffer.extend_bool_trusted_len(iterator, self.len) };
+        self.len += len;
+    }
 }
 
 impl From<BooleanBufferBuilder> for Buffer {
@@ -269,6 +286,14 @@ impl From<BooleanBufferBuilder> for BooleanBuffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
         BooleanBuffer::new(builder.buffer.into(), 0, builder.len)
+    }
+}
+
+impl From<BooleanBufferBuilder> for NullBuffer {
+    #[inline]
+    fn from(builder: BooleanBufferBuilder) -> Self {
+        let boolean_buffer = BooleanBuffer::from(builder);
+        NullBuffer::new(boolean_buffer)
     }
 }
 
@@ -522,5 +547,66 @@ mod tests {
 
         assert_eq!(buf.len(), buf2.inner().len());
         assert_eq!(buf.as_slice(), buf2.values());
+    }
+
+    #[test]
+    fn test_extend() {
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools = vec![true, false, true, true, false, true, true, true, false];
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+        assert_eq!(builder.len(), 9);
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().enumerate() {
+            assert_eq!(finished.value(i), v);
+        }
+
+        // Test > 64 bits
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+        assert_eq!(builder.len(), 100);
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().enumerate() {
+            assert_eq!(finished.value(i), v, "at index {}", i);
+        }
+    }
+
+    #[test]
+    fn test_extend_misaligned() {
+        // Test misaligned start
+        for offset in 1..65 {
+            let mut builder = BooleanBufferBuilder::new(0);
+            builder.append_n(offset, false);
+
+            let bools: Vec<_> = (0..100).map(|i| i % 3 == 0 || i % 7 == 0).collect();
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+            assert_eq!(builder.len(), offset + 100);
+
+            let finished = builder.finish();
+            for i in 0..offset {
+                assert!(!finished.value(i));
+            }
+            for (i, v) in bools.into_iter().enumerate() {
+                assert_eq!(finished.value(offset + i), v, "at index {}", offset + i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_extend_misaligned_end() {
+        for len in 1..130 {
+            let mut builder = BooleanBufferBuilder::new(0);
+            let mut bools: Vec<_> = (0..len).map(|i| i % 2 == 0).collect();
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+            unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+            let copy = bools.clone();
+            bools.extend(copy);
+            assert_eq!(builder.len(), 2 * len);
+
+            let finished = builder.finish();
+            for (i, &v) in bools.iter().enumerate() {
+                assert_eq!(finished.value(i), v, "at index {} for len {}", i, len);
+            }
+        }
     }
 }

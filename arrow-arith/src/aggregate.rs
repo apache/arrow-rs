@@ -45,11 +45,7 @@ trait NumericAccumulator<T: ArrowNativeTypeOp>: Copy + Default {
 /// After verifying the generated assembly this can be a simple `if`.
 #[inline(always)]
 fn select<T: Copy>(m: bool, a: T, b: T) -> T {
-    if m {
-        a
-    } else {
-        b
-    }
+    if m { a } else { b }
 }
 
 #[derive(Clone, Copy)]
@@ -336,10 +332,10 @@ fn aggregate<T: ArrowNativeTypeOp, P: ArrowPrimitiveType<Native = T>, A: Numeric
 
 /// Returns the minimum value in the boolean array.
 ///
+/// # Example
 /// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::min_boolean;
-///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(min_boolean(&a), Some(false))
 /// ```
@@ -394,10 +390,10 @@ pub fn min_boolean(array: &BooleanArray) -> Option<bool> {
 
 /// Returns the maximum value in the boolean array
 ///
+/// # Example
 /// ```
 /// # use arrow_array::BooleanArray;
 /// # use arrow_arith::aggregate::max_boolean;
-///
 /// let a = BooleanArray::from(vec![Some(true), None, Some(false)]);
 /// assert_eq!(max_boolean(&a), Some(true))
 /// ```
@@ -451,11 +447,7 @@ where
             let idx = nulls.valid_indices().reduce(|acc_idx, idx| {
                 let acc = array.value_unchecked(acc_idx);
                 let item = array.value_unchecked(idx);
-                if cmp(&acc, &item) {
-                    idx
-                } else {
-                    acc_idx
-                }
+                if cmp(&acc, &item) { idx } else { acc_idx }
             });
             idx.map(|idx| array.value_unchecked(idx))
         }
@@ -477,11 +469,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = (0..array.len()).reduce(|acc, item| {
             // SAFETY:  array's length is correct so item is within bounds
             let cmp = unsafe { GenericByteViewArray::compare_unchecked(array, item, array, acc) };
-            if cmp == swap_cond {
-                item
-            } else {
-                acc
-            }
+            if cmp == swap_cond { item } else { acc }
         });
         // SAFETY: idx came from valid range `0..array.len()`
         unsafe { target_idx.map(|idx| array.value_unchecked(idx)) }
@@ -491,11 +479,7 @@ fn min_max_view_helper<T: ByteViewType>(
         let target_idx = nulls.valid_indices().reduce(|acc_idx, idx| {
             let cmp =
                 unsafe { GenericByteViewArray::compare_unchecked(array, idx, array, acc_idx) };
-            if cmp == swap_cond {
-                idx
-            } else {
-                acc_idx
-            }
+            if cmp == swap_cond { idx } else { acc_idx }
         });
 
         // SAFETY: idx came from valid range `0..array.len()`
@@ -513,6 +497,11 @@ pub fn max_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
     min_max_view_helper(array, Ordering::Greater)
 }
 
+/// Returns the maximum value in the fixed size binary array, according to the natural order.
+pub fn max_fixed_size_binary(array: &FixedSizeBinaryArray) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a < *b)
+}
+
 /// Returns the minimum value in the binary array, according to the natural order.
 pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&[u8]> {
     min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
@@ -521,6 +510,11 @@ pub fn min_binary<T: OffsetSizeTrait>(array: &GenericBinaryArray<T>) -> Option<&
 /// Returns the minimum value in the binary view array, according to the natural order.
 pub fn min_binary_view(array: &BinaryViewArray) -> Option<&[u8]> {
     min_max_view_helper(array, Ordering::Less)
+}
+
+/// Returns the minimum value in the fixed size binary array, according to the natural order.
+pub fn min_fixed_size_binary(array: &FixedSizeBinaryArray) -> Option<&[u8]> {
+    min_max_helper::<&[u8], _, _>(array, |a, b| *a > *b)
 }
 
 /// Returns the maximum value in the string array, according to the natural order.
@@ -815,6 +809,15 @@ where
 
 /// Returns the minimum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// # Example
+/// ```rust
+/// # use arrow_array::Int32Array;
+/// # use arrow_arith::aggregate::min;
+/// let array = Int32Array::from(vec![8, 2, 4]);
+/// let result = min(&array);
+/// assert_eq!(result, Some(2));
+/// ```
 pub fn min<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,
@@ -824,6 +827,15 @@ where
 
 /// Returns the maximum value in the array, according to the natural order.
 /// For floating point arrays any NaN values are considered to be greater than any other non-null value
+///
+/// # Example
+/// ```rust
+/// # use arrow_array::Int32Array;
+/// # use arrow_arith::aggregate::max;
+/// let array = Int32Array::from(vec![4, 8, 2]);
+/// let result = max(&array);
+/// assert_eq!(result, Some(8));
+/// ```
 pub fn max<T: ArrowNumericType>(array: &PrimitiveArray<T>) -> Option<T::Native>
 where
     T::Native: PartialOrd,
@@ -1240,6 +1252,41 @@ mod tests {
         assert!(max(&a).unwrap().is_nan());
     }
 
+    fn pad_inputs_and_test_fixed_size_binary(
+        input: Vec<Option<&[u8]>>,
+        expected_min: Option<&[u8]>,
+        expected_max: Option<&[u8]>,
+    ) {
+        fn pad_slice(slice: &[u8], len: usize) -> Vec<u8> {
+            let mut padded = vec![0; len];
+            padded[..slice.len()].copy_from_slice(slice);
+            padded
+        }
+
+        let max_len = input
+            .iter()
+            .filter_map(|x| x.as_ref().map(|b| b.len()))
+            .max()
+            .unwrap_or(0);
+        let padded_input = input
+            .iter()
+            .map(|x| x.as_ref().map(|b| pad_slice(b, max_len)));
+        let input_arr =
+            FixedSizeBinaryArray::try_from_sparse_iter_with_size(padded_input, max_len as i32)
+                .unwrap();
+        let padded_expected_min = expected_min.map(|b| pad_slice(b, max_len));
+        let padded_expected_max = expected_max.map(|b| pad_slice(b, max_len));
+
+        assert_eq!(
+            padded_expected_min.as_deref(),
+            min_fixed_size_binary(&input_arr)
+        );
+        assert_eq!(
+            padded_expected_max.as_deref(),
+            max_fixed_size_binary(&input_arr)
+        );
+    }
+
     macro_rules! test_binary {
         ($NAME:ident, $ARRAY:expr, $EXPECTED_MIN:expr, $EXPECTED_MAX: expr) => {
             #[test]
@@ -1255,6 +1302,8 @@ mod tests {
                 let binary_view = BinaryViewArray::from($ARRAY);
                 assert_eq!($EXPECTED_MIN, min_binary_view(&binary_view));
                 assert_eq!($EXPECTED_MAX, max_binary_view(&binary_view));
+
+                pad_inputs_and_test_fixed_size_binary($ARRAY, $EXPECTED_MIN, $EXPECTED_MAX);
             }
         };
     }

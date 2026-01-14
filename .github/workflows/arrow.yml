@@ -56,7 +56,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -68,7 +68,10 @@ jobs:
       - name: Test arrow-schema
         run: cargo test -p arrow-schema --all-features
       - name: Test arrow-array
-        run: cargo test -p arrow-array --all-features
+        run: |
+          cargo test -p arrow-array --all-features
+          # Disable feature `force_validate`
+          cargo test -p arrow-array --features=ffi
       - name: Test arrow-select
         run: cargo test -p arrow-select --all-features
       - name: Test arrow-cast
@@ -112,7 +115,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
@@ -140,13 +143,15 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           submodules: true
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
-        with:
-          target: wasm32-unknown-unknown,wasm32-wasip1
+      - name: Install wasm32 targets
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup target add wasm32-wasip1
       - name: Build wasm32-unknown-unknown
         run: cargo build -p arrow --no-default-features --features=json,csv,ipc,ffi --target wasm32-unknown-unknown
       - name: Build wasm32-wasip1
@@ -158,7 +163,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Setup Rust toolchain
         uses: ./.github/actions/setup-builder
       - name: Setup Clippy

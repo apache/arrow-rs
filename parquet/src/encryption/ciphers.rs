@@ -18,7 +18,8 @@
 use crate::errors::ParquetError;
 use crate::errors::ParquetError::General;
 use crate::errors::Result;
-use ring::aead::{Aad, LessSafeKey, NonceSequence, UnboundKey, AES_128_GCM};
+use crate::file::metadata::HeapSize;
+use ring::aead::{AES_128_GCM, Aad, LessSafeKey, NonceSequence, UnboundKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use std::fmt::Debug;
 
@@ -27,7 +28,7 @@ pub(crate) const NONCE_LEN: usize = 12;
 pub(crate) const TAG_LEN: usize = 16;
 pub(crate) const SIZE_LEN: usize = 4;
 
-pub(crate) trait BlockDecryptor: Debug + Send + Sync {
+pub(crate) trait BlockDecryptor: Debug + Send + Sync + HeapSize {
     fn decrypt(&self, length_and_ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>>;
 
     fn compute_plaintext_tag(&self, aad: &[u8], plaintext: &[u8]) -> Result<Vec<u8>>;
@@ -47,6 +48,13 @@ impl RingGcmBlockDecryptor {
         Ok(Self {
             key: LessSafeKey::new(key),
         })
+    }
+}
+
+impl HeapSize for RingGcmBlockDecryptor {
+    fn heap_size(&self) -> usize {
+        // Ring's LessSafeKey doesn't allocate on the heap
+        0
     }
 }
 
@@ -155,7 +163,7 @@ impl BlockEncryptor for RingGcmBlockEncryptor {
         // Format is: [ciphertext size, nonce, ciphertext, authentication tag]
         let ciphertext_length: u32 = (NONCE_LEN + plaintext.len() + TAG_LEN)
             .try_into()
-            .map_err(|err| General(format!("Plaintext data too long. {:?}", err)))?;
+            .map_err(|err| General(format!("Plaintext data too long. {err:?}")))?;
         // Not checking for overflow here because we've already checked for it with ciphertext_length
         let mut ciphertext = Vec::with_capacity(SIZE_LEN + ciphertext_length as usize);
         ciphertext.extend((ciphertext_length).to_le_bytes());

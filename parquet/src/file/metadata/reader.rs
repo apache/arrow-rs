@@ -15,46 +15,44 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use std::{io::Read, ops::Range, sync::Arc};
-
-use crate::basic::ColumnOrder;
 #[cfg(feature = "encryption")]
-use crate::encryption::{
-    decrypt::{FileDecryptionProperties, FileDecryptor},
-    modules::create_footer_aad,
-};
-use bytes::Bytes;
-
+use crate::encryption::decrypt::FileDecryptionProperties;
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData};
-use crate::file::page_index::index::Index;
-use crate::file::page_index::index_reader::{acc_range, decode_column_index, decode_offset_index};
+use crate::file::FOOTER_SIZE;
+use crate::file::metadata::parser::decode_metadata;
+use crate::file::metadata::thrift::parquet_schema_from_bytes;
+use crate::file::metadata::{
+    FooterTail, ParquetMetaData, ParquetMetaDataOptions, ParquetMetaDataPushDecoder,
+};
 use crate::file::reader::ChunkReader;
-use crate::file::{FOOTER_SIZE, PARQUET_MAGIC, PARQUET_MAGIC_ENCR_FOOTER};
-use crate::format::{ColumnOrder as TColumnOrder, FileMetaData as TFileMetaData};
-#[cfg(feature = "encryption")]
-use crate::format::{EncryptionAlgorithm, FileCryptoMetaData as TFileCryptoMetaData};
-use crate::schema::types;
 use crate::schema::types::SchemaDescriptor;
-use crate::thrift::{TCompactSliceInputProtocol, TSerializable};
+use bytes::Bytes;
+use std::sync::Arc;
+use std::{io::Read, ops::Range};
 
+use crate::DecodeResult;
 #[cfg(all(feature = "async", feature = "arrow"))]
 use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
-#[cfg(feature = "encryption")]
-use crate::encryption::decrypt::CryptoContext;
-use crate::file::page_index::offset_index::OffsetIndexMetaData;
 
-/// Reads the [`ParquetMetaData`] from a byte stream.
+/// Reads [`ParquetMetaData`] from a byte stream, with either synchronous or
+/// asynchronous I/O.
 ///
-/// See [`crate::file::metadata::ParquetMetaDataWriter#output-format`] for a description of
-/// the Parquet metadata.
+/// There are two flavors of APIs:
+/// * Synchronous: [`Self::try_parse()`], [`Self::try_parse_sized()`], [`Self::parse_and_finish()`], etc.
+/// * Asynchronous (requires `async` and `arrow` features): [`Self::try_load()`], etc
 ///
-/// Parquet metadata is not necessarily contiguous in the files: part is stored
+///  See the [`ParquetMetaDataPushDecoder`] for an API that does not require I/O.
+///
+/// # Format Notes
+///
+/// Parquet metadata is not necessarily contiguous in a Parquet file: a portion is stored
 /// in the footer (the last bytes of the file), but other portions (such as the
 /// PageIndex) can be stored elsewhere.
+/// See [`crate::file::metadata::ParquetMetaDataWriter#output-format`] for more details of
+/// Parquet metadata.
 ///
 /// This reader handles reading the footer as well as the non contiguous parts
-/// of the metadata such as the page indexes; excluding Bloom Filters.
+/// of the metadata (`PageIndex` and `ColumnIndex`). It does not handle reading Bloom Filters.
 ///
 /// # Example
 /// ```no_run
@@ -69,36 +67,38 @@ use crate::file::page_index::offset_index::OffsetIndexMetaData;
 /// assert!(metadata.column_index().is_some());
 /// assert!(metadata.offset_index().is_some());
 /// ```
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct ParquetMetaDataReader {
     metadata: Option<ParquetMetaData>,
-    column_index: bool,
-    offset_index: bool,
+    column_index: PageIndexPolicy,
+    offset_index: PageIndexPolicy,
     prefetch_hint: Option<usize>,
+    metadata_options: Option<Arc<ParquetMetaDataOptions>>,
     // Size of the serialized thrift metadata plus the 8 byte footer. Only set if
     // `self.parse_metadata` is called.
     metadata_size: Option<usize>,
     #[cfg(feature = "encryption")]
-    file_decryption_properties: Option<FileDecryptionProperties>,
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
 }
 
-/// Describes how the footer metadata is stored
-///
-/// This is parsed from the last 8 bytes of the Parquet file
-pub struct FooterTail {
-    metadata_length: usize,
-    encrypted_footer: bool,
+/// Describes the policy for reading page indexes
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PageIndexPolicy {
+    /// Do not read the page index.
+    #[default]
+    Skip,
+    /// Read the page index if it exists, otherwise do not error.
+    Optional,
+    /// Require the page index to exist, and error if it does not.
+    Required,
 }
 
-impl FooterTail {
-    /// The length of the footer metadata in bytes
-    pub fn metadata_length(&self) -> usize {
-        self.metadata_length
-    }
-
-    /// Whether the footer metadata is encrypted
-    pub fn is_encrypted_footer(&self) -> bool {
-        self.encrypted_footer
+impl From<bool> for PageIndexPolicy {
+    fn from(value: bool) -> Self {
+        match value {
+            true => Self::Required,
+            false => Self::Skip,
+        }
     }
 }
 
@@ -118,27 +118,55 @@ impl ParquetMetaDataReader {
     }
 
     /// Enable or disable reading the page index structures described in
-    /// "[Parquet page index]: Layout to Support Page Skipping". Equivalent to:
-    /// `self.with_column_indexes(val).with_offset_indexes(val)`
+    /// "[Parquet page index]: Layout to Support Page Skipping".
     ///
     /// [Parquet page index]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
+    #[deprecated(since = "56.1.0", note = "Use `with_page_index_policy` instead")]
     pub fn with_page_indexes(self, val: bool) -> Self {
-        self.with_column_indexes(val).with_offset_indexes(val)
+        let policy = PageIndexPolicy::from(val);
+        self.with_column_index_policy(policy)
+            .with_offset_index_policy(policy)
     }
 
     /// Enable or disable reading the Parquet [ColumnIndex] structure.
     ///
     /// [ColumnIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    pub fn with_column_indexes(mut self, val: bool) -> Self {
-        self.column_index = val;
-        self
+    #[deprecated(since = "56.1.0", note = "Use `with_column_index_policy` instead")]
+    pub fn with_column_indexes(self, val: bool) -> Self {
+        let policy = PageIndexPolicy::from(val);
+        self.with_column_index_policy(policy)
     }
 
     /// Enable or disable reading the Parquet [OffsetIndex] structure.
     ///
     /// [OffsetIndex]:  https://github.com/apache/parquet-format/blob/master/PageIndex.md
-    pub fn with_offset_indexes(mut self, val: bool) -> Self {
-        self.offset_index = val;
+    #[deprecated(since = "56.1.0", note = "Use `with_offset_index_policy` instead")]
+    pub fn with_offset_indexes(self, val: bool) -> Self {
+        let policy = PageIndexPolicy::from(val);
+        self.with_offset_index_policy(policy)
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the column and offset indexes
+    pub fn with_page_index_policy(self, policy: PageIndexPolicy) -> Self {
+        self.with_column_index_policy(policy)
+            .with_offset_index_policy(policy)
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the column index
+    pub fn with_column_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.column_index = policy;
+        self
+    }
+
+    /// Sets the [`PageIndexPolicy`] for the offset index
+    pub fn with_offset_index_policy(mut self, policy: PageIndexPolicy) -> Self {
+        self.offset_index = policy;
+        self
+    }
+
+    /// Sets the [`ParquetMetaDataOptions`] to use when decoding
+    pub fn with_metadata_options(mut self, options: Option<ParquetMetaDataOptions>) -> Self {
+        self.metadata_options = options.map(Arc::new);
         self
     }
 
@@ -164,9 +192,9 @@ impl ParquetMetaDataReader {
     #[cfg(feature = "encryption")]
     pub fn with_decryption_properties(
         mut self,
-        properties: Option<&FileDecryptionProperties>,
+        properties: Option<std::sync::Arc<FileDecryptionProperties>>,
     ) -> Self {
-        self.file_decryption_properties = properties.cloned();
+        self.file_decryption_properties = properties;
         self
     }
 
@@ -277,7 +305,7 @@ impl ParquetMetaDataReader {
     ///             bytes = get_bytes(&file, len - needed as u64..len);
     ///             // If file metadata was read only read page indexes, otherwise continue loop
     ///             if reader.has_metadata() {
-    ///                 reader.read_page_indexes_sized(&bytes, len);
+    ///                 reader.read_page_indexes_sized(&bytes, len).unwrap();
     ///                 break;
     ///             }
     ///         }
@@ -307,7 +335,8 @@ impl ParquetMetaDataReader {
         };
 
         // we can return if page indexes aren't requested
-        if !self.column_index && !self.offset_index {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -330,24 +359,25 @@ impl ParquetMetaDataReader {
         reader: &R,
         file_size: u64,
     ) -> Result<()> {
-        if self.metadata.is_none() {
+        let Some(metadata) = self.metadata.take() else {
             return Err(general_err!(
                 "Tried to read page indexes without ParquetMetaData metadata"
             ));
-        }
+        };
 
-        // FIXME: there are differing implementations in the case where page indexes are missing
-        // from the file. `MetadataLoader` will leave them as `None`, while the parser in
-        // `index_reader::read_columns_indexes` returns a vector of empty vectors.
-        // It is best for this function to replicate the latter behavior for now, but in a future
-        // breaking release, the two paths to retrieve metadata should be made consistent. Note that this is only
-        // an issue if the user requested page indexes, so there is no need to provide empty
-        // vectors in `try_parse_sized()`.
-        // https://github.com/apache/arrow-rs/issues/6447
+        let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
+            .with_offset_index_policy(self.offset_index)
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
+        let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
-        let Some(range) = self.range_for_page_index() else {
-            return Ok(());
+        let range = match needs_index_data(&mut push_decoder)? {
+            NeedsIndexData::No(metadata) => {
+                self.metadata = Some(metadata);
+                return Ok(());
+            }
+            NeedsIndexData::Yes(range) => range,
         };
 
         // Check to see if needed range is within `file_range`. Checking `range.end` seems
@@ -357,8 +387,7 @@ impl ParquetMetaDataReader {
             // Requested range starts beyond EOF
             if range.end > file_size {
                 return Err(eof_err!(
-                    "Parquet file too small. Range {:?} is beyond file bounds {file_size}",
-                    range
+                    "Parquet file too small. Range {range:?} is beyond file bounds {file_size}",
                 ));
             } else {
                 // Ask for a larger buffer
@@ -374,19 +403,18 @@ impl ParquetMetaDataReader {
             let metadata_range = file_size.saturating_sub(metadata_size as u64)..file_size;
             if range.end > metadata_range.start {
                 return Err(eof_err!(
-                    "Parquet file too small. Page index range {:?} overlaps with file metadata {:?}",
-                    range,
-                    metadata_range
+                    "Parquet file too small. Page index range {range:?} overlaps with file metadata {metadata_range:?}",
                 ));
             }
         }
 
+        // add the needed ranges to the decoder
         let bytes_needed = usize::try_from(range.end - range.start)?;
         let bytes = reader.get_bytes(range.start - file_range.start, bytes_needed)?;
-        let offset = range.start;
 
-        self.parse_column_index(&bytes, offset)?;
-        self.parse_offset_index(&bytes, offset)?;
+        push_decoder.push_range(range, bytes)?;
+        let metadata = parse_index_data(&mut push_decoder)?;
+        self.metadata = Some(metadata);
 
         Ok(())
     }
@@ -433,7 +461,8 @@ impl ParquetMetaDataReader {
         self.metadata = Some(metadata);
 
         // we can return if page indexes aren't requested
-        if !self.column_index && !self.offset_index {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -455,7 +484,8 @@ impl ParquetMetaDataReader {
         self.metadata = Some(metadata);
 
         // we can return if page indexes aren't requested
-        if !self.column_index && !self.offset_index {
+        if self.column_index == PageIndexPolicy::Skip && self.offset_index == PageIndexPolicy::Skip
+        {
             return Ok(());
         }
 
@@ -475,15 +505,26 @@ impl ParquetMetaDataReader {
         mut fetch: F,
         remainder: Option<(usize, Bytes)>,
     ) -> Result<()> {
-        if self.metadata.is_none() {
+        let Some(metadata) = self.metadata.take() else {
             return Err(general_err!("Footer metadata is not present"));
-        }
+        };
+
+        // in this case we don't actually know what the file size is, so just use u64::MAX
+        // this is ok since the offsets in the metadata are always valid
+        let file_size = u64::MAX;
+        let push_decoder = ParquetMetaDataPushDecoder::try_new_with_metadata(file_size, metadata)?
+            .with_offset_index_policy(self.offset_index)
+            .with_column_index_policy(self.column_index)
+            .with_metadata_options(self.metadata_options.clone());
+        let mut push_decoder = self.prepare_push_decoder(push_decoder);
 
         // Get bounds needed for page indexes (if any are present in the file).
-        let range = self.range_for_page_index();
-        let range = match range {
-            Some(range) => range,
-            None => return Ok(()),
+        let range = match needs_index_data(&mut push_decoder)? {
+            NeedsIndexData::No(metadata) => {
+                self.metadata = Some(metadata);
+                return Ok(());
+            }
+            NeedsIndexData::Yes(range) => range,
         };
 
         let bytes = match &remainder {
@@ -500,174 +541,10 @@ impl ParquetMetaDataReader {
 
         // Sanity check
         assert_eq!(bytes.len() as u64, range.end - range.start);
-
-        self.parse_column_index(&bytes, range.start)?;
-        self.parse_offset_index(&bytes, range.start)?;
-
+        push_decoder.push_range(range.clone(), bytes)?;
+        let metadata = parse_index_data(&mut push_decoder)?;
+        self.metadata = Some(metadata);
         Ok(())
-    }
-
-    fn parse_column_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
-        let metadata = self.metadata.as_mut().unwrap();
-        if self.column_index {
-            let index = metadata
-                .row_groups()
-                .iter()
-                .enumerate()
-                .map(|(rg_idx, x)| {
-                    x.columns()
-                        .iter()
-                        .enumerate()
-                        .map(|(col_idx, c)| match c.column_index_range() {
-                            Some(r) => {
-                                let r_start = usize::try_from(r.start - start_offset)?;
-                                let r_end = usize::try_from(r.end - start_offset)?;
-                                Self::parse_single_column_index(
-                                    &bytes[r_start..r_end],
-                                    metadata,
-                                    c,
-                                    rg_idx,
-                                    col_idx,
-                                )
-                            }
-                            None => Ok(Index::NONE),
-                        })
-                        .collect::<Result<Vec<_>>>()
-                })
-                .collect::<Result<Vec<_>>>()?;
-            metadata.set_column_index(Some(index));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "encryption")]
-    fn parse_single_column_index(
-        bytes: &[u8],
-        metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        row_group_index: usize,
-        col_index: usize,
-    ) -> Result<Index> {
-        match &column.column_crypto_metadata {
-            Some(crypto_metadata) => {
-                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                    general_err!("Cannot decrypt column index, no file decryptor set")
-                })?;
-                let crypto_context = CryptoContext::for_column(
-                    file_decryptor,
-                    crypto_metadata,
-                    row_group_index,
-                    col_index,
-                )?;
-                let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = crypto_context.create_column_index_aad()?;
-                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-                decode_column_index(&plaintext, column.column_type())
-            }
-            None => decode_column_index(bytes, column.column_type()),
-        }
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn parse_single_column_index(
-        bytes: &[u8],
-        _metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        _row_group_index: usize,
-        _col_index: usize,
-    ) -> Result<Index> {
-        decode_column_index(bytes, column.column_type())
-    }
-
-    fn parse_offset_index(&mut self, bytes: &Bytes, start_offset: u64) -> Result<()> {
-        let metadata = self.metadata.as_mut().unwrap();
-        if self.offset_index {
-            let index = metadata
-                .row_groups()
-                .iter()
-                .enumerate()
-                .map(|(rg_idx, x)| {
-                    x.columns()
-                        .iter()
-                        .enumerate()
-                        .map(|(col_idx, c)| match c.offset_index_range() {
-                            Some(r) => {
-                                let r_start = usize::try_from(r.start - start_offset)?;
-                                let r_end = usize::try_from(r.end - start_offset)?;
-                                Self::parse_single_offset_index(
-                                    &bytes[r_start..r_end],
-                                    metadata,
-                                    c,
-                                    rg_idx,
-                                    col_idx,
-                                )
-                            }
-                            None => Err(general_err!("missing offset index")),
-                        })
-                        .collect::<Result<Vec<_>>>()
-                })
-                .collect::<Result<Vec<_>>>()?;
-
-            metadata.set_offset_index(Some(index));
-        }
-        Ok(())
-    }
-
-    #[cfg(feature = "encryption")]
-    fn parse_single_offset_index(
-        bytes: &[u8],
-        metadata: &ParquetMetaData,
-        column: &ColumnChunkMetaData,
-        row_group_index: usize,
-        col_index: usize,
-    ) -> Result<OffsetIndexMetaData> {
-        match &column.column_crypto_metadata {
-            Some(crypto_metadata) => {
-                let file_decryptor = metadata.file_decryptor.as_ref().ok_or_else(|| {
-                    general_err!("Cannot decrypt offset index, no file decryptor set")
-                })?;
-                let crypto_context = CryptoContext::for_column(
-                    file_decryptor,
-                    crypto_metadata,
-                    row_group_index,
-                    col_index,
-                )?;
-                let column_decryptor = crypto_context.metadata_decryptor();
-                let aad = crypto_context.create_offset_index_aad()?;
-                let plaintext = column_decryptor.decrypt(bytes, &aad)?;
-                decode_offset_index(&plaintext)
-            }
-            None => decode_offset_index(bytes),
-        }
-    }
-
-    #[cfg(not(feature = "encryption"))]
-    fn parse_single_offset_index(
-        bytes: &[u8],
-        _metadata: &ParquetMetaData,
-        _column: &ColumnChunkMetaData,
-        _row_group_index: usize,
-        _col_index: usize,
-    ) -> Result<OffsetIndexMetaData> {
-        decode_offset_index(bytes)
-    }
-
-    fn range_for_page_index(&self) -> Option<Range<u64>> {
-        // sanity check
-        self.metadata.as_ref()?;
-
-        // Get bounds needed for page indexes (if any are present in the file).
-        let mut range = None;
-        let metadata = self.metadata.as_ref().unwrap();
-        for c in metadata.row_groups().iter().flat_map(|r| r.columns()) {
-            if self.column_index {
-                range = acc_range(range, c.column_index_range());
-            }
-            if self.offset_index {
-                range = acc_range(range, c.offset_index_range());
-            }
-        }
-        range
     }
 
     // One-shot parse of footer.
@@ -679,12 +556,12 @@ impl ParquetMetaDataReader {
             return Err(ParquetError::NeedMoreData(FOOTER_SIZE));
         }
 
-        let mut footer = [0_u8; 8];
+        let mut footer = [0_u8; FOOTER_SIZE];
         chunk_reader
-            .get_read(file_size - 8)?
+            .get_read(file_size - FOOTER_SIZE as u64)?
             .read_exact(&mut footer)?;
 
-        let footer = Self::decode_footer_tail(&footer)?;
+        let footer = FooterTail::try_new(&footer)?;
         let metadata_len = footer.metadata_length();
         let footer_metadata_len = FOOTER_SIZE + metadata_len;
         self.metadata_size = Some(footer_metadata_len);
@@ -694,10 +571,14 @@ impl ParquetMetaDataReader {
         }
 
         let start = file_size - footer_metadata_len as u64;
-        self.decode_footer_metadata(
-            chunk_reader.get_bytes(start, metadata_len)?.as_ref(),
-            &footer,
-        )
+        let bytes = chunk_reader.get_bytes(start, metadata_len)?;
+        self.decode_footer_metadata(bytes, file_size, footer)
+    }
+
+    /// Size of the serialized thrift metadata plus the 8 byte footer. Only set if
+    /// `self.parse_metadata` is called.
+    pub fn metadata_size(&self) -> Option<usize> {
+        self.metadata_size
     }
 
     /// Return the number of bytes to read in the initial pass. If `prefetch_size` has
@@ -746,7 +627,7 @@ impl ParquetMetaDataReader {
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let footer = Self::decode_footer_tail(&footer)?;
+        let footer = FooterTail::try_new(&footer)?;
         let length = footer.metadata_length();
 
         if file_size < (length + FOOTER_SIZE) as u64 {
@@ -763,14 +644,14 @@ impl ParquetMetaDataReader {
             let meta = fetch
                 .fetch(metadata_start..(file_size - FOOTER_SIZE as u64))
                 .await?;
-            Ok((self.decode_footer_metadata(&meta, &footer)?, None))
+            Ok((self.decode_footer_metadata(meta, file_size, footer)?, None))
         } else {
             let metadata_start = (file_size - (length + FOOTER_SIZE) as u64 - footer_start)
                 .try_into()
                 .expect("metadata length should never be larger than u32");
-            let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
+            let slice = suffix.slice(metadata_start..suffix_len - FOOTER_SIZE);
             Ok((
-                self.decode_footer_metadata(slice, &footer)?,
+                self.decode_footer_metadata(slice, file_size, footer)?,
                 Some((footer_start as usize, suffix.slice(..metadata_start))),
             ))
         }
@@ -797,8 +678,11 @@ impl ParquetMetaDataReader {
         let mut footer = [0; FOOTER_SIZE];
         footer.copy_from_slice(&suffix[suffix_len - FOOTER_SIZE..suffix_len]);
 
-        let footer = Self::decode_footer_tail(&footer)?;
+        let footer = FooterTail::try_new(&footer)?;
         let length = footer.metadata_length();
+        // fake file size as we are only parsing the footer metadata here
+        // (cant be parsing page indexes without the full file size)
+        let file_size = (length + FOOTER_SIZE) as u64;
 
         // Did not fetch the entire file metadata in the initial read, need to make a second request
         let metadata_offset = length + FOOTER_SIZE;
@@ -813,54 +697,29 @@ impl ParquetMetaDataReader {
                 ));
             }
 
-            Ok((
-                // need to slice off the footer or decryption fails
-                self.decode_footer_metadata(&meta.slice(0..length), &footer)?,
-                None,
-            ))
+            // need to slice off the footer or decryption fails
+            let meta = meta.slice(0..length);
+            Ok((self.decode_footer_metadata(meta, file_size, footer)?, None))
         } else {
             let metadata_start = suffix_len - metadata_offset;
-            let slice = &suffix[metadata_start..suffix_len - FOOTER_SIZE];
+            let slice = suffix.slice(metadata_start..suffix_len - FOOTER_SIZE);
             Ok((
-                self.decode_footer_metadata(slice, &footer)?,
+                self.decode_footer_metadata(slice, file_size, footer)?,
                 Some((0, suffix.slice(..metadata_start))),
             ))
         }
     }
 
-    /// Decodes the end of the Parquet footer
-    ///
-    /// There are 8 bytes at the end of the Parquet footer with the following layout:
-    /// * 4 bytes for the metadata length
-    /// * 4 bytes for the magic bytes 'PAR1' or 'PARE' (encrypted footer)
-    ///
-    /// ```text
-    /// +-----+------------------+
-    /// | len | 'PAR1' or 'PARE' |
-    /// +-----+------------------+
-    /// ```
+    /// Decodes a [`FooterTail`] from the provided 8-byte slice.
+    #[deprecated(since = "57.0.0", note = "Use FooterTail::try_from instead")]
     pub fn decode_footer_tail(slice: &[u8; FOOTER_SIZE]) -> Result<FooterTail> {
-        let magic = &slice[4..];
-        let encrypted_footer = if magic == PARQUET_MAGIC_ENCR_FOOTER {
-            true
-        } else if magic == PARQUET_MAGIC {
-            false
-        } else {
-            return Err(general_err!("Invalid Parquet file. Corrupt footer"));
-        };
-        // get the metadata length from the footer
-        let metadata_len = u32::from_le_bytes(slice[..4].try_into().unwrap());
-        Ok(FooterTail {
-            // u32 won't be larger than usize in most cases
-            metadata_length: metadata_len as usize,
-            encrypted_footer,
-        })
+        FooterTail::try_new(slice)
     }
 
     /// Decodes the Parquet footer, returning the metadata length in bytes
-    #[deprecated(note = "use decode_footer_tail instead")]
+    #[deprecated(since = "54.3.0", note = "Use decode_footer_tail instead")]
     pub fn decode_footer(slice: &[u8; FOOTER_SIZE]) -> Result<usize> {
-        Self::decode_footer_tail(slice).map(|f| f.metadata_length)
+        FooterTail::try_new(slice).map(|f| f.metadata_length())
     }
 
     /// Decodes [`ParquetMetaData`] from the provided bytes.
@@ -869,6 +728,8 @@ impl ParquetMetaDataReader {
     /// file. The format of `buf` is the Thrift compact binary protocol, as specified
     /// by the [Parquet Spec].
     ///
+    /// It does **NOT** include the 8-byte footer.
+    ///
     /// This method handles using either `decode_metadata` or
     /// `decode_metadata_with_encryption` depending on whether the encryption
     /// feature is enabled.
@@ -876,132 +737,69 @@ impl ParquetMetaDataReader {
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub(crate) fn decode_footer_metadata(
         &self,
-        buf: &[u8],
-        footer_tail: &FooterTail,
+        buf: Bytes,
+        file_size: u64,
+        footer_tail: FooterTail,
     ) -> Result<ParquetMetaData> {
-        #[cfg(feature = "encryption")]
-        let result = Self::decode_metadata_with_encryption(
-            buf,
-            footer_tail.is_encrypted_footer(),
-            self.file_decryption_properties.as_ref(),
-        );
-        #[cfg(not(feature = "encryption"))]
-        let result = {
-            if footer_tail.is_encrypted_footer() {
-                Err(general_err!(
-                    "Parquet file has an encrypted footer but the encryption feature is disabled"
-                ))
-            } else {
-                Self::decode_metadata(buf)
-            }
-        };
-        result
+        // The push decoder expects the metadata to be at the end of the file
+        // (... data ...) + (metadata) + (footer)
+        // so we need to provide the starting offset of the metadata
+        // within the file.
+        let ending_offset = file_size.checked_sub(FOOTER_SIZE as u64).ok_or_else(|| {
+            general_err!(
+                "file size {file_size} is smaller than footer size {}",
+                FOOTER_SIZE
+            )
+        })?;
+
+        let starting_offset = ending_offset.checked_sub(buf.len() as u64).ok_or_else(|| {
+            general_err!(
+                "file size {file_size} is smaller than buffer size {} + footer size {}",
+                buf.len(),
+                FOOTER_SIZE
+            )
+        })?;
+
+        let range = starting_offset..ending_offset;
+
+        let push_decoder =
+            ParquetMetaDataPushDecoder::try_new_with_footer_tail(file_size, footer_tail)?
+                // NOTE: DO NOT enable page indexes here, they are handled separately
+                .with_page_index_policy(PageIndexPolicy::Skip)
+                .with_metadata_options(self.metadata_options.clone());
+
+        let mut push_decoder = self.prepare_push_decoder(push_decoder);
+        push_decoder.push_range(range, buf)?;
+        match push_decoder.try_decode()? {
+            DecodeResult::Data(metadata) => Ok(metadata),
+            DecodeResult::Finished => Err(general_err!(
+                "could not parse parquet metadata -- previously finished"
+            )),
+            DecodeResult::NeedsData(ranges) => Err(general_err!(
+                "could not parse parquet metadata, needs ranges {:?}",
+                ranges
+            )),
+        }
     }
 
-    /// Decodes [`ParquetMetaData`] from the provided bytes, handling metadata that may be encrypted.
-    ///
-    /// Typically this is used to decode the metadata from the end of a parquet
-    /// file. The format of `buf` is the Thrift compact binary protocol, as specified
-    /// by the [Parquet Spec]. Buffer can be encrypted with AES GCM or AES CTR
-    /// ciphers as specfied in the [Parquet Encryption Spec].
-    ///
-    /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
-    /// [Parquet Encryption Spec]: https://parquet.apache.org/docs/file-format/data-pages/encryption/
+    /// Prepares a push decoder and runs it to decode the metadata.
     #[cfg(feature = "encryption")]
-    fn decode_metadata_with_encryption(
-        buf: &[u8],
-        encrypted_footer: bool,
-        file_decryption_properties: Option<&FileDecryptionProperties>,
-    ) -> Result<ParquetMetaData> {
-        let mut prot = TCompactSliceInputProtocol::new(buf);
-        let mut file_decryptor = None;
-        let decrypted_fmd_buf;
-
-        if encrypted_footer {
-            if let Some(file_decryption_properties) = file_decryption_properties {
-                let t_file_crypto_metadata: TFileCryptoMetaData =
-                    TFileCryptoMetaData::read_from_in_protocol(&mut prot)
-                        .map_err(|e| general_err!("Could not parse crypto metadata: {}", e))?;
-                let supply_aad_prefix = match &t_file_crypto_metadata.encryption_algorithm {
-                    EncryptionAlgorithm::AESGCMV1(algo) => algo.supply_aad_prefix,
-                    _ => Some(false),
-                }
-                .unwrap_or(false);
-                if supply_aad_prefix && file_decryption_properties.aad_prefix().is_none() {
-                    return Err(general_err!(
-                        "Parquet file was encrypted with an AAD prefix that is not stored in the file, \
-                        but no AAD prefix was provided in the file decryption properties"
-                    ));
-                }
-                let decryptor = get_file_decryptor(
-                    t_file_crypto_metadata.encryption_algorithm,
-                    t_file_crypto_metadata.key_metadata.as_deref(),
-                    file_decryption_properties,
-                )?;
-                let footer_decryptor = decryptor.get_footer_decryptor();
-                let aad_footer = create_footer_aad(decryptor.file_aad())?;
-
-                decrypted_fmd_buf = footer_decryptor?
-                    .decrypt(prot.as_slice().as_ref(), aad_footer.as_ref())
-                    .map_err(|_| {
-                        general_err!(
-                            "Provided footer key and AAD were unable to decrypt parquet footer"
-                        )
-                    })?;
-                prot = TCompactSliceInputProtocol::new(decrypted_fmd_buf.as_ref());
-
-                file_decryptor = Some(decryptor);
-            } else {
-                return Err(general_err!("Parquet file has an encrypted footer but decryption properties were not provided"));
-            }
-        }
-
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
-            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-        let schema = types::from_thrift(&t_file_metadata.schema)?;
-        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
-
-        if let (Some(algo), Some(file_decryption_properties)) = (
-            t_file_metadata.encryption_algorithm,
-            file_decryption_properties,
-        ) {
-            // File has a plaintext footer but encryption algorithm is set
-            let file_decryptor_value = get_file_decryptor(
-                algo,
-                t_file_metadata.footer_signing_key_metadata.as_deref(),
-                file_decryption_properties,
-            )?;
-            if file_decryption_properties.check_plaintext_footer_integrity() && !encrypted_footer {
-                file_decryptor_value.verify_plaintext_footer_signature(buf)?;
-            }
-            file_decryptor = Some(file_decryptor_value);
-        }
-
-        let mut row_groups = Vec::new();
-        for rg in t_file_metadata.row_groups {
-            let r = RowGroupMetaData::from_encrypted_thrift(
-                schema_descr.clone(),
-                rg,
-                file_decryptor.as_ref(),
-            )?;
-            row_groups.push(r);
-        }
-        let column_orders =
-            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
-
-        let file_metadata = FileMetaData::new(
-            t_file_metadata.version,
-            t_file_metadata.num_rows,
-            t_file_metadata.created_by,
-            t_file_metadata.key_value_metadata,
-            schema_descr,
-            column_orders,
-        );
-        let mut metadata = ParquetMetaData::new(file_metadata, row_groups);
-
-        metadata.with_file_decryptor(file_decryptor);
-
-        Ok(metadata)
+    fn prepare_push_decoder(
+        &self,
+        push_decoder: ParquetMetaDataPushDecoder,
+    ) -> ParquetMetaDataPushDecoder {
+        push_decoder.with_file_decryption_properties(
+            self.file_decryption_properties
+                .as_ref()
+                .map(std::sync::Arc::clone),
+        )
+    }
+    #[cfg(not(feature = "encryption"))]
+    fn prepare_push_decoder(
+        &self,
+        push_decoder: ParquetMetaDataPushDecoder,
+    ) -> ParquetMetaDataPushDecoder {
+        push_decoder
     }
 
     /// Decodes [`ParquetMetaData`] from the provided bytes.
@@ -1012,105 +810,71 @@ impl ParquetMetaDataReader {
     ///
     /// [Parquet Spec]: https://github.com/apache/parquet-format#metadata
     pub fn decode_metadata(buf: &[u8]) -> Result<ParquetMetaData> {
-        let mut prot = TCompactSliceInputProtocol::new(buf);
-
-        let t_file_metadata: TFileMetaData = TFileMetaData::read_from_in_protocol(&mut prot)
-            .map_err(|e| general_err!("Could not parse metadata: {}", e))?;
-        let schema = types::from_thrift(&t_file_metadata.schema)?;
-        let schema_descr = Arc::new(SchemaDescriptor::new(schema));
-
-        let mut row_groups = Vec::new();
-        for rg in t_file_metadata.row_groups {
-            row_groups.push(RowGroupMetaData::from_thrift(schema_descr.clone(), rg)?);
-        }
-        let column_orders =
-            Self::parse_column_orders(t_file_metadata.column_orders, &schema_descr)?;
-
-        let file_metadata = FileMetaData::new(
-            t_file_metadata.version,
-            t_file_metadata.num_rows,
-            t_file_metadata.created_by,
-            t_file_metadata.key_value_metadata,
-            schema_descr,
-            column_orders,
-        );
-
-        Ok(ParquetMetaData::new(file_metadata, row_groups))
+        decode_metadata(buf, None)
     }
 
-    /// Parses column orders from Thrift definition.
-    /// If no column orders are defined, returns `None`.
-    fn parse_column_orders(
-        t_column_orders: Option<Vec<TColumnOrder>>,
-        schema_descr: &SchemaDescriptor,
-    ) -> Result<Option<Vec<ColumnOrder>>> {
-        match t_column_orders {
-            Some(orders) => {
-                // Should always be the case
-                if orders.len() != schema_descr.num_columns() {
-                    return Err(general_err!("Column order length mismatch"));
-                };
-                let mut res = Vec::new();
-                for (i, column) in schema_descr.columns().iter().enumerate() {
-                    match orders[i] {
-                        TColumnOrder::TYPEORDER(_) => {
-                            let sort_order = ColumnOrder::get_sort_order(
-                                column.logical_type(),
-                                column.converted_type(),
-                                column.physical_type(),
-                            );
-                            res.push(ColumnOrder::TYPE_DEFINED_ORDER(sort_order));
-                        }
-                    }
-                }
-                Ok(Some(res))
-            }
-            None => Ok(None),
-        }
+    /// Decodes [`ParquetMetaData`] from the provided bytes.
+    ///
+    /// Like [`Self::decode_metadata`] but this also accepts
+    /// metadata parsing options.
+    pub fn decode_metadata_with_options(
+        buf: &[u8],
+        options: Option<&ParquetMetaDataOptions>,
+    ) -> Result<ParquetMetaData> {
+        decode_metadata(buf, options)
+    }
+
+    /// Decodes the schema from the Parquet footer in `buf`. Returned as
+    /// a [`SchemaDescriptor`].
+    pub fn decode_schema(buf: &[u8]) -> Result<Arc<SchemaDescriptor>> {
+        Ok(Arc::new(parquet_schema_from_bytes(buf)?))
     }
 }
 
-#[cfg(feature = "encryption")]
-fn get_file_decryptor(
-    encryption_algorithm: EncryptionAlgorithm,
-    footer_key_metadata: Option<&[u8]>,
-    file_decryption_properties: &FileDecryptionProperties,
-) -> Result<FileDecryptor> {
-    match encryption_algorithm {
-        EncryptionAlgorithm::AESGCMV1(algo) => {
-            let aad_file_unique = algo
-                .aad_file_unique
-                .ok_or_else(|| general_err!("AAD unique file identifier is not set"))?;
-            let aad_prefix = if let Some(aad_prefix) = file_decryption_properties.aad_prefix() {
-                aad_prefix.clone()
-            } else {
-                algo.aad_prefix.unwrap_or_default()
-            };
+/// The bounds needed to read page indexes
+// this is an internal enum, so it is ok to allow differences in enum size
+#[allow(clippy::large_enum_variant)]
+enum NeedsIndexData {
+    /// no additional data is needed (e.g. the indexes weren't requested)
+    No(ParquetMetaData),
+    /// Additional data is needed, with the range that are required
+    Yes(Range<u64>),
+}
 
-            FileDecryptor::new(
-                file_decryption_properties,
-                footer_key_metadata,
-                aad_file_unique,
-                aad_prefix,
-            )
+/// Determines a single combined range of bytes needed to read the page indexes,
+/// or returns the metadata if no additional data is needed (e.g. if no page indexes are requested)
+fn needs_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<NeedsIndexData> {
+    match push_decoder.try_decode()? {
+        DecodeResult::NeedsData(ranges) => {
+            let range = ranges
+                .into_iter()
+                .reduce(|a, b| a.start.min(b.start)..a.end.max(b.end))
+                .ok_or_else(|| general_err!("Internal error: no ranges provided"))?;
+            Ok(NeedsIndexData::Yes(range))
         }
-        EncryptionAlgorithm::AESGCMCTRV1(_) => Err(nyi_err!(
-            "The AES_GCM_CTR_V1 encryption algorithm is not yet supported"
+        DecodeResult::Data(metadata) => Ok(NeedsIndexData::No(metadata)),
+        DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
+    }
+}
+
+/// Given a push decoder that has had the needed ranges pushed to it,
+/// attempt to decode indexes and return the updated metadata.
+fn parse_index_data(push_decoder: &mut ParquetMetaDataPushDecoder) -> Result<ParquetMetaData> {
+    match push_decoder.try_decode()? {
+        DecodeResult::NeedsData(_) => Err(general_err!(
+            "Internal error: decoder still needs data after reading required range"
         )),
+        DecodeResult::Data(metadata) => Ok(metadata),
+        DecodeResult::Finished => Err(general_err!("Internal error: decoder was finished")),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bytes::Bytes;
-
-    use crate::basic::SortOrder;
-    use crate::basic::Type;
     use crate::file::reader::Length;
-    use crate::format::TypeDefinedOrder;
-    use crate::schema::types::Type as SchemaType;
     use crate::util::test_common::file_util::get_test_file;
+    use std::ops::Range;
 
     #[test]
     fn test_parse_metadata_size_smaller_than_footer() {
@@ -1118,7 +882,7 @@ mod tests {
         let err = ParquetMetaDataReader::new()
             .parse_metadata(&test_file)
             .unwrap_err();
-        assert!(matches!(err, ParquetError::NeedMoreData(8)));
+        assert!(matches!(err, ParquetError::NeedMoreData(FOOTER_SIZE)));
     }
 
     #[test]
@@ -1141,59 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn test_metadata_column_orders_parse() {
-        // Define simple schema, we do not need to provide logical types.
-        let fields = vec![
-            Arc::new(
-                SchemaType::primitive_type_builder("col1", Type::INT32)
-                    .build()
-                    .unwrap(),
-            ),
-            Arc::new(
-                SchemaType::primitive_type_builder("col2", Type::FLOAT)
-                    .build()
-                    .unwrap(),
-            ),
-        ];
-        let schema = SchemaType::group_type_builder("schema")
-            .with_fields(fields)
-            .build()
-            .unwrap();
-        let schema_descr = SchemaDescriptor::new(Arc::new(schema));
-
-        let t_column_orders = Some(vec![
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
-            TColumnOrder::TYPEORDER(TypeDefinedOrder::new()),
-        ]);
-
-        assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr).unwrap(),
-            Some(vec![
-                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED),
-                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
-            ])
-        );
-
-        // Test when no column orders are defined.
-        assert_eq!(
-            ParquetMetaDataReader::parse_column_orders(None, &schema_descr).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn test_metadata_column_orders_len_mismatch() {
-        let schema = SchemaType::group_type_builder("schema").build().unwrap();
-        let schema_descr = SchemaDescriptor::new(Arc::new(schema));
-
-        let t_column_orders = Some(vec![TColumnOrder::TYPEORDER(TypeDefinedOrder::new())]);
-
-        let res = ParquetMetaDataReader::parse_column_orders(t_column_orders, &schema_descr);
-        assert!(res.is_err());
-        assert!(format!("{:?}", res.unwrap_err()).contains("Column order length mismatch"));
-    }
-
-    #[test]
+    #[allow(deprecated)]
     fn test_try_parse() {
         let file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();
@@ -1311,15 +1023,23 @@ mod tests {
 #[cfg(all(feature = "async", feature = "arrow", test))]
 mod async_tests {
     use super::*;
+
+    use arrow::{array::Int32Array, datatypes::DataType};
+    use arrow_array::RecordBatch;
+    use arrow_schema::{Field, Schema};
     use bytes::Bytes;
-    use futures::future::BoxFuture;
     use futures::FutureExt;
+    use futures::future::BoxFuture;
     use std::fs::File;
     use std::future::Future;
     use std::io::{Read, Seek, SeekFrom};
     use std::ops::Range;
+    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use tempfile::NamedTempFile;
 
+    use crate::arrow::ArrowWriter;
+    use crate::file::properties::WriterProperties;
     use crate::file::reader::Length;
     use crate::util::test_common::file_util::get_test_file;
 
@@ -1563,7 +1283,7 @@ mod async_tests {
 
         // just make sure the metadata is properly decrypted and read
         let expected = ParquetMetaDataReader::new()
-            .with_decryption_properties(Some(&decryption_properties))
+            .with_decryption_properties(Some(decryption_properties))
             .load_via_suffix_and_finish(input)
             .await
             .unwrap();
@@ -1571,6 +1291,7 @@ mod async_tests {
     }
 
     #[tokio::test]
+    #[allow(deprecated)]
     async fn test_page_index() {
         let mut file = get_test_file("alltypes_tiny_pages.parquet");
         let len = file.len();
@@ -1656,5 +1377,51 @@ mod async_tests {
             .unwrap();
         assert_eq!(fetch_count.load(Ordering::SeqCst), 1);
         assert!(metadata.offset_index().is_some() && metadata.column_index().is_some());
+    }
+
+    fn write_parquet_file(offset_index_disabled: bool) -> Result<NamedTempFile> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(Int32Array::from(vec![1, 2, 3]))],
+        )?;
+
+        let file = NamedTempFile::new().unwrap();
+
+        // Write properties with page index disabled
+        let props = WriterProperties::builder()
+            .set_offset_index_disabled(offset_index_disabled)
+            .build();
+
+        let mut writer = ArrowWriter::try_new(file.reopen()?, schema, Some(props))?;
+        writer.write(&batch)?;
+        writer.close()?;
+
+        Ok(file)
+    }
+
+    fn read_and_check(file: &File, policy: PageIndexPolicy) -> Result<ParquetMetaData> {
+        let mut reader = ParquetMetaDataReader::new().with_page_index_policy(policy);
+        reader.try_parse(file)?;
+        reader.finish()
+    }
+
+    #[test]
+    fn test_page_index_policy() {
+        // With page index
+        let f = write_parquet_file(false).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Required).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
+
+        // Without page index
+        let f = write_parquet_file(true).unwrap();
+        let res = read_and_check(f.as_file(), PageIndexPolicy::Required);
+        assert!(matches!(
+            res,
+            Err(ParquetError::General(e)) if e == "missing offset index"
+        ));
+        read_and_check(f.as_file(), PageIndexPolicy::Optional).unwrap();
+        read_and_check(f.as_file(), PageIndexPolicy::Skip).unwrap();
     }
 }

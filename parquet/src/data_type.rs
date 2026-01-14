@@ -33,7 +33,7 @@ use crate::util::bit_util::FromBytes;
 
 /// Rust representation for logical type INT96, value is backed by an array of `u32`.
 /// The type only takes 12 bytes, without extra padding.
-#[derive(Clone, Copy, Debug, PartialOrd, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Int96 {
     value: [u32; 3],
 }
@@ -72,12 +72,6 @@ impl Int96 {
     #[inline]
     pub fn set_data(&mut self, elem0: u32, elem1: u32, elem2: u32) {
         self.value = [elem0, elem1, elem2];
-    }
-
-    /// Converts this INT96 into an i64 representing the number of MILLISECONDS since Epoch
-    #[deprecated(since = "54.0.0", note = "Use `to_millis` instead")]
-    pub fn to_i64(&self) -> i64 {
-        self.to_millis()
     }
 
     /// Converts this INT96 into an i64 representing the number of SECONDS since EPOCH
@@ -125,13 +119,43 @@ impl Int96 {
     }
 
     #[inline]
+    fn get_days(&self) -> i32 {
+        self.data()[2] as i32
+    }
+
+    #[inline]
+    fn get_nanos(&self) -> i64 {
+        ((self.data()[1] as i64) << 32) + self.data()[0] as i64
+    }
+
+    #[inline]
     fn data_as_days_and_nanos(&self) -> (i32, i64) {
-        let day = self.data()[2] as i32;
-        let nanos = ((self.data()[1] as i64) << 32) + self.data()[0] as i64;
-        (day, nanos)
+        (self.get_days(), self.get_nanos())
     }
 }
 
+impl PartialOrd for Int96 {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Int96 {
+    /// Order `Int96` correctly for (deprecated) timestamp types.
+    ///
+    /// Note: this is done even though the Int96 type is deprecated and the
+    /// [spec does not define the sort order]
+    /// because some engines, notably Spark and Databricks Photon still write
+    /// Int96 timestamps and rely on their order for optimization.
+    ///
+    /// [spec does not define the sort order]: https://github.com/apache/parquet-format/blob/cf943c197f4fad826b14ba0c40eb0ffdab585285/src/main/thrift/parquet.thrift#L1079
+    fn cmp(&self, other: &Self) -> Ordering {
+        match self.get_days().cmp(&other.get_days()) {
+            Ordering::Equal => self.get_nanos().cmp(&other.get_nanos()),
+            ord => ord,
+        }
+    }
+}
 impl From<Vec<u32>> for Int96 {
     fn from(buf: Vec<u32>) -> Self {
         assert_eq!(buf.len(), 3);
@@ -654,7 +678,7 @@ pub(crate) mod private {
     use bytes::Bytes;
 
     use crate::encodings::decoding::PlainDecoderDetails;
-    use crate::util::bit_util::{read_num_bytes, BitReader, BitWriter};
+    use crate::util::bit_util::{BitReader, BitWriter, read_num_bytes};
 
     use super::{ParquetError, Result, SliceAsBytes};
     use crate::basic::Type;
@@ -1212,26 +1236,6 @@ pub trait DataType: 'static + Send {
     ) -> Option<&'a mut ColumnWriterImpl<'b, Self>>
     where
         Self: Sized;
-}
-
-// Workaround bug in specialization
-#[deprecated(
-    since = "54.0.0",
-    note = "Seems like a stray and nobody knows what's it for. Will be removed in 55.0.0"
-)]
-#[allow(missing_docs)]
-pub trait SliceAsBytesDataType: DataType
-where
-    Self::T: SliceAsBytes,
-{
-}
-
-#[allow(deprecated)]
-impl<T> SliceAsBytesDataType for T
-where
-    T: DataType,
-    <T as DataType>::T: SliceAsBytes,
-{
 }
 
 macro_rules! make_type {

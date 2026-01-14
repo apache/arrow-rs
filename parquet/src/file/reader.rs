@@ -48,11 +48,12 @@ pub trait Length {
 /// Generates [`Read`]ers to read chunks of a Parquet data source.
 ///
 /// The Parquet reader uses [`ChunkReader`] to access Parquet data, allowing
-/// multiple decoders to read concurrently from different locations in the same file.
+/// multiple decoders to read concurrently from different locations in the same
+/// file.
 ///
-/// The trait provides:
-/// * random access (via [`Self::get_bytes`])
-/// * sequential (via [`Self::get_read`])
+/// The trait functions both as a reader and a factory for readers.
+/// * random access via [`Self::get_bytes`]
+/// * sequential access via the reader returned via factory method [`Self::get_read`]
 ///
 /// # Provided Implementations
 /// * [`File`] for reading from local file system
@@ -123,11 +124,25 @@ impl ChunkReader for Bytes {
 
     fn get_read(&self, start: u64) -> Result<Self::T> {
         let start = start as usize;
+        if start > self.len() {
+            return Err(eof_err!(
+                "Expected to read at offset {start}, while file has length {}",
+                self.len()
+            ));
+        }
         Ok(self.slice(start..).reader())
     }
 
     fn get_bytes(&self, start: u64, length: usize) -> Result<Bytes> {
         let start = start as usize;
+        if start > self.len() || start + length > self.len() {
+            return Err(eof_err!(
+                "Expected to read {} bytes at offset {}, while file has length {}",
+                length,
+                start,
+                self.len()
+            ));
+        }
         Ok(self.slice(start..start + length))
     }
 }
@@ -153,7 +168,7 @@ pub trait FileReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 /// Parquet row group reader API. With this, user can get metadata information about the
@@ -211,7 +226,7 @@ pub trait RowGroupReader: Send + Sync {
     ///
     /// Projected schema can be a subset of or equal to the file schema, when it is None,
     /// full file schema is assumed.
-    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter>;
+    fn get_row_iter(&self, projection: Option<SchemaType>) -> Result<RowIter<'_>>;
 }
 
 // ----------------------------------------------------------------------
@@ -273,3 +288,34 @@ impl Iterator for FilePageIterator {
 }
 
 impl PageIterator for FilePageIterator {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_bytes_chunk_reader_get_read_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_read(5).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read at offset 5, while file has length 4"
+        );
+    }
+
+    #[test]
+    fn test_bytes_chunk_reader_get_bytes_out_of_bounds() {
+        let data = Bytes::from(vec![0, 1, 2, 3]);
+        let err = data.get_bytes(5, 1).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read 1 bytes at offset 5, while file has length 4"
+        );
+
+        let err = data.get_bytes(2, 3).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "EOF: Expected to read 3 bytes at offset 2, while file has length 4"
+        );
+    }
+}

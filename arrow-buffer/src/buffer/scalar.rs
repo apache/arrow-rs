@@ -29,17 +29,38 @@ use std::ops::Deref;
 /// with the following differences:
 ///
 /// - slicing and cloning is O(1).
-/// - it supports external allocated memory
+/// - support for external allocated memory (e.g. via FFI).
 ///
+/// See [`Buffer`] for more low-level memory management details.
+///
+/// # Example: Convert to/from Vec (without copies)
+///
+/// (See [`Buffer::from_vec`] and [`Buffer::into_vec`] for a lower level API)
 /// ```
 /// # use arrow_buffer::ScalarBuffer;
 /// // Zero-copy conversion from Vec
 /// let buffer = ScalarBuffer::from(vec![1, 2, 3]);
 /// assert_eq!(&buffer, &[1, 2, 3]);
+/// // convert the buffer back to Vec without copy assuming:
+/// // 1. the inner buffer is not sliced
+/// // 2. the inner buffer uses standard allocation
+/// // 3. there are no other references to the inner buffer
+/// let vec: Vec<i32> = buffer.into();
+/// assert_eq!(&vec, &[1, 2, 3]);
+/// ```
 ///
+/// # Example: Zero copy slicing
+/// ```
+/// # use arrow_buffer::ScalarBuffer;
+/// let buffer = ScalarBuffer::from(vec![1, 2, 3]);
+/// assert_eq!(&buffer, &[1, 2, 3]);
 /// // Zero-copy slicing
 /// let sliced = buffer.slice(1, 2);
 /// assert_eq!(&sliced, &[2, 3]);
+/// // Original buffer is unchanged
+/// assert_eq!(&buffer, &[1, 2, 3]);
+/// // converting the sliced buffer back to Vec incurs a copy
+/// let vec: Vec<i32> = sliced.into();
 /// ```
 #[derive(Clone, Default)]
 pub struct ScalarBuffer<T: ArrowNativeType> {
@@ -72,6 +93,19 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
         buffer.slice_with_length(byte_offset, byte_len).into()
     }
 
+    /// Unsafe function to create a new [`ScalarBuffer`] from a [`Buffer`].
+    /// Only use for testing purpose.
+    ///
+    /// # Safety
+    ///
+    /// This function is unsafe because it does not check if the `buffer` is aligned
+    pub unsafe fn new_unchecked(buffer: Buffer) -> Self {
+        Self {
+            buffer,
+            phantom: Default::default(),
+        }
+    }
+
     /// Free up unused memory.
     pub fn shrink_to_fit(&mut self) {
         self.buffer.shrink_to_fit();
@@ -98,6 +132,16 @@ impl<T: ArrowNativeType> ScalarBuffer<T> {
     #[inline]
     pub fn ptr_eq(&self, other: &Self) -> bool {
         self.buffer.ptr_eq(&other.buffer)
+    }
+
+    /// Returns the number of elements in the buffer
+    pub fn len(&self) -> usize {
+        self.buffer.len() / std::mem::size_of::<T>()
+    }
+
+    /// Returns if the buffer is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 
@@ -139,8 +183,10 @@ impl<T: ArrowNativeType> From<Buffer> for ScalarBuffer<T> {
                 is_aligned,
                 "Memory pointer is not aligned with the specified scalar type"
             ),
-            Deallocation::Custom(_, _) =>
-                assert!(is_aligned, "Memory pointer from external source (e.g, FFI) is not aligned with the specified scalar type. Before importing buffer through FFI, please make sure the allocation is aligned."),
+            Deallocation::Custom(_, _) => assert!(
+                is_aligned,
+                "Memory pointer from external source (e.g, FFI) is not aligned with the specified scalar type. Before importing buffer through FFI, please make sure the allocation is aligned."
+            ),
         }
 
         Self {

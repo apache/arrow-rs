@@ -25,8 +25,8 @@ use arrow_data::UnsafeFlag;
 use arrow_schema::{ArrowError, SchemaRef};
 
 use crate::convert::MessageBuffer;
-use crate::reader::{read_dictionary_impl, RecordBatchDecoder};
-use crate::{MessageHeader, CONTINUATION_MARKER};
+use crate::reader::{RecordBatchDecoder, read_dictionary_impl};
+use crate::{CONTINUATION_MARKER, MessageHeader};
 
 /// A low-level interface for reading [`RecordBatch`] data from a stream of bytes
 ///
@@ -260,12 +260,12 @@ impl StreamDecoder {
                         t => {
                             return Err(ArrowError::IpcError(format!(
                                 "Message type unsupported by StreamDecoder: {t:?}"
-                            )))
+                            )));
                         }
                     }
                 }
                 DecoderState::Finished => {
-                    return Err(ArrowError::IpcError("Unexpected EOS".to_string()))
+                    return Err(ArrowError::IpcError("Unexpected EOS".to_string()));
                 }
             }
         }
@@ -293,7 +293,7 @@ mod tests {
     use super::*;
     use crate::writer::{IpcWriteOptions, StreamWriter};
     use arrow_array::{
-        types::Int32Type, DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray,
+        DictionaryArray, Int32Array, Int64Array, RecordBatch, RunArray, types::Int32Type,
     };
     use arrow_schema::{DataType, Field, Schema};
 
@@ -395,8 +395,7 @@ mod tests {
             let mut writer = StreamWriter::try_new_with_options(
                 &mut buffer,
                 &schema,
-                #[allow(deprecated)]
-                IpcWriteOptions::default().with_preserve_dict_id(false),
+                IpcWriteOptions::default(),
             )
             .expect("Failed to create StreamWriter");
             writer.write(&batch).expect("Failed to write RecordBatch");
@@ -408,7 +407,7 @@ mod tests {
         while let Some(batch) = decoder
             .decode(buf)
             .map_err(|e| {
-                ArrowError::ExternalError(format!("Failed to decode record batch: {}", e).into())
+                ArrowError::ExternalError(format!("Failed to decode record batch: {e}").into())
             })
             .expect("Failed to decode record batch")
         {

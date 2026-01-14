@@ -19,9 +19,12 @@
 //!
 //! <https://arrow.apache.org/docs/format/CanonicalExtensions.html#fixed-shape-tensor>
 
-use serde::{Deserialize, Serialize};
+use serde_core::de::{self, MapAccess, Visitor};
+use serde_core::ser::SerializeStruct;
+use serde_core::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
 
-use crate::{extension::ExtensionType, ArrowError, DataType};
+use crate::{ArrowError, DataType, extension::ExtensionType};
 
 /// The extension type for fixed shape tensor.
 ///
@@ -129,7 +132,7 @@ impl FixedShapeTensor {
 }
 
 /// Extension type metadata for [`FixedShapeTensor`].
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FixedShapeTensorMetadata {
     /// The physical shape of the contained tensors.
     shape: Vec<usize>,
@@ -139,6 +142,143 @@ pub struct FixedShapeTensorMetadata {
 
     /// Indices of the desired ordering of the original dimensions.
     permutations: Option<Vec<usize>>,
+}
+
+impl Serialize for FixedShapeTensorMetadata {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("FixedShapeTensorMetadata", 3)?;
+        state.serialize_field("shape", &self.shape)?;
+        state.serialize_field("dim_names", &self.dim_names)?;
+        state.serialize_field("permutations", &self.permutations)?;
+        state.end()
+    }
+}
+
+#[derive(Debug)]
+enum MetadataField {
+    Shape,
+    DimNames,
+    Permutations,
+}
+
+struct MetadataFieldVisitor;
+
+impl<'de> Visitor<'de> for MetadataFieldVisitor {
+    type Value = MetadataField;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("`shape`, `dim_names`, or `permutations`")
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<MetadataField, E>
+    where
+        E: de::Error,
+    {
+        match value {
+            "shape" => Ok(MetadataField::Shape),
+            "dim_names" => Ok(MetadataField::DimNames),
+            "permutations" => Ok(MetadataField::Permutations),
+            _ => Err(de::Error::unknown_field(
+                value,
+                &["shape", "dim_names", "permutations"],
+            )),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for MetadataField {
+    fn deserialize<D>(deserializer: D) -> Result<MetadataField, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_identifier(MetadataFieldVisitor)
+    }
+}
+
+struct FixedShapeTensorMetadataVisitor;
+
+impl<'de> Visitor<'de> for FixedShapeTensorMetadataVisitor {
+    type Value = FixedShapeTensorMetadata;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        formatter.write_str("struct FixedShapeTensorMetadata")
+    }
+
+    fn visit_seq<V>(self, mut seq: V) -> Result<FixedShapeTensorMetadata, V::Error>
+    where
+        V: de::SeqAccess<'de>,
+    {
+        let shape = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+        let dim_names = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+        let permutations = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+        Ok(FixedShapeTensorMetadata {
+            shape,
+            dim_names,
+            permutations,
+        })
+    }
+
+    fn visit_map<V>(self, mut map: V) -> Result<FixedShapeTensorMetadata, V::Error>
+    where
+        V: MapAccess<'de>,
+    {
+        let mut shape = None;
+        let mut dim_names = None;
+        let mut permutations = None;
+
+        while let Some(key) = map.next_key()? {
+            match key {
+                MetadataField::Shape => {
+                    if shape.is_some() {
+                        return Err(de::Error::duplicate_field("shape"));
+                    }
+                    shape = Some(map.next_value()?);
+                }
+                MetadataField::DimNames => {
+                    if dim_names.is_some() {
+                        return Err(de::Error::duplicate_field("dim_names"));
+                    }
+                    dim_names = Some(map.next_value()?);
+                }
+                MetadataField::Permutations => {
+                    if permutations.is_some() {
+                        return Err(de::Error::duplicate_field("permutations"));
+                    }
+                    permutations = Some(map.next_value()?);
+                }
+            }
+        }
+
+        let shape = shape.ok_or_else(|| de::Error::missing_field("shape"))?;
+
+        Ok(FixedShapeTensorMetadata {
+            shape,
+            dim_names,
+            permutations,
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for FixedShapeTensorMetadata {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_struct(
+            "FixedShapeTensorMetadata",
+            &["shape", "dim_names", "permutations"],
+            FixedShapeTensorMetadataVisitor,
+        )
+    }
 }
 
 impl FixedShapeTensorMetadata {
@@ -297,8 +437,8 @@ mod tests {
     #[cfg(feature = "canonical_extension_types")]
     use crate::extension::CanonicalExtensionType;
     use crate::{
-        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
         Field,
+        extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY},
     };
 
     use super::*;
@@ -377,9 +517,8 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(
-        expected = "FixedShapeTensor metadata deserialization failed: missing field `shape`"
-    )]
+    #[should_panic(expected = "FixedShapeTensor metadata deserialization failed: \
+        unknown field `not-shape`, expected one of `shape`, `dim_names`, `permutations`")]
     fn invalid_metadata() {
         let fixed_shape_tensor =
             FixedShapeTensor::try_new(DataType::Float32, [100, 200, 500], None, None).unwrap();

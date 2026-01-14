@@ -19,16 +19,16 @@ use std::any::Any;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow_buffer::{Buffer, BufferBuilder, NullBufferBuilder, ScalarBuffer};
-use arrow_data::ByteView;
+use arrow_buffer::{Buffer, NullBufferBuilder, ScalarBuffer};
+use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
-use hashbrown::hash_table::Entry;
 use hashbrown::HashTable;
+use hashbrown::hash_table::Entry;
 
-use crate::builder::ArrayBuilder;
+use crate::builder::{ArrayBuilder, BinaryLikeArrayBuilder, StringLikeArrayBuilder};
 use crate::types::bytes::ByteArrayNativeType;
 use crate::types::{BinaryViewType, ByteViewType, StringViewType};
-use crate::{ArrayRef, GenericByteViewArray};
+use crate::{Array, ArrayRef, GenericByteViewArray};
 
 const STARTING_BLOCK_SIZE: u32 = 8 * 1024; // 8KiB
 const MAX_BLOCK_SIZE: u32 = 2 * 1024 * 1024; // 2MiB
@@ -68,8 +68,8 @@ impl BlockSizeGrowthStrategy {
 ///
 /// To avoid bump allocating, this builder allocates data in fixed size blocks, configurable
 /// using [`GenericByteViewBuilder::with_fixed_block_size`]. [`GenericByteViewBuilder::append_value`]
-/// writes values larger than 12 bytes to the current in-progress block, with values smaller
-/// than 12 bytes inlined into the views. If a value is appended that will not fit in the
+/// writes values larger than [`MAX_INLINE_VIEW_LEN`] bytes to the current in-progress block, with values smaller
+/// than [`MAX_INLINE_VIEW_LEN`] bytes inlined into the views. If a value is appended that will not fit in the
 /// in-progress block, it will be closed, and a new block of sufficient size allocated
 ///
 /// # Append Views
@@ -79,7 +79,7 @@ impl BlockSizeGrowthStrategy {
 /// using [`GenericByteViewBuilder::append_block`] and then views into this block appended
 /// using [`GenericByteViewBuilder::try_append_view`]
 pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
-    views_builder: BufferBuilder<u128>,
+    views_buffer: Vec<u128>,
     null_buffer_builder: NullBufferBuilder,
     completed: Vec<Buffer>,
     in_progress: Vec<u8>,
@@ -87,6 +87,7 @@ pub struct GenericByteViewBuilder<T: ByteViewType + ?Sized> {
     /// Some if deduplicating strings
     /// map `<string hash> -> <index to the views>`
     string_tracker: Option<(HashTable<usize>, ahash::RandomState)>,
+    max_deduplication_len: Option<u32>,
     phantom: PhantomData<T>,
 }
 
@@ -99,7 +100,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Creates a new [`GenericByteViewBuilder`] with space for `capacity` string values.
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
-            views_builder: BufferBuilder::new(capacity),
+            views_buffer: Vec::with_capacity(capacity),
             null_buffer_builder: NullBufferBuilder::new(capacity),
             completed: vec![],
             in_progress: vec![],
@@ -107,21 +108,39 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
                 current_size: STARTING_BLOCK_SIZE,
             },
             string_tracker: None,
+            max_deduplication_len: None,
             phantom: Default::default(),
+        }
+    }
+
+    /// Configure max deduplication length when deduplicating strings while building the array.
+    /// Default is None.
+    ///
+    /// When [`Self::with_deduplicate_strings`] is enabled, the builder attempts to deduplicate
+    /// any strings longer than 12 bytes. However, since it takes time proportional to the length
+    /// of the string to deduplicate, setting this option limits the CPU overhead for this option.  
+    pub fn with_max_deduplication_len(self, max_deduplication_len: u32) -> Self {
+        debug_assert!(
+            max_deduplication_len > 0,
+            "max_deduplication_len must be greater than 0"
+        );
+        Self {
+            max_deduplication_len: Some(max_deduplication_len),
+            ..self
         }
     }
 
     /// Set a fixed buffer size for variable length strings
     ///
     /// The block size is the size of the buffer used to store values greater
-    /// than 12 bytes. The builder allocates new buffers when the current
+    /// than [`MAX_INLINE_VIEW_LEN`] bytes. The builder allocates new buffers when the current
     /// buffer is full.
     ///
     /// By default the builder balances buffer size and buffer count by
     /// growing buffer size exponentially from 8KB up to 2MB. The
     /// first buffer allocated is 8KB, then 16KB, then 32KB, etc up to 2MB.
     ///
-    /// If this method is used, any new buffers allocated are  
+    /// If this method is used, any new buffers allocated are
     /// exactly this size. This can be useful for advanced users
     /// that want to control the memory usage and buffer count.
     ///
@@ -134,13 +153,6 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         }
     }
 
-    /// Override the size of buffers to allocate for holding string data
-    /// Use `with_fixed_block_size` instead.
-    #[deprecated(since = "53.0.0", note = "Use `with_fixed_block_size` instead")]
-    pub fn with_block_size(self, block_size: u32) -> Self {
-        self.with_fixed_block_size(block_size)
-    }
-
     /// Deduplicate strings while building the array
     ///
     /// This will potentially decrease the memory usage if the array have repeated strings
@@ -148,7 +160,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     pub fn with_deduplicate_strings(self) -> Self {
         Self {
             string_tracker: Some((
-                HashTable::with_capacity(self.views_builder.capacity()),
+                HashTable::with_capacity(self.views_buffer.capacity()),
                 Default::default(),
             )),
             ..self
@@ -195,14 +207,46 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// (2) The range `offset..offset+length` must be within the bounds of the block
     /// (3) The data in the block must be valid of type `T`
     pub unsafe fn append_view_unchecked(&mut self, block: u32, offset: u32, len: u32) {
-        let b = self.completed.get_unchecked(block as usize);
+        let b = unsafe { self.completed.get_unchecked(block as usize) };
         let start = offset as usize;
         let end = start.saturating_add(len as usize);
-        let b = b.get_unchecked(start..end);
+        let b = unsafe { b.get_unchecked(start..end) };
 
         let view = make_view(b, block, offset);
-        self.views_builder.append(view);
+        self.views_buffer.push(view);
         self.null_buffer_builder.append_non_null();
+    }
+
+    /// Appends an array to the builder.
+    /// This will flush any in-progress block and append the data buffers
+    /// and add the (adapted) views.
+    pub fn append_array(&mut self, array: &GenericByteViewArray<T>) {
+        self.flush_in_progress();
+        // keep original views if this array is the first to be added or if there are no data buffers (all inline views)
+        let keep_views = self.completed.is_empty() || array.data_buffers().is_empty();
+        let starting_buffer = self.completed.len() as u32;
+
+        self.completed.extend(array.data_buffers().iter().cloned());
+
+        if keep_views {
+            self.views_buffer.extend_from_slice(array.views());
+        } else {
+            self.views_buffer.extend(array.views().iter().map(|v| {
+                let mut byte_view = ByteView::from(*v);
+                if byte_view.length > MAX_INLINE_VIEW_LEN {
+                    // Small views (<=12 bytes) are inlined, so only need to update large views
+                    byte_view.buffer_index += starting_buffer;
+                };
+
+                byte_view.as_u128()
+            }));
+        }
+
+        if let Some(null_buffer) = array.nulls() {
+            self.null_buffer_builder.append_buffer(null_buffer);
+        } else {
+            self.null_buffer_builder.append_n_non_nulls(array.len());
+        }
     }
 
     /// Try to append a view of the given `block`, `offset` and `length`
@@ -255,9 +299,9 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// Useful if we want to know what value has been inserted to the builder
     /// The index has to be smaller than `self.len()`, otherwise it will panic
     pub fn get_value(&self, index: usize) -> &[u8] {
-        let view = self.views_builder.as_slice().get(index).unwrap();
+        let view = self.views_buffer.as_slice().get(index).unwrap();
         let len = *view as u32;
-        if len <= 12 {
+        if len <= MAX_INLINE_VIEW_LEN {
             // # Safety
             // The view is valid from the builder
             unsafe { GenericByteViewArray::<T>::inline_value(view, len as usize) }
@@ -281,49 +325,70 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
     /// - String length exceeds `u32::MAX`
     #[inline]
     pub fn append_value(&mut self, value: impl AsRef<T::Native>) {
+        self.try_append_value(value).unwrap()
+    }
+
+    /// Appends a value into the builder
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - String buffer count exceeds `u32::MAX`
+    /// - String length exceeds `u32::MAX`
+    #[inline]
+    pub fn try_append_value(&mut self, value: impl AsRef<T::Native>) -> Result<(), ArrowError> {
         let v: &[u8] = value.as_ref().as_ref();
-        let length: u32 = v.len().try_into().unwrap();
-        if length <= 12 {
+        let length: u32 = v.len().try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!("String length {} exceeds u32::MAX", v.len()))
+        })?;
+
+        if length <= MAX_INLINE_VIEW_LEN {
             let mut view_buffer = [0; 16];
             view_buffer[0..4].copy_from_slice(&length.to_le_bytes());
             view_buffer[4..4 + v.len()].copy_from_slice(v);
-            self.views_builder.append(u128::from_le_bytes(view_buffer));
+            self.views_buffer.push(u128::from_le_bytes(view_buffer));
             self.null_buffer_builder.append_non_null();
-            return;
+            return Ok(());
         }
 
         // Deduplication if:
         // (1) deduplication is enabled.
-        // (2) len > 12
-        if let Some((mut ht, hasher)) = self.string_tracker.take() {
-            let hash_val = hasher.hash_one(v);
-            let hasher_fn = |v: &_| hasher.hash_one(v);
+        // (2) len > `MAX_INLINE_VIEW_LEN` and len <= `max_deduplication_len`
+        let can_deduplicate = self.string_tracker.is_some()
+            && self
+                .max_deduplication_len
+                .map(|max_length| length <= max_length)
+                .unwrap_or(true);
+        if can_deduplicate {
+            if let Some((mut ht, hasher)) = self.string_tracker.take() {
+                let hash_val = hasher.hash_one(v);
+                let hasher_fn = |v: &_| hasher.hash_one(v);
 
-            let entry = ht.entry(
-                hash_val,
-                |idx| {
-                    let stored_value = self.get_value(*idx);
-                    v == stored_value
-                },
-                hasher_fn,
-            );
-            match entry {
-                Entry::Occupied(occupied) => {
-                    // If the string already exists, we will directly use the view
-                    let idx = occupied.get();
-                    self.views_builder
-                        .append(self.views_builder.as_slice()[*idx]);
-                    self.null_buffer_builder.append_non_null();
-                    self.string_tracker = Some((ht, hasher));
-                    return;
+                let entry = ht.entry(
+                    hash_val,
+                    |idx| {
+                        let stored_value = self.get_value(*idx);
+                        v == stored_value
+                    },
+                    hasher_fn,
+                );
+                match entry {
+                    Entry::Occupied(occupied) => {
+                        // If the string already exists, we will directly use the view
+                        let idx = occupied.get();
+                        self.views_buffer.push(self.views_buffer[*idx]);
+                        self.null_buffer_builder.append_non_null();
+                        self.string_tracker = Some((ht, hasher));
+                        return Ok(());
+                    }
+                    Entry::Vacant(vacant) => {
+                        // o.w. we insert the (string hash -> view index)
+                        // the idx is current length of views_builder, as we are inserting a new view
+                        vacant.insert(self.views_buffer.len());
+                    }
                 }
-                Entry::Vacant(vacant) => {
-                    // o.w. we insert the (string hash -> view index)
-                    // the idx is current length of views_builder, as we are inserting a new view
-                    vacant.insert(self.views_builder.len());
-                }
+                self.string_tracker = Some((ht, hasher));
             }
-            self.string_tracker = Some((ht, hasher));
         }
 
         let required_cap = self.in_progress.len() + v.len();
@@ -332,17 +397,28 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
             let to_reserve = v.len().max(self.block_size.next_size() as usize);
             self.in_progress.reserve(to_reserve);
         };
+
         let offset = self.in_progress.len() as u32;
         self.in_progress.extend_from_slice(v);
 
+        let buffer_index: u32 = self.completed.len().try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "Buffer count {} exceeds u32::MAX",
+                self.completed.len()
+            ))
+        })?;
+
         let view = ByteView {
             length,
+            // This won't panic as we checked the length of prefix earlier.
             prefix: u32::from_le_bytes(v[0..4].try_into().unwrap()),
-            buffer_index: self.completed.len() as u32,
+            buffer_index,
             offset,
         };
-        self.views_builder.append(view.into());
+        self.views_buffer.push(view.into());
         self.null_buffer_builder.append_non_null();
+
+        Ok(())
     }
 
     /// Append an `Option` value into the builder
@@ -354,25 +430,71 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         };
     }
 
+    /// Append the same value `n` times into the builder
+    ///
+    /// This is more efficient than calling [`Self::try_append_value`] `n` times,
+    /// especially when deduplication is enabled, as it only hashes the value once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if
+    /// - String buffer count exceeds `u32::MAX`
+    /// - String length exceeds `u32::MAX`
+    ///
+    /// # Example
+    /// ```
+    /// # use arrow_array::builder::StringViewBuilder;
+    /// # use arrow_array::Array;
+    /// let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+    ///
+    /// // Append "hello" 1000 times efficiently
+    /// builder.try_append_value_n("hello", 1000)?;
+    ///
+    /// let array = builder.finish();
+    /// assert_eq!(array.len(), 1000);
+    ///
+    /// // All values are "hello"
+    /// for value in array.iter() {
+    ///     assert_eq!(value, Some("hello"));
+    /// }
+    /// # Ok::<(), arrow_schema::ArrowError>(())
+    /// ```
+    #[inline]
+    pub fn try_append_value_n(
+        &mut self,
+        value: impl AsRef<T::Native>,
+        n: usize,
+    ) -> Result<(), ArrowError> {
+        if n == 0 {
+            return Ok(());
+        }
+        // Process value once (handles deduplication, buffer management, view creation)
+        self.try_append_value(value)?;
+        // Reuse the view (n-1) times
+        let view = *self.views_buffer.last().unwrap();
+        self.views_buffer.extend(std::iter::repeat_n(view, n - 1));
+        self.null_buffer_builder.append_n_non_nulls(n - 1);
+        Ok(())
+    }
+
     /// Append a null value into the builder
     #[inline]
     pub fn append_null(&mut self) {
         self.null_buffer_builder.append_null();
-        self.views_builder.append(0);
+        self.views_buffer.push(0);
     }
 
     /// Builds the [`GenericByteViewArray`] and reset this builder
     pub fn finish(&mut self) -> GenericByteViewArray<T> {
         self.flush_in_progress();
         let completed = std::mem::take(&mut self.completed);
-        let len = self.views_builder.len();
-        let views = ScalarBuffer::new(self.views_builder.finish(), 0, len);
         let nulls = self.null_buffer_builder.finish();
-        if let Some((ref mut ht, _)) = self.string_tracker.as_mut() {
+        if let Some((ht, _)) = self.string_tracker.as_mut() {
             ht.clear();
         }
+        let views = std::mem::take(&mut self.views_buffer);
         // SAFETY: valid by construction
-        unsafe { GenericByteViewArray::new_unchecked(views, completed, nulls) }
+        unsafe { GenericByteViewArray::new_unchecked(views.into(), completed, nulls) }
     }
 
     /// Builds the [`GenericByteViewArray`] without resetting the builder
@@ -381,8 +503,8 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
         if !self.in_progress.is_empty() {
             completed.push(Buffer::from_slice_ref(&self.in_progress));
         }
-        let len = self.views_builder.len();
-        let views = Buffer::from_slice_ref(self.views_builder.as_slice());
+        let len = self.views_buffer.len();
+        let views = Buffer::from_slice_ref(self.views_buffer.as_slice());
         let views = ScalarBuffer::new(views, 0, len);
         let nulls = self.null_buffer_builder.finish_cloned();
         // SAFETY: valid by construction
@@ -396,7 +518,7 @@ impl<T: ByteViewType + ?Sized> GenericByteViewBuilder<T> {
 
     /// Return the allocated size of this builder in bytes, useful for memory accounting.
     pub fn allocated_size(&self) -> usize {
-        let views = self.views_builder.capacity() * std::mem::size_of::<u128>();
+        let views = self.views_buffer.capacity() * std::mem::size_of::<u128>();
         let null = self.null_buffer_builder.allocated_size();
         let buffer_size = self.completed.iter().map(|b| b.capacity()).sum::<usize>();
         let in_progress = self.in_progress.capacity();
@@ -418,7 +540,7 @@ impl<T: ByteViewType + ?Sized> std::fmt::Debug for GenericByteViewBuilder<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}ViewBuilder", T::PREFIX)?;
         f.debug_struct("")
-            .field("views_builder", &self.views_builder)
+            .field("views_buffer", &self.views_buffer)
             .field("in_progress", &self.in_progress)
             .field("completed", &self.completed)
             .field("null_buffer_builder", &self.null_buffer_builder)
@@ -484,6 +606,21 @@ impl<T: ByteViewType + ?Sized, V: AsRef<T::Native>> Extend<Option<V>>
 /// ```
 pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 
+impl StringLikeArrayBuilder for StringViewBuilder {
+    fn type_name() -> &'static str {
+        std::any::type_name::<StringViewBuilder>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn append_value(&mut self, value: &str) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
+
 ///  Array builder for [`BinaryViewArray`][crate::BinaryViewArray]
 ///
 /// Values can be appended using [`GenericByteViewBuilder::append_value`], and nulls with
@@ -505,6 +642,21 @@ pub type StringViewBuilder = GenericByteViewBuilder<StringViewType>;
 /// ```
 ///
 pub type BinaryViewBuilder = GenericByteViewBuilder<BinaryViewType>;
+
+impl BinaryLikeArrayBuilder for BinaryViewBuilder {
+    fn type_name() -> &'static str {
+        std::any::type_name::<BinaryViewBuilder>()
+    }
+    fn with_capacity(capacity: usize) -> Self {
+        Self::with_capacity(capacity)
+    }
+    fn append_value(&mut self, value: &[u8]) {
+        Self::append_value(self, value);
+    }
+    fn append_null(&mut self) {
+        Self::append_null(self);
+    }
+}
 
 /// Creates a view from a fixed length input (the compiler can generate
 /// specialized code for this)
@@ -557,8 +709,52 @@ pub fn make_view(data: &[u8], block_id: u32, offset: u32) -> u128 {
 mod tests {
     use core::str;
 
+    use arrow_buffer::ArrowNativeType;
+
     use super::*;
-    use crate::Array;
+
+    #[test]
+    fn test_string_max_deduplication_len() {
+        let value_1 = "short";
+        let value_2 = "not so similar string but long";
+        let value_3 = "1234567890123";
+
+        let max_deduplication_len = MAX_INLINE_VIEW_LEN * 2;
+
+        let mut builder = StringViewBuilder::new()
+            .with_deduplicate_strings()
+            .with_max_deduplication_len(max_deduplication_len);
+
+        assert!(value_1.len() < MAX_INLINE_VIEW_LEN.as_usize());
+        assert!(value_2.len() > max_deduplication_len.as_usize());
+        assert!(
+            value_3.len() > MAX_INLINE_VIEW_LEN.as_usize()
+                && value_3.len() < max_deduplication_len.as_usize()
+        );
+
+        // append value1 (short), expect it is inlined and not deduplicated
+        builder.append_value(value_1); // view 0
+        builder.append_value(value_1); // view 1
+        // append value2, expect second copy is not deduplicated as it exceeds max_deduplication_len
+        builder.append_value(value_2); // view 2
+        builder.append_value(value_2); // view 3
+        // append value3, expect second copy is deduplicated
+        builder.append_value(value_3); // view 4
+        builder.append_value(value_3); // view 5
+
+        let array = builder.finish();
+
+        // verify
+        let v2 = ByteView::from(array.views()[2]);
+        let v3 = ByteView::from(array.views()[3]);
+        assert_eq!(v2.buffer_index, v3.buffer_index); // stored in same buffer
+        assert_ne!(v2.offset, v3.offset); // different offsets --> not deduplicated
+
+        let v4 = ByteView::from(array.views()[4]);
+        let v5 = ByteView::from(array.views()[5]);
+        assert_eq!(v4.buffer_index, v5.buffer_index); // stored in same buffer
+        assert_eq!(v4.offset, v5.offset); // same offsets --> deduplicated
+    }
 
     #[test]
     fn test_string_view_deduplicate() {
@@ -665,7 +861,10 @@ mod tests {
         );
 
         let err = v.try_append_view(0, u32::MAX, 1).unwrap_err();
-        assert_eq!(err.to_string(), "Invalid argument error: Range 4294967295..4294967296 out of bounds for block of length 17");
+        assert_eq!(
+            err.to_string(),
+            "Invalid argument error: Range 4294967295..4294967296 out of bounds for block of length 17"
+        );
 
         let err = v.try_append_view(0, 1, u32::MAX).unwrap_err();
         assert_eq!(
@@ -716,10 +915,12 @@ mod tests {
             assert_eq!(fixed_builder.completed.len(), 2_usize.pow(i + 1) - 1);
 
             // Every buffer is fixed size
-            assert!(fixed_builder
-                .completed
-                .iter()
-                .all(|b| b.len() == STARTING_BLOCK_SIZE as usize));
+            assert!(
+                fixed_builder
+                    .completed
+                    .iter()
+                    .all(|b| b.len() == STARTING_BLOCK_SIZE as usize)
+            );
         }
 
         // Add one more value, and the buffer stop growing.
@@ -729,5 +930,77 @@ mod tests {
             exp_builder.completed.last().unwrap().capacity(),
             MAX_BLOCK_SIZE as usize
         );
+    }
+
+    #[test]
+    fn test_append_value_n() {
+        // Test with inline strings (<=12 bytes)
+        let mut builder = StringViewBuilder::new();
+
+        builder.try_append_value_n("hello", 100).unwrap();
+        builder.append_value("world");
+        builder.try_append_value_n("foo", 50).unwrap();
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 151);
+        assert_eq!(array.null_count(), 0);
+
+        // Verify the values
+        for i in 0..100 {
+            assert_eq!(array.value(i), "hello");
+        }
+        assert_eq!(array.value(100), "world");
+        for i in 101..151 {
+            assert_eq!(array.value(i), "foo");
+        }
+
+        // All inline strings should have no data buffers
+        assert_eq!(array.data_buffers().len(), 0);
+    }
+
+    #[test]
+    fn test_append_value_n_with_deduplication() {
+        let long_string = "This is a very long string that exceeds the inline length";
+
+        // Test with deduplication enabled
+        let mut builder = StringViewBuilder::new().with_deduplicate_strings();
+
+        // First append the string once to add it to the hash map
+        builder.append_value(long_string);
+
+        // Then append_n the same string - should deduplicate and reuse the existing value
+        builder.try_append_value_n(long_string, 999).unwrap();
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 1000);
+        assert_eq!(array.null_count(), 0);
+
+        // Verify all values are the same
+        for i in 0..1000 {
+            assert_eq!(array.value(i), long_string);
+        }
+
+        // With deduplication, should only have 1 data buffer containing the string once
+        assert_eq!(array.data_buffers().len(), 1);
+
+        // All views should be identical
+        let first_view = array.views()[0];
+        for view in array.views().iter() {
+            assert_eq!(*view, first_view);
+        }
+    }
+
+    #[test]
+    fn test_append_value_n_zero() {
+        let mut builder = StringViewBuilder::new();
+
+        builder.append_value("first");
+        builder.try_append_value_n("should not appear", 0).unwrap();
+        builder.append_value("second");
+
+        let array = builder.finish();
+        assert_eq!(array.len(), 2);
+        assert_eq!(array.value(0), "first");
+        assert_eq!(array.value(1), "second");
     }
 }

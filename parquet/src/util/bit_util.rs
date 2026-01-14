@@ -21,7 +21,7 @@ use bytes::Bytes;
 
 use crate::data_type::{AsBytes, ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
-use crate::util::bit_pack::{unpack16, unpack32, unpack64, unpack8};
+use crate::util::bit_pack::{unpack8, unpack16, unpack32, unpack64};
 
 #[inline]
 fn array_from_slice<const N: usize>(bs: &[u8]) -> Result<[u8; N]> {
@@ -150,8 +150,8 @@ where
 /// This function should be removed after
 /// [`int_roundings`](https://github.com/rust-lang/rust/issues/88581) is stable.
 #[inline]
-pub fn ceil<T: num::Integer>(value: T, divisor: T) -> T {
-    num::Integer::div_ceil(&value, &divisor)
+pub fn ceil<T: num_integer::Integer>(value: T, divisor: T) -> T {
+    num_integer::Integer::div_ceil(&value, &divisor)
 }
 
 /// Returns the `num_bits` least-significant bits of `v`
@@ -245,7 +245,7 @@ impl BitWriter {
     pub fn skip(&mut self, num_bytes: usize) -> usize {
         self.flush();
         let result = self.buffer.len();
-        self.buffer.extend(std::iter::repeat(0).take(num_bytes));
+        self.buffer.extend(std::iter::repeat_n(0, num_bytes));
         result
     }
 
@@ -283,9 +283,9 @@ impl BitWriter {
     /// The `num_bits` must not be greater than 64. This is bit packed.
     #[inline]
     pub fn put_value(&mut self, v: u64, num_bits: usize) {
-        assert!(num_bits <= 64);
+        debug_assert!(num_bits <= 64);
         let num_bits = num_bits as u8;
-        assert_eq!(v.checked_shr(num_bits as u32).unwrap_or(0), 0); // covers case v >> 64
+        debug_assert_eq!(v.checked_shr(num_bits as u32).unwrap_or(0), 0); // covers case v >> 64
 
         // Add value to buffered_values
         self.buffered_values |= v << self.bit_offset;

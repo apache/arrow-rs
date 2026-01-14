@@ -78,10 +78,10 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
         DataType::Utf8View => {
             let list = array.as_string_view();
             let v = list.views().iter().map(|v| *v as i32).collect::<Vec<_>>();
-            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(
+            Ok(Arc::new(PrimitiveArray::<Int32Type>::try_new(
                 v.into(),
                 list.nulls().cloned(),
-            )))
+            )?))
         }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
@@ -92,15 +92,15 @@ pub fn length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             Ok(length_impl::<Int64Type>(list.offsets(), list.nulls()))
         }
         DataType::FixedSizeBinary(len) | DataType::FixedSizeList(_, len) => Ok(Arc::new(
-            Int32Array::new(vec![*len; array.len()].into(), array.nulls().cloned()),
+            Int32Array::try_new(vec![*len; array.len()].into(), array.nulls().cloned())?,
         )),
         DataType::BinaryView => {
             let list = array.as_binary_view();
             let v = list.views().iter().map(|v| *v as i32).collect::<Vec<_>>();
-            Ok(Arc::new(PrimitiveArray::<Int32Type>::new(
+            Ok(Arc::new(PrimitiveArray::<Int32Type>::try_new(
                 v.into(),
                 list.nulls().cloned(),
-            )))
+            )?))
         }
         other => Err(ArrowError::ComputeError(format!(
             "length not supported for {other:?}"
@@ -144,7 +144,10 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
                 .iter()
                 .map(|view| (*view as i32).wrapping_mul(8))
                 .collect();
-            Ok(Arc::new(Int32Array::new(values, array.nulls().cloned())))
+            Ok(Arc::new(Int32Array::try_new(
+                values,
+                array.nulls().cloned(),
+            )?))
         }
         DataType::Binary => {
             let list = array.as_binary::<i32>();
@@ -154,10 +157,10 @@ pub fn bit_length(array: &dyn Array) -> Result<ArrayRef, ArrowError> {
             let list = array.as_binary::<i64>();
             Ok(bit_length_impl::<Int64Type>(list.offsets(), list.nulls()))
         }
-        DataType::FixedSizeBinary(len) => Ok(Arc::new(Int32Array::new(
+        DataType::FixedSizeBinary(len) => Ok(Arc::new(Int32Array::try_new(
             vec![*len * 8; array.len()].into(),
             array.nulls().cloned(),
-        ))),
+        )?)),
         other => Err(ArrowError::ComputeError(format!(
             "bit_length not supported for {other:?}"
         ))),
@@ -624,11 +627,7 @@ mod tests {
         let data: Vec<Option<&str>> = (0..TOTAL)
             .map(|n| {
                 let i = n % 5;
-                if i == 3 {
-                    None
-                } else {
-                    Some(v[i as usize])
-                }
+                if i == 3 { None } else { Some(v[i as usize]) }
             })
             .collect();
 
@@ -671,11 +670,7 @@ mod tests {
         let data: Vec<Option<&str>> = (0..TOTAL)
             .map(|n| {
                 let i = n % 5;
-                if i == 3 {
-                    None
-                } else {
-                    Some(v[i as usize])
-                }
+                if i == 3 { None } else { Some(v[i as usize]) }
             })
             .collect();
 

@@ -16,7 +16,7 @@
 // under the License.
 
 use crate::basic::Type as PhysicalType;
-use crate::column::reader::{get_typed_column_reader, ColumnReader, ColumnReaderImpl};
+use crate::column::reader::{ColumnReader, ColumnReaderImpl, get_typed_column_reader};
 use crate::data_type::*;
 use crate::errors::{ParquetError, Result};
 use crate::record::api::Field;

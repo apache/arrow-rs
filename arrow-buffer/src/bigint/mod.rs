@@ -17,8 +17,12 @@
 
 use crate::arith::derive_arith;
 use crate::bigint::div::div_rem;
-use num::cast::AsPrimitive;
-use num::{BigInt, FromPrimitive, ToPrimitive};
+use num_bigint::BigInt;
+use num_traits::{
+    Bounded, CheckedAdd, CheckedDiv, CheckedMul, CheckedNeg, CheckedRem, CheckedSub, FromPrimitive,
+    Num, One, Signed, ToPrimitive, WrappingAdd, WrappingMul, WrappingNeg, WrappingSub, Zero,
+    cast::AsPrimitive,
+};
 use std::cmp::Ordering;
 use std::num::ParseIntError;
 use std::ops::{BitAnd, BitOr, BitXor, Neg, Shl, Shr};
@@ -232,11 +236,7 @@ impl i256 {
     pub fn from_f64(v: f64) -> Option<Self> {
         BigInt::from_f64(v).and_then(|i| {
             let (integer, overflow) = i256::from_bigint_with_overflow(i);
-            if overflow {
-                None
-            } else {
-                Some(integer)
-            }
+            if overflow { None } else { Some(integer) }
         })
     }
 
@@ -304,7 +304,7 @@ impl i256 {
         let v_bytes = v.to_signed_bytes_le();
         match v_bytes.len().cmp(&32) {
             Ordering::Less => {
-                let mut bytes = if num::Signed::is_negative(&v) {
+                let mut bytes = if num_traits::Signed::is_negative(&v) {
                     [255_u8; 32]
                 } else {
                     [0; 32]
@@ -586,6 +586,34 @@ impl i256 {
     pub const fn is_positive(self) -> bool {
         self.high.is_positive() || self.high == 0 && self.low != 0
     }
+
+    /// Returns the number of leading zeros in the binary representation of this [`i256`].
+    pub const fn leading_zeros(&self) -> u32 {
+        match self.high {
+            0 => u128::BITS + self.low.leading_zeros(),
+            _ => self.high.leading_zeros(),
+        }
+    }
+
+    /// Returns the number of trailing zeros in the binary representation of this [`i256`].
+    pub const fn trailing_zeros(&self) -> u32 {
+        match self.low {
+            0 => u128::BITS + self.high.trailing_zeros(),
+            _ => self.low.trailing_zeros(),
+        }
+    }
+
+    fn redundant_leading_sign_bits_i256(n: i256) -> u8 {
+        let mask = n >> 255; // all ones or all zeros
+        ((n ^ mask).leading_zeros() - 1) as u8 // we only need one sign bit
+    }
+
+    fn i256_to_f64(input: i256) -> f64 {
+        let k = i256::redundant_leading_sign_bits_i256(input);
+        let n = input << k; // left-justify (no redundant sign bits)
+        let n = (n.high >> 64) as i64; // throw away the lower 192 bits
+        (n as f64) * f64::powi(2.0, 192 - (k as i32)) // convert to f64 and scale it, as we left-shift k bit previous, so we need to scale it by 2^(192-k)
+    }
 }
 
 /// Temporary workaround due to lack of stable const array slicing
@@ -821,6 +849,15 @@ impl ToPrimitive for i256 {
         }
     }
 
+    fn to_f64(&self) -> Option<f64> {
+        match *self {
+            Self::MIN => Some(-2_f64.powi(255)),
+            Self::ZERO => Some(0f64),
+            Self::ONE => Some(1f64),
+            n => Some(Self::i256_to_f64(n)),
+        }
+    }
+
     fn to_u64(&self) -> Option<u64> {
         let as_i128 = self.low as i128;
 
@@ -836,11 +873,142 @@ impl ToPrimitive for i256 {
     }
 }
 
+// num_traits checked implementations
+
+impl CheckedNeg for i256 {
+    fn checked_neg(&self) -> Option<Self> {
+        (*self).checked_neg()
+    }
+}
+
+impl CheckedAdd for i256 {
+    fn checked_add(&self, v: &i256) -> Option<Self> {
+        (*self).checked_add(*v)
+    }
+}
+
+impl CheckedSub for i256 {
+    fn checked_sub(&self, v: &i256) -> Option<Self> {
+        (*self).checked_sub(*v)
+    }
+}
+
+impl CheckedDiv for i256 {
+    fn checked_div(&self, v: &i256) -> Option<Self> {
+        (*self).checked_div(*v)
+    }
+}
+
+impl CheckedMul for i256 {
+    fn checked_mul(&self, v: &i256) -> Option<Self> {
+        (*self).checked_mul(*v)
+    }
+}
+
+impl CheckedRem for i256 {
+    fn checked_rem(&self, v: &i256) -> Option<Self> {
+        (*self).checked_rem(*v)
+    }
+}
+
+impl WrappingAdd for i256 {
+    fn wrapping_add(&self, v: &Self) -> Self {
+        (*self).wrapping_add(*v)
+    }
+}
+
+impl WrappingSub for i256 {
+    fn wrapping_sub(&self, v: &Self) -> Self {
+        (*self).wrapping_sub(*v)
+    }
+}
+
+impl WrappingMul for i256 {
+    fn wrapping_mul(&self, v: &Self) -> Self {
+        (*self).wrapping_mul(*v)
+    }
+}
+
+impl WrappingNeg for i256 {
+    fn wrapping_neg(&self) -> Self {
+        (*self).wrapping_neg()
+    }
+}
+
+impl Zero for i256 {
+    fn zero() -> Self {
+        i256::ZERO
+    }
+
+    fn is_zero(&self) -> bool {
+        *self == i256::ZERO
+    }
+}
+
+impl One for i256 {
+    fn one() -> Self {
+        i256::ONE
+    }
+
+    fn is_one(&self) -> bool {
+        *self == i256::ONE
+    }
+}
+
+impl Num for i256 {
+    type FromStrRadixErr = ParseI256Error;
+
+    fn from_str_radix(str: &str, radix: u32) -> Result<Self, Self::FromStrRadixErr> {
+        if radix == 10 {
+            str.parse()
+        } else {
+            // Parsing from non-10 baseseeÎ is not supported
+            Err(ParseI256Error {})
+        }
+    }
+}
+
+impl Signed for i256 {
+    fn abs(&self) -> Self {
+        self.wrapping_abs()
+    }
+
+    fn abs_sub(&self, other: &Self) -> Self {
+        if self > other {
+            self.wrapping_sub(other)
+        } else {
+            i256::ZERO
+        }
+    }
+
+    fn signum(&self) -> Self {
+        (*self).signum()
+    }
+
+    fn is_positive(&self) -> bool {
+        (*self).is_positive()
+    }
+
+    fn is_negative(&self) -> bool {
+        (*self).is_negative()
+    }
+}
+
+impl Bounded for i256 {
+    fn min_value() -> Self {
+        i256::MIN
+    }
+
+    fn max_value() -> Self {
+        i256::MAX
+    }
+}
+
 #[cfg(all(test, not(miri)))] // llvm.x86.subborrow.64 not supported by MIRI
 mod tests {
     use super::*;
-    use num::Signed;
-    use rand::{rng, Rng};
+    use num_traits::Signed;
+    use rand::{Rng, rng};
 
     #[test]
     fn test_signed_cmp() {
@@ -1263,5 +1431,153 @@ mod tests {
                 test_reference_op(il, ir)
             }
         }
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_typical_values() {
+        let v = i256::from_i128(42_i128);
+        assert_eq!(v.to_f64().unwrap(), 42.0);
+
+        let v = i256::from_i128(-123456789012345678i128);
+        assert_eq!(v.to_f64().unwrap(), -123456789012345678.0);
+
+        let v = i256::from_string("0").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 0.0);
+
+        let v = i256::from_string("1").unwrap();
+        assert_eq!(v.to_f64().unwrap(), 1.0);
+
+        let mut rng = rng();
+        for _ in 0..10 {
+            let f64_value =
+                (rng.random_range(i128::MIN..i128::MAX) as f64) * rng.random_range(0.0..1.0);
+            let big = i256::from_f64(f64_value).unwrap();
+            assert_eq!(big.to_f64().unwrap(), f64_value);
+        }
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_positive_value() {
+        let max_f = f64::MAX;
+        let big = i256::from_f64(max_f * 2.0).unwrap_or(i256::MAX);
+        let out = big.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_positive());
+    }
+
+    #[test]
+    fn test_decimal256_to_f64_large_negative_value() {
+        let max_f = f64::MAX;
+        let big_neg = i256::from_f64(-(max_f * 2.0)).unwrap_or(i256::MIN);
+        let out = big_neg.to_f64().unwrap();
+        assert!(out.is_finite() && out.is_sign_negative());
+    }
+
+    #[test]
+    fn test_num_traits() {
+        let value = i256::from_i128(-5);
+        assert_eq!(
+            <i256 as CheckedNeg>::checked_neg(&value),
+            Some(i256::from(5))
+        );
+
+        assert_eq!(
+            <i256 as CheckedAdd>::checked_add(&value, &value),
+            Some(i256::from(-10))
+        );
+
+        assert_eq!(
+            <i256 as CheckedSub>::checked_sub(&value, &value),
+            Some(i256::from(0))
+        );
+
+        assert_eq!(
+            <i256 as CheckedMul>::checked_mul(&value, &value),
+            Some(i256::from(25))
+        );
+
+        assert_eq!(
+            <i256 as CheckedDiv>::checked_div(&value, &value),
+            Some(i256::from(1))
+        );
+
+        assert_eq!(
+            <i256 as CheckedRem>::checked_rem(&value, &value),
+            Some(i256::from(0))
+        );
+
+        assert_eq!(
+            <i256 as WrappingAdd>::wrapping_add(&value, &value),
+            i256::from(-10)
+        );
+
+        assert_eq!(
+            <i256 as WrappingSub>::wrapping_sub(&value, &value),
+            i256::from(0)
+        );
+
+        assert_eq!(
+            <i256 as WrappingMul>::wrapping_mul(&value, &value),
+            i256::from(25)
+        );
+
+        assert_eq!(<i256 as WrappingNeg>::wrapping_neg(&value), i256::from(5));
+
+        // A single check for wrapping behavior, rely on trait implementation for others
+        let result = <i256 as WrappingAdd>::wrapping_add(&i256::MAX, &i256::ONE);
+        assert_eq!(result, i256::MIN);
+
+        assert_eq!(<i256 as Signed>::abs(&value), i256::from(5));
+
+        assert_eq!(<i256 as One>::one(), i256::from(1));
+        assert_eq!(<i256 as Zero>::zero(), i256::from(0));
+
+        assert_eq!(<i256 as Bounded>::min_value(), i256::MIN);
+        assert_eq!(<i256 as Bounded>::max_value(), i256::MAX);
+    }
+
+    #[test]
+    fn test_numtraits_from_str_radix() {
+        assert_eq!(
+            i256::from_str_radix("123456789", 10).expect("parsed"),
+            i256::from(123456789)
+        );
+        assert_eq!(
+            i256::from_str_radix("0", 10).expect("parsed"),
+            i256::from(0)
+        );
+        assert!(i256::from_str_radix("abc", 10).is_err());
+        assert!(i256::from_str_radix("0", 16).is_err());
+    }
+
+    #[test]
+    fn test_leading_zeros() {
+        // Without high part
+        assert_eq!(i256::from(0).leading_zeros(), 256);
+        assert_eq!(i256::from(1).leading_zeros(), 256 - 1);
+        assert_eq!(i256::from(16).leading_zeros(), 256 - 5);
+        assert_eq!(i256::from(17).leading_zeros(), 256 - 5);
+
+        // With high part
+        assert_eq!(i256::from_parts(2, 16).leading_zeros(), 128 - 5);
+        assert_eq!(i256::from_parts(2, i128::MAX).leading_zeros(), 1);
+
+        assert_eq!(i256::MAX.leading_zeros(), 1);
+        assert_eq!(i256::from(-1).leading_zeros(), 0);
+    }
+
+    #[test]
+    fn test_trailing_zeros() {
+        // Without high part
+        assert_eq!(i256::from(0).trailing_zeros(), 256);
+        assert_eq!(i256::from(2).trailing_zeros(), 1);
+        assert_eq!(i256::from(16).trailing_zeros(), 4);
+        assert_eq!(i256::from(17).trailing_zeros(), 0);
+        // With high part
+        assert_eq!(i256::from_parts(0, i128::MAX).trailing_zeros(), 128);
+        assert_eq!(i256::from_parts(0, 16).trailing_zeros(), 128 + 4);
+        assert_eq!(i256::from_parts(2, i128::MAX).trailing_zeros(), 1);
+
+        assert_eq!(i256::MAX.trailing_zeros(), 0);
+        assert_eq!(i256::from(-1).trailing_zeros(), 0);
     }
 }

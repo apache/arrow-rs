@@ -89,8 +89,7 @@ You can also use rust's official docker image:
 docker run --rm -v $(pwd):/arrow-rs -it rust /bin/bash -c "cd /arrow-rs && rustup component add rustfmt && cargo build"
 ```
 
-The command above assumes that are in the root directory of the project, not in the same
-directory as this README.md.
+The command above assumes that are in the root directory of the project.
 
 You can also compile specific workspaces:
 
