@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -937,6 +937,27 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
             unsafe { OffsetBuffer::new_unchecked(buffer) }
         }
     }
+}
+
+/// Helper function that creates an [`OffsetBuffer`] from a buffer and array offset/ length
+///
+/// # Safety
+///
+/// - buffer must contain valid arrow offsets ( [`OffsetBuffer`] ) for the
+///   given length and offset.
+unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
+    buffer: Buffer,
+    offset: usize,
+    len: usize,
+) -> OffsetBuffer<O> {
+    if len == 0 && buffer.is_empty() {
+        return OffsetBuffer::new_empty();
+    }
+
+    let scalar_buffer = ScalarBuffer::new(buffer, offset, len + 1);
+    // Safety:
+    // Arguments were valid
+    unsafe { OffsetBuffer::new_unchecked(scalar_buffer) }
 }
 
 /// Helper function for printing potentially long arrays.
