@@ -1530,6 +1530,15 @@ impl UnorderedRows {
         self.offsets.push(self.buffer.len())
     }
 
+    /// Return the length of each row in this [`Rows`]
+    pub fn lengths(&self) -> impl ExactSizeIterator<Item = usize> + '_ {
+        self.offsets.windows(2).map(|x| x[1] - x[0])
+    }
+    /// Return the length of each row in this [`Rows`]
+    pub fn lengths_from(&self, data_range: &Range<usize>) -> impl ExactSizeIterator<Item = usize> + '_ {
+        self.offsets[data_range.start..].windows(2).map(|x| x[1] - x[0]).take(data_range.len())
+    }
+
     /// Returns the row at index `row`
     pub fn row(&self, row: usize) -> UnorderedRow<'_> {
         assert!(row + 1 < self.offsets.len());
@@ -1550,7 +1559,7 @@ impl UnorderedRows {
         }
     }
 
-    // Get data for rows in start..end
+    /// Get data for rows in start..end
     pub(crate) fn data_range(&self, data_range: Range<usize>) -> &[u8] {
         assert!(data_range.start < self.offsets.len());
         assert!(data_range.end < self.offsets.len());
@@ -1568,6 +1577,19 @@ impl UnorderedRows {
         // let start = self.offsets[data_range.start];
         // let end = self.offsets[data_range.end];
         // &self.buffer[start..end]
+    }
+
+    /// Get the number of bytes the rows will take
+    pub(crate) fn data_range_len(&self, data_range: &Range<usize>) -> usize {
+        assert!(data_range.start < self.offsets.len());
+        assert!(data_range.end < self.offsets.len());
+        // We want to exclude end, so we take the one before it
+        let end_row = data_range.end - 1;
+
+            let end = unsafe { self.offsets.get_unchecked(end_row + 1) };
+            let start = unsafe { self.offsets.get_unchecked(data_range.start) };
+
+            *end - *start
     }
 
     /// Sets the length of this [`UnorderedRows`] to 0

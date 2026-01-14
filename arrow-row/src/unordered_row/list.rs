@@ -31,15 +31,15 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
 
     let offsets = array.value_offsets().windows(2);
     lengths
-        .iter_mut()
-        .zip(offsets)
-        .enumerate()
-        .for_each(|(idx, (length, offsets))| {
-            let start = offsets[0].as_usize() - shift;
-            let end = offsets[1].as_usize() - shift;
-            let range = array.is_valid(idx).then_some(start..end);
-            *length += encoded_len(rows, range);
-        });
+      .iter_mut()
+      .zip(offsets)
+      .enumerate()
+      .for_each(|(idx, (length, offsets))| {
+          let start = offsets[0].as_usize() - shift;
+          let end = offsets[1].as_usize() - shift;
+          let range = array.is_valid(idx).then_some(start..end);
+          *length += encoded_len(rows, range);
+      });
 }
 
 fn encoded_len(rows: &UnorderedRows, range: Option<Range<usize>>) -> usize {
@@ -50,12 +50,20 @@ fn encoded_len(rows: &UnorderedRows, range: Option<Range<usize>>) -> usize {
     //         Some(range) => Some(rows.data_range(range))
     //     }
     // )
-    match range {
-        None => 1,
+    match range.filter(|r| !r.is_empty()) {
+        None =>
+            // Only the ctrl byte
+            1,
         Some(range) => {
-            1 + range
-                .map(|i| super::variable::padded_length(Some(rows.row(i).as_ref().len())))
-                .sum::<usize>()
+            // Number of items
+            super::variable::length_of_encoding_length(range.len()) +
+              // ctrl byte for the length type that will be used for all lengths here
+              1 +
+              // what is the worst case scenerio for how much bytes are needed to encode the length of a row
+              // if the range is a single item (this is worst case scenerio as we don't know how much each row will take)
+              super::variable::get_number_of_bytes_needed_to_encode(rows.data_range_len(&range)) * range.len() +
+              // The bytes themselves
+              super::variable::padded_length(Some(rows.data_range(range).len()))
         }
     }
 }
@@ -72,25 +80,21 @@ pub fn encode<O: OffsetSizeTrait>(
     let shift = array.value_offsets()[0].as_usize();
 
     offsets
-        .iter_mut()
-        .skip(1)
-        .zip(array.value_offsets().windows(2))
-        .enumerate()
-        .for_each(|(idx, (offset, offsets))| {
-            let start = offsets[0].as_usize() - shift;
-            let end = offsets[1].as_usize() - shift;
-            let range = array.is_valid(idx).then_some(start..end);
-            let out = &mut data[*offset..];
-            *offset += encode_one(out, rows, range)
-        });
+      .iter_mut()
+      .skip(1)
+      .zip(array.value_offsets().windows(2))
+      .enumerate()
+      .for_each(|(idx, (offset, offsets))| {
+          let start = offsets[0].as_usize() - shift;
+          let end = offsets[1].as_usize() - shift;
+          let range = array.is_valid(idx).then_some(start..end);
+          let out = &mut data[*offset..];
+          *offset += encode_one(out, rows, range)
+      });
 }
 
 #[inline]
-fn encode_one(
-    out: &mut [u8],
-    rows: &UnorderedRows,
-    range: Option<Range<usize>>,
-) -> usize {
+fn encode_one(out: &mut [u8], rows: &UnorderedRows, range: Option<Range<usize>>) -> usize {
     // match range {
     //     None =>{
     //         let offset = super::variable::encode_null(out);
@@ -105,7 +109,6 @@ fn encode_one(
     //     },
     // };
 
-
     // super::variable::encode_one(
     //     out,
     //     match range {
@@ -114,17 +117,48 @@ fn encode_one(
     //         Some(range) => Some(rows.data_range(range))
     //     }
     // )
-    match range {
-        None => super::variable::encode_empty(out),
-        Some(range) if range.start == range.end => super::variable::encode_empty(out),
+
+    match range.filter(|r| !r.is_empty()) {
+        None => {
+            super::variable::encode_empty(out)
+        },
         Some(range) => {
             let mut offset = 0;
-            // super::variable::fast_encode_bytes(out, rows.data_range(range))
-            for i in range {
-                let row = rows.row(i);
-                offset += super::variable::encode_one(&mut out[offset..], Some(row.data));
-            }
-            offset += super::variable::encode_one(&mut out[offset..], Some(&[]));
+
+            // Encode the number of items in the list
+            offset += super::variable::encode_len(&mut out[offset..], range.len());
+
+            // Encode the type of the lengths of the rows and the lengths themselves
+            offset += super::variable::encode_lengths_with_prefix(
+                &mut out[offset..],
+                rows.data_range_len(&range),
+                rows.lengths_from(&range),
+            );
+
+            // Encode the whole list in one go
+            offset += super::variable::fast_encode_bytes(
+                &mut out[offset..],
+                rows.data_range(range.clone()),
+            );
+            //
+            //
+            //
+            //
+            // // TODO - encode all rows lengths at the start and then encode
+            // //        the entire rows data in one go
+            //
+            // // TODO - encode number of bytes so we can in the decode skip small copy
+            //
+            // for i in range {
+            //     let row = rows.row(i);
+            //     // // This is required as we are decoding data until we get an empty marker
+            //     // assert!(
+            //     //     row.data.len() > 1,
+            //     //     "list item row data must have more than 1 byte"
+            //     // );
+            //     offset += super::variable::encode_one(&mut out[offset..], Some(row.data));
+            // }
+            // offset += super::variable::encode_one(&mut out[offset..], Some(&[]));
             offset
         }
     }
@@ -142,7 +176,6 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     validate_utf8: bool,
     list_nulls: Option<NullBuffer>,
 ) -> Result<GenericListArray<O>, ArrowError> {
-
     let mut values_bytes = 0;
 
     let mut offset = 0;
@@ -151,46 +184,72 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
 
     for row in rows.iter_mut() {
         let mut row_offset = 0;
-        loop {
-            let decoded = super::variable::decode_blocks(&row[row_offset..], |x| {
-                values_bytes += x.len();
-            });
-            if decoded <= 1 {
-                offsets.push(O::usize_as(offset));
-                break;
-            }
-            row_offset += decoded;
-            offset += 1;
+
+        let (number_of_items, start_offset) = super::variable::decode_len(&row[row_offset..]);
+        row_offset += start_offset;
+
+        offset += number_of_items;
+        offsets.push(O::usize_as(offset));
+
+        if number_of_items == 0 {
+            continue;
         }
+
+        // TODO - encode the bytes first and then the lengths so we don't have to jump here in memory
+        // read ctrl byte
+        let byte_size = super::variable::get_number_of_bytes_used_to_encode_from_ctrl_byte(row[row_offset]);
+        // Skip the ctrl byte
+        row_offset += 1;
+
+        // Skip the lengths
+        row_offset += byte_size * number_of_items;
+
+        let (number_of_bytes, start_offset) = super::variable::decode_len(&row[row_offset..]);
+        row_offset += start_offset;
+
+        values_bytes += number_of_bytes;
     }
     O::from_usize(offset).expect("overflow");
 
     let mut values_offsets = Vec::with_capacity(offset);
+    values_offsets.push(0);
     let mut values_bytes = Vec::with_capacity(values_bytes);
     for row in rows.iter_mut() {
         let mut row_offset = 0;
-        loop {
-            let decoded = super::variable::decode_blocks(&row[row_offset..], |x| {
-                values_bytes.extend_from_slice(x)
-            });
-            row_offset += decoded;
-            if decoded <= 1 {
-                break;
-            }
-            values_offsets.push(values_bytes.len());
+
+        // Decode the number of items in the list
+        let (number_of_items, start_offset) = super::variable::decode_len(&&row[row_offset..]);
+        row_offset += start_offset;
+
+        if number_of_items == 0 {
+            *row = &row[row_offset..];
+            continue;
         }
+
+        // decode the lengths of the rows
+
+        let mut initial_value_offset = values_bytes.len();
+        row_offset += super::variable::decode_lengths_with_prefix(&row[row_offset..], number_of_items, |len: usize| {
+            initial_value_offset += len;
+
+            values_offsets.push(initial_value_offset);
+        });
+
+        // copy the rows bytes in a single pass
+        let decoded = super::variable::decode_blocks(&row[row_offset..], |x| {
+            values_bytes.extend_from_slice(x)
+        });
+        row_offset += decoded;
         *row = &row[row_offset..];
     }
 
-    let mut last_value_offset = 0;
     let mut child_rows: Vec<_> = values_offsets
-        .into_iter()
-        .map(|offset| {
-            let v = &values_bytes[last_value_offset..offset];
-            last_value_offset = offset;
-            v
-        })
-        .collect();
+      .windows(2)
+      .map(|start_and_end| {
+          let v = &values_bytes[start_and_end[0]..start_and_end[1]];
+          v
+      })
+      .collect();
 
     let child = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     assert_eq!(child.len(), 1);
@@ -202,24 +261,24 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
     let corrected_type = match field.data_type() {
         DataType::List(inner_field) => DataType::List(Arc::new(
             inner_field
-                .as_ref()
-                .clone()
-                .with_data_type(child_data.data_type().clone()),
+              .as_ref()
+              .clone()
+              .with_data_type(child_data.data_type().clone()),
         )),
         DataType::LargeList(inner_field) => DataType::LargeList(Arc::new(
             inner_field
-                .as_ref()
-                .clone()
-                .with_data_type(child_data.data_type().clone()),
+              .as_ref()
+              .clone()
+              .with_data_type(child_data.data_type().clone()),
         )),
         _ => unreachable!(),
     };
 
     let builder = ArrayDataBuilder::new(corrected_type)
-        .len(rows.len())
-        .nulls(list_nulls)
-        .add_buffer(Buffer::from_vec(offsets))
-        .add_child_data(child_data);
+      .len(rows.len())
+      .nulls(list_nulls)
+      .add_buffer(Buffer::from_vec(offsets))
+      .add_child_data(child_data);
 
     Ok(GenericListArray::from(unsafe { builder.build_unchecked() }))
 }
@@ -234,8 +293,8 @@ pub fn compute_lengths_fixed_size_list(
         match array.is_valid(idx) {
             true => {
                 1 + ((idx * value_length)..(idx + 1) * value_length)
-                    .map(|child_idx| rows.row(child_idx).as_ref().len())
-                    .sum::<usize>()
+                  .map(|child_idx| rows.row(child_idx).as_ref().len())
+                  .sum::<usize>()
             }
             false => 1,
         }
@@ -253,28 +312,28 @@ pub fn encode_fixed_size_list(
 ) {
     let null_sentinel = null_sentinel();
     offsets
-        .iter_mut()
-        .skip(1)
-        .enumerate()
-        .for_each(|(idx, offset)| {
-            let value_length = array.value_length().as_usize();
-            match array.is_valid(idx) {
-                true => {
-                    data[*offset] = 0x01;
-                    *offset += 1;
-                    for child_idx in (idx * value_length)..(idx + 1) * value_length {
-                        let row = rows.row(child_idx);
-                        let end_offset = *offset + row.as_ref().len();
-                        data[*offset..end_offset].copy_from_slice(row.as_ref());
-                        *offset = end_offset;
-                    }
-                }
-                false => {
-                    data[*offset] = null_sentinel;
-                    *offset += 1;
-                }
-            };
-        })
+      .iter_mut()
+      .skip(1)
+      .enumerate()
+      .for_each(|(idx, offset)| {
+          let value_length = array.value_length().as_usize();
+          match array.is_valid(idx) {
+              true => {
+                  data[*offset] = 0x01;
+                  *offset += 1;
+                  for child_idx in (idx * value_length)..(idx + 1) * value_length {
+                      let row = rows.row(child_idx);
+                      let end_offset = *offset + row.as_ref().len();
+                      data[*offset..end_offset].copy_from_slice(row.as_ref());
+                      *offset = end_offset;
+                  }
+              }
+              false => {
+                  data[*offset] = null_sentinel;
+                  *offset += 1;
+              }
+          };
+      })
 }
 
 /// Decodes a fixed size list array from `rows` with the provided `options`
@@ -330,9 +389,9 @@ pub unsafe fn decode_fixed_size_list(
     let children = unsafe { converter.convert_raw(&mut child_rows, validate_utf8) }?;
     let child_data = children.iter().map(|c| c.to_data()).collect();
     let builder = ArrayDataBuilder::new(list_type.clone())
-        .len(len)
-        .nulls(nulls)
-        .child_data(child_data);
+      .len(len)
+      .nulls(nulls)
+      .child_data(child_data);
 
     Ok(FixedSizeListArray::from(unsafe {
         builder.build_unchecked()
