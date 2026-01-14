@@ -24,6 +24,7 @@ use crate::arrow::array_reader::{ArrayReaderBuilder, RowGroupCache};
 use crate::arrow::arrow_reader::metrics::ArrowReaderMetrics;
 use crate::arrow::arrow_reader::{
     ParquetRecordBatchReader, ReadPlanBuilder, RowFilter, RowSelection, RowSelectionPolicy,
+    selection::RowSelectionStrategy,
 };
 use crate::arrow::in_memory_row_group::ColumnChunkData;
 use crate::arrow::push_decoder::reader_builder::data::DataRequestBuilder;
@@ -583,12 +584,14 @@ impl RowGroupReaderBuilder {
 
                 // before plan is build below
                 // check if plan is bitmask and if it is, put it in a variable
-                let page_offsets = if plan_builder.selection().is_some_and(|selection| {
-                    selection.requires_page_aware_mask(
-                        &self.projection,
-                        self.row_group_offset_index(row_group_idx),
-                    )
-                }) {
+                let page_offsets = if plan_builder.resolve_selection_strategy()
+                    == RowSelectionStrategy::Mask
+                    && plan_builder.selection().is_some_and(|selection| {
+                        selection.requires_page_aware_mask(
+                            &self.projection,
+                            self.row_group_offset_index(row_group_idx),
+                        )
+                    }) {
                     self.row_group_offset_index(row_group_idx)
                         .and_then(|columns| columns.first())
                         .map(|column| column.page_locations())
