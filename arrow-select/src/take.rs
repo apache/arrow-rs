@@ -28,7 +28,7 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
     bit_util,
 };
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
 
 use num_traits::{One, Zero};
@@ -786,6 +786,11 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     run_array: &RunArray<T>,
     logical_indices: &PrimitiveArray<I>,
 ) -> Result<RunArray<T>, ArrowError> {
+    if logical_indices.is_empty() {
+        let data = ArrayData::new_empty(run_array.data_type());
+        return Ok(RunArray::from(data));
+    }
+
     // get physical indices for the input logical indices
     let physical_indices = run_array.get_physical_indices(logical_indices.values())?;
 
@@ -2681,5 +2686,16 @@ mod tests {
             take(&values, &indices, None),
             Err(ArrowError::OffsetOverflowError(_))
         ));
+    }
+
+    #[test]
+    fn test_take_run_empty_indices() {
+        let mut builder = PrimitiveRunBuilder::<Int32Type, Int32Type>::new();
+        builder.extend([Some(1), Some(1), Some(2), Some(2)]);
+        let run_array = builder.finish();
+
+        let logical_indices: PrimitiveArray<Int32Type> = PrimitiveArray::from(Vec::<i32>::new());
+
+        let _ = take_run(&run_array, &logical_indices).expect("take_run with empty indices");
     }
 }
