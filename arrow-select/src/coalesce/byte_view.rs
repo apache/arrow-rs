@@ -98,7 +98,10 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// This is done on write (when we know it is necessary) rather than
     /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
-        self.views.reserve(self.batch_size);
+        if self.views.capacity() == 0 {
+            self.views.reserve(self.batch_size);
+        }
+        debug_assert_eq!(self.views.capacity(), self.batch_size);
     }
 
     /// Finishes in progress buffer, if any

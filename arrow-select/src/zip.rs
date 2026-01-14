@@ -35,7 +35,7 @@ use std::fmt::{Debug, Formatter};
 use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::Not;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 /// Zip two arrays by some boolean mask.
 ///
@@ -667,10 +667,15 @@ fn maybe_prep_null_mask_filter(predicate: &BooleanArray) -> BooleanBuffer {
 
 struct ByteViewScalarImpl<T: ByteViewType> {
     truthy_view: Option<u128>,
-    truthy_buffers: Vec<Buffer>,
+    truthy_buffers: Arc<[Buffer]>,
     falsy_view: Option<u128>,
-    falsy_buffers: Vec<Buffer>,
+    falsy_buffers: Arc<[Buffer]>,
     phantom: PhantomData<T>,
+}
+
+static EMPTY_ARC: OnceLock<Arc<[Buffer]>> = OnceLock::new();
+fn empty_arc_buffers() -> Arc<[Buffer]> {
+    Arc::clone(EMPTY_ARC.get_or_init(|| Arc::new([])))
 }
 
 impl<T: ByteViewType> ByteViewScalarImpl<T> {
@@ -686,9 +691,9 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         }
     }
 
-    fn get_value_from_scalar(scalar: &dyn Array) -> (Option<u128>, Vec<Buffer>) {
+    fn get_value_from_scalar(scalar: &dyn Array) -> (Option<u128>, Arc<[Buffer]>) {
         if scalar.is_null(0) {
-            (None, vec![])
+            (None, empty_arc_buffers())
         } else {
             let (views, buffers, _) = scalar.as_byte_view::<T>().clone().into_parts();
             (views.first().copied(), buffers)
@@ -698,8 +703,8 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
     fn get_views_for_single_non_nullable(
         predicate: BooleanBuffer,
         value: u128,
-        buffers: Vec<Buffer>,
-    ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
+        buffers: Arc<[Buffer]>,
+    ) -> (ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>) {
         let number_of_true = predicate.count_set_bits();
         let number_of_values = predicate.len();
 
@@ -708,7 +713,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
             // All values are null
             return (
                 vec![0; number_of_values].into(),
-                vec![],
+                empty_arc_buffers(),
                 Some(NullBuffer::new_null(number_of_values)),
             );
         }
@@ -724,10 +729,10 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
         predicate: BooleanBuffer,
         result_len: usize,
         truthy_view: u128,
-        truthy_buffers: Vec<Buffer>,
+        truthy_buffers: Arc<[Buffer]>,
         falsy_view: u128,
-        falsy_buffers: Vec<Buffer>,
-    ) -> (ScalarBuffer<u128>, Vec<Buffer>, Option<NullBuffer>) {
+        falsy_buffers: Arc<[Buffer]>,
+    ) -> (ScalarBuffer<u128>, Arc<[Buffer]>, Option<NullBuffer>) {
         let true_count = predicate.count_set_bits();
         match true_count {
             0 => {
@@ -751,7 +756,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                     let byte_view_falsy = ByteView::from(falsy_view);
                     let new_index_falsy_buffers =
                         buffers.len() as u32 + byte_view_falsy.buffer_index;
-                    buffers.extend(falsy_buffers);
+                    buffers.extend(falsy_buffers.iter().cloned());
                     let byte_view_falsy =
                         byte_view_falsy.with_buffer_index(new_index_falsy_buffers);
                     byte_view_falsy.as_u128()
@@ -778,7 +783,7 @@ impl<T: ByteViewType> ByteViewScalarImpl<T> {
                 }
 
                 let bytes = Buffer::from(mutable);
-                (bytes.into(), buffers, None)
+                (bytes.into(), buffers.into(), None)
             }
         }
     }
@@ -804,28 +809,28 @@ impl<T: ByteViewType> ZipImpl for ByteViewScalarImpl<T> {
                 predicate,
                 result_len,
                 truthy,
-                self.truthy_buffers.clone(),
+                Arc::clone(&self.truthy_buffers),
                 falsy,
-                self.falsy_buffers.clone(),
+                Arc::clone(&self.falsy_buffers),
             ),
             (Some(truthy), None) => Self::get_views_for_single_non_nullable(
                 predicate,
                 truthy,
-                self.truthy_buffers.clone(),
+                Arc::clone(&self.truthy_buffers),
             ),
             (None, Some(falsy)) => {
                 let predicate = predicate.not();
                 Self::get_views_for_single_non_nullable(
                     predicate,
                     falsy,
-                    self.falsy_buffers.clone(),
+                    Arc::clone(&self.falsy_buffers),
                 )
             }
             (None, None) => {
                 // All values are null
                 (
                     vec![0; result_len].into(),
-                    vec![],
+                    empty_arc_buffers(),
                     Some(NullBuffer::new_null(result_len)),
                 )
             }

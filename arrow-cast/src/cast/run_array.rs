@@ -72,13 +72,17 @@ pub(crate) fn run_end_encoded_cast<K: RunEndIndexType>(
 
                 // Expand to logical form
                 _ => {
-                    let run_ends = run_array.run_ends().values().to_vec();
-                    let mut indices = Vec::with_capacity(run_array.run_ends().len());
-                    let mut physical_idx: usize = 0;
-                    for logical_idx in 0..run_array.run_ends().len() {
-                        // If the logical index is equal to the (next) run end, increment the physical index,
-                        // since we are at the end of a run.
+                    let len = run_array.len();
+                    let offset = run_array.offset();
+                    let run_ends = run_array.run_ends().values();
+
+                    let mut indices = Vec::with_capacity(len);
+                    let mut physical_idx = run_array.get_start_physical_index();
+
+                    for logical_idx in offset..offset + len {
                         if logical_idx == run_ends[physical_idx].as_usize() {
+                            // If the logical index is equal to the (next) run end, increment the physical index,
+                            // since we are at the end of a run.
                             physical_idx += 1;
                         }
                         indices.push(physical_idx as i32);
