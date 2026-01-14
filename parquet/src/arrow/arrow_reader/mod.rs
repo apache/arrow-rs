@@ -323,7 +323,7 @@ impl<T> ArrowReaderBuilder<T> {
     /// let schema_desc = builder.metadata().file_metadata().schema_descr_ptr();
     /// // Create predicate that evaluates `int_col != 1`.
     /// // `int_col` column has index 4 (zero based) in the schema
-    /// let projection = ProjectionMask::leaves(&schema_desc, [0]);
+    /// let projection = ProjectionMask::leaves(&schema_desc, [4]);
     /// // Only the projection columns are passed to the predicate so
     /// // int_col is column 0 in the predicate
     /// let predicate = ArrowPredicateFn::new(projection, |batch| {
