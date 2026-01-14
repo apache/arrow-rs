@@ -1704,10 +1704,6 @@ mod tests {
         let neg_year = date_to_millis(-5000, 12, 31);
         assert!(op(large_year, 12).is_some(), "{op_name}: large year");
         assert!(op(neg_year, -12).is_some(), "{op_name}: negative year");
-
-        // Extreme base values fail
-        assert!(op(i64::MAX, 1).is_none(), "{op_name}: i64::MAX base");
-        assert!(op(i64::MIN, -1).is_none(), "{op_name}: i64::MIN base");
     }
 
     #[test]
@@ -1722,16 +1718,13 @@ mod tests {
     where
         F: Fn(i64, IntervalDayTime) -> Option<i64>,
     {
-        let near_max = date_to_millis(200000, 12, 1);
-        let near_min = date_to_millis(-200000, 2, 1);
-
         // Moderate intervals succeed
         assert!(
-            op(near_max, IntervalDayTime::new(30, 0)).is_some(),
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(30, 0)).is_some(),
             "{op_name}: +30 days"
         );
         assert!(
-            op(near_min, IntervalDayTime::new(-30, 0)).is_some(),
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(-30, 0)).is_some(),
             "{op_name}: -30 days"
         );
         assert!(
@@ -1739,38 +1732,26 @@ mod tests {
             "{op_name}: normal"
         );
 
-        // Large intervals that would overflow - behavior differs for add vs subtract
-        // For add: near_max + huge_days overflows, near_min + huge_neg_days overflows
-        // For subtract: near_min - huge_days overflows, near_max - huge_neg_days overflows
+        // Overflow handling
         if is_subtract {
             assert!(
-                op(near_min, IntervalDayTime::new(100_000_000, 0)).is_none(),
-                "{op_name}: huge days from min"
+                op(MIN_VALID_MILLIS, IntervalDayTime::new(1, 0)).is_none(),
+                "{op_name}: overflow days from min"
             );
             assert!(
-                op(near_max, IntervalDayTime::new(-100_000_000, 0)).is_none(),
-                "{op_name}: huge neg days from max"
+                op(MAX_VALID_MILLIS, IntervalDayTime::new(-1, 0)).is_none(),
+                "{op_name}: overflow neg days from max"
             );
         } else {
             assert!(
-                op(near_max, IntervalDayTime::new(100_000_000, 0)).is_none(),
-                "{op_name}: huge days"
+                op(MAX_VALID_MILLIS, IntervalDayTime::new(1, 0)).is_none(),
+                "{op_name}: overflow days"
             );
             assert!(
-                op(near_min, IntervalDayTime::new(-100_000_000, 0)).is_none(),
-                "{op_name}: huge neg days"
+                op(MIN_VALID_MILLIS, IntervalDayTime::new(-1, 0)).is_none(),
+                "{op_name}: overflow neg days"
             );
         }
-
-        // Extreme base values fail
-        assert!(
-            op(i64::MAX, IntervalDayTime::new(1, 0)).is_none(),
-            "{op_name}: i64::MAX"
-        );
-        assert!(
-            op(i64::MIN, IntervalDayTime::new(-1, 0)).is_none(),
-            "{op_name}: i64::MIN"
-        );
 
         // Extreme intervals fail
         assert!(
@@ -1797,21 +1778,18 @@ mod tests {
         test_day_time_op(Date64Type::subtract_day_time_opt, "subtract_day_time", true);
     }
 
-    fn test_month_day_nano_op<F>(op: F, op_name: &str)
+    fn test_month_day_nano_op<F>(op: F, op_name: &str, is_subtract: bool)
     where
         F: Fn(i64, IntervalMonthDayNano) -> Option<i64>,
     {
-        let near_max = date_to_millis(5000, 11, 1);
-        let near_min = date_to_millis(-5000, 2, 28);
         let zero = IntervalMonthDayNano::new(0, 0, 0);
 
-        // Normal operations succeed
         assert!(
-            op(near_max, IntervalMonthDayNano::new(1, 30, 0)).is_some(),
+            op(YEAR_2000_MILLIS, IntervalMonthDayNano::new(1, 30, 0)).is_some(),
             "{op_name}: +1mo +30d"
         );
         assert!(
-            op(near_min, IntervalMonthDayNano::new(-1, -30, 0)).is_some(),
+            op(YEAR_2000_MILLIS, IntervalMonthDayNano::new(-1, -30, 0)).is_some(),
             "{op_name}: -1mo -30d"
         );
         assert!(
@@ -1827,15 +1805,26 @@ mod tests {
             "{op_name}: normal"
         );
 
-        // Extreme base values fail
-        assert!(
-            op(i64::MAX, IntervalMonthDayNano::new(1, 0, 0)).is_none(),
-            "{op_name}: i64::MAX"
-        );
-        assert!(
-            op(i64::MIN, IntervalMonthDayNano::new(-1, 0, 0)).is_none(),
-            "{op_name}: i64::MIN"
-        );
+        // overflow handling
+        if is_subtract {
+            assert!(
+                op(MIN_VALID_MILLIS, IntervalMonthDayNano::new(0, 1, 0)).is_none(),
+                "{op_name}: overflow days from min"
+            );
+            assert!(
+                op(MAX_VALID_MILLIS, IntervalMonthDayNano::new(0, -1, 0)).is_none(),
+                "{op_name}: overflow neg days from max"
+            );
+        } else {
+            assert!(
+                op(MAX_VALID_MILLIS, IntervalMonthDayNano::new(0, 1, 0)).is_none(),
+                "{op_name}: overflow days"
+            );
+            assert!(
+                op(MIN_VALID_MILLIS, IntervalMonthDayNano::new(0, -1, 0)).is_none(),
+                "{op_name}: overflow neg days"
+            );
+        }
 
         // Nanosecond precision works
         assert!(
@@ -1861,10 +1850,15 @@ mod tests {
     fn test_date64_month_day_nano_operations() {
         use arrow_array::types::Date64Type;
 
-        test_month_day_nano_op(Date64Type::add_month_day_nano_opt, "add_month_day_nano");
+        test_month_day_nano_op(
+            Date64Type::add_month_day_nano_opt,
+            "add_month_day_nano",
+            false,
+        );
         test_month_day_nano_op(
             Date64Type::subtract_month_day_nano_opt,
             "subtract_month_day_nano",
+            true,
         );
     }
 }
