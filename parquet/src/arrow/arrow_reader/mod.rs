@@ -1002,6 +1002,20 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// // Read data
     /// let _batch = reader.next().unwrap().unwrap();
     /// ```
+
+
+    /// # Example
+    /// ```rust
+    /// use parquet::arrow::arrow_reader::ArrowReaderBuilder;
+    /// # async fn example() -> parquet::errors::Result<()> {
+    /// let file = std::fs::File::open("data.parquet")?;
+    /// let builder = ArrowReaderBuilder::try_new(file)?;
+    /// let mut reader = builder.build()?;
+    /// # Ok(())
+    /// # }
+    /// ```
+
+
     pub fn try_new(reader: T) -> Result<Self> {
         Self::try_new_with_options(reader, Default::default())
     }
