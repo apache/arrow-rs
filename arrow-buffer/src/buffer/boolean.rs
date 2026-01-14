@@ -368,7 +368,7 @@ impl BooleanBuffer {
 
     /// Finds the position of the n-th set bit (1-based) starting from `start` index.
     /// If fewer than `n` set bits are found, returns the length of the buffer.
-    pub fn find_nth_set_bit_position(self, start: usize, n: usize) -> usize {
+    pub fn find_nth_set_bit_position(&self, start: usize, n: usize) -> usize {
         if n == 0 {
             return start;
         }
