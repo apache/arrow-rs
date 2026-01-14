@@ -747,7 +747,11 @@ fn parse_e_notation<T: DecimalType>(
     // skip to the exponent index directly or just after any processed fractionals
     let mut bs = s.as_bytes().iter().skip(index + fractionals as usize);
 
-    // complete parsing of any unprocessed fractionals up to the exponent
+    // This function is only called from `parse_decimal`, in which we skip parsing any fractionals
+    // after we reach `scale` digits, not knowing ahead of time whether the decimal contains an
+    // e-notation or not.
+    // So once we do hit into an e-notation, and drop down into this function, we need to parse the
+    // remaining unprocessed fractionals too, since otherwise we might lose precision.
     for b in bs.by_ref() {
         match b {
             b'0'..=b'9' => {
@@ -831,7 +835,9 @@ fn parse_e_notation<T: DecimalType>(
 }
 
 /// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
-/// The result value can't be out of bounds.
+/// Expected behavior:
+/// - the result value can't be out of bounds.
+/// - when parsing a decimal with scale 0, any digits pass the decimal point will be discarded
 pub fn parse_decimal<T: DecimalType>(
     s: &str,
     precision: u8,
