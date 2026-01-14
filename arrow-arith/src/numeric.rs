@@ -947,7 +947,19 @@ mod tests {
     // The valid date range of NaiveDate is from January 1, -262143 to December 31, 262142 (Gregorian calendar).
     const MAX_VALID_DATE: NaiveDate = NaiveDate::from_ymd_opt(262142, 12, 31).unwrap();
     const MIN_VALID_DATE: NaiveDate = NaiveDate::from_ymd_opt(-262143, 1, 1).unwrap();
+    const MAX_VALID_MILLIS: i64 = MAX_VALID_DATE
+        .signed_duration_since(EPOCH)
+        .num_milliseconds();
+    const MIN_VALID_MILLIS: i64 = MIN_VALID_DATE
+        .signed_duration_since(EPOCH)
+        .num_milliseconds();
     const EPOCH: NaiveDate = NaiveDate::from_ymd_opt(1970, 1, 1).unwrap();
+    const YEAR_2000_MILLIS: i64 = date_to_millis(2000, 1, 1);
+
+    const fn date_to_millis(year: i32, month: u32, day: u32) -> i64 {
+        let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
+        date.signed_duration_since(EPOCH).num_milliseconds()
+    }
 
     fn test_neg_primitive<T: ArrowPrimitiveType>(
         input: &[T::Native],
@@ -1649,43 +1661,23 @@ mod tests {
         );
     }
 
-    fn date_to_millis(year: i32, month: u32, day: u32) -> i64 {
-        let date = NaiveDate::from_ymd_opt(year, month, day).unwrap();
-        (date - EPOCH).num_milliseconds()
-    }
-
-    fn max_valid_millis() -> i64 {
-        (MAX_VALID_DATE - EPOCH).num_milliseconds()
-    }
-
-    fn min_valid_millis() -> i64 {
-        (MIN_VALID_DATE - EPOCH).num_milliseconds()
-    }
-
-    fn year_2000_millis() -> i64 {
-        date_to_millis(2000, 1, 1)
-    }
-
     #[test]
     fn test_date64_to_naive_date_opt_boundaries() {
         use arrow_array::types::Date64Type;
 
         const MS_PER_DAY: i64 = 24 * 60 * 60 * 1000;
-        let max_millis = max_valid_millis();
-        let min_millis = min_valid_millis();
-        let year_2000_millis = year_2000_millis();
 
         // Verify boundary millisecond values
-        assert_eq!(max_millis, 8210266790400000i64);
-        assert_eq!(min_millis, -8334601228800000i64);
+        assert_eq!(MAX_VALID_MILLIS, 8210266790400000i64);
+        assert_eq!(MIN_VALID_MILLIS, -8334601228800000i64);
 
         // Valid boundary dates work
-        assert!(Date64Type::to_naive_date_opt(max_millis).is_some());
-        assert!(Date64Type::to_naive_date_opt(min_millis).is_some());
+        assert!(Date64Type::to_naive_date_opt(MAX_VALID_MILLIS).is_some());
+        assert!(Date64Type::to_naive_date_opt(MIN_VALID_MILLIS).is_some());
 
         // Beyond boundaries fail
-        assert!(Date64Type::to_naive_date_opt(max_millis + MS_PER_DAY).is_none());
-        assert!(Date64Type::to_naive_date_opt(min_millis - MS_PER_DAY).is_none());
+        assert!(Date64Type::to_naive_date_opt(MAX_VALID_MILLIS + MS_PER_DAY).is_none());
+        assert!(Date64Type::to_naive_date_opt(MIN_VALID_MILLIS - MS_PER_DAY).is_none());
 
         // Extreme values fail
         assert!(Date64Type::to_naive_date_opt(i64::MAX).is_none());
@@ -1693,18 +1685,17 @@ mod tests {
 
         // Common values work
         assert!(Date64Type::to_naive_date_opt(0).is_some());
-        assert!(Date64Type::to_naive_date_opt(year_2000_millis).is_some());
+        assert!(Date64Type::to_naive_date_opt(YEAR_2000_MILLIS).is_some());
     }
 
     fn test_year_month_op<F>(op: F, op_name: &str)
     where
         F: Fn(i64, i32) -> Option<i64>,
     {
-        let year_2000_millis = year_2000_millis();
         // Normal operations succeed
-        assert!(op(year_2000_millis, 120).is_some(), "{op_name}: normal add");
+        assert!(op(YEAR_2000_MILLIS, 120).is_some(), "{op_name}: normal add");
         assert!(
-            op(year_2000_millis, 0).is_some(),
+            op(YEAR_2000_MILLIS, 0).is_some(),
             "{op_name}: zero interval"
         );
 
@@ -1733,7 +1724,6 @@ mod tests {
     {
         let near_max = date_to_millis(200000, 12, 1);
         let near_min = date_to_millis(-200000, 2, 1);
-        let year_2000_millis = year_2000_millis();
 
         // Moderate intervals succeed
         assert!(
@@ -1745,7 +1735,7 @@ mod tests {
             "{op_name}: -30 days"
         );
         assert!(
-            op(year_2000_millis, IntervalDayTime::new(1000, 12345)).is_some(),
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(1000, 12345)).is_some(),
             "{op_name}: normal"
         );
 
@@ -1794,7 +1784,7 @@ mod tests {
 
         // Large ms within valid range succeed
         assert!(
-            op(year_2000_millis, IntervalDayTime::new(0, i32::MAX)).is_some(),
+            op(YEAR_2000_MILLIS, IntervalDayTime::new(0, i32::MAX)).is_some(),
             "{op_name}: large ms"
         );
     }
@@ -1814,7 +1804,6 @@ mod tests {
         let near_max = date_to_millis(5000, 11, 1);
         let near_min = date_to_millis(-5000, 2, 28);
         let zero = IntervalMonthDayNano::new(0, 0, 0);
-        let year_2000_millis = year_2000_millis();
 
         // Normal operations succeed
         assert!(
@@ -1826,12 +1815,12 @@ mod tests {
             "{op_name}: -1mo -30d"
         );
         assert!(
-            op(year_2000_millis, zero).is_some(),
+            op(YEAR_2000_MILLIS, zero).is_some(),
             "{op_name}: zero interval"
         );
         assert!(
             op(
-                year_2000_millis,
+                YEAR_2000_MILLIS,
                 IntervalMonthDayNano::new(2, 10, 123_456_789_000)
             )
             .is_some(),
@@ -1851,7 +1840,7 @@ mod tests {
         // Nanosecond precision works
         assert!(
             op(
-                year_2000_millis,
+                YEAR_2000_MILLIS,
                 IntervalMonthDayNano::new(0, 0, 999_999_999)
             )
             .is_some(),
@@ -1860,7 +1849,7 @@ mod tests {
         // 1 day in nanos
         assert!(
             op(
-                year_2000_millis,
+                YEAR_2000_MILLIS,
                 IntervalMonthDayNano::new(0, 0, 86_400_000_000_000)
             )
             .is_some(),
