@@ -157,11 +157,6 @@ required-features = ["arrow", "async"]
 path = "./examples/async_read_parquet.rs"
 
 [[example]]
-name = "read_with_row_filter"
-required-features = ["arrow"]
-path = "./examples/read_with_row_filter.rs"
-
-[[example]]
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"
