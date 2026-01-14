@@ -161,6 +161,8 @@
 #![warn(missing_docs)]
 use std::cmp::Ordering;
 use std::hash::{Hash, Hasher};
+use std::iter::Map;
+use std::slice::Windows;
 use std::sync::Arc;
 
 use arrow_array::cast::*;
@@ -1118,6 +1120,9 @@ pub struct Rows {
     config: RowConfig,
 }
 
+/// The iterator type for [`Rows::lengths`]
+pub type RowLengthIter<'a> = Map<Windows<'a, usize>, fn(&'a [usize]) -> usize>;
+
 impl Rows {
     /// Append a [`Row`] to this [`Rows`]
     pub fn push(&mut self, row: Row<'_>) {
@@ -1154,6 +1159,19 @@ impl Rows {
             data,
             config: &self.config,
         }
+    }
+
+    /// Returns the number of bytes the row at index `row` is occupying,
+    /// that is, what is the length of the returned [`Row::data`] will be.
+    pub fn row_len(&self, row: usize) -> usize {
+        assert!(row + 1 < self.offsets.len());
+
+        self.offsets[row + 1] - self.offsets[row]
+    }
+
+    /// Get an iterator over the lengths of each row in this [`Rows`]
+    pub fn lengths(&self) -> RowLengthIter<'_> {
+        self.offsets.windows(2).map(|w| w[1] - w[0])
     }
 
     /// Sets the length of this [`Rows`] to 0
@@ -1563,7 +1581,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                     array => {
                         tracker.push_variable(
                             array.keys().iter().map(|v| match v {
-                                Some(k) => values.row(k.as_usize()).data.len(),
+                                Some(k) => values.row_len(k.as_usize()),
                                 None => null.data.len(),
                             })
                         )
@@ -1574,7 +1592,7 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             Encoder::Struct(rows, null) => {
                 let array = as_struct_array(array);
                 tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
-                    true => 1 + rows.row(idx).as_ref().len(),
+                    true => 1 + rows.row_len(idx),
                     false => 1 + null.data.len(),
                 }));
             }
@@ -1626,10 +1644,10 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
                 let lengths = (0..union_array.len()).map(|i| {
                     let type_id = type_ids[i];
                     let child_row_i = offsets.as_ref().map(|o| o[i] as usize).unwrap_or(i);
-                    let child_row = child_rows[type_id as usize].row(child_row_i);
+                    let child_row_len = child_rows[type_id as usize].row_len(child_row_i);
 
                     // length: 1 byte type_id + child row bytes
-                    1 + child_row.as_ref().len()
+                    1 + child_row_len
                 });
 
                 tracker.push_variable(lengths);
@@ -3699,6 +3717,38 @@ mod tests {
                 }
             }
 
+            // Validate rows length iterator
+            {
+                let mut rows_iter = rows.iter();
+                let mut rows_lengths_iter = rows.lengths();
+                for (index, row) in rows_iter.by_ref().enumerate() {
+                    let len = rows_lengths_iter
+                        .next()
+                        .expect("Reached end of length iterator while still have rows");
+                    assert_eq!(
+                        row.data.len(),
+                        len,
+                        "Row length mismatch: {} vs {}",
+                        row.data.len(),
+                        len
+                    );
+                    assert_eq!(
+                        len,
+                        rows.row_len(index),
+                        "Row length mismatch at index {}: {} vs {}",
+                        index,
+                        len,
+                        rows.row_len(index)
+                    );
+                }
+
+                assert_eq!(
+                    rows_lengths_iter.next(),
+                    None,
+                    "Length iterator did not reach end"
+                );
+            }
+
             // Convert rows produced from convert_columns().
             // Note: validate_utf8 is set to false since Row is initialized through empty_rows()
             let back = converter.convert_rows(&rows).unwrap();
@@ -4350,5 +4400,14 @@ mod tests {
             empty_rows.size() > before_size,
             "Size should increase when reserving more space than previously reserved"
         );
+    }
+
+    #[test]
+    fn empty_rows_should_return_empty_lengths_iterator() {
+        let rows = RowConverter::new(vec![SortField::new(DataType::UInt8)])
+            .unwrap()
+            .empty_rows(0, 0);
+        let mut lengths_iter = rows.lengths();
+        assert_eq!(lengths_iter.next(), None);
     }
 }
