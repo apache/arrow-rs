@@ -135,6 +135,40 @@ impl AvroFormat for AvroSoeFormat {
     }
 }
 
+/// Unframed Avro binary streaming format ("raw Avro record body bytes (no prefix, no OCF header)").
+///
+/// Each record written by the stream writer contains only the raw Avro
+/// record body bytes (i.e., the Avro binary encoding of the datum) with **no**
+/// per-record prefix and **no** Object Container File (OCF) header.
+///
+/// This format is useful when another transport provides framing (for example,
+/// length-delimited buffers) or when embedding Avro record payloads inside a
+/// larger envelope.
+#[derive(Debug, Default)]
+pub struct AvroBinaryFormat;
+
+impl AvroFormat for AvroBinaryFormat {
+    const NEEDS_PREFIX: bool = false;
+
+    fn start_stream<W: Write>(
+        &mut self,
+        _writer: &mut W,
+        _schema: &Schema,
+        compression: Option<CompressionCodec>,
+    ) -> Result<(), ArrowError> {
+        if compression.is_some() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Compression not supported for Avro binary streaming".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn sync_marker(&self) -> Option<&[u8; 16]> {
+        None
+    }
+}
+
 #[inline]
 fn write_string<W: Write>(writer: &mut W, s: &str) -> Result<(), ArrowError> {
     write_bytes(writer, s.as_bytes())

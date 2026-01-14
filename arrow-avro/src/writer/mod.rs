@@ -19,47 +19,129 @@
 //!
 //! # Overview
 //!
-//! Use this module to serialize Arrow `RecordBatch` values into Avro. Two output
-//! formats are supported:
+//! Use this module to serialize Arrow [`arrow_array::RecordBatch`] values into Avro. Three output
+//! modes are supported:
 //!
-//! * **[`AvroWriter`](crate::writer::AvroWriter)** — writes an **Object Container File (OCF)**: a self‑describing
-//!   file with header (schema JSON + metadata), optional compression, data blocks, and
-//!   sync markers. See Avro 1.11.1 “Object Container Files.”
+//! * **[`crate::writer::AvroWriter`]** — writes an **Object Container File (OCF)**: a self‑describing
+//!   file with header (schema JSON and metadata), optional compression, data blocks, and
+//!   sync markers. See Avro 1.11.1 "Object Container Files."
 //!   <https://avro.apache.org/docs/1.11.1/specification/#object-container-files>
-//! * **[`AvroStreamWriter`](crate::writer::AvroStreamWriter)** — writes a **Single Object Encoding (SOE) Stream** (“datum” bytes) without
+//!
+//! * **[`crate::writer::AvroStreamWriter`]** — writes a **Single Object Encoding (SOE) Stream** without
 //!   any container framing. This is useful when the schema is known out‑of‑band (i.e.,
 //!   via a registry) and you want minimal overhead.
 //!
-//! ## Which format should you use?
+//! * **[`crate::writer::Encoder`]** — a row-by-row encoder that buffers encoded records into a single
+//!   contiguous byte buffer and returns per-row [`bytes::Bytes`] slices.
+//!   Ideal for publishing individual messages to Kafka, Pulsar, or other message queues
+//!   where each message must be a self-contained Avro payload.
 //!
-//! * Use **OCF** when you need a portable, self‑contained file. The schema travels with
-//!   the data, making it easy to read elsewhere.
-//! * Use the **SOE stream** when your surrounding protocol supplies schema information
-//!   (i.e., a schema registry). The writer automatically adds the per‑record prefix:
-//!   - **SOE**: Each record is prefixed with the 2-byte header (`0xC3 0x01`) followed by
-//!     an 8‑byte little‑endian CRC‑64‑AVRO fingerprint, then the Avro body.
-//!     See Avro 1.11.1 "Single object encoding".
-//!     <https://avro.apache.org/docs/1.11.1/specification/#single-object-encoding>
-//!   - **Confluent wire format**: Each record is prefixed with magic byte `0x00` followed by
-//!     a **big‑endian** 4‑byte schema ID, then the Avro body. Use `FingerprintStrategy::Id(schema_id)`.
-//!     <https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format>
-//!   - **Apicurio wire format**: Each record is prefixed with magic byte `0x00` followed by
-//!     a **big‑endian** 8‑byte schema ID, then the Avro body. Use `FingerprintStrategy::Id64(schema_id)`.
-//!     <https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry>
+//! ## Which writer should you use?
 //!
-//! ## Choosing the Avro schema
+//! | Use Case | Recommended Type |
+//! |----------|------------------|
+//! | Write an OCF file to disk | [`crate::writer::AvroWriter`] |
+//! | Stream records continuously to a file/socket | [`crate::writer::AvroStreamWriter`] |
+//! | Publish individual records to Kafka/Pulsar | [`crate::writer::Encoder`] |
+//! | Need per-row byte slices for custom framing | [`crate::writer::Encoder`] |
+//!
+//! ## Per-Record Prefix Formats
+//!
+//! For [`crate::writer::AvroStreamWriter`] and [`crate::writer::Encoder`], each record is automatically prefixed
+//! based on the fingerprint strategy:
+//!
+//! | Strategy | Prefix | Use Case |
+//! |----------|--------|----------|
+//! | `FingerprintStrategy::Rabin` (default) | `0xC3 0x01` + 8-byte LE Rabin fingerprint | Standard Avro SOE |
+//! | `FingerprintStrategy::Id(id)` | `0x00` + 4-byte BE schema ID | [Confluent Schema Registry] |
+//! | `FingerprintStrategy::Id64(id)` | `0x00` + 8-byte BE schema ID | [Apicurio Registry] |
+//!
+//! [Confluent Schema Registry]: https://docs.confluent.io/platform/current/schema-registry/fundamentals/serdes-develop/index.html#wire-format
+//! [Apicurio Registry]: https://www.apicur.io/registry/docs/apicurio-registry/1.3.3.Final/getting-started/assembly-using-kafka-client-serdes.html#registry-serdes-types-avro-registry
+//!
+//! ## Choosing the Avro Schema
 //!
 //! By default, the writer converts your Arrow schema to Avro (including a top‑level record
 //! name). If you already have an Avro schema JSON you want to use verbatim, put it into the
-//! Arrow schema metadata under the `avro.schema` key before constructing the writer. The
-//! builder will use that schema instead of generating a new one (unless `strip_metadata` is
-//! set to true in the options).
+//! Arrow schema metadata under the [`SCHEMA_METADATA_KEY`](crate::schema::SCHEMA_METADATA_KEY)
+//! key before constructing the writer. The builder will use that schema instead of generating
+//! a new one.
 //!
 //! ## Compression
 //!
-//! For OCF, you may enable a compression codec via `WriterBuilder::with_compression`. The
-//! chosen codec is written into the file header and used for subsequent blocks. SOE stream
-//! writing doesn’t apply container‑level compression.
+//! For OCF ([`crate::writer::AvroWriter`]), you may enable a compression codec via
+//! [`crate::writer::WriterBuilder::with_compression`]. The chosen codec is written into the file header
+//! and used for subsequent blocks. SOE stream writing ([`crate::writer::AvroStreamWriter`], [`crate::writer::Encoder`])
+//! does not apply container‑level compression.
+//!
+//! # Examples
+//!
+//! ## Writing an OCF File
+//!
+//! ```
+//! use std::sync::Arc;
+//! use arrow_array::{ArrayRef, Int64Array, StringArray, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::writer::AvroWriter;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let schema = Schema::new(vec![
+//!     Field::new("id", DataType::Int64, false),
+//!     Field::new("name", DataType::Utf8, false),
+//! ]);
+//!
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema.clone()),
+//!     vec![
+//!         Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
+//!         Arc::new(StringArray::from(vec!["alice", "bob"])) as ArrayRef,
+//!     ],
+//! )?;
+//!
+//! let mut writer = AvroWriter::new(Vec::<u8>::new(), schema)?;
+//! writer.write(&batch)?;
+//! writer.finish()?;
+//! let bytes = writer.into_inner();
+//! assert!(!bytes.is_empty());
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## Using the Row-by-Row Encoder for Message Queues
+//!
+//! ```
+//! use std::sync::Arc;
+//! use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+//! use arrow_schema::{DataType, Field, Schema};
+//! use arrow_avro::writer::{WriterBuilder, format::AvroSoeFormat};
+//! use arrow_avro::schema::FingerprintStrategy;
+//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
+//! let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
+//! let batch = RecordBatch::try_new(
+//!     Arc::new(schema.clone()),
+//!     vec![Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef],
+//! )?;
+//!
+//! // Build an Encoder with Confluent wire format (schema ID = 42)
+//! let mut encoder = WriterBuilder::new(schema)
+//!     .with_fingerprint_strategy(FingerprintStrategy::Id(42))
+//!     .build_encoder::<AvroSoeFormat>()?;
+//!
+//! encoder.encode(&batch)?;
+//!
+//! // Get the buffered rows (zero-copy views into a single backing buffer)
+//! let rows = encoder.flush();
+//! assert_eq!(rows.len(), 3);
+//!
+//! // Each row has Confluent wire format: magic byte + 4-byte schema ID + body
+//! for row in rows.rows() {
+//!     let row = row?;
+//!     assert_eq!(row[0], 0x00); // Confluent magic byte
+//! }
+//! # Ok(())
+//! # }
+//! ```
 //!
 //! ---
 use crate::codec::AvroFieldBuilder;
@@ -70,7 +152,8 @@ use crate::schema::{
 use crate::writer::encoder::{RecordEncoder, RecordEncoderBuilder, write_long};
 use crate::writer::format::{AvroFormat, AvroOcfFormat, AvroSoeFormat};
 use arrow_array::RecordBatch;
-use arrow_schema::{ArrowError, Schema};
+use arrow_schema::{ArrowError, Schema, SchemaRef};
+use bytes::{Bytes, BytesMut};
 use std::io::Write;
 use std::sync::Arc;
 
@@ -79,11 +162,100 @@ mod encoder;
 /// Logic for different Avro container file formats.
 pub mod format;
 
+/// A contiguous set of encoded rows.
+///
+/// `EncodedRows` stores:
+/// - a single backing byte buffer (`bytes::Bytes`)
+/// - a `Vec<u64>` of row boundary offsets (length = `rows + 1`)
+///
+/// This lets callers obtain per-row payloads as zero-copy `Bytes` slices.
+///
+/// For compatibility with APIs that require owned `Vec<u8>`, use [`EncodedRows::to_vecs`].
+#[derive(Debug, Clone)]
+pub struct EncodedRows {
+    data: Bytes,
+    offsets: Vec<u64>,
+}
+
+impl EncodedRows {
+    /// Create a new `EncodedRows` from a backing buffer and row boundary offsets.
+    ///
+    /// `offsets` must have length `rows + 1`, and be monotonically non-decreasing.
+    /// The last offset should equal `data.len()`.
+    pub fn new(data: Bytes, offsets: Vec<u64>) -> Self {
+        Self { data, offsets }
+    }
+
+    /// Number of rows in this buffer.
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.offsets.len().saturating_sub(1)
+    }
+
+    /// Returns `true` if there are no rows.
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Returns the backing buffer.
+    ///
+    /// Note: individual rows should typically be accessed via [`Self::row`] or [`Self::rows`].
+    #[inline]
+    pub fn bytes(&self) -> &Bytes {
+        &self.data
+    }
+
+    /// Returns the row boundary offsets (length = `len() + 1`).
+    #[inline]
+    pub fn offsets(&self) -> &[u64] {
+        &self.offsets
+    }
+
+    /// Return the `i`th row as a zero-copy `Bytes` slice.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the row offsets are invalid (e.g. exceed `usize::MAX`).
+    ///
+    /// # Panics
+    ///
+    /// Panics if `i >= self.len()`.
+    pub fn row(&self, i: usize) -> Result<Bytes, ArrowError> {
+        let start_u64 = self.offsets[i];
+        let end_u64 = self.offsets[i + 1];
+        let start = usize::try_from(start_u64).map_err(|_| {
+            ArrowError::ParseError("row start offset does not fit in usize".to_string())
+        })?;
+        let end = usize::try_from(end_u64).map_err(|_| {
+            ArrowError::ParseError("row end offset does not fit in usize".to_string())
+        })?;
+        Ok(self.data.slice(start..end))
+    }
+
+    /// Iterate over rows as zero-copy `Bytes` slices.
+    pub fn rows(&self) -> impl Iterator<Item = Result<Bytes, ArrowError>> + '_ {
+        (0..self.len()).map(|i| self.row(i))
+    }
+
+    /// Copy all rows into independent `Vec<u8>` buffers.
+    ///
+    /// This is useful for compatibility with APIs that require owned, mutable byte vectors.
+    pub fn to_vecs(&self) -> Result<Vec<Vec<u8>>, ArrowError> {
+        let mut out = Vec::with_capacity(self.len());
+        for i in 0..self.len() {
+            out.push(self.row(i)?.to_vec());
+        }
+        Ok(out)
+    }
+}
+
 /// Builder to configure and create a `Writer`.
 #[derive(Debug, Clone)]
 pub struct WriterBuilder {
     schema: Schema,
     codec: Option<CompressionCodec>,
+    row_capacity: Option<usize>,
     capacity: usize,
     fingerprint_strategy: Option<FingerprintStrategy>,
 }
@@ -99,6 +271,7 @@ impl WriterBuilder {
         Self {
             schema,
             codec: None,
+            row_capacity: None,
             capacity: 1024,
             fingerprint_strategy: None,
         }
@@ -117,30 +290,34 @@ impl WriterBuilder {
         self
     }
 
-    /// Sets the capacity for the given object and returns the modified instance.
+    /// Sets the expected capacity (in bytes) for internal buffers.
+    ///
+    /// This is used as a hint to pre-allocate staging buffers for writing.
     pub fn with_capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity;
         self
     }
 
-    /// Create a new `Writer` with specified `AvroFormat` and builder options.
-    /// Performs one‑time startup (header/stream init, encoder plan).
-    pub fn build<W, F>(self, mut writer: W) -> Result<Writer<W, F>, ArrowError>
-    where
-        W: Write,
-        F: AvroFormat,
-    {
-        let mut format = F::default();
+    /// Sets the expected byte size for each encoded row.
+    ///
+    /// This setting affects [`Encoder`] created via [`build_encoder`](Self::build_encoder).
+    /// It is used as a hint to reduce reallocations when the typical encoded row size is known.
+    pub fn with_row_capacity(mut self, capacity: usize) -> Self {
+        self.row_capacity = Some(capacity);
+        self
+    }
+
+    fn prepare_encoder<F: AvroFormat>(&self) -> Result<(Arc<Schema>, RecordEncoder), ArrowError> {
         let avro_schema = match self.schema.metadata.get(SCHEMA_METADATA_KEY) {
             Some(json) => AvroSchema::new(json.clone()),
             None => AvroSchema::try_from(&self.schema)?,
         };
         let maybe_fingerprint = if F::NEEDS_PREFIX {
-            match self.fingerprint_strategy {
-                Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(id)),
-                Some(FingerprintStrategy::Id64(id)) => Some(Fingerprint::Id64(id)),
+            match &self.fingerprint_strategy {
+                Some(FingerprintStrategy::Id(id)) => Some(Fingerprint::Id(*id)),
+                Some(FingerprintStrategy::Id64(id)) => Some(Fingerprint::Id64(*id)),
                 Some(strategy) => {
-                    Some(avro_schema.fingerprint(FingerprintAlgorithm::from(strategy))?)
+                    Some(avro_schema.fingerprint(FingerprintAlgorithm::from(*strategy))?)
                 }
                 None => Some(
                     avro_schema
@@ -156,11 +333,48 @@ impl WriterBuilder {
             avro_schema.clone().json_string,
         );
         let schema = Arc::new(Schema::new_with_metadata(self.schema.fields().clone(), md));
-        format.start_stream(&mut writer, &schema, self.codec)?;
         let avro_root = AvroFieldBuilder::new(&avro_schema.schema()?).build()?;
         let encoder = RecordEncoderBuilder::new(&avro_root, schema.as_ref())
             .with_fingerprint(maybe_fingerprint)
             .build()?;
+        Ok((schema, encoder))
+    }
+
+    /// Build a new [`Encoder`] for the given [`AvroFormat`].
+    ///
+    /// `Encoder` only supports stream formats (no OCF sync markers). Attempting to build an
+    /// encoder with an OCF format (e.g. [`AvroOcfFormat`]) will return an error.
+    pub fn build_encoder<F: AvroFormat>(self) -> Result<Encoder, ArrowError> {
+        if F::default().sync_marker().is_some() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Encoder only supports stream formats (no OCF header/sync marker)".to_string(),
+            ));
+        }
+        let (schema, encoder) = self.prepare_encoder::<F>()?;
+        Ok(Encoder {
+            schema,
+            encoder,
+            row_capacity: self.row_capacity,
+            buffer: BytesMut::with_capacity(self.capacity),
+            offsets: vec![0],
+        })
+    }
+
+    /// Build a new [`Writer`] with the specified [`AvroFormat`] and builder options.
+    pub fn build<W, F>(self, mut writer: W) -> Result<Writer<W, F>, ArrowError>
+    where
+        W: Write,
+        F: AvroFormat,
+    {
+        let mut format = F::default();
+        if format.sync_marker().is_none() && !F::NEEDS_PREFIX {
+            return Err(ArrowError::InvalidArgumentError(
+                "AvroBinaryFormat is only supported with Encoder, use build_encoder instead"
+                    .to_string(),
+            ));
+        }
+        let (schema, encoder) = self.prepare_encoder::<F>()?;
+        format.start_stream(&mut writer, &schema, self.codec)?;
         Ok(Writer {
             writer,
             schema,
@@ -169,6 +383,72 @@ impl WriterBuilder {
             capacity: self.capacity,
             encoder,
         })
+    }
+}
+
+/// A row-by-row streaming encoder for Avro **Single Object Encoding** (SOE) streams.
+///
+/// Unlike [`Writer`], which writes directly to an output sink, `Encoder` buffers rows in a
+/// single contiguous backing buffer and returns per-row payloads as zero-copy [`bytes::Bytes`]
+/// slices via [`EncodedRows`].
+///
+/// To get owned `Vec<u8>` payloads for compatibility with APIs that require owned buffers,
+/// call [`EncodedRows::to_vecs`].
+#[derive(Debug)]
+pub struct Encoder {
+    schema: SchemaRef,
+    encoder: RecordEncoder,
+    row_capacity: Option<usize>,
+    buffer: BytesMut,
+    offsets: Vec<u64>,
+}
+
+impl Encoder {
+    /// Serialize one [`RecordBatch`] into the internal buffer.
+    pub fn encode(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
+        if batch.schema().fields() != self.schema.fields() {
+            return Err(ArrowError::SchemaError(
+                "Schema of RecordBatch differs from Writer schema".to_string(),
+            ));
+        }
+        self.encoder.encode_rows(
+            batch,
+            self.row_capacity.unwrap_or(0),
+            &mut self.buffer,
+            &mut self.offsets,
+        )?;
+        Ok(())
+    }
+
+    /// A convenience method to write a slice of [`RecordBatch`] values.
+    pub fn encode_batches(&mut self, batches: &[RecordBatch]) -> Result<(), ArrowError> {
+        for b in batches {
+            self.encode(b)?;
+        }
+        Ok(())
+    }
+
+    /// Drain and return all currently buffered encoded rows.
+    ///
+    /// The returned [`EncodedRows`] provides per-row payloads as `Bytes` slices.
+    /// For owned buffers, use [`EncodedRows::to_vecs`].
+    pub fn flush(&mut self) -> EncodedRows {
+        let data = self.buffer.split().freeze();
+        let offsets = std::mem::replace(&mut self.offsets, vec![0]);
+        EncodedRows::new(data, offsets)
+    }
+
+    /// Returns the Arrow schema used by this encoder.
+    ///
+    /// The returned schema includes metadata with the Avro schema JSON under
+    /// the `avro.schema` key.
+    pub fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
+    /// Returns the number of encoded rows currently buffered.
+    pub fn buffered_len(&self) -> usize {
+        self.offsets.len().saturating_sub(1)
     }
 }
 
@@ -182,7 +462,7 @@ impl WriterBuilder {
 #[derive(Debug)]
 pub struct Writer<W: Write, F: AvroFormat> {
     writer: W,
-    schema: Arc<Schema>,
+    schema: SchemaRef,
     format: F,
     compression: Option<CompressionCodec>,
     capacity: usize,
@@ -401,6 +681,8 @@ mod tests {
     use crate::schema::{AvroSchema, SchemaStore};
     use crate::test_util::arrow_test_data;
     use arrow::datatypes::TimeUnit;
+    use arrow::util::pretty::pretty_format_batches;
+    use arrow_array::builder::{Int32Builder, ListBuilder};
     #[cfg(feature = "avro_custom_types")]
     use arrow_array::types::{Int16Type, Int32Type, Int64Type};
     use arrow_array::types::{
@@ -408,16 +690,17 @@ mod tests {
         TimestampMillisecondType, TimestampNanosecondType,
     };
     use arrow_array::{
-        Array, ArrayRef, BinaryArray, Date32Array, Int32Array, PrimitiveArray, RecordBatch,
-        StringArray, StructArray, UnionArray,
+        Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Int32Array, Int64Array,
+        PrimitiveArray, RecordBatch, StringArray, StructArray, UnionArray,
     };
     #[cfg(feature = "avro_custom_types")]
-    use arrow_array::{Int16Array, Int64Array, RunArray};
+    use arrow_array::{Int16Array, RunArray};
     use arrow_schema::UnionMode;
     #[cfg(not(feature = "avro_custom_types"))]
     use arrow_schema::{DataType, Field, Schema};
     #[cfg(feature = "avro_custom_types")]
     use arrow_schema::{DataType, Field, Schema};
+    use bytes::BytesMut;
     use std::collections::HashMap;
     use std::collections::HashSet;
     use std::fs::File;
@@ -2408,6 +2691,478 @@ mod tests {
         let roundtrip =
             arrow::compute::concat_batches(&rt_schema, &rt_batches).expect("concat roundtrip");
         assert_eq!(roundtrip, batch);
+        Ok(())
+    }
+
+    fn make_encoder_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ])
+    }
+
+    fn make_encoder_batch(schema: &Schema) -> RecordBatch {
+        let a = Int32Array::from(vec![1, 2, 3]);
+        let b = Int32Array::from(vec![10, 20, 30]);
+        RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(a) as ArrayRef, Arc::new(b) as ArrayRef],
+        )
+        .expect("failed to build test RecordBatch")
+    }
+
+    fn make_real_avro_schema_and_batch() -> Result<(Schema, RecordBatch, AvroSchema), ArrowError> {
+        let avro_json = r#"
+        {
+          "type": "record",
+          "name": "User",
+          "fields": [
+            { "name": "id",     "type": "long" },
+            { "name": "name",   "type": "string" },
+            { "name": "active", "type": "boolean" },
+            { "name": "tags",   "type": { "type": "array", "items": "int" } },
+            { "name": "opt",    "type": ["null", "string"], "default": null }
+          ]
+        }"#;
+        let avro_schema = AvroSchema::new(avro_json.to_string());
+        let mut md = HashMap::new();
+        md.insert(
+            SCHEMA_METADATA_KEY.to_string(),
+            avro_schema.json_string.clone(),
+        );
+        let item_field = Arc::new(Field::new(
+            Field::LIST_FIELD_DEFAULT_NAME,
+            DataType::Int32,
+            false,
+        ));
+        let schema = Schema::new_with_metadata(
+            vec![
+                Field::new("id", DataType::Int64, false),
+                Field::new("name", DataType::Utf8, false),
+                Field::new("active", DataType::Boolean, false),
+                Field::new("tags", DataType::List(item_field.clone()), false),
+                Field::new("opt", DataType::Utf8, true),
+            ],
+            md,
+        );
+        let id = Int64Array::from(vec![1, 2, 3]);
+        let name = StringArray::from(vec!["alice", "bob", "carol"]);
+        let active = BooleanArray::from(vec![true, false, true]);
+        let mut tags_builder = ListBuilder::new(Int32Builder::new()).with_field(item_field);
+        tags_builder.values().append_value(1);
+        tags_builder.values().append_value(2);
+        tags_builder.append(true);
+        tags_builder.append(true);
+        tags_builder.values().append_value(3);
+        tags_builder.append(true);
+        let tags = tags_builder.finish();
+        let opt = StringArray::from(vec![Some("x"), None, Some("z")]);
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![
+                Arc::new(id) as ArrayRef,
+                Arc::new(name) as ArrayRef,
+                Arc::new(active) as ArrayRef,
+                Arc::new(tags) as ArrayRef,
+                Arc::new(opt) as ArrayRef,
+            ],
+        )?;
+        Ok((schema, batch, avro_schema))
+    }
+
+    #[test]
+    fn test_row_writer_matches_stream_writer_soe() -> Result<(), ArrowError> {
+        let schema = make_encoder_schema();
+        let batch = make_encoder_batch(&schema);
+        let mut stream = AvroStreamWriter::new(Vec::<u8>::new(), schema.clone())?;
+        stream.write(&batch)?;
+        stream.finish()?;
+        let stream_bytes = stream.into_inner();
+        let mut row_writer = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+        row_writer.encode(&batch)?;
+        let rows = row_writer.flush();
+        // NOTE: EncodedRows is now zero-copy; `to_vecs()` is an explicit compatibility copy.
+        let row_bytes: Vec<u8> = rows.to_vecs()?.concat();
+        assert_eq!(stream_bytes, row_bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn test_row_writer_flush_clears_buffer() -> Result<(), ArrowError> {
+        let schema = make_encoder_schema();
+        let batch = make_encoder_batch(&schema);
+        let mut row_writer = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+        row_writer.encode(&batch)?;
+        assert_eq!(row_writer.buffered_len(), batch.num_rows());
+        let out1 = row_writer.flush();
+        assert_eq!(out1.len(), batch.num_rows());
+        assert_eq!(row_writer.buffered_len(), 0);
+        let out2 = row_writer.flush();
+        assert_eq!(out2.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_row_writer_roundtrip_decoder_soe_real_avro_data() -> Result<(), ArrowError> {
+        let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
+        let mut store = SchemaStore::new();
+        store.register(avro_schema.clone())?;
+        let mut row_writer = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+        row_writer.encode(&batch)?;
+        let rows = row_writer.flush();
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .with_batch_size(1024)
+            .build_decoder()?;
+        for row in rows.rows() {
+            let row = row?;
+            let consumed = decoder.decode(row.as_ref())?;
+            assert_eq!(
+                consumed,
+                row.len(),
+                "decoder should consume the full row frame"
+            );
+        }
+        let out = decoder.flush()?.expect("decoded batch");
+        let expected = pretty_format_batches(std::slice::from_ref(&batch))?.to_string();
+        let actual = pretty_format_batches(&[out])?.to_string();
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_row_writer_roundtrip_decoder_soe_streaming_chunks() -> Result<(), ArrowError> {
+        let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
+        let mut store = SchemaStore::new();
+        store.register(avro_schema.clone())?;
+        let mut row_writer = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+        row_writer.encode(&batch)?;
+        let rows = row_writer.flush();
+        // Build a contiguous stream and frame boundaries (prefix sums) from EncodedRows.
+        let mut stream: Vec<u8> = Vec::new();
+        let mut boundaries: Vec<usize> = Vec::with_capacity(rows.len() + 1);
+        boundaries.push(0usize);
+        for row in rows.rows() {
+            let row = row?;
+            stream.extend_from_slice(row.as_ref());
+            boundaries.push(stream.len());
+        }
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .with_batch_size(1024)
+            .build_decoder()?;
+        let mut buffered = BytesMut::new();
+        let chunk_rows = [1usize, 2, 3, 1, 4, 2];
+        let mut row_idx = 0usize;
+        let mut i = 0usize;
+        let n_rows = rows.len();
+        while row_idx < n_rows {
+            let take = chunk_rows[i % chunk_rows.len()];
+            i += 1;
+            let end_row = (row_idx + take).min(n_rows);
+            let byte_start = boundaries[row_idx];
+            let byte_end = boundaries[end_row];
+            buffered.extend_from_slice(&stream[byte_start..byte_end]);
+            loop {
+                let consumed = decoder.decode(&buffered)?;
+                if consumed == 0 {
+                    break;
+                }
+                let _ = buffered.split_to(consumed);
+            }
+            assert!(
+                buffered.is_empty(),
+                "expected decoder to consume the entire frame-aligned chunk"
+            );
+            row_idx = end_row;
+        }
+        let out = decoder.flush()?.expect("decoded batch");
+        let expected = pretty_format_batches(std::slice::from_ref(&batch))?.to_string();
+        let actual = pretty_format_batches(&[out])?.to_string();
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_row_writer_roundtrip_decoder_confluent_wire_format_id() -> Result<(), ArrowError> {
+        let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
+        let schema_id: u32 = 42;
+        let mut store = SchemaStore::new_with_type(FingerprintAlgorithm::Id);
+        store.set(Fingerprint::Id(schema_id), avro_schema.clone())?;
+        let mut row_writer = WriterBuilder::new(schema)
+            .with_fingerprint_strategy(FingerprintStrategy::Id(schema_id))
+            .build_encoder::<AvroSoeFormat>()?;
+        row_writer.encode(&batch)?;
+        let rows = row_writer.flush();
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .with_batch_size(1024)
+            .build_decoder()?;
+        for row in rows.rows() {
+            let row = row?;
+            let consumed = decoder.decode(row.as_ref())?;
+            assert_eq!(consumed, row.len());
+        }
+        let out = decoder.flush()?.expect("decoded batch");
+        let expected = pretty_format_batches(std::slice::from_ref(&batch))?.to_string();
+        let actual = pretty_format_batches(&[out])?.to_string();
+        assert_eq!(expected, actual);
+        Ok(())
+    }
+
+    #[test]
+    fn test_encoder_encode_batches_flush_and_encoded_rows_methods_with_avro_binary_format()
+    -> Result<(), ArrowError> {
+        use crate::writer::format::AvroBinaryFormat;
+        use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+        use arrow_schema::{DataType, Field, Schema};
+        use std::sync::Arc;
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let schema_ref = Arc::new(schema.clone());
+        let batch1 = RecordBatch::try_new(
+            schema_ref.clone(),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![10, 20, 30])) as ArrayRef,
+            ],
+        )?;
+        let batch2 = RecordBatch::try_new(
+            schema_ref,
+            vec![
+                Arc::new(Int32Array::from(vec![4, 5])) as ArrayRef,
+                Arc::new(Int32Array::from(vec![40, 50])) as ArrayRef,
+            ],
+        )?;
+        let mut encoder = WriterBuilder::new(schema).build_encoder::<AvroBinaryFormat>()?;
+        let empty = Encoder::flush(&mut encoder);
+        assert_eq!(EncodedRows::len(&empty), 0);
+        assert!(EncodedRows::is_empty(&empty));
+        assert_eq!(EncodedRows::bytes(&empty).as_ref(), &[] as &[u8]);
+        assert_eq!(EncodedRows::offsets(&empty), &[0_u64]);
+        assert_eq!(EncodedRows::rows(&empty).count(), 0);
+        assert!(EncodedRows::to_vecs(&empty)?.is_empty());
+        let batches = vec![batch1, batch2];
+        Encoder::encode_batches(&mut encoder, &batches)?;
+        assert_eq!(encoder.buffered_len(), 5);
+        let rows = Encoder::flush(&mut encoder);
+        assert_eq!(
+            encoder.buffered_len(),
+            0,
+            "Encoder::flush should reset the internal offsets"
+        );
+        assert_eq!(EncodedRows::len(&rows), 5);
+        assert!(!EncodedRows::is_empty(&rows));
+        let expected_offsets: &[u64] = &[0, 2, 4, 6, 8, 10];
+        assert_eq!(EncodedRows::offsets(&rows), expected_offsets);
+        let expected_rows: Vec<Vec<u8>> = vec![
+            vec![2, 20],
+            vec![4, 40],
+            vec![6, 60],
+            vec![8, 80],
+            vec![10, 100],
+        ];
+        let expected_stream: Vec<u8> = expected_rows.concat();
+        assert_eq!(
+            EncodedRows::bytes(&rows).as_ref(),
+            expected_stream.as_slice()
+        );
+        for (i, expected) in expected_rows.iter().enumerate() {
+            assert_eq!(EncodedRows::row(&rows, i)?.as_ref(), expected.as_slice());
+        }
+        let iter_rows: Vec<Vec<u8>> = EncodedRows::rows(&rows)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|b| b.to_vec())
+            .collect();
+        assert_eq!(iter_rows, expected_rows);
+        assert_eq!(EncodedRows::to_vecs(&rows)?, expected_rows);
+        let recreated = EncodedRows::new(
+            EncodedRows::bytes(&rows).clone(),
+            EncodedRows::offsets(&rows).to_vec(),
+        );
+        assert_eq!(EncodedRows::len(&recreated), EncodedRows::len(&rows));
+        assert_eq!(EncodedRows::bytes(&recreated), EncodedRows::bytes(&rows));
+        assert_eq!(
+            EncodedRows::offsets(&recreated),
+            EncodedRows::offsets(&rows)
+        );
+        assert_eq!(
+            EncodedRows::to_vecs(&recreated)?,
+            EncodedRows::to_vecs(&rows)?
+        );
+        let empty_again = Encoder::flush(&mut encoder);
+        assert!(EncodedRows::is_empty(&empty_again));
+        Ok(())
+    }
+
+    #[test]
+    fn test_writer_builder_build_rejects_avro_binary_format() {
+        use crate::writer::format::AvroBinaryFormat;
+        use arrow_schema::{DataType, Field, Schema};
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let err = WriterBuilder::new(schema)
+            .build::<_, AvroBinaryFormat>(Vec::<u8>::new())
+            .unwrap_err();
+        match err {
+            ArrowError::InvalidArgumentError(msg) => assert_eq!(
+                msg,
+                "AvroBinaryFormat is only supported with Encoder, use build_encoder instead"
+            ),
+            other => panic!("expected InvalidArgumentError, got {:?}", other),
+        }
+    }
+    #[test]
+    fn test_row_encoder_avro_binary_format_roundtrip_decoder_with_soe_framing()
+    -> Result<(), ArrowError> {
+        use crate::writer::format::AvroBinaryFormat;
+        let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
+        let batches: Vec<RecordBatch> = vec![batch.clone(), batch.slice(1, 2)];
+        let expected = arrow::compute::concat_batches(&batch.schema(), &batches)?;
+        let mut binary_encoder =
+            WriterBuilder::new(schema.clone()).build_encoder::<AvroBinaryFormat>()?;
+        binary_encoder.encode_batches(&batches)?;
+        let binary_rows = binary_encoder.flush();
+        assert_eq!(
+            binary_rows.len(),
+            expected.num_rows(),
+            "binary encoder row count mismatch"
+        );
+        let mut soe_encoder = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+        soe_encoder.encode_batches(&batches)?;
+        let soe_rows = soe_encoder.flush();
+        assert_eq!(
+            soe_rows.len(),
+            binary_rows.len(),
+            "SOE vs binary row count mismatch"
+        );
+        let mut store = SchemaStore::new(); // Rabin by default
+        let fp = store.register(avro_schema)?;
+        let fp_le_bytes = match fp {
+            Fingerprint::Rabin(v) => v.to_le_bytes(),
+            other => panic!("expected Rabin fingerprint from SchemaStore::new(), got {other:?}"),
+        };
+        const SOE_MAGIC: [u8; 2] = [0xC3, 0x01];
+        const SOE_PREFIX_LEN: usize = 2 + 8;
+        for i in 0..binary_rows.len() {
+            let body = binary_rows.row(i)?;
+            let soe = soe_rows.row(i)?;
+            assert!(
+                soe.len() >= SOE_PREFIX_LEN,
+                "expected SOE row to include prefix"
+            );
+            assert_eq!(&soe.as_ref()[..2], &SOE_MAGIC);
+            assert_eq!(&soe.as_ref()[2..SOE_PREFIX_LEN], &fp_le_bytes);
+            assert_eq!(
+                &soe.as_ref()[SOE_PREFIX_LEN..],
+                body.as_ref(),
+                "SOE body bytes differ from AvroBinaryFormat body bytes (row {i})"
+            );
+        }
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .with_batch_size(1024)
+            .build_decoder()?;
+        for body in binary_rows.rows() {
+            let body = body?;
+            let mut framed = Vec::with_capacity(SOE_PREFIX_LEN + body.len());
+            framed.extend_from_slice(&SOE_MAGIC);
+            framed.extend_from_slice(&fp_le_bytes);
+            framed.extend_from_slice(body.as_ref());
+            let consumed = decoder.decode(&framed)?;
+            assert_eq!(
+                consumed,
+                framed.len(),
+                "decoder should consume the full SOE-framed message"
+            );
+        }
+        let out = decoder.flush()?.expect("expected a decoded RecordBatch");
+        let expected_str = pretty_format_batches(&[expected])?.to_string();
+        let actual_str = pretty_format_batches(&[out])?.to_string();
+        assert_eq!(expected_str, actual_str);
+        Ok(())
+    }
+
+    #[test]
+    fn test_row_encoder_avro_binary_format_roundtrip_decoder_streaming_chunks()
+    -> Result<(), ArrowError> {
+        use crate::writer::format::AvroBinaryFormat;
+        let (schema, batch, avro_schema) = make_real_avro_schema_and_batch()?;
+        let mut encoder = WriterBuilder::new(schema).build_encoder::<AvroBinaryFormat>()?;
+        encoder.encode(&batch)?;
+        let rows = encoder.flush();
+        let mut store = SchemaStore::new();
+        let fp = store.register(avro_schema)?;
+        let fp_le_bytes = match fp {
+            Fingerprint::Rabin(v) => v.to_le_bytes(),
+            other => panic!("expected Rabin fingerprint from SchemaStore::new(), got {other:?}"),
+        };
+        const SOE_MAGIC: [u8; 2] = [0xC3, 0x01];
+        const SOE_PREFIX_LEN: usize = 2 + 8;
+        let mut stream: Vec<u8> = Vec::new();
+        for body in rows.rows() {
+            let body = body?;
+            let msg_len: u32 = (SOE_PREFIX_LEN + body.len())
+                .try_into()
+                .expect("message length must fit in u32");
+            stream.extend_from_slice(&msg_len.to_le_bytes());
+            stream.extend_from_slice(&SOE_MAGIC);
+            stream.extend_from_slice(&fp_le_bytes);
+            stream.extend_from_slice(body.as_ref());
+        }
+        let mut decoder = ReaderBuilder::new()
+            .with_writer_schema_store(store)
+            .with_batch_size(1024)
+            .build_decoder()?;
+        let chunk_sizes = [1usize, 2, 3, 5, 8, 13, 21, 34];
+        let mut pos = 0usize;
+        let mut i = 0usize;
+        let mut buffered = BytesMut::new();
+        let mut decoded_frames = 0usize;
+        while pos < stream.len() {
+            let take = chunk_sizes[i % chunk_sizes.len()];
+            i += 1;
+            let end = (pos + take).min(stream.len());
+            buffered.extend_from_slice(&stream[pos..end]);
+            pos = end;
+            loop {
+                if buffered.len() < 4 {
+                    break;
+                }
+                let msg_len =
+                    u32::from_le_bytes([buffered[0], buffered[1], buffered[2], buffered[3]])
+                        as usize;
+                if buffered.len() < 4 + msg_len {
+                    break;
+                }
+                let frame = buffered.split_to(4 + msg_len);
+                let payload = &frame[4..];
+                let consumed = decoder.decode(payload)?;
+                assert_eq!(
+                    consumed,
+                    payload.len(),
+                    "decoder should consume the full SOE-framed message"
+                );
+
+                decoded_frames += 1;
+            }
+        }
+        assert!(
+            buffered.is_empty(),
+            "expected transport framer to consume all bytes; leftover = {}",
+            buffered.len()
+        );
+        assert_eq!(
+            decoded_frames,
+            rows.len(),
+            "expected to decode exactly one frame per encoded row"
+        );
+        let out = decoder.flush()?.expect("expected decoded RecordBatch");
+        let expected_str = pretty_format_batches(std::slice::from_ref(&batch))?.to_string();
+        let actual_str = pretty_format_batches(&[out])?.to_string();
+        assert_eq!(expected_str, actual_str);
         Ok(())
     }
 }
