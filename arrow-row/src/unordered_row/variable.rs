@@ -368,11 +368,12 @@ pub(crate) fn get_ctrl_byte(len: usize) -> u8 {
 /// Faster encode_blocks that first copy all the data and then iterate over it and
 #[inline]
 pub(crate) fn fast_encode_bytes(out: &mut [u8], val: &[u8]) -> usize {
-    // TODO - in desc should do max minus the length so the order will be different (longer strings sort before shorter ones)
+    // Encode the length using the smallest type possible
     let start_data_offset = encode_len(out, val.len());
 
     let len = start_data_offset + val.len();
 
+    // Copy the data in one go
     out[start_data_offset..len].copy_from_slice(val);
 
     len

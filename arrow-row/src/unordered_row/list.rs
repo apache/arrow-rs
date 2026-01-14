@@ -95,28 +95,6 @@ pub fn encode<O: OffsetSizeTrait>(
 
 #[inline]
 fn encode_one(out: &mut [u8], rows: &UnorderedRows, range: Option<Range<usize>>) -> usize {
-    // match range {
-    //     None =>{
-    //         let offset = super::variable::encode_null(out);
-    //
-    //         // No need to encode anything else
-    //         offset
-    //     },
-    //     Some(range) => {
-    //         // Encode number of items
-    //         let offset = super::variable::encode_len(out, range.len());
-    //
-    //     },
-    // };
-
-    // super::variable::encode_one(
-    //     out,
-    //     match range {
-    //         None => None,
-    //         Some(range) if range.is_empty() => Some(&[]),
-    //         Some(range) => Some(rows.data_range(range))
-    //     }
-    // )
 
     match range.filter(|r| !r.is_empty()) {
         None => {
@@ -129,8 +107,13 @@ fn encode_one(out: &mut [u8], rows: &UnorderedRows, range: Option<Range<usize>>)
             offset += super::variable::encode_len(&mut out[offset..], range.len());
 
             // Encode the type of the lengths of the rows and the lengths themselves
+            // this is used to avoid using more memory than needed for small rows
             offset += super::variable::encode_lengths_with_prefix(
                 &mut out[offset..],
+
+                // Encode using the worst case if there is a single row
+                // as we don't know the maximum length of the rows without iterating over them
+                // so we use the worst case scenario
                 rows.data_range_len(&range),
                 rows.lengths_from(&range),
             );
@@ -140,25 +123,7 @@ fn encode_one(out: &mut [u8], rows: &UnorderedRows, range: Option<Range<usize>>)
                 &mut out[offset..],
                 rows.data_range(range.clone()),
             );
-            //
-            //
-            //
-            //
-            // // TODO - encode all rows lengths at the start and then encode
-            // //        the entire rows data in one go
-            //
-            // // TODO - encode number of bytes so we can in the decode skip small copy
-            //
-            // for i in range {
-            //     let row = rows.row(i);
-            //     // // This is required as we are decoding data until we get an empty marker
-            //     // assert!(
-            //     //     row.data.len() > 1,
-            //     //     "list item row data must have more than 1 byte"
-            //     // );
-            //     offset += super::variable::encode_one(&mut out[offset..], Some(row.data));
-            // }
-            // offset += super::variable::encode_one(&mut out[offset..], Some(&[]));
+
             offset
         }
     }
@@ -195,7 +160,8 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
             continue;
         }
 
-        // TODO - encode the bytes first and then the lengths so we don't have to jump here in memory
+        // TODO - encode the bytes first and then the lengths so we don't have to jump here in memory only to get to the number
+        //        of bytes the lengths is using
         // read ctrl byte
         let byte_size = super::variable::get_number_of_bytes_used_to_encode_from_ctrl_byte(row[row_offset]);
         // Skip the ctrl byte
@@ -227,7 +193,6 @@ pub unsafe fn decode<O: OffsetSizeTrait>(
         }
 
         // decode the lengths of the rows
-
         let mut initial_value_offset = values_bytes.len();
         row_offset += super::variable::decode_lengths_with_prefix(&row[row_offset..], number_of_items, |len: usize| {
             initial_value_offset += len;
