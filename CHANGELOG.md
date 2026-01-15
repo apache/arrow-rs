@@ -19,6 +19,12 @@
 
 # Changelog
 
+## [Unreleased]
+
+**Breaking changes:**
+
+- Deprecate `ArrowReaderOptions::with_page_index` in favor of `with_page_index_policy` to support `PageIndexPolicy` enum with Skip, Optional, and Required policies. The deprecated method converts boolean to Required (true) or Skip (false). Use `with_page_index_policy`, `with_column_index_policy`, or `with_offset_index_policy` for fine-grained control.
+
 ## [57.2.0](https://github.com/apache/arrow-rs/tree/57.2.0) (2026-01-07)
 
 [Full Changelog](https://github.com/apache/arrow-rs/compare/57.1.0...57.2.0)
