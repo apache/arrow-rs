@@ -32,29 +32,17 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
     rows: &Rows,
     array: &GenericListArray<O>,
 ) {
-    let offsets = array.value_offsets().windows(2);
-    let mut rows_length_iter = rows.lengths();
+    let shift = array.value_offsets()[0].as_usize();
 
     lengths
         .iter_mut()
-        .zip(offsets)
+        .zip(array.value_offsets().windows(2))
         .enumerate()
         .for_each(|(idx, (length, offsets))| {
-            let len = offsets[1].as_usize() - offsets[0].as_usize();
-            if array.is_valid(idx) {
-                *length += 1 + rows_length_iter
-                    .by_ref()
-                    .take(len)
-                    .map(Some)
-                    .map(super::variable::padded_length)
-                    .sum::<usize>()
-            } else {
-                // Advance rows iterator by len
-                if len > 0 {
-                    rows_length_iter.nth(len - 1);
-                }
-                *length += 1;
-            }
+            let start = offsets[0].as_usize() - shift;
+            let end = offsets[1].as_usize() - shift;
+            let range = array.is_valid(idx).then_some(start..end);
+            *length += list_element_encoded_len(rows, range);
         });
 }
 
@@ -329,6 +317,23 @@ pub unsafe fn decode_fixed_size_list(
     }))
 }
 
+/// Computes the encoded length for a single list element given its child rows.
+///
+/// This is used by list types (List, LargeList, ListView, LargeListView) to determine
+/// the encoded length of a list element. For null elements, returns 1 (null sentinel only).
+/// For valid elements, returns 1 + the sum of padded lengths for each child row.
+#[inline]
+fn list_element_encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
+    match range {
+        None => 1,
+        Some(range) => {
+            1 + range
+                .map(|i| super::variable::padded_length(Some(rows.row(i).as_ref().len())))
+                .sum::<usize>()
+        }
+    }
+}
+
 /// Computes the encoded lengths for a `GenericListViewArray`
 ///
 /// `rows` should contain the encoded child elements
@@ -345,7 +350,7 @@ pub fn compute_lengths_list_view<O: OffsetSizeTrait>(
         let start = offsets[idx].as_usize() - shift;
         let size = sizes[idx].as_usize();
         let range = array.is_valid(idx).then_some(start..start + size);
-        *length += encoded_len(rows, range);
+        *length += list_element_encoded_len(rows, range);
     });
 }
 
