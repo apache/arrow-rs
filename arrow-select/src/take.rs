@@ -2695,6 +2695,19 @@ mod tests {
 
         let logical_indices: PrimitiveArray<Int32Type> = PrimitiveArray::from(Vec::<i32>::new());
 
-        let _ = take_impl(&run_array, &logical_indices).expect("take_run with empty indices");
+        let result = take_impl(&run_array, &logical_indices).expect("take_run with empty indices");
+
+        // Verify the result is a valid empty RunArray
+        assert_eq!(result.len(), 0);
+        assert_eq!(result.null_count(), 0);
+
+        // Verify that the result can be downcast and used without validation errors
+        // This specifically tests that "The values in run_ends array should be strictly positive" is not triggered
+        let run_result = result
+            .as_any()
+            .downcast_ref::<RunArray<Int32Type>>()
+            .expect("result should be a RunArray");
+        assert_eq!(run_result.run_ends().len(), 0);
+        assert_eq!(run_result.values().len(), 0);
     }
 }
