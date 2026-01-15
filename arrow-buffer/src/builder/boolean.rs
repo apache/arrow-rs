@@ -16,16 +16,33 @@
 // under the License.
 
 use crate::bit_util::apply_bitwise_binary_op;
-use crate::{BooleanBuffer, Buffer, MutableBuffer, bit_util};
+use crate::{BooleanBuffer, Buffer, MutableBuffer, NullBuffer, bit_util};
 use std::ops::Range;
 
 /// Builder for [`BooleanBuffer`]
 ///
+/// Builds a packed buffer of bits representing boolean values. Each bit in the
+/// buffer corresponds to a boolean value,
+///
 /// # See Also
 ///
-/// * [`NullBuffer`] for building [`BooleanBuffer`]s for representing nulls
+/// * [`NullBufferBuilder`] for building [`BooleanBuffer`]s for representing nulls
+/// * [`BufferBuilder`] for building [`Buffer`]s
 ///
-/// [`NullBuffer`]: crate::NullBuffer
+/// # Example
+/// ```
+/// # use arrow_buffer::builder::BooleanBufferBuilder;
+/// let mut builder = BooleanBufferBuilder::new(10);
+/// builder.append(true);
+/// builder.append(false);
+/// builder.append_n(3, true); // append 3 trues
+/// let buffer = builder.build();
+/// assert_eq!(buffer.len(), 5); // 5 bits appended
+/// assert_eq!(buffer.values(), &[0b00011101_u8]); // packed bits
+///```
+///
+/// [`BufferBuilder`]: crate::builder::BufferBuilder
+/// [`NullBufferBuilder`]: crate::builder::NullBufferBuilder
 #[derive(Debug)]
 pub struct BooleanBufferBuilder {
     buffer: MutableBuffer,
@@ -247,12 +264,22 @@ impl BooleanBufferBuilder {
         self.buffer.as_slice_mut()
     }
 
-    /// Creates a [`BooleanBuffer`]
+    /// Resets this builder and returns a [`BooleanBuffer`].
+    ///
+    /// Use [`Self::build`] when you don't need to reuse this builder.
     #[inline]
     pub fn finish(&mut self) -> BooleanBuffer {
         let buf = std::mem::replace(&mut self.buffer, MutableBuffer::new(0));
         let len = std::mem::replace(&mut self.len, 0);
         BooleanBuffer::new(buf.into(), 0, len)
+    }
+
+    /// Builds a [`BooleanBuffer`] without resetting the builder.
+    ///
+    /// This consumes the builder. Use [`Self::finish`] to reuse it.
+    #[inline]
+    pub fn build(self) -> BooleanBuffer {
+        BooleanBuffer::new(self.buffer.into(), 0, self.len)
     }
 
     /// Builds the [BooleanBuffer] without resetting the builder.
@@ -285,7 +312,15 @@ impl From<BooleanBufferBuilder> for Buffer {
 impl From<BooleanBufferBuilder> for BooleanBuffer {
     #[inline]
     fn from(builder: BooleanBufferBuilder) -> Self {
-        BooleanBuffer::new(builder.buffer.into(), 0, builder.len)
+        builder.build()
+    }
+}
+
+impl From<BooleanBufferBuilder> for NullBuffer {
+    #[inline]
+    fn from(builder: BooleanBufferBuilder) -> Self {
+        let boolean_buffer = BooleanBuffer::from(builder);
+        NullBuffer::new(boolean_buffer)
     }
 }
 
