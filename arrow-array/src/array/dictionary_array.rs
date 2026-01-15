@@ -25,8 +25,8 @@ use crate::{
 };
 use arrow_buffer::bit_util::set_bit;
 use arrow_buffer::buffer::NullBuffer;
-use arrow_buffer::{ArrowNativeType, BooleanBuffer, BooleanBufferBuilder};
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_buffer::{ArrowNativeType, BooleanBuffer, BooleanBufferBuilder, ScalarBuffer};
+use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType};
 use std::any::Any;
 use std::sync::Arc;
@@ -580,16 +580,17 @@ impl<K: ArrowDictionaryKeyType> DictionaryArray<K> {
     }
 }
 
-/// Constructs a `DictionaryArray` from an array data reference.
+/// Constructs a `DictionaryArray` from an `ArrayData`
 impl<T: ArrowDictionaryKeyType> From<ArrayData> for DictionaryArray<T> {
     fn from(data: ArrayData) -> Self {
-        let (data_type, len, nulls, offset, buffers, mut child_data) = data.into_parts();
+        let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
 
         assert_eq!(
             buffers.len(),
             1,
             "DictionaryArray data should contain a single buffer only (keys)."
         );
+        let buffer = buffers.pop().expect("checked above");
         assert_eq!(
             child_data.len(),
             1,
@@ -609,16 +610,7 @@ impl<T: ArrowDictionaryKeyType> From<ArrayData> for DictionaryArray<T> {
             let values = make_array(cd);
 
             // create a zero-copy of the keys' data
-            // SAFETY:
-            // ArrayData is valid and verified type above
-            let keys = PrimitiveArray::<T>::from(unsafe {
-                ArrayDataBuilder::new(T::DATA_TYPE)
-                    .buffers(buffers)
-                    .nulls(nulls)
-                    .offset(offset)
-                    .len(len)
-                    .build_unchecked()
-            });
+            let keys = PrimitiveArray::<T>::new(ScalarBuffer::new(buffer, offset, len), nulls);
 
             Self {
                 data_type,
