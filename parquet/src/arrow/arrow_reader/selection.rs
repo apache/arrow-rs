@@ -1108,6 +1108,49 @@ mod tests {
     }
 
     #[test]
+    fn test_mask_cursor_page_aware_chunking() {
+        let selectors = vec![RowSelector::skip(2), RowSelector::select(10)];
+        let mask = boolean_mask_from_selectors(&selectors);
+        let mut cursor = MaskCursor { mask, position: 0 };
+
+        let pages = vec![
+            PageLocation {
+                offset: 0,
+                compressed_page_size: 1,
+                first_row_index: 0,
+            },
+            PageLocation {
+                offset: 1,
+                compressed_page_size: 1,
+                first_row_index: 4,
+            },
+            PageLocation {
+                offset: 2,
+                compressed_page_size: 1,
+                first_row_index: 8,
+            },
+            PageLocation {
+                offset: 3,
+                compressed_page_size: 1,
+                first_row_index: 12,
+            },
+        ];
+        // First chunk is page 1
+        let chunk = cursor.next_mask_chunk(100, Some(&pages)).unwrap();
+        assert_eq!(chunk.initial_skip, 2);
+        assert_eq!(chunk.mask_start, 2);
+        assert_eq!(chunk.chunk_rows, 2);
+        assert_eq!(chunk.selected_rows, 2);
+
+        // Second chunk is page 2
+        let chunk = cursor.next_mask_chunk(100, Some(&pages)).unwrap();
+        assert_eq!(chunk.initial_skip, 0);
+        assert_eq!(chunk.mask_start, 4);
+        assert_eq!(chunk.chunk_rows, 4);
+        assert_eq!(chunk.selected_rows, 4);
+    }
+
+    #[test]
     fn test_and() {
         let mut a = RowSelection::from(vec![
             RowSelector::skip(12),

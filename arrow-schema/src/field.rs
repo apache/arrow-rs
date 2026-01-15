@@ -718,6 +718,8 @@ impl Field {
             DataType::Union(fields, _) => fields.iter().flat_map(|(_, f)| f.fields()).collect(),
             DataType::List(field)
             | DataType::LargeList(field)
+            | DataType::ListView(field)
+            | DataType::LargeListView(field)
             | DataType::FixedSizeList(field, _)
             | DataType::Map(field, _) => field.fields(),
             DataType::Dictionary(_, value_field) => Field::_fields(value_field.as_ref()),
