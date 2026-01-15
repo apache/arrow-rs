@@ -33,8 +33,8 @@ pub fn compute_lengths<R: RunEndIndexType>(
     // Iterate over each run and apply the same length to all logical positions in the run
     for (physical_idx, &run_end) in run_ends.iter().enumerate() {
         let logical_end = run_end.as_usize();
-        let row = rows.row(physical_idx);
-        let encoded_len = variable::encoded_len(Some(row.data));
+        let row_len = rows.row_len(physical_idx);
+        let encoded_len = variable::padded_length(Some(row_len));
 
         // Add the same length for all logical positions in this run
         for length in &mut lengths[logical_start..logical_end] {

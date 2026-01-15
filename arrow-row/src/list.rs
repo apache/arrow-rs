@@ -27,30 +27,30 @@ pub fn compute_lengths<O: OffsetSizeTrait>(
     rows: &Rows,
     array: &GenericListArray<O>,
 ) {
-    let shift = array.value_offsets()[0].as_usize();
-
     let offsets = array.value_offsets().windows(2);
+    let mut rows_length_iter = rows.lengths();
+
     lengths
         .iter_mut()
         .zip(offsets)
         .enumerate()
         .for_each(|(idx, (length, offsets))| {
-            let start = offsets[0].as_usize() - shift;
-            let end = offsets[1].as_usize() - shift;
-            let range = array.is_valid(idx).then_some(start..end);
-            *length += encoded_len(rows, range);
+            let len = offsets[1].as_usize() - offsets[0].as_usize();
+            if array.is_valid(idx) {
+                *length += 1 + rows_length_iter
+                    .by_ref()
+                    .take(len)
+                    .map(Some)
+                    .map(super::variable::padded_length)
+                    .sum::<usize>()
+            } else {
+                // Advance rows iterator by len
+                if len > 0 {
+                    rows_length_iter.nth(len - 1);
+                }
+                *length += 1;
+            }
         });
-}
-
-fn encoded_len(rows: &Rows, range: Option<Range<usize>>) -> usize {
-    match range {
-        None => 1,
-        Some(range) => {
-            1 + range
-                .map(|i| super::variable::padded_length(Some(rows.row(i).as_ref().len())))
-                .sum::<usize>()
-        }
-    }
 }
 
 /// Encodes the provided `GenericListArray` to `out` with the provided `SortOptions`

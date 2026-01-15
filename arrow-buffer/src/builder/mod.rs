@@ -28,23 +28,31 @@ pub use offset::*;
 use crate::{ArrowNativeType, Buffer, MutableBuffer};
 use std::marker::PhantomData;
 
-/// Builder for creating a [Buffer] object.
+/// Builder for creating Arrow [`Buffer`] objects
 ///
-/// A [Buffer] is the underlying data structure of Arrow's Arrays.
+/// A [`Buffer`] is the underlying data structure of Arrow's Arrays.
 ///
 /// For all supported types, there are type definitions for the
 /// generic version of `BufferBuilder<T>`, e.g. `BufferBuilder`.
+///
+/// **Note it is typically faster to create buffers directly from `Vec`**.
+/// See example on [`Buffer`].
+///
+/// # See Also
+/// * [`BooleanBufferBuilder`]: for packing bits in [`BooleanBuffer`]s
+/// * [`NullBufferBuilder`]: for creating [`NullBuffer`]s of null values
+///
+/// [`BooleanBuffer`]: crate::BooleanBuffer
+/// [`NullBuffer`]: crate::NullBuffer
 ///
 /// # Example:
 ///
 /// ```
 /// # use arrow_buffer::builder::BufferBuilder;
-///
 /// let mut builder = BufferBuilder::<u8>::new(100);
 /// builder.append_slice(&[42, 43, 44]);
 /// builder.append(45);
 /// let buffer = builder.finish();
-///
 /// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 43, 44, 45]);
 /// ```
 #[derive(Debug)]
@@ -341,16 +349,15 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
 
     /// Resets this builder and returns an immutable [Buffer].
     ///
+    /// Use [`Self::build`] when you don't need to reuse this builder.
+    ///
     /// # Example:
     ///
     /// ```
     /// # use arrow_buffer::builder::BufferBuilder;
-    ///
     /// let mut builder = BufferBuilder::<u8>::new(10);
     /// builder.append_slice(&[42, 44, 46]);
-    ///
     /// let buffer = builder.finish();
-    ///
     /// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 44, 46]);
     /// ```
     #[inline]
@@ -358,6 +365,24 @@ impl<T: ArrowNativeType> BufferBuilder<T> {
         let buf = std::mem::take(&mut self.buffer);
         self.len = 0;
         buf.into()
+    }
+
+    /// Builds an immutable [Buffer] without resetting the builder.
+    ///
+    /// This consumes the builder. Use [`Self::finish`] to reuse it.
+    ///
+    /// # Example:
+    ///
+    /// ```
+    /// # use arrow_buffer::builder::BufferBuilder;
+    /// let mut builder = BufferBuilder::<u8>::new(10);
+    /// builder.append_slice(&[42, 44, 46]);
+    /// let buffer = builder.build();
+    /// assert_eq!(unsafe { buffer.typed_data::<u8>() }, &[42, 44, 46]);
+    /// ```
+    #[inline]
+    pub fn build(self) -> Buffer {
+        self.buffer.into()
     }
 }
 

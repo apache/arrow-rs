@@ -305,9 +305,9 @@ impl<T> ArrowReaderBuilder<T> {
     /// It is recommended to enable reading the page index if using this functionality, to allow
     /// more efficient skipping over data pages. See [`ArrowReaderOptions::with_page_index`].
     ///
-    /// For a running example see `parquet/examples/read_with_row_filter.rs`.
-    /// See <https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive/>
-    /// for a technical explanation of late materialization.
+    /// See the [blog post on late materialization] for a more technical explanation.
+    ///
+    /// [blog post on late materialization]: https://arrow.apache.org/blog/2025/12/11/parquet-late-materialization-deep-dive
     ///
     /// # Example
     /// ```rust
@@ -321,16 +321,19 @@ impl<T> ArrowReaderBuilder<T> {
     /// # let file = File::open(&path)?;
     /// let builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
     /// let schema_desc = builder.metadata().file_metadata().schema_descr_ptr();
-    ///
-    /// // Create predicate: column id > 4. This col has index 0.
-    /// let projection = ProjectionMask::leaves(&schema_desc, [0]);
+    /// // Create predicate that evaluates `int_col != 1`.
+    /// // `int_col` column has index 4 (zero based) in the schema
+    /// let projection = ProjectionMask::leaves(&schema_desc, [4]);
+    /// // Only the projection columns are passed to the predicate so
+    /// // int_col is column 0 in the predicate
     /// let predicate = ArrowPredicateFn::new(projection, |batch| {
-    ///     let id_col = batch.column(0);
-    ///     arrow::compute::kernels::cmp::gt(id_col, &Int32Array::new_scalar(4))
+    ///     let int_col = batch.column(0);
+    ///     arrow::compute::kernels::cmp::neq(int_col, &Int32Array::new_scalar(1))
     /// });
-    ///
     /// let row_filter = RowFilter::new(vec![Box::new(predicate)]);
-    /// let _reader = builder.with_row_filter(row_filter).build()?;
+    /// // The filter will be invoked during the reading process
+    /// let reader = builder.with_row_filter(row_filter).build()?;
+    /// # for b in reader { let _ = b?; }
     /// # Ok(())
     /// # }
     /// ```
@@ -506,22 +509,21 @@ impl ArrowReaderOptions {
     ///
     /// # Example
     /// ```
-    /// use std::io::Bytes;
-    /// use std::sync::Arc;
-    /// use tempfile::tempfile;
-    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
-    /// use arrow_schema::{DataType, Field, Schema, TimeUnit};
-    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-    /// use parquet::arrow::ArrowWriter;
-    ///
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// # use arrow_schema::{DataType, Field, Schema, TimeUnit};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// # use parquet::arrow::ArrowWriter;
     /// // Write data - schema is inferred from the data to be Int32
-    /// let file = tempfile().unwrap();
+    /// let mut file = Vec::new();
     /// let batch = RecordBatch::try_from_iter(vec![
     ///     ("col_1", Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef),
     /// ]).unwrap();
-    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
     /// writer.write(&batch).unwrap();
     /// writer.close().unwrap();
+    /// let file = Bytes::from(file);
     ///
     /// // Read the file back.
     /// // Supply a schema that interprets the Int32 column as a Timestamp.
@@ -530,7 +532,7 @@ impl ArrowReaderOptions {
     /// ]));
     /// let options = ArrowReaderOptions::new().with_schema(supplied_schema.clone());
     /// let mut builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
-    ///     file.try_clone().unwrap(),
+    ///     file.clone(),
     ///     options
     /// ).expect("Error if the schema is not compatible with the parquet file schema.");
     ///
@@ -546,24 +548,24 @@ impl ArrowReaderOptions {
     /// the dictionary encoding by specifying a `Dictionary` type in the schema hint:
     ///
     /// ```
-    /// use std::sync::Arc;
-    /// use tempfile::tempfile;
-    /// use arrow_array::{ArrayRef, RecordBatch, StringArray};
-    /// use arrow_schema::{DataType, Field, Schema};
-    /// use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-    /// use parquet::arrow::ArrowWriter;
-    ///
+    /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
+    /// # use arrow_array::{ArrayRef, RecordBatch, StringArray};
+    /// # use arrow_schema::{DataType, Field, Schema};
+    /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
+    /// # use parquet::arrow::ArrowWriter;
     /// // Write a Parquet file with string data
-    /// let file = tempfile().unwrap();
+    /// let mut file = Vec::new();
     /// let schema = Arc::new(Schema::new(vec![
     ///     Field::new("city", DataType::Utf8, false)
     /// ]));
     /// let cities = StringArray::from(vec!["Berlin", "Berlin", "Paris", "Berlin", "Paris"]);
     /// let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(cities)]).unwrap();
     ///
-    /// let mut writer = ArrowWriter::try_new(file.try_clone().unwrap(), batch.schema(), None).unwrap();
+    /// let mut writer = ArrowWriter::try_new(&mut file, batch.schema(), None).unwrap();
     /// writer.write(&batch).unwrap();
     /// writer.close().unwrap();
+    /// let file = Bytes::from(file);
     ///
     /// // Read the file back, requesting dictionary encoding preservation
     /// let dict_schema = Arc::new(Schema::new(vec![
@@ -574,7 +576,7 @@ impl ArrowReaderOptions {
     /// ]));
     /// let options = ArrowReaderOptions::new().with_schema(dict_schema);
     /// let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
-    ///     file.try_clone().unwrap(),
+    ///     file.clone(),
     ///     options
     /// ).unwrap();
     ///
@@ -703,26 +705,27 @@ impl ArrowReaderOptions {
     /// # Example
     /// ```
     /// # use std::sync::Arc;
+    /// # use bytes::Bytes;
     /// # use arrow_array::{ArrayRef, Int64Array, RecordBatch};
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::{ArrowWriter, RowNumber};
     /// # use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
-    /// # use tempfile::tempfile;
     /// #
     /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
     /// // Create a simple record batch with some data
     /// let values = Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef;
     /// let batch = RecordBatch::try_from_iter(vec![("value", values)])?;
     ///
-    /// // Write the batch to a temporary parquet file
-    /// let file = tempfile()?;
+    /// // Write the batch to an in-memory buffer
+    /// let mut file = Vec::new();
     /// let mut writer = ArrowWriter::try_new(
-    ///     file.try_clone()?,
+    ///     &mut file,
     ///     batch.schema(),
     ///     None
     /// )?;
     /// writer.write(&batch)?;
     /// writer.close()?;
+    /// let file = Bytes::from(file);
     ///
     /// // Create a virtual column for row numbers
     /// let row_number_field = Arc::new(Field::new("row_number", DataType::Int64, false)
