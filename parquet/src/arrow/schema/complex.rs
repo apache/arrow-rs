@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use crate::arrow::schema::extension::try_add_extension_type;
 use crate::arrow::schema::primitive::convert_primitive;
-use crate::arrow::schema::virtual_type::RowNumber;
+use crate::arrow::schema::virtual_type::{RowGroupIndex, RowNumber};
 use crate::arrow::{PARQUET_FIELD_ID_META_KEY, ProjectionMask};
 use crate::basic::{ConvertedType, Repetition};
 use crate::errors::ParquetError;
@@ -88,6 +88,8 @@ impl ParquetField {
 pub enum VirtualColumnType {
     /// Row number within the file
     RowNumber,
+    /// Row group index
+    RowGroupIndex,
 }
 
 #[derive(Debug, Clone)]
@@ -584,6 +586,7 @@ pub(super) fn convert_virtual_field(
 
     let virtual_type = match extension_name {
         RowNumber::NAME => VirtualColumnType::RowNumber,
+        RowGroupIndex::NAME => VirtualColumnType::RowGroupIndex,
         _ => {
             return Err(ParquetError::ArrowError(format!(
                 "unsupported virtual column type '{}' for field '{}'",
