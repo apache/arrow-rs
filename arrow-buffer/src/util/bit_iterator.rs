@@ -57,6 +57,7 @@ impl<'a> BitIterator<'a> {
 impl Iterator for BitIterator<'_> {
     type Item = bool;
 
+    #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.current_offset == self.end_offset {
             return None;
@@ -80,6 +81,7 @@ impl Iterator for BitIterator<'_> {
         self.len()
     }
 
+    #[inline]
     fn nth(&mut self, n: usize) -> Option<Self::Item> {
         // Check if we can advance to the desired offset.
         // When n is 0 it means we want the next() value
