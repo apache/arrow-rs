@@ -105,41 +105,7 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
     }
 
     match (from_type, to_type) {
-        (
-            Null,
-            Boolean
-            | Int8
-            | UInt8
-            | Int16
-            | UInt16
-            | Float16
-            | Int32
-            | UInt32
-            | Float32
-            | Date32
-            | Time32(_)
-            | Int64
-            | UInt64
-            | Float64
-            | Date64
-            | Timestamp(_, _)
-            | Time64(_)
-            | Duration(_)
-            | Interval(_)
-            | FixedSizeBinary(_)
-            | Binary
-            | Utf8
-            | LargeBinary
-            | LargeUtf8
-            | BinaryView
-            | Utf8View
-            | List(_)
-            | LargeList(_)
-            | FixedSizeList(_, _)
-            | Struct(_)
-            | Map(_, _)
-            | Dictionary(_, _),
-        ) => true,
+        (Null, _) => true,
         // Dictionary/List conditions should be put in front of others
         (Dictionary(_, from_value_type), Dictionary(_, to_value_type)) => {
             can_cast_types(from_value_type, to_value_type)
@@ -213,7 +179,10 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
         ) => true,
         // signed numeric to decimal
         (
+<<<<<<< HEAD
             Null | Int8 | Int16 | Int32 | Int64 | Float16 | Float32 | Float64,
+            Int8 | Int16 | Int32 | Int64 | Float32 | Float64,
+>>>>>>> main
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
 
@@ -810,41 +779,7 @@ pub fn cast_with_options(
         return Ok(make_array(array.to_data()));
     }
     match (from_type, to_type) {
-        (
-            Null,
-            Boolean
-            | Int8
-            | UInt8
-            | Int16
-            | UInt16
-            | Float16
-            | Int32
-            | UInt32
-            | Float32
-            | Date32
-            | Time32(_)
-            | Int64
-            | UInt64
-            | Float64
-            | Date64
-            | Timestamp(_, _)
-            | Time64(_)
-            | Duration(_)
-            | Interval(_)
-            | FixedSizeBinary(_)
-            | Binary
-            | Utf8
-            | LargeBinary
-            | LargeUtf8
-            | BinaryView
-            | Utf8View
-            | List(_)
-            | LargeList(_)
-            | FixedSizeList(_, _)
-            | Struct(_)
-            | Map(_, _)
-            | Dictionary(_, _),
-        ) => Ok(new_null_array(to_type, array.len())),
+        (Null, _) => Ok(new_null_array(to_type, array.len())),
         (RunEndEncoded(index_type, _), _) => match index_type.data_type() {
             Int16 => run_end_encoded_cast::<Int16Type>(array, to_type, cast_options),
             Int32 => run_end_encoded_cast::<Int32Type>(array, to_type, cast_options),
@@ -8216,17 +8151,27 @@ mod tests {
         typed_test!(Date64Array, Date64, Date64Type);
     }
 
-    fn cast_from_null_to_other(data_type: &DataType) {
+    fn cast_from_null_to_other_base(data_type: &DataType, is_complex: bool) {
         // Cast from null to data_type
-        {
-            let array = new_null_array(&DataType::Null, 4);
-            assert_eq!(array.data_type(), &DataType::Null);
-            let cast_array = cast(&array, data_type).expect("cast failed");
-            assert_eq!(cast_array.data_type(), data_type);
-            for i in 0..4 {
+        let array = new_null_array(&DataType::Null, 4);
+        assert_eq!(array.data_type(), &DataType::Null);
+        let cast_array = cast(&array, data_type).expect("cast failed");
+        assert_eq!(cast_array.data_type(), data_type);
+        for i in 0..4 {
+            if is_complex {
+                assert!(cast_array.logical_nulls().unwrap().is_null(i));
+            } else {
                 assert!(cast_array.is_null(i));
             }
         }
+    }
+
+    fn cast_from_null_to_other(data_type: &DataType) {
+        cast_from_null_to_other_base(data_type, false);
+    }
+
+    fn cast_from_null_to_other_complex(data_type: &DataType) {
+        cast_from_null_to_other_base(data_type, true);
     }
 
     #[test]
@@ -8272,6 +8217,23 @@ mod tests {
         // Cast null from and to struct
         let data_type = DataType::Struct(vec![Field::new("data", DataType::Int64, false)].into());
         cast_from_null_to_other(&data_type);
+
+        let target_type = DataType::ListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        cast_from_null_to_other(&target_type);
+
+        let target_type =
+            DataType::LargeListView(Arc::new(Field::new("item", DataType::Int32, true)));
+        cast_from_null_to_other(&target_type);
+
+        let fields = UnionFields::from_fields(vec![Field::new("a", DataType::Int64, false)]);
+        let target_type = DataType::Union(fields, UnionMode::Sparse);
+        cast_from_null_to_other_complex(&target_type);
+
+        let target_type = DataType::RunEndEncoded(
+            Arc::new(Field::new("item", DataType::Int32, true)),
+            Arc::new(Field::new("item", DataType::Int32, true)),
+        );
+        cast_from_null_to_other_complex(&target_type);
     }
 
     /// Print the `DictionaryArray` `array` as a vector of strings
@@ -11763,9 +11725,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic = "assertion `left == right` failed\n  left: ScalarBuffer([1, 1, 2])\n right: [2, 2, 3]"]
-    // TODO: fix cast of RunArrays to account for sliced RunArray's
-    // https://github.com/apache/arrow-rs/issues/9018
     fn test_sliced_run_end_encoded_to_primitive() {
         let run_ends = Int32Array::from(vec![2, 5, 6]);
         let values = Int32Array::from(vec![1, 2, 3]);
