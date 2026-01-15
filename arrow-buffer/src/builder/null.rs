@@ -200,7 +200,7 @@ impl NullBufferBuilder {
     ///
     /// # Safety
     /// The caller must ensure that the iterator reports the correct length.
-    /// 
+    ///
     /// # Example
     /// ```
     /// # use arrow_buffer::NullBufferBuilder;
