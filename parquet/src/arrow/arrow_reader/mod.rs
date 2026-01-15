@@ -5730,9 +5730,8 @@ pub(crate) mod tests {
 
         let ids: Vec<i64> = (0..num_rows as i64).collect();
         let id_array = Int64Array::from(ids);
-        let batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(id_array) as ArrayRef])
-                .unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(id_array) as ArrayRef])
+            .unwrap();
 
         let props = WriterProperties::builder()
             .set_write_batch_size(rows_per_page)
@@ -5802,9 +5801,8 @@ pub(crate) mod tests {
 
         let ids: Vec<i64> = (0..num_rows as i64).collect();
         let id_array = Int64Array::from(ids);
-        let batch =
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(id_array) as ArrayRef])
-                .unwrap();
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(id_array) as ArrayRef])
+            .unwrap();
 
         let props = WriterProperties::builder()
             .set_write_batch_size(rows_per_page)
