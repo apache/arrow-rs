@@ -183,6 +183,9 @@ pub fn can_cast_types(from_type: &DataType, to_type: &DataType) -> bool {
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
         ) => true,
 
+        // decimal to null
+        (Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _), Null) => true,
+
         // decimal to unsigned numeric
         (
             Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _) | Decimal256(_, _),
