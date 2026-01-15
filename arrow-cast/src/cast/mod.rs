@@ -51,6 +51,9 @@ use crate::cast::list::*;
 use crate::cast::map::*;
 use crate::cast::run_array::*;
 use crate::cast::string::*;
+use arrow_array::types::Float16Type;
+use half::f16;
+
 
 use arrow_buffer::IntervalMonthDayNano;
 use arrow_data::ByteView;
@@ -2356,6 +2359,11 @@ where
         Int16 => cast_decimal_to_integer::<D, Int16Type>(array, base, *scale, cast_options),
         Int32 => cast_decimal_to_integer::<D, Int32Type>(array, base, *scale, cast_options),
         Int64 => cast_decimal_to_integer::<D, Int64Type>(array, base, *scale, cast_options),
+
+
+        Float16 => cast_decimal_to_float::<D, Float16Type, _>(array, |x| {
+        half::f16::from_f64(as_float(x) / 10_f64.powi(*scale as i32))
+        }),
         Float32 => cast_decimal_to_float::<D, Float32Type, _>(array, |x| {
             (as_float(x) / 10_f64.powi(*scale as i32)) as f32
         }),
@@ -2452,6 +2460,16 @@ where
             base,
             cast_options,
         ),
+
+
+         Float16 => cast_floating_point_to_decimal::<_, D>(
+            array.as_primitive::<Float16Type>(),
+            *precision,
+            *scale,
+            cast_options,
+        ),
+
+
         Float32 => cast_floating_point_to_decimal::<_, D>(
             array.as_primitive::<Float32Type>(),
             *precision,
