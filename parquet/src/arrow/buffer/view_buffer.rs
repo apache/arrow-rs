@@ -71,7 +71,9 @@ impl ViewBuffer {
     pub fn into_array(self, null_buffer: Option<Buffer>, data_type: &ArrowType) -> ArrayRef {
         let len = self.views.len();
         let views = ScalarBuffer::from(self.views);
-        let nulls = null_buffer.map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, len)));
+        let nulls = null_buffer
+            .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, len)))
+            .filter(|n| n.null_count() != 0);
         match data_type {
             ArrowType::Utf8View => {
                 // Safety: views were created correctly, and checked that the data is utf8 when building the buffer
