@@ -636,12 +636,7 @@ impl RowGroupReaderBuilder {
             cache_projection.union(predicate.projection());
         }
         cache_projection.intersect(&self.projection);
-        self.exclude_nested_columns_from_cache(&cache_projection)
-    }
-
-    /// Exclude leaves belonging to roots that span multiple parquet leaves (i.e. nested columns)
-    fn exclude_nested_columns_from_cache(&self, mask: &ProjectionMask) -> Option<ProjectionMask> {
-        mask.without_nested_types(self.metadata.file_metadata().schema_descr())
+        Some(cache_projection)
     }
 
     /// Get the offset index for the specified row group, if any
