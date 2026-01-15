@@ -14,7 +14,7 @@
 // KIND, either express or implied.  See the License for the
 // specific language governing permissions and limitations
 // under the License.
-use crate::decoder::{VariantBasicType, VariantPrimitiveType};
+use crate::decoder::{OffsetSizeBytes, VariantBasicType, VariantPrimitiveType};
 use crate::{
     ShortString, Variant, VariantDecimal4, VariantDecimal8, VariantDecimal16, VariantList,
     VariantMetadata, VariantObject,
@@ -43,19 +43,13 @@ fn short_string_header(len: usize) -> u8 {
     (len as u8) << 2 | VariantBasicType::ShortString as u8
 }
 
-pub(crate) fn int_size(v: usize) -> u8 {
+pub(crate) fn int_size(v: usize) -> OffsetSizeBytes {
     match v {
-        0..=0xFF => 1,
-        0x100..=0xFFFF => 2,
-        0x10000..=0xFFFFFF => 3,
-        _ => 4,
+        0..=0xFF => OffsetSizeBytes::One,
+        0x100..=0xFFFF => OffsetSizeBytes::Two,
+        0x10000..=0xFFFFFF => OffsetSizeBytes::Three,
+        _ => OffsetSizeBytes::Four,
     }
-}
-
-/// Write little-endian integer to buffer at a specific position
-fn write_offset_at_pos(buf: &mut [u8], start_pos: usize, value: usize, nbytes: u8) {
-    let bytes = value.to_le_bytes();
-    buf[start_pos..start_pos + nbytes as usize].copy_from_slice(&bytes[..nbytes as usize]);
 }
 
 /// Wrapper around a `Vec<u8>` that provides methods for appending
@@ -357,63 +351,6 @@ impl ValueBuilder {
             Variant::List(list) => builder.append_slice(list.value)
         );
         state.finish();
-    }
-
-    /// Writes out the header byte for a variant object or list, from the starting position
-    /// of the builder, will return the position after this write
-    pub(crate) fn append_header_start_from_buf_pos(
-        &mut self,
-        start_pos: usize, // the start position where the header will be inserted
-        header_byte: u8,
-        is_large: bool,
-        num_fields: usize,
-    ) -> usize {
-        let buffer = self.inner_mut();
-
-        // Write header at the original start position
-        let mut header_pos = start_pos;
-
-        // Write header byte
-        buffer[header_pos] = header_byte;
-        header_pos += 1;
-
-        // Write number of fields
-        if is_large {
-            buffer[header_pos..header_pos + 4].copy_from_slice(&(num_fields as u32).to_le_bytes());
-            header_pos += 4;
-        } else {
-            buffer[header_pos] = num_fields as u8;
-            header_pos += 1;
-        }
-
-        header_pos
-    }
-
-    /// Writes out the offsets for an array of offsets, including the final offset (data size).
-    /// from the starting position of the buffer, will return the position after this write
-    pub(crate) fn append_offset_array_start_from_buf_pos(
-        &mut self,
-        start_pos: usize,
-        offsets: impl IntoIterator<Item = usize>,
-        data_size: Option<usize>,
-        nbytes: u8,
-    ) -> usize {
-        let buf = self.inner_mut();
-
-        let mut current_pos = start_pos;
-        for relative_offset in offsets {
-            write_offset_at_pos(buf, current_pos, relative_offset, nbytes);
-            current_pos += nbytes as usize;
-        }
-
-        // Write data_size
-        if let Some(data_size) = data_size {
-            // Write data_size at the end of the offsets
-            write_offset_at_pos(buf, current_pos, data_size, nbytes);
-            current_pos += nbytes as usize;
-        }
-
-        current_pos
     }
 }
 
