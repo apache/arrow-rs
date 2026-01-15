@@ -206,7 +206,7 @@ impl NullBufferBuilder {
     /// # use arrow_buffer::NullBufferBuilder;
     /// let mut builder = NullBufferBuilder::new(8);
     /// let validities = [true, false, true, true];
-    /// builder.extend(validities.iter().copied());
+    /// unsafe { builder.extend_trusted_len(validities.iter().copied()); }
     /// assert_eq!(builder.len(), 4);
     /// ```
     pub unsafe fn extend_trusted_len<I: Iterator<Item = bool>>(&mut self, iter: I) {
