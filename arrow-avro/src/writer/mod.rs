@@ -168,7 +168,7 @@ pub mod format;
 /// - a single backing byte buffer (`bytes::Bytes`)
 /// - a `Vec<u64>` of row boundary offsets (length = `rows + 1`)
 ///
-/// This lets callers obtain per-row payloads as zero-copy `Bytes` slices.
+/// This lets callers get per-row payloads as zero-copy `Bytes` slices.
 ///
 /// For compatibility with APIs that require owned `Vec<u8>`, use [`EncodedRows::to_vecs`].
 #[derive(Debug, Clone)]
@@ -218,22 +218,89 @@ impl EncodedRows {
     ///
     /// Returns an error if the row offsets are invalid (e.g. exceed `usize::MAX`).
     ///
-    /// # Panics
+    /// # Examples
     ///
-    /// Panics if `i >= self.len()`.
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// use arrow_avro::writer::WriterBuilder;
+    /// use arrow_avro::writer::format::AvroSoeFormat;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
+    /// let batch = RecordBatch::try_new(
+    ///     Arc::new(schema.clone()),
+    ///     vec![Arc::new(Int32Array::from(vec![1, 2])) as ArrayRef],
+    /// )?;
+    ///
+    /// let mut encoder = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+    /// encoder.encode(&batch)?;
+    /// let rows = encoder.flush();
+    ///
+    /// // Access the first row (index 0)
+    /// let row0 = rows.row(0)?;
+    /// assert!(!row0.is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn row(&self, i: usize) -> Result<Bytes, ArrowError> {
-        let start_u64 = self.offsets[i];
-        let end_u64 = self.offsets[i + 1];
-        let start = usize::try_from(start_u64).map_err(|_| {
-            ArrowError::ParseError("row start offset does not fit in usize".to_string())
+        if i >= self.len() {
+            return Err(ArrowError::AvroError(format!(
+                "Row index {i} out of bounds for len {}",
+                self.len()
+            )));
+        }
+        // SAFETY:
+        // self.len() is defined as self.offsets.len().saturating_sub(1).
+        // The check `i >= self.len()` above ensures that `i < self.offsets.len() - 1`.
+        // Therefore, both `i` and `i + 1` are strictly within the bounds of `self.offsets`.
+        let (start_u64, end_u64) = unsafe {
+            (
+                *self.offsets.get_unchecked(i),
+                *self.offsets.get_unchecked(i + 1),
+            )
+        };
+        let start = usize::try_from(start_u64).map_err(|e| {
+            ArrowError::AvroError(format!("row start offset does not fit in usize: {e}"))
         })?;
-        let end = usize::try_from(end_u64).map_err(|_| {
-            ArrowError::ParseError("row end offset does not fit in usize".to_string())
+        let end = usize::try_from(end_u64).map_err(|e| {
+            ArrowError::AvroError(format!("row end offset does not fit in usize: {e}"))
         })?;
         Ok(self.data.slice(start..end))
     }
 
     /// Iterate over rows as zero-copy `Bytes` slices.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// use arrow_avro::writer::WriterBuilder;
+    /// use arrow_avro::writer::format::AvroSoeFormat;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
+    /// let batch = RecordBatch::try_new(
+    ///     Arc::new(schema.clone()),
+    ///     vec![Arc::new(Int32Array::from(vec![10, 20])) as ArrayRef],
+    /// )?;
+    ///
+    /// let mut encoder = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+    /// encoder.encode(&batch)?;
+    /// let rows = encoder.flush();
+    ///
+    /// let mut count = 0;
+    /// for row in rows.rows() {
+    ///     let _bytes = row?;
+    ///     count += 1;
+    /// }
+    /// assert_eq!(count, 2);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn rows(&self) -> impl Iterator<Item = Result<Bytes, ArrowError>> + '_ {
         (0..self.len()).map(|i| self.row(i))
     }
@@ -241,6 +308,33 @@ impl EncodedRows {
     /// Copy all rows into independent `Vec<u8>` buffers.
     ///
     /// This is useful for compatibility with APIs that require owned, mutable byte vectors.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::sync::Arc;
+    /// use arrow_array::{ArrayRef, Int32Array, RecordBatch};
+    /// use arrow_schema::{DataType, Field, Schema};
+    /// use arrow_avro::writer::WriterBuilder;
+    /// use arrow_avro::writer::format::AvroSoeFormat;
+    ///
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let schema = Schema::new(vec![Field::new("x", DataType::Int32, false)]);
+    /// let batch = RecordBatch::try_new(
+    ///     Arc::new(schema.clone()),
+    ///     vec![Arc::new(Int32Array::from(vec![100])) as ArrayRef],
+    /// )?;
+    ///
+    /// let mut encoder = WriterBuilder::new(schema).build_encoder::<AvroSoeFormat>()?;
+    /// encoder.encode(&batch)?;
+    /// let rows = encoder.flush();
+    ///
+    /// let vecs = rows.to_vecs()?;
+    /// assert_eq!(vecs.len(), 1);
+    /// assert!(!vecs[0].is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn to_vecs(&self) -> Result<Vec<Vec<u8>>, ArrowError> {
         let mut out = Vec::with_capacity(self.len());
         for i in 0..self.len() {
@@ -407,7 +501,7 @@ impl Encoder {
     /// Serialize one [`RecordBatch`] into the internal buffer.
     pub fn encode(&mut self, batch: &RecordBatch) -> Result<(), ArrowError> {
         if batch.schema().fields() != self.schema.fields() {
-            return Err(ArrowError::SchemaError(
+            return Err(ArrowError::AvroError(
                 "Schema of RecordBatch differs from Writer schema".to_string(),
             ));
         }
@@ -434,7 +528,9 @@ impl Encoder {
     /// For owned buffers, use [`EncodedRows::to_vecs`].
     pub fn flush(&mut self) -> EncodedRows {
         let data = self.buffer.split().freeze();
-        let offsets = std::mem::replace(&mut self.offsets, vec![0]);
+        let mut offsets = Vec::with_capacity(self.offsets.len());
+        offsets.append(&mut self.offsets);
+        self.offsets.push(0);
         EncodedRows::new(data, offsets)
     }
 

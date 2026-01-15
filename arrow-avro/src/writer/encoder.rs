@@ -48,6 +48,25 @@ use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
 
+macro_rules! for_rows_with_prefix {
+    ($n:expr, $prefix:expr, $out:ident, |$row:ident| $body:block) => {{
+        match $prefix {
+            Some(prefix) => {
+                for $row in 0..$n {
+                    $out.write_all(prefix)
+                        .map_err(|e| ArrowError::IoError(format!("write prefix: {e}"), e))?;
+                    $body
+                }
+            }
+            None => {
+                for $row in 0..$n {
+                    $body
+                }
+            }
+        }
+    }};
+}
+
 /// Encode a single Avro-`long` using ZigZag + variable length, buffered.
 ///
 /// Spec: <https://avro.apache.org/docs/1.11.1/specification/#binary-encoding>
@@ -807,24 +826,12 @@ impl RecordEncoder {
     ) -> Result<(), ArrowError> {
         let mut column_encoders = self.prepare_for_batch(batch)?;
         let n = batch.num_rows();
-        match self.prefix {
-            Some(prefix) => {
-                for row in 0..n {
-                    out.write_all(prefix.as_slice())
-                        .map_err(|e| ArrowError::IoError(format!("write prefix: {e}"), e))?;
-                    for enc in column_encoders.iter_mut() {
-                        enc.encode(out, row)?;
-                    }
-                }
+        let prefix = self.prefix.as_ref().map(|p| p.as_slice());
+        for_rows_with_prefix!(n, prefix, out, |row| {
+            for enc in column_encoders.iter_mut() {
+                enc.encode(out, row)?;
             }
-            None => {
-                for row in 0..n {
-                    for enc in column_encoders.iter_mut() {
-                        enc.encode(out, row)?;
-                    }
-                }
-            }
-        }
+        });
         Ok(())
     }
 
@@ -843,52 +850,92 @@ impl RecordEncoder {
         out: &mut BytesMut,
         offsets: &mut Vec<u64>,
     ) -> Result<(), ArrowError> {
-        // Validate invariants once per call (cheap vs. per-row allocations).
-        if offsets.is_empty() {
-            return Err(ArrowError::InvalidArgumentError(
-                "encode_rows requires offsets to be seeded with a 0 sentinel".to_string(),
-            ));
-        }
+        let last_offset = *offsets.last().ok_or_else(|| {
+            ArrowError::AvroError(
+                "encode_rows requires offsets to be non-empty and seeded with a 0 sentinel"
+                    .to_string(),
+            )
+        })?;
+        // The first offset must be 0. (Safe index [0] because last() exists ensures len >= 1).
         if offsets[0] != 0 {
-            return Err(ArrowError::InvalidArgumentError(
+            return Err(ArrowError::AvroError(
                 "encode_rows requires offsets[0] == 0".to_string(),
             ));
         }
-        let expected_last = out.len() as u64;
-        if *offsets.last().unwrap() != expected_last {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "encode_rows requires offsets.last() == out.len() ({} != {})",
-                offsets.last().unwrap(),
-                expected_last
+        let out_len_u64 = out.len() as u64;
+        if last_offset != out_len_u64 {
+            return Err(ArrowError::AvroError(format!(
+                "encode_rows requires offsets.last() == out.len() ({last_offset} != {out_len_u64})",
             )));
         }
-        let mut column_encoders = self.prepare_for_batch(batch)?;
         let n = batch.num_rows();
+        if n == 0 {
+            return Ok(());
+        }
+        if offsets.len().checked_add(n).is_none() {
+            return Err(ArrowError::AvroError(
+                "encode_rows cannot append offsets: too many rows".to_string(),
+            ));
+        }
+        let mut column_encoders = self.prepare_for_batch(batch)?;
         offsets.reserve(n);
-        out.reserve(n.saturating_mul(row_capacity));
-        let mut w = out.writer();
-        match &self.prefix {
-            Some(prefix) => {
-                let prefix_bytes = prefix.as_slice();
-                for row in 0..n {
-                    w.write_all(prefix_bytes)
-                        .map_err(|e| ArrowError::IoError(format!("write prefix: {e}"), e))?;
-                    for enc in column_encoders.iter_mut() {
-                        enc.encode(&mut w, row)?;
-                    }
-                    offsets.push((*w.get_ref()).len() as u64);
-                }
-            }
-            None => {
-                for row in 0..n {
-                    for enc in column_encoders.iter_mut() {
-                        enc.encode(&mut w, row)?;
-                    }
-                    offsets.push((*w.get_ref()).len() as u64);
+        let prefix_bytes = self.prefix.as_ref().map(|p| p.as_slice());
+        let prefix_len = prefix_bytes.map_or(0usize, |p| p.len());
+        let per_row_hint = match row_capacity {
+            0 => prefix_len,
+            _ => row_capacity.max(prefix_len),
+        };
+        if per_row_hint != 0 {
+            if let Some(additional) = n.checked_mul(per_row_hint) {
+                if out.len().checked_add(additional).is_some() {
+                    out.reserve(additional);
                 }
             }
         }
-        Ok(())
+        let start_out_len = out.len();
+        let start_offsets_len = offsets.len();
+        let res = (|| -> Result<(), ArrowError> {
+            if column_encoders.is_empty() {
+                if let Some(prefix) = prefix_bytes {
+                    let inc = prefix.len() as u64;
+                    let mut cur = out_len_u64;
+                    for _ in 0..n {
+                        out.extend_from_slice(prefix);
+                        cur += inc;
+                        offsets.push(cur);
+                    }
+                } else {
+                    offsets.extend(std::iter::repeat_n(out_len_u64, n));
+                }
+                return Ok(());
+            }
+            let mut w = out.writer();
+            if let [enc0] = column_encoders.as_mut_slice() {
+                for_rows_with_prefix!(n, prefix_bytes, w, |row| {
+                    enc0.encode(&mut w, row)?;
+                    offsets.push(w.get_ref().len() as u64);
+                });
+                return Ok(());
+            }
+            for_rows_with_prefix!(n, prefix_bytes, w, |row| {
+                for enc in column_encoders.iter_mut() {
+                    enc.encode(&mut w, row)?;
+                }
+                offsets.push(w.get_ref().len() as u64);
+            });
+            Ok(())
+        })();
+        if res.is_err() {
+            out.truncate(start_out_len);
+            offsets.truncate(start_offsets_len);
+        } else {
+            debug_assert_eq!(
+                *offsets.last().unwrap(),
+                out.len() as u64,
+                "encode_rows: offsets/out length mismatch after successful encode"
+            );
+        }
+        res
     }
 }
 
