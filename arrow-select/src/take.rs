@@ -214,6 +214,10 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
     values: &dyn Array,
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
+    if indices.is_empty() {
+        let data = ArrayData::new_empty(values.data_type());
+        return Ok(Arc::new(make_array(data)));
+    }
     downcast_primitive_array! {
         values => Ok(Arc::new(take_primitive(values, indices)?)),
         DataType::Boolean => {
@@ -786,11 +790,6 @@ fn take_run<T: RunEndIndexType, I: ArrowPrimitiveType>(
     run_array: &RunArray<T>,
     logical_indices: &PrimitiveArray<I>,
 ) -> Result<RunArray<T>, ArrowError> {
-    if logical_indices.is_empty() {
-        let data = ArrayData::new_empty(run_array.data_type());
-        return Ok(RunArray::from(data));
-    }
-
     // get physical indices for the input logical indices
     let physical_indices = run_array.get_physical_indices(logical_indices.values())?;
 
@@ -2696,6 +2695,6 @@ mod tests {
 
         let logical_indices: PrimitiveArray<Int32Type> = PrimitiveArray::from(Vec::<i32>::new());
 
-        let _ = take_run(&run_array, &logical_indices).expect("take_run with empty indices");
+        let _ = take_impl(&run_array, &logical_indices).expect("take_run with empty indices");
     }
 }
