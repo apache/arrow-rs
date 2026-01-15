@@ -234,8 +234,6 @@ impl<R: RunEndIndexType> From<ArrayData> for RunArray<R> {
             }
         }
 
-        assert_eq!(child_data.len(), 2, "RunArray should have two child arrays");
-
         let [run_end_child, values_child]: [ArrayData; 2] = child_data
             .try_into()
             .expect("RunArray data should have exactly two child arrays");
