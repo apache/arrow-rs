@@ -836,8 +836,10 @@ fn parse_e_notation<T: DecimalType>(
 
 /// Parse the string format decimal value to i128/i256 format and checking the precision and scale.
 /// Expected behavior:
-/// - the result value can't be out of bounds.
-/// - when parsing a decimal with scale 0, any digits pass the decimal point will be discarded
+/// - The result value can't be out of bounds.
+/// - When parsing a decimal with scale 0, all fractional digits will be discarded. The final
+///   fractional digits may be a subset or a superset of the digits after the decimal point when
+///   e-notation is used.
 pub fn parse_decimal<T: DecimalType>(
     s: &str,
     precision: u8,
@@ -849,17 +851,23 @@ pub fn parse_decimal<T: DecimalType>(
     let base = T::Native::usize_as(10);
 
     let bs = s.as_bytes();
+
+    if !bs
+        .last()
+        .is_some_and(|b| b.is_ascii_digit() || (b == &b'.' && s.len() > 1))
+    {
+        // If the last character is not a digit (or a decimal point prefixed with some digits), then
+        // it's not a valid decimal.
+        return Err(ArrowError::ParseError(format!(
+            "can't parse the string value {s} to decimal"
+        )));
+    }
+
     let (signed, negative) = match bs.first() {
         Some(b'-') => (true, true),
         Some(b'+') => (true, false),
         _ => (false, false),
     };
-
-    if bs.is_empty() || signed && bs.len() == 1 {
-        return Err(ArrowError::ParseError(format!(
-            "can't parse the string value {s} to decimal"
-        )));
-    }
 
     // Iterate over the raw input bytes, skipping the sign if any
     let mut bs = bs.iter().enumerate().skip(signed as usize);
@@ -917,13 +925,6 @@ pub fn parse_decimal<T: DecimalType>(
 
                 if is_e_notation {
                     break;
-                }
-
-                // Fail on "."
-                if digits == 0 && scale != 0 {
-                    return Err(ArrowError::ParseError(format!(
-                        "can't parse the string value {s} to decimal"
-                    )));
                 }
             }
             b'e' | b'E' => {
@@ -2600,6 +2601,9 @@ mod tests {
             "1.1e.12",
             "1.23e+3.",
             "1.23e+3.1",
+            "1e",
+            "1e+",
+            "1e-",
         ];
         for s in can_not_parse_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, 20, 3);
@@ -2742,6 +2746,7 @@ mod tests {
         }
 
         let zero_scale_tests = [
+            (".123", 0, 3),
             ("0.123", 0, 3),
             ("1.0", 1, 3),
             ("1.2", 1, 3),
@@ -2768,6 +2773,15 @@ mod tests {
         for (s, i, precision) in zero_scale_tests {
             let result_128 = parse_decimal::<Decimal128Type>(s, precision, 0).unwrap();
             assert_eq!(i, result_128);
+        }
+
+        let can_not_parse_zero_scale = [".", "blag", "", "+", "-", "e"];
+        for s in can_not_parse_zero_scale {
+            let result_128 = parse_decimal::<Decimal128Type>(s, 5, 0);
+            assert_eq!(
+                format!("Parser error: can't parse the string value {s} to decimal"),
+                result_128.unwrap_err().to_string(),
+            );
         }
     }
 
