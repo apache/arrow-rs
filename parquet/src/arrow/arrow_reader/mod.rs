@@ -5553,14 +5553,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn test_row_filter_full_page_skip_is_handled() {
+    fn test_page_aware_mask_handles_page_skip() {
+        // Test that when using Auto policy with page-aware bitmask, the reader
+        // correctly handles pages that are skipped entirely due to row filtering.
+        //
+        // This creates a file with 12 rows across 6 pages (2 rows per page).
+        // After filtering, only the first and last rows remain, skipping 4 pages
+        // in the middle. The page-aware mask should handle this correctly by
+        // respecting page boundaries during chunk iteration.
         let first_value: i64 = 1111;
         let last_value: i64 = 9999;
         let num_rows: usize = 12;
 
-        // build data with row selection average length 4
-        // The result would be (1111 XXXX) ... (4 page in the middle)... (XXXX 9999)
-        // The Row Selection would be [1111, (skip 10), 9999]
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", arrow_schema::DataType::Int64, false),
             Field::new("value", arrow_schema::DataType::Int64, false),
@@ -5606,8 +5610,8 @@ pub(crate) mod tests {
         let options = ArrowReaderOptions::new().with_page_index(true);
         let predicate = make_predicate(filter_mask.clone());
 
-        // The batch size is set to 12 to read all rows in one go after filtering
-        // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
+        // Using Auto policy with page index enabled - page-aware mask should handle
+        // the skipped pages correctly without panicking.
         let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
             .unwrap()
             .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
@@ -5616,8 +5620,6 @@ pub(crate) mod tests {
             .build()
             .unwrap();
 
-        // Predicate pruning used to panic once mask-backed plans removed whole pages.
-        // Collecting into batches validates the plan now downgrades to selectors instead.
         let schema = reader.schema().clone();
         let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
         let result = concat_batches(&schema, &batches).unwrap();
@@ -5630,6 +5632,225 @@ pub(crate) mod tests {
             result.column(1).as_ref(),
             &Int64Array::from(vec![first_value, last_value])
         );
+    }
+
+    /// Test that bitmask-based row selection correctly handles page boundaries.
+    /// This test creates a parquet file with multiple small pages and verifies that
+    /// when using Mask policy, pages that are skipped entirely are handled correctly.
+    #[test]
+    fn test_bitmask_page_aware_selection() {
+        let first_value: i64 = 1111;
+        let last_value: i64 = 9999;
+        let num_rows: usize = 20;
+
+        // Create a file with 20 rows, ~2 rows per page = 10 pages
+        // Selection will be: first row, skip middle rows, last row
+        // This forces the reader to handle skipped pages correctly
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", arrow_schema::DataType::Int64, false),
+            Field::new("value", arrow_schema::DataType::Int64, false),
+        ]));
+
+        let mut int_values: Vec<i64> = (0..num_rows as i64).collect();
+        int_values[0] = first_value;
+        int_values[num_rows - 1] = last_value;
+        let keys = Int64Array::from(int_values.clone());
+        let values = Int64Array::from(int_values.clone());
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(keys) as ArrayRef, Arc::new(values) as ArrayRef],
+        )
+        .unwrap();
+
+        // Configure small pages to create multiple page boundaries
+        let props = WriterProperties::builder()
+            .set_write_batch_size(2)
+            .set_data_page_row_count_limit(2)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema, Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buffer);
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let builder =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
+        let schema = builder.parquet_schema().clone();
+        let filter_mask = ProjectionMask::leaves(&schema, [0]);
+
+        let make_predicate = |mask: ProjectionMask| {
+            ArrowPredicateFn::new(mask, move |batch: RecordBatch| {
+                let column = batch.column(0);
+                let match_first = eq(column, &Int64Array::new_scalar(first_value))?;
+                let match_second = eq(column, &Int64Array::new_scalar(last_value))?;
+                or(&match_first, &match_second)
+            })
+        };
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let predicate = make_predicate(filter_mask.clone());
+
+        // Use Mask policy explicitly to test page-aware behavior
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
+            .unwrap()
+            .with_row_filter(RowFilter::new(vec![Box::new(predicate)]))
+            .with_batch_size(num_rows)
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build()
+            .unwrap();
+
+        let schema = reader.schema().clone();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let result = concat_batches(&schema, &batches).unwrap();
+
+        // Should have exactly 2 rows: first and last
+        assert_eq!(result.num_rows(), 2);
+
+        // Verify the values
+        let key_col = result.column(0).as_primitive::<types::Int64Type>();
+        assert_eq!(key_col.value(0), first_value);
+        assert_eq!(key_col.value(1), last_value);
+    }
+
+    /// Test that page-aware bitmask handles edge cases at exact page boundaries.
+    /// When mask_start aligns exactly with a page boundary, verify correct behavior.
+    #[test]
+    fn test_bitmask_at_page_boundary() {
+        let num_rows: usize = 10;
+        let rows_per_page: usize = 2;
+
+        // Create a file with 10 rows, 2 rows per page = 5 pages
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+
+        let ids: Vec<i64> = (0..num_rows as i64).collect();
+        let id_array = Int64Array::from(ids);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(id_array) as ArrayRef])
+                .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(rows_per_page)
+            .set_data_page_row_count_limit(rows_per_page)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buffer);
+
+        // Create a selection that starts exactly at page boundaries
+        // Select rows 0-1 (page 0), skip 2-5 (pages 1-2), select 6-9 (pages 3-4)
+        let selection = RowSelection::from(vec![
+            RowSelector::select(2), // Page 0: rows 0-1
+            RowSelector::skip(4),   // Pages 1-2: rows 2-5
+            RowSelector::select(4), // Pages 3-4: rows 6-9
+        ]);
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
+            .unwrap()
+            .with_row_selection(selection.clone())
+            .with_batch_size(num_rows)
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build()
+            .unwrap();
+
+        let schema = reader.schema().clone();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        // Should have 2 + 4 = 6 rows
+        assert_eq!(total_rows, 6);
+
+        // Verify values from the concatenated result
+        let result = concat_batches(&schema, &batches).unwrap();
+        let id_col = result.column(0).as_primitive::<types::Int64Type>();
+
+        // Expected values: 0, 1, 6, 7, 8, 9
+        assert_eq!(id_col.value(0), 0);
+        assert_eq!(id_col.value(1), 1);
+        assert_eq!(id_col.value(2), 6);
+        assert_eq!(id_col.value(3), 7);
+        assert_eq!(id_col.value(4), 8);
+        assert_eq!(id_col.value(5), 9);
+    }
+
+    /// Test that page-aware bitmask handles mid-page selections correctly.
+    /// The selection starts in the middle of a page and ends in the middle of another.
+    #[test]
+    fn test_bitmask_mid_page_selection() {
+        let num_rows: usize = 12;
+        let rows_per_page: usize = 3;
+
+        // Create a file with 12 rows, 3 rows per page = 4 pages
+        // Page 0: rows 0-2
+        // Page 1: rows 3-5
+        // Page 2: rows 6-8
+        // Page 3: rows 9-11
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "id",
+            arrow_schema::DataType::Int64,
+            false,
+        )]));
+
+        let ids: Vec<i64> = (0..num_rows as i64).collect();
+        let id_array = Int64Array::from(ids);
+        let batch =
+            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(id_array) as ArrayRef])
+                .unwrap();
+
+        let props = WriterProperties::builder()
+            .set_write_batch_size(rows_per_page)
+            .set_data_page_row_count_limit(rows_per_page)
+            .build();
+
+        let mut buffer = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(props)).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let data = Bytes::from(buffer);
+
+        // Select mid-page: skip first, select row 1-2, skip row 3-7 (cross pages), select row 8-10
+        let selection = RowSelection::from(vec![
+            RowSelector::skip(1),   // Skip row 0
+            RowSelector::select(2), // Select rows 1-2 (partial page 0)
+            RowSelector::skip(5),   // Skip rows 3-7 (pages 1, part of 2)
+            RowSelector::select(3), // Select rows 8-10 (part of pages 2-3)
+            RowSelector::skip(1),   // Skip row 11
+        ]);
+
+        let options = ArrowReaderOptions::new().with_page_index(true);
+        let reader = ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options)
+            .unwrap()
+            .with_row_selection(selection.clone())
+            .with_batch_size(num_rows)
+            .with_row_selection_policy(RowSelectionPolicy::Mask)
+            .build()
+            .unwrap();
+
+        let schema = reader.schema().clone();
+        let batches = reader.collect::<Result<Vec<_>, _>>().unwrap();
+        let total_rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+
+        // Should have 2 + 3 = 5 rows
+        assert_eq!(total_rows, 5);
+
+        let result = concat_batches(&schema, &batches).unwrap();
+        let id_col = result.column(0).as_primitive::<types::Int64Type>();
+
+        // Expected values: 1, 2, 8, 9, 10
+        assert_eq!(id_col.value(0), 1);
+        assert_eq!(id_col.value(1), 2);
+        assert_eq!(id_col.value(2), 8);
+        assert_eq!(id_col.value(3), 9);
+        assert_eq!(id_col.value(4), 10);
     }
 
     #[test]
