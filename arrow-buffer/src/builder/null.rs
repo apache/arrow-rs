@@ -17,18 +17,21 @@
 
 use crate::{BooleanBufferBuilder, MutableBuffer, NullBuffer};
 
-/// Builder for creating [`NullBuffer`]
+/// Builder for creating [`NullBuffer`]s (bitmaps indicating validity/nulls).
+///
+/// # See also
+/// * [`BooleanBufferBuilder`] for a lower-level bitmap builder.
+/// * [`Self::allocated_size`] for the current memory allocated by the builder.
 ///
 /// # Performance
 ///
-/// This builder only materializes the buffer when we append `false`.
-/// If you only append `true`s to the builder, what you get will be
-/// `None` when calling [`finish`](#method.finish).
+/// This builder only materializes the buffer when null values (`false`) are
+/// appended. If you only append non-null, (`true`) to the builder, no buffer is
+/// allocated and [`build`](#method.build) or [`finish`](#method.finish) return
+/// `None`.
 ///
 /// This optimization is **very** important for the performance as it avoids
 /// allocating memory for the null buffer when there are no nulls.
-///
-/// See [`Self::allocated_size`] to get the current memory allocated by the builder.
 ///
 /// # Example
 /// ```
@@ -195,7 +198,9 @@ impl NullBufferBuilder {
 
     /// Extends this builder with validity values.
     ///
-    ///
+    /// # Safety
+    /// The caller must ensure that the iterator reports the correct length.
+    /// 
     /// # Example
     /// ```
     /// # use arrow_buffer::NullBufferBuilder;
@@ -204,18 +209,34 @@ impl NullBufferBuilder {
     /// builder.extend(validities.iter().copied());
     /// assert_eq!(builder.len(), 4);
     /// ```
-    pub fn extend<I: Iterator<Item = bool>>(&mut self, iter: I) {
+    pub unsafe fn extend_trusted_len<I: Iterator<Item = bool>>(&mut self, iter: I) {
         // Materialize since we're about to append bits
         self.materialize_if_needed();
 
-        self.bitmap_builder.as_mut().unwrap().extend(iter)
+        unsafe {
+            self.bitmap_builder
+                .as_mut()
+                .unwrap()
+                .extend_trusted_len(iter)
+        };
     }
 
     /// Builds the null buffer and resets the builder.
     /// Returns `None` if the builder only contains `true`s.
+    /// Builds the [`NullBuffer`] and resets the builder.
+    ///
+    /// Returns `None` if the builder only contains `true`s. Use [`Self::build`]
+    /// when you don't need to reuse this builder.
     pub fn finish(&mut self) -> Option<NullBuffer> {
         self.len = 0;
-        Some(NullBuffer::new(self.bitmap_builder.take()?.finish()))
+        Some(NullBuffer::new(self.bitmap_builder.take()?.build()))
+    }
+
+    /// Builds the [`NullBuffer`] without resetting the builder.
+    ///
+    /// This consumes the builder. Use [`Self::finish`] to reuse it.
+    pub fn build(self) -> Option<NullBuffer> {
+        self.bitmap_builder.map(NullBuffer::from)
     }
 
     /// Builds the [NullBuffer] without resetting the builder.
@@ -256,9 +277,7 @@ impl NullBufferBuilder {
             .map(|b| b.capacity() / 8)
             .unwrap_or(0)
     }
-}
 
-impl NullBufferBuilder {
     /// Return the number of bits in the buffer.
     pub fn len(&self) -> usize {
         self.bitmap_builder.as_ref().map_or(self.len, |b| b.len())
@@ -425,14 +444,18 @@ mod tests {
     fn test_extend() {
         // Test small extend (less than 64 bits)
         let mut builder = NullBufferBuilder::new(0);
-        builder.extend([true, false, true, true].iter().copied());
+        unsafe {
+            builder.extend_trusted_len([true, false, true, true].iter().copied());
+        }
         // bits: 0=true, 1=false, 2=true, 3=true -> 0b1101 = 13
         assert_eq!(builder.as_slice().unwrap(), &[0b1101_u8]);
 
         // Test extend with exactly 64 bits
         let mut builder = NullBufferBuilder::new(0);
         let pattern: Vec<bool> = (0..64).map(|i| i % 2 == 0).collect();
-        builder.extend(pattern.iter().copied());
+        unsafe {
+            builder.extend_trusted_len(pattern.iter().copied());
+        }
         // Even positions are true: 0, 2, 4, ... -> bits 0, 2, 4, ...
         // In little-endian: 0b01010101 repeated
         assert_eq!(
@@ -443,7 +466,7 @@ mod tests {
         // Test extend with more than 64 bits (tests chunking)
         let mut builder = NullBufferBuilder::new(0);
         let pattern: Vec<bool> = (0..100).map(|i| i % 3 == 0).collect();
-        builder.extend(pattern.iter().copied());
+        unsafe { builder.extend_trusted_len(pattern.iter().copied()) };
         assert_eq!(builder.len(), 100);
         // Verify a few specific bits
         let buf = builder.finish().unwrap();
@@ -456,7 +479,7 @@ mod tests {
         // Test extend with non-aligned start (tests bit-by-bit path)
         let mut builder = NullBufferBuilder::new(0);
         builder.append_non_null(); // Start at bit 1 (non-aligned)
-        builder.extend([false, true, false, true].iter().copied());
+        unsafe { builder.extend_trusted_len([false, true, false, true].iter().copied()) };
         assert_eq!(builder.as_slice().unwrap(), &[0b10101_u8]);
     }
 }

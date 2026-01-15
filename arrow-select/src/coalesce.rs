@@ -25,7 +25,6 @@ use crate::filter::{
     is_optimize_beneficial_record_batch,
 };
 
-use crate::filter::filter_record_batch;
 use crate::take::take_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
 use arrow_array::{Array, ArrayRef, BooleanArray, RecordBatch, downcast_primitive};
