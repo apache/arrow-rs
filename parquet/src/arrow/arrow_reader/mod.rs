@@ -1490,7 +1490,7 @@ pub(crate) mod tests {
         FloatType, Int32Type, Int64Type, Int96, Int96Type,
     };
     use crate::errors::Result;
-    use crate::file::metadata::{ParquetMetaData, ParquetStatisticsPolicy};
+    use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetStatisticsPolicy};
     use crate::file::properties::{EnabledStatistics, WriterProperties, WriterVersion};
     use crate::file::writer::SerializedFileWriter;
     use crate::schema::parser::parse_message_type;
@@ -3244,8 +3244,9 @@ pub(crate) mod tests {
 
         file.rewind().unwrap();
 
-        let options = ArrowReaderOptions::new()
-            .with_page_index(opts.enabled_statistics == EnabledStatistics::Page);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(
+            opts.enabled_statistics == EnabledStatistics::Page,
+        ));
 
         let mut builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, options).unwrap();
@@ -4653,7 +4654,8 @@ pub(crate) mod tests {
             batch_size: usize,
             selections: RowSelection,
         ) -> ParquetRecordBatchReader {
-            let options = ArrowReaderOptions::new().with_page_index(true);
+            let options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
             let file = test_file.try_clone().unwrap();
             ParquetRecordBatchReaderBuilder::try_new_with_options(file, options)
                 .unwrap()
@@ -4692,7 +4694,7 @@ pub(crate) mod tests {
             let test_file = File::open(path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
                 test_file,
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
             assert!(!builder.metadata().offset_index().unwrap()[0].is_empty());
@@ -4707,7 +4709,7 @@ pub(crate) mod tests {
             let test_file = File::open(path).unwrap();
             let builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
                 test_file,
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .unwrap();
             // Although `Vec<Vec<PageLoacation>>` of each row group is empty,
@@ -5479,7 +5481,7 @@ pub(crate) mod tests {
         writer.close().unwrap();
         let data = Bytes::from(buffer);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder =
             ParquetRecordBatchReaderBuilder::try_new_with_options(data.clone(), options).unwrap();
         let schema = builder.parquet_schema().clone();
@@ -5494,7 +5496,7 @@ pub(crate) mod tests {
             })
         };
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let predicate = make_predicate(filter_mask.clone());
 
         // The batch size is set to 12 to read all rows in one go after filtering
