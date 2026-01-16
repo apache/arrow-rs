@@ -2765,7 +2765,6 @@ mod tests {
     use half::f16;
     use std::sync::Arc;
 
-
     #[test]
     fn test_decimal128_to_float16_cast() {
         use arrow_array::{Decimal128Array, Float16Array};
@@ -2775,19 +2774,11 @@ mod tests {
             .unwrap();
 
         let result = cast(&decimal, &DataType::Float16).unwrap();
-        let float_arr = result
-            .as_any()
-            .downcast_ref::<Float16Array>()
-            .unwrap();
+        let float_arr = result.as_any().downcast_ref::<Float16Array>().unwrap();
 
         assert_eq!(float_arr.len(), 2);
         assert!(float_arr.is_null(1));
     }
-
-
-
-
-
 
     #[derive(Clone)]
     struct DecimalCastTestConfig {
