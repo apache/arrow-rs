@@ -252,10 +252,6 @@ impl BatchCoalescer {
             .fields()
             .iter()
             .any(|field| !field.data_type().is_primitive())
-            || self
-                .biggest_coalesce_batch_size
-                .map(|biggest_size| filter.true_count() > biggest_size)
-                .unwrap_or(false)
         {
             let batch = filter_record_batch(&batch, filter)?;
 
