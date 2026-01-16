@@ -2071,18 +2071,18 @@ mod tests {
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(Bytes::from(file), options).unwrap();
 
-        let offset_index = reader.metadata().offset_index().unwrap();
+        let offset_index = reader.metadata().offset_index().expect("offset index should be present");
         assert_eq!(offset_index.len(), 1); // 1 row group
         assert_eq!(offset_index[0].len(), 2); // 2 columns
 
-        let column_index = reader.metadata().column_index().unwrap();
+        let column_index = reader.metadata().column_index().expect("column index should be present");
         assert_eq!(column_index.len(), 1); // 1 row group
         assert_eq!(column_index[0].len(), 2); // 2 column
 
-        let a_idx = &column_index[0][0];
+        let a_idx = column_index[0][0].as_ref().unwrap();
         assert!(matches!(a_idx, ColumnIndexMetaData::INT32(_)), "{a_idx:?}");
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, None), "{b_idx:?}");
     }
 
     #[test]
@@ -2159,10 +2159,10 @@ mod tests {
 
         // check histogram in column index as well
         assert!(reader.metadata().column_index().is_some());
-        let column_index = reader.metadata().column_index().unwrap();
+        let column_index = reader.metadata().column_index().expect("column index should be present");
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let ColumnIndexMetaData::BYTE_ARRAY(index) = &column_index[0][0] {
+        let col_idx = if let ColumnIndexMetaData::BYTE_ARRAY(index) = column_index[0][0].as_ref().expect("column index should be present for column 0") {
             assert_eq!(index.num_pages(), 1);
             index
         } else {
@@ -2174,11 +2174,13 @@ mod tests {
         check_def_hist(col_idx.definition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
-        let offset_index = reader.metadata().offset_index().unwrap();
+        let offset_index = reader.metadata().offset_index().expect("offset index should be present");
         assert_eq!(offset_index.len(), 1);
         assert_eq!(offset_index[0].len(), 1);
-        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_some());
+        assert!(offset_index[0][0].as_ref().expect("offset index should be present for column 0").unencoded_byte_array_data_bytes.is_some());
         let page_sizes = offset_index[0][0]
+            .as_ref()
+            .expect("offset index should be present for column 0")
             .unencoded_byte_array_data_bytes
             .as_ref()
             .unwrap();
@@ -2310,10 +2312,10 @@ mod tests {
 
         // check histogram in column index as well
         assert!(reader.metadata().column_index().is_some());
-        let column_index = reader.metadata().column_index().unwrap();
+        let column_index = reader.metadata().column_index().expect("column index should be present");
         assert_eq!(column_index.len(), 1);
         assert_eq!(column_index[0].len(), 1);
-        let col_idx = if let ColumnIndexMetaData::INT32(index) = &column_index[0][0] {
+        let col_idx = if let ColumnIndexMetaData::INT32(index) = column_index[0][0].as_ref().expect("column index should be present for column 0") {
             assert_eq!(index.num_pages(), 1);
             index
         } else {
@@ -2324,10 +2326,10 @@ mod tests {
         check_rep_hist(col_idx.repetition_level_histogram(0).unwrap());
 
         assert!(reader.metadata().offset_index().is_some());
-        let offset_index = reader.metadata().offset_index().unwrap();
+        let offset_index = reader.metadata().offset_index().expect("offset index should be present");
         assert_eq!(offset_index.len(), 1);
         assert_eq!(offset_index[0].len(), 1);
-        assert!(offset_index[0][0].unencoded_byte_array_data_bytes.is_none());
+        assert!(offset_index[0][0].as_ref().expect("offset index should be present for column 0").unencoded_byte_array_data_bytes.is_none());
     }
 
     #[test]
@@ -2497,8 +2499,8 @@ mod tests {
             let rg_offset_indexes = offset_indexes.and_then(|oi| oi.get(rg_idx));
             let mut rg_out = writer.next_row_group().unwrap();
             for (col_idx, column) in rg.columns().iter().enumerate() {
-                let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).cloned();
-                let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).cloned();
+                let column_index = rg_column_indexes.and_then(|row| row.get(col_idx)).and_then(|opt| opt.clone());
+                let offset_index = rg_offset_indexes.and_then(|row| row.get(col_idx)).and_then(|opt| opt.clone());
                 let result = ColumnCloseResult {
                     bytes_written: column.compressed_size() as _,
                     rows_written: rg.num_rows() as _,
