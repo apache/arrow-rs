@@ -484,6 +484,7 @@ pub fn make_comparator(
              }
         },
         (Map(_, _), Map(_, _)) => compare_map(left, right, opts),
+        (Null, Null) => Ok(Box::new(|_, _| Ordering::Equal)),
         (Union(_, _), Union(_, _)) => compare_union(left, right, opts),
         (lhs, rhs) => Err(ArrowError::InvalidArgumentError(match lhs == rhs {
             true => format!("The data type type {lhs:?} has no natural order"),
@@ -1500,5 +1501,16 @@ mod tests {
             &out,
             "Cannot compare UnionArrays with different modes: left=Dense, right=Sparse"
         );
+    }
+
+    #[test]
+    fn test_null_array_cmp() {
+        let a = NullArray::new(3);
+        let b = NullArray::new(3);
+        let cmp = make_comparator(&a, &b, SortOptions::default()).unwrap();
+
+        assert_eq!(cmp(0, 0), Ordering::Equal);
+        assert_eq!(cmp(0, 1), Ordering::Equal);
+        assert_eq!(cmp(2, 0), Ordering::Equal);
     }
 }
