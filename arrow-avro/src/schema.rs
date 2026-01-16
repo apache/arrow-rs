@@ -395,6 +395,66 @@ impl AvroSchema {
         Self::generate_fingerprint(&self.schema()?, hash_type)
     }
 
+    pub(crate) fn project(&self, projection: &[usize]) -> Result<Self, ArrowError> {
+        let mut value: Value = serde_json::from_str(&self.json_string)
+            .map_err(|e| ArrowError::AvroError(format!("Invalid Avro schema JSON: {e}")))?;
+        let obj = value.as_object_mut().ok_or_else(|| {
+            ArrowError::AvroError(
+                "Projected schema must be a JSON object Avro record schema".to_string(),
+            )
+        })?;
+        match obj.get("type").and_then(|v| v.as_str()) {
+            Some("record") => {}
+            Some(other) => {
+                return Err(ArrowError::AvroError(format!(
+                    "Projected schema must be an Avro record, found type '{other}'"
+                )));
+            }
+            None => {
+                return Err(ArrowError::AvroError(
+                    "Projected schema missing required 'type' field".to_string(),
+                ));
+            }
+        }
+        let fields_val = obj.get_mut("fields").ok_or_else(|| {
+            ArrowError::AvroError("Avro record schema missing required 'fields'".to_string())
+        })?;
+        let projected_fields = {
+            let mut original_fields = match fields_val {
+                Value::Array(arr) => std::mem::take(arr),
+                _ => {
+                    return Err(ArrowError::AvroError(
+                        "Avro record schema 'fields' must be an array".to_string(),
+                    ));
+                }
+            };
+            let len = original_fields.len();
+            let mut seen: HashSet<usize> = HashSet::with_capacity(projection.len());
+            let mut out: Vec<Value> = Vec::with_capacity(projection.len());
+            for &i in projection {
+                if i >= len {
+                    return Err(ArrowError::AvroError(format!(
+                        "Projection index {i} out of bounds for record with {len} fields"
+                    )));
+                }
+                if !seen.insert(i) {
+                    return Err(ArrowError::AvroError(format!(
+                        "Duplicate projection index {i}"
+                    )));
+                }
+                out.push(std::mem::replace(&mut original_fields[i], Value::Null));
+            }
+            out
+        };
+        *fields_val = Value::Array(projected_fields);
+        let json_string = serde_json::to_string(&value).map_err(|e| {
+            ArrowError::AvroError(format!(
+                "Failed to serialize projected Avro schema JSON: {e}"
+            ))
+        })?;
+        Ok(Self::new(json_string))
+    }
+
     pub(crate) fn generate_fingerprint(
         schema: &Schema,
         hash_type: FingerprintAlgorithm,
@@ -3136,5 +3196,547 @@ mod tests {
         assert_eq!(union_arr2[0], Value::String("null".into()));
         assert_eq!(union_arr2[1], Value::String("int".into()));
         assert_eq!(union_arr2[2], Value::String("string".into()));
+    }
+
+    #[test]
+    fn test_project_empty_projection() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert!(
+            fields.is_empty(),
+            "Empty projection should yield empty fields"
+        );
+    }
+
+    #[test]
+    fn test_project_single_field() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn test_project_multiple_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"},
+                {"name": "d", "type": "boolean"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 2, 3]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("a"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("c"));
+        assert_eq!(fields[2].get("name").and_then(|n| n.as_str()), Some("d"));
+    }
+
+    #[test]
+    fn test_project_all_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 2);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("a"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn test_project_reorder_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Project in reverse order
+        let projected = schema.project(&[2, 0, 1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("c"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("a"));
+        assert_eq!(fields[2].get("name").and_then(|n| n.as_str()), Some("b"));
+    }
+
+    #[test]
+    fn test_project_preserves_record_metadata() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "MyRecord",
+            "namespace": "com.example",
+            "doc": "A test record",
+            "aliases": ["OldRecord"],
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        assert_eq!(v.get("name").and_then(|n| n.as_str()), Some("MyRecord"));
+        assert_eq!(
+            v.get("namespace").and_then(|n| n.as_str()),
+            Some("com.example")
+        );
+        assert_eq!(v.get("doc").and_then(|n| n.as_str()), Some("A test record"));
+        assert!(v.get("aliases").is_some());
+    }
+
+    #[test]
+    fn test_project_preserves_field_metadata() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int", "doc": "Field A", "default": 0},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(
+            fields[0].get("doc").and_then(|d| d.as_str()),
+            Some("Field A")
+        );
+        assert_eq!(fields[0].get("default").and_then(|d| d.as_i64()), Some(0));
+    }
+
+    #[test]
+    fn test_project_with_nested_record() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Outer",
+            "fields": [
+                {"name": "id", "type": "int"},
+                {"name": "inner", "type": {
+                    "type": "record",
+                    "name": "Inner",
+                    "fields": [
+                        {"name": "x", "type": "int"},
+                        {"name": "y", "type": "string"}
+                    ]
+                }},
+                {"name": "value", "type": "double"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[1]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(
+            fields[0].get("name").and_then(|n| n.as_str()),
+            Some("inner")
+        );
+        // Verify nested record structure is preserved
+        let inner_type = fields[0].get("type").unwrap();
+        assert_eq!(
+            inner_type.get("type").and_then(|t| t.as_str()),
+            Some("record")
+        );
+        assert_eq!(
+            inner_type.get("name").and_then(|n| n.as_str()),
+            Some("Inner")
+        );
+    }
+
+    #[test]
+    fn test_project_with_complex_field_types() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "arr", "type": {"type": "array", "items": "int"}},
+                {"name": "map", "type": {"type": "map", "values": "string"}},
+                {"name": "union", "type": ["null", "int"]}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 2]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 2);
+        // Verify array type is preserved
+        let arr_type = fields[0].get("type").unwrap();
+        assert_eq!(arr_type.get("type").and_then(|t| t.as_str()), Some("array"));
+        // Verify union type is preserved
+        let union_type = fields[1].get("type").unwrap();
+        assert!(union_type.is_array());
+    }
+
+    #[test]
+    fn test_project_error_invalid_json() {
+        let schema = AvroSchema::new("not valid json".to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Invalid Avro schema JSON"),
+            "Expected parse error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_not_object() {
+        // Primitive type schema (not a JSON object)
+        let schema = AvroSchema::new(r#""string""#.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be a JSON object"),
+            "Expected object error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_array_schema() {
+        // Array (list) is a valid JSON but not a record
+        let schema = AvroSchema::new(r#"["null", "int"]"#.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be a JSON object"),
+            "Expected object error for array schema, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_not_record() {
+        let schema_json = r#"{
+            "type": "enum",
+            "name": "Color",
+            "symbols": ["RED", "GREEN", "BLUE"]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'enum'"),
+            "Expected type mismatch error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_array() {
+        let schema_json = r#"{
+            "type": "array",
+            "items": "int"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'array'"),
+            "Expected type mismatch error for array type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_fixed() {
+        let schema_json = r#"{
+            "type": "fixed",
+            "name": "MD5",
+            "size": 16
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'fixed'"),
+            "Expected type mismatch error for fixed type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_type_map() {
+        let schema_json = r#"{
+            "type": "map",
+            "values": "string"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must be an Avro record") && msg.contains("'map'"),
+            "Expected type mismatch error for map type, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_missing_type_field() {
+        let schema_json = r#"{
+            "name": "Test",
+            "fields": [{"name": "a", "type": "int"}]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing required 'type' field"),
+            "Expected missing type error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_missing_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("missing required 'fields'"),
+            "Expected missing fields error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_fields_not_array() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": "not an array"
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("'fields' must be an array"),
+            "Expected fields array error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_index_out_of_bounds() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[5]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out of bounds") && msg.contains("5") && msg.contains("2"),
+            "Expected out of bounds error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_index_out_of_bounds_edge() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Index 1 is just out of bounds for a 1-element array
+        let err = schema.project(&[1]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out of bounds") && msg.contains("1"),
+            "Expected out of bounds error for edge case, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_duplicate_index() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"},
+                {"name": "c", "type": "long"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0, 1, 0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Duplicate projection index") && msg.contains("0"),
+            "Expected duplicate index error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_error_duplicate_index_consecutive() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "a", "type": "int"},
+                {"name": "b", "type": "string"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[1, 1]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Duplicate projection index") && msg.contains("1"),
+            "Expected duplicate index error for consecutive duplicates, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_with_empty_fields() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "EmptyRecord",
+            "fields": []
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Projecting empty from empty should succeed
+        let projected = schema.project(&[]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn test_project_empty_fields_index_out_of_bounds() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "EmptyRecord",
+            "fields": []
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let err = schema.project(&[0]).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("out of bounds") && msg.contains("0 fields"),
+            "Expected out of bounds error for empty record, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_project_result_is_valid_avro_schema() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "namespace": "com.example",
+            "fields": [
+                {"name": "id", "type": "long"},
+                {"name": "name", "type": "string"},
+                {"name": "active", "type": "boolean"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        let projected = schema.project(&[0, 2]).unwrap();
+        // Verify the projected schema can be parsed as a valid Avro schema
+        let parsed = projected.schema();
+        assert!(parsed.is_ok(), "Projected schema should be valid Avro");
+        match parsed.unwrap() {
+            Schema::Complex(ComplexType::Record(r)) => {
+                assert_eq!(r.name, "Test");
+                assert_eq!(r.namespace, Some("com.example"));
+                assert_eq!(r.fields.len(), 2);
+                assert_eq!(r.fields[0].name, "id");
+                assert_eq!(r.fields[1].name, "active");
+            }
+            _ => panic!("Expected Record schema"),
+        }
+    }
+
+    #[test]
+    fn test_project_non_contiguous_indices() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "Test",
+            "fields": [
+                {"name": "f0", "type": "int"},
+                {"name": "f1", "type": "int"},
+                {"name": "f2", "type": "int"},
+                {"name": "f3", "type": "int"},
+                {"name": "f4", "type": "int"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Select every other field
+        let projected = schema.project(&[0, 2, 4]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("f0"));
+        assert_eq!(fields[1].get("name").and_then(|n| n.as_str()), Some("f2"));
+        assert_eq!(fields[2].get("name").and_then(|n| n.as_str()), Some("f4"));
+    }
+
+    #[test]
+    fn test_project_single_field_from_many() {
+        let schema_json = r#"{
+            "type": "record",
+            "name": "BigRecord",
+            "fields": [
+                {"name": "f0", "type": "int"},
+                {"name": "f1", "type": "int"},
+                {"name": "f2", "type": "int"},
+                {"name": "f3", "type": "int"},
+                {"name": "f4", "type": "int"},
+                {"name": "f5", "type": "int"},
+                {"name": "f6", "type": "int"},
+                {"name": "f7", "type": "int"},
+                {"name": "f8", "type": "int"},
+                {"name": "f9", "type": "int"}
+            ]
+        }"#;
+        let schema = AvroSchema::new(schema_json.to_string());
+        // Select only the last field
+        let projected = schema.project(&[9]).unwrap();
+        let v: Value = serde_json::from_str(&projected.json_string).unwrap();
+        let fields = v.get("fields").and_then(|f| f.as_array()).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].get("name").and_then(|n| n.as_str()), Some("f9"));
     }
 }

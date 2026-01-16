@@ -531,6 +531,8 @@ fn make_default_display_index<'a>(
         }
         DataType::List(_) => array_format(as_generic_list_array::<i32>(array), options),
         DataType::LargeList(_) => array_format(as_generic_list_array::<i64>(array), options),
+        DataType::ListView(_) => array_format(array.as_list_view::<i32>(), options),
+        DataType::LargeListView(_) => array_format(array.as_list_view::<i64>(), options),
         DataType::FixedSizeList(_, _) => {
             let a = array.as_any().downcast_ref::<FixedSizeListArray>().unwrap();
             array_format(a, options)
@@ -1190,6 +1192,27 @@ impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListArray<O> {
     }
 }
 
+impl<'a, O: OffsetSizeTrait> DisplayIndexState<'a> for &'a GenericListViewArray<O> {
+    type State = ArrayFormatter<'a>;
+
+    fn prepare(&self, options: &FormatOptions<'a>) -> Result<Self::State, ArrowError> {
+        let field = match (*self).data_type() {
+            DataType::ListView(f) => f,
+            DataType::LargeListView(f) => f,
+            _ => unreachable!(),
+        };
+        make_array_formatter(self.values().as_ref(), options, Some(field.as_ref()))
+    }
+
+    fn write(&self, s: &Self::State, idx: usize, f: &mut dyn Write) -> FormatResult {
+        let offsets = self.value_offsets();
+        let sizes = self.value_sizes();
+        let start = offsets[idx].as_usize();
+        let end = start + sizes[idx].as_usize();
+        write_list(f, start..end, s)
+    }
+}
+
 impl<'a> DisplayIndexState<'a> for &'a FixedSizeListArray {
     type State = (usize, ArrayFormatter<'a>);
 
@@ -1515,5 +1538,35 @@ mod tests {
             "input_value1",
             array_value_to_string(&map_array, 3).unwrap()
         );
+    }
+
+    #[test]
+    fn test_list_view_to_string() {
+        let list_view = ListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), None, Some(6)]),
+            Some(vec![]),
+        ]);
+
+        assert_eq!("[1, 2, 3]", array_value_to_string(&list_view, 0).unwrap());
+        assert_eq!("", array_value_to_string(&list_view, 1).unwrap());
+        assert_eq!("[4, , 6]", array_value_to_string(&list_view, 2).unwrap());
+        assert_eq!("[]", array_value_to_string(&list_view, 3).unwrap());
+    }
+
+    #[test]
+    fn test_large_list_view_to_string() {
+        let list_view = LargeListViewArray::from_iter_primitive::<Int32Type, _, _>(vec![
+            Some(vec![Some(1), Some(2), Some(3)]),
+            None,
+            Some(vec![Some(4), None, Some(6)]),
+            Some(vec![]),
+        ]);
+
+        assert_eq!("[1, 2, 3]", array_value_to_string(&list_view, 0).unwrap());
+        assert_eq!("", array_value_to_string(&list_view, 1).unwrap());
+        assert_eq!("[4, , 6]", array_value_to_string(&list_view, 2).unwrap());
+        assert_eq!("[]", array_value_to_string(&list_view, 3).unwrap());
     }
 }

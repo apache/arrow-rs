@@ -700,7 +700,7 @@ impl ArrowReaderOptions {
 
     /// Include virtual columns in the output.
     ///
-    /// Virtual columns are columns that are not part of the Parquet schema, but are added to the output by the reader such as row numbers.
+    /// Virtual columns are columns that are not part of the Parquet schema, but are added to the output by the reader such as row numbers and row group indices.
     ///
     /// # Example
     /// ```
@@ -1539,7 +1539,10 @@ pub(crate) mod tests {
         ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder, RowFilter, RowSelection,
         RowSelectionPolicy, RowSelector,
     };
-    use crate::arrow::schema::{add_encoded_arrow_schema_to_metadata, virtual_type::RowNumber};
+    use crate::arrow::schema::{
+        add_encoded_arrow_schema_to_metadata,
+        virtual_type::{RowGroupIndex, RowNumber},
+    };
     use crate::arrow::{ArrowWriter, ProjectionMask};
     use crate::basic::{ConvertedType, Encoding, LogicalType, Repetition, Type as PhysicalType};
     use crate::column::reader::decoder::REPETITION_LEVELS_BATCH_SIZE;
@@ -5938,6 +5941,183 @@ pub(crate) mod tests {
                     .expect("Could not read")
             },
         );
+    }
+
+    #[test]
+    fn test_read_row_group_indices() {
+        // create a parquet file with 3 row groups, 2 rows each
+        let array1 = Int64Array::from(vec![1, 2]);
+        let array2 = Int64Array::from(vec![3, 4]);
+        let array3 = Int64Array::from(vec![5, 6]);
+
+        let batch1 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array1) as ArrayRef)]).unwrap();
+        let batch2 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array2) as ArrayRef)]).unwrap();
+        let batch3 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array3) as ArrayRef)]).unwrap();
+
+        let mut buffer = Vec::new();
+        let options = WriterProperties::builder()
+            .set_max_row_group_size(2)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch1.schema(), Some(options)).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.write(&batch2).unwrap();
+        writer.write(&batch3).unwrap();
+        writer.close().unwrap();
+
+        let file = Bytes::from(buffer);
+        let row_group_index_field = Arc::new(
+            Field::new("row_group_index", ArrowDataType::Int64, false)
+                .with_extension_type(RowGroupIndex),
+        );
+
+        let options = ArrowReaderOptions::new()
+            .with_virtual_columns(vec![row_group_index_field.clone()])
+            .unwrap();
+        let mut arrow_reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options)
+                .expect("reader builder with virtual columns")
+                .build()
+                .expect("reader with virtual columns");
+
+        let batch = arrow_reader.next().unwrap().unwrap();
+
+        assert_eq!(batch.num_columns(), 2);
+        assert_eq!(batch.num_rows(), 6);
+
+        assert_eq!(
+            batch
+                .column(0)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)]
+        );
+
+        assert_eq!(
+            batch
+                .column(1)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(1), Some(1), Some(2), Some(2)]
+        );
+    }
+
+    #[test]
+    fn test_read_only_row_group_indices() {
+        let array1 = Int64Array::from(vec![1, 2, 3]);
+        let array2 = Int64Array::from(vec![4, 5]);
+
+        let batch1 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array1) as ArrayRef)]).unwrap();
+        let batch2 =
+            RecordBatch::try_from_iter(vec![("value", Arc::new(array2) as ArrayRef)]).unwrap();
+
+        let mut buffer = Vec::new();
+        let options = WriterProperties::builder()
+            .set_max_row_group_size(3)
+            .build();
+        let mut writer = ArrowWriter::try_new(&mut buffer, batch1.schema(), Some(options)).unwrap();
+        writer.write(&batch1).unwrap();
+        writer.write(&batch2).unwrap();
+        writer.close().unwrap();
+
+        let file = Bytes::from(buffer);
+        let row_group_index_field = Arc::new(
+            Field::new("row_group_index", ArrowDataType::Int64, false)
+                .with_extension_type(RowGroupIndex),
+        );
+
+        let options = ArrowReaderOptions::new()
+            .with_virtual_columns(vec![row_group_index_field.clone()])
+            .unwrap();
+        let metadata = ArrowReaderMetadata::load(&file, options).unwrap();
+        let num_columns = metadata
+            .metadata
+            .file_metadata()
+            .schema_descr()
+            .num_columns();
+
+        let mut arrow_reader = ParquetRecordBatchReaderBuilder::new_with_metadata(file, metadata)
+            .with_projection(ProjectionMask::none(num_columns))
+            .build()
+            .expect("reader with virtual columns only");
+
+        let batch = arrow_reader.next().unwrap().unwrap();
+        let schema = Arc::new(Schema::new(vec![(*row_group_index_field).clone()]));
+
+        assert_eq!(batch.schema(), schema);
+        assert_eq!(batch.num_columns(), 1);
+        assert_eq!(batch.num_rows(), 5);
+
+        assert_eq!(
+            batch
+                .column(0)
+                .as_primitive::<types::Int64Type>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(0), Some(0), Some(0), Some(1), Some(1)]
+        );
+    }
+
+    #[test]
+    fn test_read_row_group_indices_with_selection() -> Result<()> {
+        let mut buffer = Vec::new();
+        let options = WriterProperties::builder()
+            .set_max_row_group_size(10)
+            .build();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            ArrowDataType::Int64,
+            false,
+        )]));
+
+        let mut writer = ArrowWriter::try_new(&mut buffer, schema.clone(), Some(options))?;
+
+        // write out 3 batches of 10 rows each
+        for i in 0..3 {
+            let start = i * 10;
+            let array = Int64Array::from_iter_values(start..start + 10);
+            let batch = RecordBatch::try_from_iter(vec![("value", Arc::new(array) as ArrayRef)])?;
+            writer.write(&batch)?;
+        }
+        writer.close()?;
+
+        let file = Bytes::from(buffer);
+        let row_group_index_field = Arc::new(
+            Field::new("rg_idx", ArrowDataType::Int64, false).with_extension_type(RowGroupIndex),
+        );
+
+        let options =
+            ArrowReaderOptions::new().with_virtual_columns(vec![row_group_index_field])?;
+
+        // test row groups are read in reverse order
+        let arrow_reader =
+            ParquetRecordBatchReaderBuilder::try_new_with_options(file.clone(), options.clone())?
+                .with_row_groups(vec![2, 1, 0])
+                .build()?;
+
+        let batches: Vec<_> = arrow_reader.collect::<Result<Vec<_>, _>>()?;
+        let combined = concat_batches(&batches[0].schema(), &batches)?;
+
+        let values = combined.column(0).as_primitive::<types::Int64Type>();
+        let first_val = values.value(0);
+        let last_val = values.value(combined.num_rows() - 1);
+        // first row from rg 2
+        assert_eq!(first_val, 20);
+        // the last row from rg 0
+        assert_eq!(last_val, 9);
+
+        let rg_indices = combined.column(1).as_primitive::<types::Int64Type>();
+        assert_eq!(rg_indices.value(0), 2);
+        assert_eq!(rg_indices.value(10), 1);
+        assert_eq!(rg_indices.value(20), 0);
+
+        Ok(())
     }
 
     pub(crate) fn test_row_numbers_with_multiple_row_groups_helper<F>(
