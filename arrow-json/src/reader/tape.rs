@@ -216,14 +216,22 @@ impl<'a> Tape<'a> {
 /// States based on <https://www.json.org/json-en.html>
 #[derive(Debug, Copy, Clone)]
 enum DecoderState {
-    /// Decoding an object
+    /// Decoding an object - awaiting a '"' (new field) or '}' (done)
     ///
     /// Contains index of start [`TapeElement::StartObject`]
     Object(u32),
-    /// Decoding a list
+    /// Continue decoding an object - awaiting ',' (before next field) or '}' (done)
+    ///
+    /// Contains index of start [`TapeElement::StartObject`]
+    ContinueObject(u32),
+    /// Decoding a list - awaiting first element or ']' (done)
     ///
     /// Contains index of start [`TapeElement::StartList`]
     List(u32),
+    /// Continue decoding a list - awaiting ',' (before next element) or ']' (done)
+    ///
+    /// Contains index of start [`TapeElement::StartList`]
+    ContinueList(u32),
     String,
     Value,
     Number,
@@ -242,8 +250,8 @@ enum DecoderState {
 impl DecoderState {
     fn as_str(&self) -> &'static str {
         match self {
-            DecoderState::Object(_) => "object",
-            DecoderState::List(_) => "list",
+            DecoderState::Object(_) | DecoderState::ContinueObject(_) => "object",
+            DecoderState::List(_) | DecoderState::ContinueList(_) => "list",
             DecoderState::String => "string",
             DecoderState::Value => "value",
             DecoderState::Number => "number",
@@ -338,6 +346,20 @@ impl TapeDecoder {
         }
     }
 
+    /// Write the closing elements for an object to the tape
+    fn write_end_object(&mut self, start_idx: u32) {
+        let end_idx = self.elements.len() as u32;
+        self.elements[start_idx as usize] = TapeElement::StartObject(end_idx);
+        self.elements.push(TapeElement::EndObject(start_idx));
+    }
+
+    /// Write the closing elements for a list to the tape
+    fn write_end_list(&mut self, start_idx: u32) {
+        let end_idx = self.elements.len() as u32;
+        self.elements[start_idx as usize] = TapeElement::StartList(end_idx);
+        self.elements.push(TapeElement::EndList(start_idx));
+    }
+
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
         let mut iter = BufIter::new(buf);
 
@@ -358,38 +380,71 @@ impl TapeDecoder {
             };
 
             match state {
-                // Decoding an object
+                // Decoding an object - awaiting next field or '}'
                 DecoderState::Object(start_idx) => {
-                    iter.advance_until(|b| !json_whitespace(b) && b != b',');
+                    let start_idx = *start_idx;
+                    iter.skip_whitespace();
                     match next!(iter) {
                         b'"' => {
+                            *state = DecoderState::ContinueObject(start_idx);
                             self.stack.push(DecoderState::Value);
                             self.stack.push(DecoderState::Colon);
                             self.stack.push(DecoderState::String);
                         }
                         b'}' => {
-                            let start_idx = *start_idx;
-                            let end_idx = self.elements.len() as u32;
-                            self.elements[start_idx as usize] = TapeElement::StartObject(end_idx);
-                            self.elements.push(TapeElement::EndObject(start_idx));
+                            self.write_end_object(start_idx);
                             self.stack.pop();
                         }
-                        b => return Err(err(b, "parsing object")),
+                        b => return Err(err(b, "expected '\"' or '}'")),
                     }
                 }
-                // Decoding a list
+                // Continue decoding an object - awaiting ',' or '}'
+                DecoderState::ContinueObject(start_idx) => {
+                    let start_idx = *start_idx;
+                    iter.skip_whitespace();
+                    match next!(iter) {
+                        b',' => {
+                            *state = DecoderState::Object(start_idx);
+                        }
+                        b'}' => {
+                            self.write_end_object(start_idx);
+                            self.stack.pop();
+                        }
+                        b => return Err(err(b, "expected ',' or '}'")),
+                    }
+                }
+                // Decoding a list - awaiting next element or ']'
                 DecoderState::List(start_idx) => {
-                    iter.advance_until(|b| !json_whitespace(b) && b != b',');
+                    let start_idx = *start_idx;
+                    iter.skip_whitespace();
                     match iter.peek() {
                         Some(b']') => {
                             iter.next();
-                            let start_idx = *start_idx;
-                            let end_idx = self.elements.len() as u32;
-                            self.elements[start_idx as usize] = TapeElement::StartList(end_idx);
-                            self.elements.push(TapeElement::EndList(start_idx));
+                            self.write_end_list(start_idx);
                             self.stack.pop();
                         }
-                        Some(_) => self.stack.push(DecoderState::Value),
+                        Some(_) => {
+                            *state = DecoderState::ContinueList(start_idx);
+                            self.stack.push(DecoderState::Value);
+                        }
+                        None => break,
+                    }
+                }
+                // Continue decoding a list - awaiting ',' or ']'
+                DecoderState::ContinueList(start_idx) => {
+                    let start_idx = *start_idx;
+                    iter.skip_whitespace();
+                    match iter.peek() {
+                        Some(b',') => {
+                            iter.next();
+                            *state = DecoderState::List(start_idx);
+                        }
+                        Some(b']') => {
+                            iter.next();
+                            self.write_end_list(start_idx);
+                            self.stack.pop();
+                        }
+                        Some(b) => return Err(err(b, "expected ',' or ']'")),
                         None => break,
                     }
                 }
@@ -971,5 +1026,122 @@ mod tests {
         let mut decoder = TapeDecoder::new(16, 2);
         let res = decoder.decode(b"{\"test\": \"\\udc00\\udc01\"}");
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn test_valid_comma_usage() {
+        // Verify that valid JSON with proper comma usage still works
+
+        // Valid object with commas
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"{"a": 1, "b": 2, "c": 3}"#;
+        decoder.decode(json.as_bytes()).unwrap();
+        let tape = decoder.finish().unwrap();
+        let mut s = String::new();
+        tape.serialize(&mut s, 1);
+        assert!(s.contains("\"a\""));
+        assert!(s.contains("\"b\""));
+        assert!(s.contains("\"c\""));
+
+        // Valid list with commas
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"[1, 2, 3, 4]"#;
+        decoder.decode(json.as_bytes()).unwrap();
+        let tape = decoder.finish().unwrap();
+        let mut s = String::new();
+        tape.serialize(&mut s, 1);
+        assert!(s.contains("1"));
+        assert!(s.contains("2"));
+        assert!(s.contains("3"));
+        assert!(s.contains("4"));
+
+        // Empty object (no commas needed)
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"{}"#;
+        decoder.decode(json.as_bytes()).unwrap();
+        decoder.finish().unwrap();
+
+        // Empty list (no commas needed)
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"[]"#;
+        decoder.decode(json.as_bytes()).unwrap();
+        decoder.finish().unwrap();
+    }
+
+    #[test]
+    fn test_reject_invalid_commas_in_objects() {
+        // Verify that the parser correctly rejects invalid JSON with extra commas in objects
+
+        // Empty with comma - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"{,}"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("expected '\"' or '}'"), "Error was: {}", err);
+
+        // Leading comma - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"{, "field": 10}"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("expected '\"' or '}'"), "Error was: {}", err);
+
+        // Double comma between fields - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"{"a": 1,, "b": 2}"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("expected '\"' or '}'"), "Error was: {}", err);
+
+        // Multiple commas - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"{"a": 1,,,, "b": 2}"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("expected '\"' or '}'"), "Error was: {}", err);
+
+        // Trailing comma - intentionally allowed
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"{"a": 1,}"#;
+        decoder.decode(json.as_bytes()).unwrap();
+        let tape = decoder.finish().unwrap();
+        let mut s = String::new();
+        tape.serialize(&mut s, 1);
+        assert!(s.contains("\"a\""));
+    }
+
+    #[test]
+    fn test_reject_invalid_commas_in_lists() {
+        // Verify that the parser correctly rejects invalid JSON with extra commas in lists
+
+        // Empty with comma - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"[,]"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("parsing value"), "Error was: {}", err);
+
+        // Leading comma - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"[, 1, 2]"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("parsing value"), "Error was: {}", err);
+
+        // Double comma between elements - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"[1,, 2, 3]"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("parsing value"), "Error was: {}", err);
+
+        // Multiple commas - should reject
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"[1,,,, 2]"#;
+        let err = decoder.decode(json.as_bytes()).unwrap_err().to_string();
+        assert!(err.contains("parsing value"), "Error was: {}", err);
+
+        // Trailing comma - intentionally allowed
+        let mut decoder = TapeDecoder::new(16, 2);
+        let json = r#"[1, 2,]"#;
+        decoder.decode(json.as_bytes()).unwrap();
+        let tape = decoder.finish().unwrap();
+        let mut s = String::new();
+        tape.serialize(&mut s, 1);
+        assert!(s.contains("1"));
+        assert!(s.contains("2"));
     }
 }
