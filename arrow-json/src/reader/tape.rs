@@ -302,6 +302,16 @@ macro_rules! next {
     };
 }
 
+/// Evaluates to the next non-whitespace byte in the iterator or breaks the current loop
+macro_rules! next_non_whitespace {
+    ($next:ident) => {
+        match $next.next_non_whitespace() {
+            Some(b) => b,
+            None => break,
+        }
+    };
+}
+
 /// Implements a state machine for decoding JSON to a tape
 pub struct TapeDecoder {
     elements: Vec<TapeElement>,
@@ -382,8 +392,7 @@ impl TapeDecoder {
                 // Decoding an object - awaiting next field or '}'
                 DecoderState::Object(start_idx) => {
                     let start_idx = *start_idx;
-                    iter.skip_whitespace();
-                    match next!(iter) {
+                    match next_non_whitespace!(iter) {
                         b'"' => {
                             *state = DecoderState::ContinueObject(start_idx);
                             self.stack.push(DecoderState::Value);
@@ -400,8 +409,7 @@ impl TapeDecoder {
                 // Continue decoding an object - awaiting ',' or '}'
                 DecoderState::ContinueObject(start_idx) => {
                     let start_idx = *start_idx;
-                    iter.skip_whitespace();
-                    match next!(iter) {
+                    match next_non_whitespace!(iter) {
                         b',' => {
                             *state = DecoderState::Object(start_idx);
                         }
@@ -461,9 +469,8 @@ impl TapeDecoder {
                         b => unreachable!("{}", b),
                     }
                 }
-                state @ DecoderState::Value => {
-                    iter.skip_whitespace();
-                    *state = match next!(iter) {
+                DecoderState::Value => {
+                    *state = match next_non_whitespace!(iter) {
                         b'"' => DecoderState::String,
                         b @ b'-' | b @ b'0'..=b'9' => {
                             self.bytes.push(b);
@@ -499,8 +506,7 @@ impl TapeDecoder {
                     }
                 }
                 DecoderState::Colon => {
-                    iter.skip_whitespace();
-                    match next!(iter) {
+                    match next_non_whitespace!(iter) {
                         b':' => self.stack.pop(),
                         b => return Err(err(b, "parsing colon")),
                     };
@@ -739,6 +745,26 @@ impl<'a> BufIter<'a> {
         {
             Some((x, b)) => {
                 self.advance(x);
+                Some(b)
+            }
+            None => {
+                self.advance(s.len());
+                None
+            }
+        }
+    }
+
+    // Advance to and consume the next non-whitespace char
+    fn next_non_whitespace(&mut self) -> Option<u8> {
+        let s = self.as_slice();
+        match s
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, b)| !json_whitespace(*b))
+        {
+            Some((x, b)) => {
+                self.advance(x + 1);
                 Some(b)
             }
             None => {
