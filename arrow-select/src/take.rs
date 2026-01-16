@@ -28,7 +28,7 @@ use arrow_buffer::{
     ArrowNativeType, BooleanBuffer, Buffer, MutableBuffer, NullBuffer, OffsetBuffer, ScalarBuffer,
     bit_util,
 };
-use arrow_data::{ArrayData, ArrayDataBuilder};
+use arrow_data::ArrayDataBuilder;
 use arrow_schema::{ArrowError, DataType, FieldRef, UnionMode};
 
 use num_traits::{One, Zero};
@@ -215,8 +215,7 @@ fn take_impl<IndexType: ArrowPrimitiveType>(
     indices: &PrimitiveArray<IndexType>,
 ) -> Result<ArrayRef, ArrowError> {
     if indices.is_empty() {
-        let data = ArrayData::new_empty(values.data_type());
-        return Ok(Arc::new(make_array(data)));
+        return Ok(new_empty_array(values.data_type()));
     }
     downcast_primitive_array! {
         values => Ok(Arc::new(take_primitive(values, indices)?)),
