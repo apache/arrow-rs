@@ -753,9 +753,9 @@ impl Iterator for BufIter<'_> {
     type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let b = self.peek();
+        let b = self.peek()?;
         self.pos += 1;
-        b
+        Some(b)
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
