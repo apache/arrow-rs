@@ -149,6 +149,7 @@ use arrow_array::{RecordBatch, RecordBatchReader, StructArray, downcast_integer,
 use arrow_data::ArrayData;
 use arrow_schema::{ArrowError, DataType, FieldRef, Schema, SchemaRef, TimeUnit};
 pub use schema::*;
+pub use tape::*;
 
 use crate::reader::boolean_array::BooleanArrayDecoder;
 use crate::reader::decimal_array::DecimalArrayDecoder;
@@ -159,7 +160,6 @@ use crate::reader::primitive_array::PrimitiveArrayDecoder;
 use crate::reader::string_array::StringArrayDecoder;
 use crate::reader::string_view_array::StringViewArrayDecoder;
 use crate::reader::struct_array::StructArrayDecoder;
-use crate::reader::tape::{Tape, TapeDecoder};
 use crate::reader::timestamp_array::TimestampArrayDecoder;
 
 mod binary_array;
@@ -184,6 +184,7 @@ pub struct ReaderBuilder {
     strict_mode: bool,
     is_field: bool,
     struct_mode: StructMode,
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
 
     schema: SchemaRef,
 }
@@ -205,6 +206,7 @@ impl ReaderBuilder {
             is_field: false,
             struct_mode: Default::default(),
             schema,
+            decoder_factory: None,
         }
     }
 
@@ -218,7 +220,7 @@ impl ReaderBuilder {
     /// # use arrow_array::cast::AsArray;
     /// # use arrow_array::types::Int32Type;
     /// # use arrow_json::ReaderBuilder;
-    /// # use arrow_schema::{DataType, Field};
+    /// # use arrow_schema::{DataType, Field, FieldRef};
     /// // Root of JSON schema is a numeric type
     /// let data = "1\n2\n3\n";
     /// let field = Arc::new(Field::new("int", DataType::Int32, true));
@@ -246,6 +248,7 @@ impl ReaderBuilder {
             is_field: true,
             struct_mode: Default::default(),
             schema: Arc::new(Schema::new([field.into()])),
+            decoder_factory: None,
         }
     }
 
@@ -285,6 +288,14 @@ impl ReaderBuilder {
         }
     }
 
+    /// Set an optional hook for customizing decoding behavior.
+    pub fn with_decoder_factory(self, decoder_factory: Arc<dyn DecoderFactory>) -> Self {
+        Self {
+            decoder_factory: Some(decoder_factory),
+            ..self
+        }
+    }
+
     /// Create a [`Reader`] with the provided [`BufRead`]
     pub fn build<R: BufRead>(self, reader: R) -> Result<Reader<R>, ArrowError> {
         Ok(Reader {
@@ -304,11 +315,13 @@ impl ReaderBuilder {
         };
 
         let decoder = make_decoder(
+            None,
             data_type,
             self.coerce_primitive,
             self.strict_mode,
             nullable,
             self.struct_mode,
+            self.decoder_factory,
         )?;
 
         let num_fields = self.schema.flattened_fields().len();
@@ -371,6 +384,95 @@ impl<R: BufRead> RecordBatchReader for Reader<R> {
     fn schema(&self) -> SchemaRef {
         self.decoder.schema.clone()
     }
+}
+
+/// A trait to create custom decoders for specific data types.
+///
+/// This allows overriding the default decoders for specific data types,
+/// or adding new decoders for custom data types.
+///
+/// # Examples
+///
+/// ```
+/// use arrow_json::{ArrayDecoder, DecoderFactory, TapeElement, Tape, ReaderBuilder, StructMode};
+/// use arrow_schema::ArrowError;
+/// use arrow_schema::{DataType, Field, FieldRef, Fields, Schema};
+/// use arrow_array::cast::AsArray;
+/// use arrow_array::Array;
+/// use arrow_array::builder::StringBuilder;
+/// use arrow_data::ArrayData;
+/// use std::sync::Arc;
+///
+/// struct IncorrectStringAsNullDecoder {}
+///
+/// impl ArrayDecoder for IncorrectStringAsNullDecoder {
+///     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+///         let mut builder = StringBuilder::new();
+///         for p in pos {
+///             match tape.get(*p) {
+///                 TapeElement::String(idx) => {
+///                     builder.append_value(tape.get_string(idx));
+///                 }
+///                 _ => builder.append_null(),
+///             }
+///         }
+///         Ok(builder.finish().into_data())
+///     }
+/// }
+///
+/// #[derive(Debug)]
+/// struct IncorrectStringAsNullDecoderFactory;
+///
+/// impl DecoderFactory for IncorrectStringAsNullDecoderFactory {
+///     fn make_custom_decoder<'a>(
+///         &self,
+///         _field: Option<FieldRef>,
+///         data_type: DataType,
+///         _coerce_primitive: bool,
+///         _strict_mode: bool,
+///         _is_nullable: bool,
+///         _struct_mode: StructMode,
+///     ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+///         match data_type {
+///             DataType::Utf8 => Ok(Some(Box::new(IncorrectStringAsNullDecoder {}))),
+///             _ => Ok(None),
+///         }
+///     }
+/// }
+///
+/// let json = r#"
+/// {"a": "a"}
+/// {"a": 12}
+/// "#;
+/// let batch = ReaderBuilder::new(Arc::new(Schema::new(Fields::from(vec![Field::new(
+///     "a",
+///     DataType::Utf8,
+///     true,
+/// )]))))
+/// .with_decoder_factory(Arc::new(IncorrectStringAsNullDecoderFactory))
+/// .build(json.as_bytes())
+/// .unwrap()
+/// .next()
+/// .unwrap()
+/// .unwrap();
+///
+/// let values = batch.column(0).as_string::<i32>();
+/// assert_eq!(values.len(), 2);
+/// assert_eq!(values.value(0), "a");
+/// assert!(values.is_null(1));
+/// ```
+pub trait DecoderFactory: std::fmt::Debug + Send + Sync {
+    /// Make a decoder that overrides the default decoder for a specific data type.
+    /// This can be used to override how e.g. error in decoding are handled.
+    fn make_custom_decoder(
+        &self,
+        _field: Option<FieldRef>,
+        _data_type: DataType,
+        _coerce_primitive: bool,
+        _strict_mode: bool,
+        _is_nullable: bool,
+        _struct_mode: StructMode,
+    ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError>;
 }
 
 /// A low-level interface for reading JSON data from a byte stream
@@ -674,7 +776,8 @@ impl Decoder {
     }
 }
 
-trait ArrayDecoder: Send {
+/// A trait to decode JSON values into arrow arrays
+pub trait ArrayDecoder: Send {
     /// Decode elements from `tape` starting at the indexes contained in `pos`
     fn decode(&mut self, tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError>;
 }
@@ -686,12 +789,27 @@ macro_rules! primitive_decoder {
 }
 
 fn make_decoder(
+    field: Option<FieldRef>,
     data_type: DataType,
     coerce_primitive: bool,
     strict_mode: bool,
     is_nullable: bool,
     struct_mode: StructMode,
+    decoder_factory: Option<Arc<dyn DecoderFactory>>,
 ) -> Result<Box<dyn ArrayDecoder>, ArrowError> {
+    if let Some(ref factory) = decoder_factory {
+        if let Some(decoder) = factory.make_custom_decoder(
+            field.clone(),
+            data_type.clone(),
+            coerce_primitive,
+            strict_mode,
+            is_nullable,
+            struct_mode,
+        )? {
+            return Ok(decoder);
+        }
+    }
+
     downcast_integer! {
         data_type => (primitive_decoder, data_type),
         DataType::Null => Ok(Box::<NullArrayDecoder>::default()),
@@ -744,14 +862,14 @@ fn make_decoder(
         DataType::Utf8 => Ok(Box::new(StringArrayDecoder::<i32>::new(coerce_primitive))),
         DataType::Utf8View => Ok(Box::new(StringViewArrayDecoder::new(coerce_primitive))),
         DataType::LargeUtf8 => Ok(Box::new(StringArrayDecoder::<i64>::new(coerce_primitive))),
-        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
-        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::List(_) => Ok(Box::new(ListArrayDecoder::<i32>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode, decoder_factory)?)),
+        DataType::LargeList(_) => Ok(Box::new(ListArrayDecoder::<i64>::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode, decoder_factory)?)),
+        DataType::Struct(_) => Ok(Box::new(StructArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode, decoder_factory)?)),
         DataType::Binary => Ok(Box::new(BinaryArrayDecoder::<i32>::default())),
         DataType::LargeBinary => Ok(Box::new(BinaryArrayDecoder::<i64>::default())),
         DataType::FixedSizeBinary(len) => Ok(Box::new(FixedSizeBinaryArrayDecoder::new(len))),
         DataType::BinaryView => Ok(Box::new(BinaryViewDecoder::default())),
-        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode)?)),
+        DataType::Map(_, _) => Ok(Box::new(MapArrayDecoder::new(data_type, coerce_primitive, strict_mode, is_nullable, struct_mode, decoder_factory)?)),
         d => Err(ArrowError::NotYetImplemented(format!("Support for {d} in JSON reader")))
     }
 }
@@ -2814,5 +2932,70 @@ mod tests {
                 .to_string(),
             "Json error: whilst decoding field 'a': failed to parse \"a\" as Int32".to_owned()
         );
+    }
+
+    #[test]
+    fn test_decoder_factory() {
+        use arrow_array::builder;
+
+        struct AlwaysNullStringArrayDecoder;
+
+        impl ArrayDecoder for AlwaysNullStringArrayDecoder {
+            fn decode(&mut self, _tape: &Tape<'_>, pos: &[u32]) -> Result<ArrayData, ArrowError> {
+                let mut builder = builder::StringBuilder::new();
+                for _ in pos {
+                    builder.append_null();
+                }
+                Ok(builder.finish().into_data())
+            }
+        }
+
+        #[derive(Debug)]
+        struct AlwaysNullStringArrayDecoderFactory;
+
+        impl DecoderFactory for AlwaysNullStringArrayDecoderFactory {
+            fn make_custom_decoder<'a>(
+                &self,
+                _field: Option<FieldRef>,
+                data_type: DataType,
+                _coerce_primitive: bool,
+                _strict_mode: bool,
+                _is_nullable: bool,
+                _struct_mode: StructMode,
+            ) -> Result<Option<Box<dyn ArrayDecoder>>, ArrowError> {
+                match data_type {
+                    DataType::Utf8 => Ok(Some(Box::new(AlwaysNullStringArrayDecoder {}))),
+                    _ => Ok(None),
+                }
+            }
+        }
+
+        let buf = r#"
+        {"a": "1", "b": 2}
+        {"a": "hello", "b": 23}
+        "#;
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let batches = ReaderBuilder::new(schema.clone())
+            .with_batch_size(2)
+            .with_decoder_factory(Arc::new(AlwaysNullStringArrayDecoderFactory))
+            .build(Cursor::new(buf.as_bytes()))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        assert_eq!(batches.len(), 1);
+
+        let col1 = batches[0].column(0).as_string::<i32>();
+        assert_eq!(col1.null_count(), 2);
+        assert!(col1.is_null(0));
+        assert!(col1.is_null(1));
+
+        let col2 = batches[0].column(1).as_primitive::<Int32Type>();
+        assert_eq!(col2.value(0), 2);
+        assert_eq!(col2.value(1), 23);
     }
 }

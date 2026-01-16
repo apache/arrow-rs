@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+use std::sync::Arc;
+
 use crate::reader::tape::{Tape, TapeElement};
 use crate::reader::{ArrayDecoder, StructMode, make_decoder};
 use arrow_array::builder::BooleanBufferBuilder;
@@ -68,6 +70,8 @@ impl FieldTapePositions {
     }
 }
 
+use super::DecoderFactory;
+
 pub struct StructArrayDecoder {
     data_type: DataType,
     decoders: Vec<Box<dyn ArrayDecoder>>,
@@ -85,6 +89,7 @@ impl StructArrayDecoder {
         strict_mode: bool,
         is_nullable: bool,
         struct_mode: StructMode,
+        decoder_factory: Option<Arc<dyn DecoderFactory>>,
     ) -> Result<Self, ArrowError> {
         let (decoders, field_name_to_index) = {
             let fields = struct_fields(&data_type);
@@ -96,11 +101,13 @@ impl StructArrayDecoder {
                     // it doesn't contain any nulls not masked by its parent
                     let nullable = f.is_nullable() || is_nullable;
                     make_decoder(
+                        Some(f.clone()),
                         f.data_type().clone(),
                         coerce_primitive,
                         strict_mode,
                         nullable,
                         struct_mode,
+                        decoder_factory.clone(),
                     )
                 })
                 .collect::<Result<Vec<_>, ArrowError>>()?;
