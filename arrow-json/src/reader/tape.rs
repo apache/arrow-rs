@@ -734,44 +734,26 @@ impl<'a> BufIter<'a> {
         }
     }
 
-    // Skip to the next non-whitespace char and return a peek at it
+    // Advance to the next non-whitespace char and peek at it
     fn skip_whitespace(&mut self) -> Option<u8> {
-        let s = self.as_slice();
-        match s
-            .iter()
-            .copied()
-            .enumerate()
-            .find(|(_, b)| !json_whitespace(*b))
-        {
-            Some((x, b)) => {
-                self.advance(x);
-                Some(b)
+        for b in self.as_slice() {
+            if !json_whitespace(*b) {
+                return Some(*b);
             }
-            None => {
-                self.advance(s.len());
-                None
-            }
+            self.pos += 1;
         }
+        None
     }
 
-    // Advance to and consume the next non-whitespace char
+    // Advance to the next non-whitespace char and consume it
     fn next_non_whitespace(&mut self) -> Option<u8> {
-        let s = self.as_slice();
-        match s
-            .iter()
-            .copied()
-            .enumerate()
-            .find(|(_, b)| !json_whitespace(*b))
-        {
-            Some((x, b)) => {
-                self.advance(x + 1);
-                Some(b)
-            }
-            None => {
-                self.advance(s.len());
-                None
+        for b in self.as_slice() {
+            self.pos += 1;
+            if !json_whitespace(*b) {
+                return Some(*b);
             }
         }
+        None
     }
 }
 
