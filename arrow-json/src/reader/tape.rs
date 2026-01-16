@@ -367,8 +367,7 @@ impl TapeDecoder {
             let state = match self.stack.last_mut() {
                 Some(l) => l,
                 None => {
-                    iter.skip_whitespace();
-                    if iter.is_empty() || self.cur_row >= self.batch_size {
+                    if iter.skip_whitespace().is_none() || self.cur_row >= self.batch_size {
                         break;
                     }
 
@@ -416,8 +415,7 @@ impl TapeDecoder {
                 // Decoding a list - awaiting next element or ']'
                 DecoderState::List(start_idx) => {
                     let start_idx = *start_idx;
-                    iter.skip_whitespace();
-                    match iter.peek() {
+                    match iter.skip_whitespace() {
                         Some(b']') => {
                             iter.next();
                             self.write_end_list(start_idx);
@@ -433,8 +431,7 @@ impl TapeDecoder {
                 // Continue decoding a list - awaiting ',' or ']'
                 DecoderState::ContinueList(start_idx) => {
                     let start_idx = *start_idx;
-                    iter.skip_whitespace();
-                    match iter.peek() {
+                    match iter.skip_whitespace() {
                         Some(b',') => {
                             iter.next();
                             *state = DecoderState::List(start_idx);
@@ -731,8 +728,24 @@ impl<'a> BufIter<'a> {
         }
     }
 
-    fn skip_whitespace(&mut self) {
-        self.advance_until(|b| !json_whitespace(b));
+    // Skip to the next non-whitespace char and return a peek at it
+    fn skip_whitespace(&mut self) -> Option<u8> {
+        let s = self.as_slice();
+        match s
+            .iter()
+            .copied()
+            .enumerate()
+            .find(|(_, b)| !json_whitespace(*b))
+        {
+            Some((x, b)) => {
+                self.advance(x);
+                Some(b)
+            }
+            None => {
+                self.advance(s.len());
+                None
+            }
+        }
     }
 }
 
