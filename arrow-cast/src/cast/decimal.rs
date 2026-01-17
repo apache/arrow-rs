@@ -826,18 +826,21 @@ where
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
+    let scale_op: fn(D::Native, D::Native) -> Result<D::Native, ArrowError> =
+        if scale < 0 {
+            <D::Native as ArrowNativeTypeOp>::mul_checked
+        } else {
+            <D::Native as ArrowNativeTypeOp>::div_checked
+        };
+
     if cast_options.safe {
         for i in 0..array.len() {
             if array.is_null(i) {
                 value_builder.append_null();
             } else {
-                let v = if scale < 0 {
-                    array.value(i).mul_checked(div).ok()
-                } else {
-                    array.value(i).div_checked(div).ok()
-                }
-                .and_then(<T::Native as NumCast>::from::<D::Native>);
-
+                let v = scale_op(array.value(i), div)
+                    .ok()
+                    .and_then(<T::Native as NumCast>::from::<D::Native>);
                 value_builder.append_option(v);
             }
         }
@@ -846,11 +849,7 @@ where
             if array.is_null(i) {
                 value_builder.append_null();
             } else {
-                let v = if scale < 0 {
-                    array.value(i).mul_checked(div)?
-                } else {
-                    array.value(i).div_checked(div)?
-                };
+                let v = scale_op(array.value(i), div)?;
 
                 let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
                     ArrowError::CastError(format!(
