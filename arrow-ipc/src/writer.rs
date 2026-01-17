@@ -991,7 +991,7 @@ impl DictionaryTracker {
     ///
     /// This allows the dictionary tracker to be reused for a new IPC stream while avoiding the
     /// allocation cost of creating a new instance. This method should not be called if
-    /// the dictionary tracker will be used to continue writing to the an existing IPC stream.
+    /// the dictionary tracker will be used to continue writing to an existing IPC stream.
     pub fn reset(&mut self) {
         self.dict_ids.clear();
         self.written.clear();
