@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
+use crate::filter::FilterPredicate;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, GenericByteViewArray};
@@ -345,6 +346,33 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         }
         self.source = Some(source);
         Ok(())
+    }
+
+    fn copy_rows_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+        offset: usize,
+        len: usize,
+    ) -> Result<(), ArrowError> {
+        // Temporarily swap out the source with a filtered slice
+        let Some(source) = self.source.as_mut() else {
+            return Err(ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray: source not set".to_string(),
+            ));
+        };
+        // TODO special case offset 0 to skip this nonsense
+        let source_slice = source.array.slice(offset, len);
+        let filtered = filter.filter(&source_slice)?;
+        let old_source = std::mem::replace(&mut source.array, filtered);
+        // Now copy rows with the filtered source (don't return until replaced the old source)
+        let res = self.copy_rows(0, filter.count());
+        let Some(source) = self.source.as_mut() else {
+            return Err(ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray: source not set".to_string(),
+            ));
+        };
+        source.array = old_source;
+        res
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {

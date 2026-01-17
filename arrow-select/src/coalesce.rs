@@ -21,8 +21,7 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{
-    FilterBuilder, FilterPredicate, IndexIterator, filter_record_batch,
-    is_optimize_beneficial_record_batch,
+    FilterBuilder, FilterPredicate, filter_record_batch, is_optimize_beneficial_record_batch,
 };
 
 use crate::take::take_record_batch;
@@ -247,15 +246,10 @@ impl BatchCoalescer {
     ) -> Result<(), ArrowError> {
         // We only support primitve now, fallback to filter_record_batch for other types
         // Also, skip optimization when filter is not very selective
-        if batch
-            .schema()
-            .fields()
-            .iter()
-            .any(|field| !field.data_type().is_primitive())
-            || self
-                .biggest_coalesce_batch_size
-                .map(|biggest_size| filter.true_count() > biggest_size)
-                .unwrap_or(false)
+        if self
+            .biggest_coalesce_batch_size
+            .map(|biggest_size| filter.true_count() > biggest_size)
+            .unwrap_or(false)
         {
             let batch = filter_record_batch(&batch, filter)?;
 
@@ -337,7 +331,7 @@ impl BatchCoalescer {
 
             // Copy all collected indices in one call per array
             for in_progress in self.in_progress_arrays.iter_mut() {
-                in_progress.copy_rows_by_filter(&chunk_predicate)?;
+                in_progress.copy_rows_by_filter(&chunk_predicate, filter_pos, chunk_len)?;
             }
 
             self.buffered_rows += to_copy;
@@ -714,14 +708,16 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     /// Return an error if the source array is not set
     fn copy_rows(&mut self, offset: usize, len: usize) -> Result<(), ArrowError>;
 
-    /// Copy rows at the given indices from the current source array into the in-progress array
-    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
-        // Default implementation: iterate over indices from the filter
-        for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
-            self.copy_rows(idx, 1)?;
-        }
-        Ok(())
-    }
+    /// Copy rows from the source array between the specified offset and len that
+    /// match the predicate to the output array
+    ///
+    /// TODO add an example
+    fn copy_rows_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+        offset: usize,
+        len: usize,
+    ) -> Result<(), ArrowError>;
 
     /// Finish the currently in-progress array and return it as an `ArrayRef`
     fn finish(&mut self) -> Result<ArrayRef, ArrowError>;

@@ -97,7 +97,12 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
     }
 
     /// Copy rows using a predicate
-    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
+    fn copy_rows_by_filter(
+        &mut self,
+        filter: &FilterPredicate,
+        offset: usize,
+        len: usize,
+    ) -> Result<(), ArrowError> {
         self.ensure_capacity();
 
         let s = self
@@ -110,7 +115,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             })?
             .as_primitive::<T>();
 
-        let values = s.values();
+        let values = s.values().slice(offset, len);
         let count = filter.count();
 
         // Use the predicate's strategy for optimal iteration
@@ -220,7 +225,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             }
             IterationStrategy::All => {
                 // Copy all values
-                self.current.extend_from_slice(values);
+                self.current.extend_from_slice(&values);
                 if let Some(nulls) = s.nulls() {
                     self.nulls.append_buffer(nulls);
                 } else {
