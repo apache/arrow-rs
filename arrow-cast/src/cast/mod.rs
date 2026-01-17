@@ -3903,6 +3903,121 @@ mod tests {
             &DataType::Int64,
             vec![Some(1_250), Some(2_250), Some(3_250), None, Some(5_250)]
         );
+
+        let value_array: Vec<Option<i32>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal32_array(value_array, 8, -2).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(12_500), Some(22_500), Some(32_500), None, Some(52_500)]
+        );
+
+        let value_array: Vec<Option<i32>> = vec![Some(2), Some(1), None];
+        let array = create_decimal32_array(value_array, 9, -9).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(2_000_000_000), Some(1_000_000_000), None]
+        );
+
+        let value_array: Vec<Option<i64>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal64_array(value_array, 18, -3).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(125_000), Some(225_000), Some(325_000), None, Some(525_000)]
+        );
+
+        let value_array: Vec<Option<i64>> = vec![Some(12), Some(34), None];
+        let array = create_decimal64_array(value_array, 18, -10).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(120_000_000_000), Some(340_000_000_000), None]
+        );
+
+        let value_array: Vec<Option<i128>> =
+            vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let array = create_decimal128_array(value_array, 38, -4).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(1_250_000),
+                Some(2_250_000),
+                Some(3_250_000),
+                None,
+                Some(5_250_000)
+            ]
+        );
+
+        let value_array: Vec<Option<i128>> = vec![Some(9), Some(1), None];
+        let array = create_decimal128_array(value_array, 38, -18).unwrap();
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![
+                Some(9_000_000_000_000_000_000),
+                Some(1_000_000_000_000_000_000),
+                None
+            ]
+        );
+
+        let array = create_decimal32_array(vec![Some(999_999_999)], 9, -1).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Arithmetic overflow: Overflow happened on: 999999999 * 10".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int64,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
+
+        let array = create_decimal64_array(vec![Some(13)], 18, -1).unwrap();
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: false,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert_eq!(
+            "Cast error: value of 130 is out of range Int8".to_string(),
+            casted_array.unwrap_err().to_string()
+        );
+
+        let casted_array = cast_with_options(
+            &array,
+            &DataType::Int8,
+            &CastOptions {
+                safe: true,
+                format_options: FormatOptions::default(),
+            },
+        );
+        assert!(casted_array.is_ok());
+        assert!(casted_array.unwrap().is_null(0));
     }
 
     #[test]
