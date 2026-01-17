@@ -497,24 +497,25 @@ impl FixedSizeBinaryArray {
 
 impl From<ArrayData> for FixedSizeBinaryArray {
     fn from(data: ArrayData) -> Self {
+        let (data_type, len, nulls, offset, buffers, _child_data) = data.into_parts();
+
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             1,
             "FixedSizeBinaryArray data should contain 1 buffer only (values)"
         );
-        let value_length = match data.data_type() {
-            DataType::FixedSizeBinary(len) => *len,
+        let value_length = match data_type {
+            DataType::FixedSizeBinary(len) => len,
             _ => panic!("Expected data type to be FixedSizeBinary"),
         };
 
         let size = value_length as usize;
-        let value_data =
-            data.buffers()[0].slice_with_length(data.offset() * size, data.len() * size);
+        let value_data = buffers[0].slice_with_length(offset * size, len * size);
 
         Self {
-            data_type: data.data_type().clone(),
-            nulls: data.nulls().cloned(),
-            len: data.len(),
+            data_type,
+            nulls,
+            len,
             value_data,
             value_length,
         }
