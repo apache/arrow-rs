@@ -829,6 +829,7 @@ pub enum DictionaryUpdate {
 /// isn't allowed in the `FileWriter`.
 #[derive(Debug)]
 pub struct DictionaryTracker {
+    // NOTE: When adding fields, update the clear() method accordingly.
     written: HashMap<i64, ArrayData>,
     dict_ids: Vec<i64>,
     error_on_replacement: bool,
@@ -985,6 +986,16 @@ impl DictionaryTracker {
             },
             DictionaryComparison::Equal => unreachable!("Already checked equal case"),
         }
+    }
+
+    /// Clears the state of the dictionary tracker.
+    ///
+    /// This allows the dictionary tracker to be reused for a new IPC stream while avoiding the
+    /// allocation cost of creating a new instance. This method should not be called if
+    /// the dictionary tracker will be used to continue writing to an existing IPC stream.
+    pub fn clear(&mut self) {
+        self.dict_ids.clear();
+        self.written.clear();
     }
 }
 
@@ -1192,9 +1203,11 @@ impl<W: Write> FileWriter<W> {
         let mut fbb = FlatBufferBuilder::new();
         let dictionaries = fbb.create_vector(&self.dictionary_blocks);
         let record_batches = fbb.create_vector(&self.record_blocks);
-        let mut dictionary_tracker = DictionaryTracker::new(true);
+
+        // dictionaries are already written, so we can reset dictionary tracker to reuse for schema
+        self.dictionary_tracker.clear();
         let schema = IpcSchemaEncoder::new()
-            .with_dictionary_tracker(&mut dictionary_tracker)
+            .with_dictionary_tracker(&mut self.dictionary_tracker)
             .schema_to_fb_offset(&mut fbb, &self.schema);
         let fb_custom_metadata = (!self.custom_metadata.is_empty())
             .then(|| crate::convert::metadata_to_fb(&mut fbb, &self.custom_metadata));
@@ -4173,5 +4186,74 @@ mod tests {
         // should be good enough.
         let all_passed = (0..20).all(|_| create_hash() == expected);
         assert!(all_passed);
+    }
+
+    #[test]
+    fn test_dictionary_tracker_reset() {
+        let data_gen = IpcDataGenerator::default();
+        let mut dictionary_tracker = DictionaryTracker::new(false);
+        let writer_options = IpcWriteOptions::default();
+        let mut compression_ctx = CompressionContext::default();
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "a",
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8)),
+            false,
+        )]));
+
+        let mut write_single_batch_stream =
+            |batch: RecordBatch, dict_tracker: &mut DictionaryTracker| -> Vec<u8> {
+                let mut buffer = Vec::new();
+
+                // create a new IPC stream:
+                let stream_header = data_gen.schema_to_bytes_with_dictionary_tracker(
+                    &schema,
+                    dict_tracker,
+                    &writer_options,
+                );
+                _ = write_message(&mut buffer, stream_header, &writer_options).unwrap();
+
+                let (encoded_dicts, encoded_batch) = data_gen
+                    .encode(&batch, dict_tracker, &writer_options, &mut compression_ctx)
+                    .unwrap();
+                for encoded_dict in encoded_dicts {
+                    _ = write_message(&mut buffer, encoded_dict, &writer_options).unwrap();
+                }
+                _ = write_message(&mut buffer, encoded_batch, &writer_options).unwrap();
+
+                buffer
+            };
+
+        let batch1 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values([0]),
+                Arc::new(StringArray::from_iter_values(["a"])),
+            ))],
+        )
+        .unwrap();
+        let buffer = write_single_batch_stream(batch1.clone(), &mut dictionary_tracker);
+
+        // ensure we can read the stream back
+        let mut reader = StreamReader::try_new(Cursor::new(buffer), None).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+        assert_eq!(read_batch, batch1);
+
+        // reset the dictionary tracker so it can be used for next stream
+        dictionary_tracker.clear();
+
+        // now write a 2nd stream and ensure we can also read it:
+        let batch2 = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(DictionaryArray::new(
+                UInt8Array::from_iter_values([0]),
+                Arc::new(StringArray::from_iter_values(["a"])),
+            ))],
+        )
+        .unwrap();
+        let buffer = write_single_batch_stream(batch2.clone(), &mut dictionary_tracker);
+        let mut reader = StreamReader::try_new(Cursor::new(buffer), None).unwrap();
+        let read_batch = reader.next().unwrap().unwrap();
+        assert_eq!(read_batch, batch2);
     }
 }
