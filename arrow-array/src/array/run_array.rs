@@ -642,6 +642,7 @@ mod tests {
     use super::*;
     use crate::builder::PrimitiveRunBuilder;
     use crate::cast::AsArray;
+    use crate::new_empty_array;
     use crate::types::{Int8Type, UInt32Type};
     use crate::{Int16Array, Int32Array, StringArray};
 
@@ -737,6 +738,26 @@ mod tests {
 
         let run_ends = ree_array.run_ends();
         assert_eq!(run_ends.values(), &run_ends_values);
+    }
+
+    #[test]
+    fn test_run_array_empty() {
+        let runs = new_empty_array(&DataType::Int16);
+        let runs = runs.as_primitive::<Int16Type>();
+        let values = new_empty_array(&DataType::Int64);
+        let array = RunArray::try_new(runs, &values).unwrap();
+
+        fn assertions(array: &RunArray<Int16Type>) {
+            assert!(array.is_empty());
+            assert_eq!(array.get_start_physical_index(), 0);
+            assert_eq!(array.get_end_physical_index(), 0);
+            assert!(array.get_physical_indices::<i16>(&[]).unwrap().is_empty());
+            assert!(array.run_ends().is_empty());
+            assert_eq!(array.run_ends().sliced_values().count(), 0);
+        }
+
+        assertions(&array);
+        assertions(&array.slice(0, 0));
     }
 
     #[test]
