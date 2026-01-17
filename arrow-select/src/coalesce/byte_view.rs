@@ -16,6 +16,7 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
+use crate::filter::FilterPredicate;
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
 use arrow_array::{Array, ArrayRef, GenericByteViewArray};
@@ -98,10 +99,9 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// This is done on write (when we know it is necessary) rather than
     /// eagerly to avoid allocations that are not used.
     fn ensure_capacity(&mut self) {
-        if self.views.capacity() == 0 {
-            self.views.reserve(self.batch_size);
+        if self.views.capacity() < self.batch_size {
+            self.views.reserve(self.batch_size - self.views.len());
         }
-        debug_assert_eq!(self.views.capacity(), self.batch_size);
     }
 
     /// Finishes in progress buffer, if any
@@ -343,6 +343,46 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         } else {
             self.append_views_and_update_buffer_index(views, buffers);
         }
+        self.source = Some(source);
+        Ok(())
+    }
+
+    fn copy_rows_by_filter(&mut self, filter: &FilterPredicate) -> Result<(), ArrowError> {
+        self.ensure_capacity();
+        let source = self.source.take().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
+                "Internal Error: InProgressByteViewArray: source not set".to_string(),
+            )
+        })?;
+
+        // TODO: we can optimize this by filtering here
+        let array = filter.filter(source.array.as_ref())?;
+        let s = array.as_byte_view::<B>();
+
+        // add any nulls, as necessary
+        if let Some(nulls) = s.nulls().as_ref() {
+            self.nulls.append_buffer(nulls);
+        } else {
+            self.nulls.append_n_non_nulls(s.len());
+        };
+
+        let views = s.views().as_ref();
+        let buffers = s.data_buffers();
+
+        // If there are no data buffers in s (all inlined views), can append the
+        // views/nulls and done
+        if buffers.is_empty() {
+            self.views.extend_from_slice(views);
+        } else {
+            let ideal_buffer_size: usize = s.total_buffer_bytes_used();
+
+            if source.need_gc {
+                self.append_views_and_copy_strings(views, ideal_buffer_size, buffers);
+            } else {
+                self.append_views_and_update_buffer_index(views, buffers);
+            }
+        }
+
         self.source = Some(source);
         Ok(())
     }

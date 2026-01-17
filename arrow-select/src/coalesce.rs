@@ -21,7 +21,7 @@
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
 use crate::filter::{
-    FilterBuilder, FilterPredicate, IndexIterator, filter_record_batch,
+    FilterBuilder, FilterPredicate, IndexIterator,
     is_optimize_beneficial_record_batch,
 };
 
@@ -245,20 +245,6 @@ impl BatchCoalescer {
         batch: RecordBatch,
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
-        // We only support primitve now, fallback to filter_record_batch for other types
-        // Also, skip optimization when filter is not very selective
-        if batch
-            .schema()
-            .fields()
-            .iter()
-            .any(|field| !field.data_type().is_primitive())
-        {
-            let batch = filter_record_batch(&batch, filter)?;
-
-            self.push_batch(batch)?;
-            return Ok(());
-        }
-
         // Build an optimized filter predicate that chooses the best iteration strategy
         let is_optimize_beneficial = is_optimize_beneficial_record_batch(&batch);
         let selected_count = filter.true_count();
@@ -2123,5 +2109,29 @@ mod tests {
         let expected = uint32_batch_non_null(0..TOTAL_ROWS);
 
         assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn test_string_view_with_filter() {
+        use arrow_array::StringViewArray;
+        let array = StringViewArray::from(vec![
+            Some("short"),
+            Some("a very long string that will not be inlined"),
+            None,
+            Some("another long string for testing"),
+            Some("inline"),
+            Some("to be filtered out"),
+            Some("also filtered out"),
+        ]);
+        let batch = RecordBatch::try_from_iter(vec![("c1", Arc::new(array) as ArrayRef)]).unwrap();
+
+        let filter = BooleanArray::from(vec![true, true, true, true, true, false, false]);
+
+        Test::new()
+            .with_batch(batch)
+            .with_filter(filter)
+            .with_batch_size(2)
+            .with_expected_output_sizes(vec![2, 2, 1])
+            .run();
     }
 }
