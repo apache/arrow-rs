@@ -421,6 +421,48 @@ impl FilterPredicate {
     pub fn filter_array(&self) -> &BooleanArray {
         &self.filter
     }
+
+    /// Returns a slice of the [`FilterPredicate`]
+    ///
+    /// # Panics
+    /// Panics if `offset + len > self.filter.len()`
+    pub fn slice(&self, offset: usize, len: usize, count: usize) -> Self {
+        let filter = self.filter.slice(offset, len);
+        let strategy = match &self.strategy {
+            IterationStrategy::None => IterationStrategy::None,
+            IterationStrategy::All => IterationStrategy::All,
+            IterationStrategy::SlicesIterator => IterationStrategy::SlicesIterator,
+            IterationStrategy::IndexIterator => IterationStrategy::IndexIterator,
+            IterationStrategy::Indices(indices) => {
+                let start = indices.partition_point(|&i| i < offset);
+                let end = indices.partition_point(|&i| i < offset + len);
+                IterationStrategy::Indices(
+                    indices[start..end].iter().map(|&i| i - offset).collect(),
+                )
+            }
+            IterationStrategy::Slices(slices) => {
+                let mut chunk_slices = Vec::new();
+                for &(start, end) in slices {
+                    if end <= offset {
+                        continue;
+                    }
+                    if start >= offset + len {
+                        break;
+                    }
+                    let s = start.max(offset) - offset;
+                    let e = end.min(offset + len) - offset;
+                    chunk_slices.push((s, e));
+                }
+                IterationStrategy::Slices(chunk_slices)
+            }
+        };
+
+        Self {
+            filter,
+            count,
+            strategy,
+        }
+    }
 }
 
 fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {

@@ -20,9 +20,7 @@
 //!
 //! [`filter`]: crate::filter::filter
 //! [`take`]: crate::take::take
-use crate::filter::{
-    FilterBuilder, FilterPredicate, filter_record_batch, is_optimize_beneficial_record_batch,
-};
+use crate::filter::{FilterBuilder, FilterPredicate, is_optimize_beneficial_record_batch};
 
 use crate::take::take_record_batch;
 use arrow_array::types::{BinaryViewType, StringViewType};
@@ -245,21 +243,12 @@ impl BatchCoalescer {
         filter: &BooleanArray,
     ) -> Result<(), ArrowError> {
         // We only support primitve now, fallback to filter_record_batch for other types
-        // Also, skip optimization when filter is not very selective
-        if self
-            .biggest_coalesce_batch_size
-            .map(|biggest_size| filter.true_count() > biggest_size)
-            .unwrap_or(false)
-        {
-            let batch = filter_record_batch(&batch, filter)?;
-
-            self.push_batch(batch)?;
-            return Ok(());
-        }
+        // Also, skip optimization when filter is not very selectivex§
 
         // Build an optimized filter predicate that chooses the best iteration strategy
         let is_optimize_beneficial = is_optimize_beneficial_record_batch(&batch);
         let selected_count = filter.true_count();
+        let num_rows = batch.num_rows();
 
         // Fast path: skip if no rows selected
         if selected_count == 0 {
@@ -267,10 +256,11 @@ impl BatchCoalescer {
         }
 
         // Fast path: if all rows selected, just push the batch
-        if selected_count == batch.num_rows() {
+        if selected_count == num_rows {
             return self.push_batch(batch);
         }
 
+        let selectivity = Some(selected_count as f64 / num_rows as f64);
         let (_schema, arrays, _num_rows) = batch.into_parts();
 
         // Setup input arrays as sources
@@ -279,7 +269,7 @@ impl BatchCoalescer {
             .iter_mut()
             .zip(&arrays)
             .for_each(|(in_progress, array)| {
-                in_progress.set_source(Some(Arc::clone(array)));
+                in_progress.set_source(Some(Arc::clone(array)), selectivity);
             });
 
         // Choose iteration strategy based on the optimized predicate
@@ -287,7 +277,7 @@ impl BatchCoalescer {
 
         // Clear sources to allow memory to be freed
         for in_progress in self.in_progress_arrays.iter_mut() {
-            in_progress.set_source(None);
+            in_progress.set_source(None, None);
         }
 
         Ok(())
@@ -305,6 +295,13 @@ impl BatchCoalescer {
         let mut remaining = count;
         let mut filter_pos = 0; // Position in the filter array
 
+        // Build an optimized filter predicate once for the whole input batch
+        let mut filter_builder = FilterBuilder::new(filter);
+        if is_optimize_beneficial {
+            filter_builder = filter_builder.optimize();
+        }
+        let predicate = filter_builder.build();
+
         // We need to process the filter in chunks that fit the target batch size
         while remaining > 0 {
             let space_in_batch = self.target_batch_size - self.buffered_rows;
@@ -321,13 +318,7 @@ impl BatchCoalescer {
                     - filter_pos
             };
 
-            let chunk_filter = filter.slice(filter_pos, chunk_len);
-            let mut filter_builder = FilterBuilder::new(&chunk_filter);
-
-            if is_optimize_beneficial {
-                filter_builder = filter_builder.optimize();
-            }
-            let chunk_predicate = filter_builder.build();
+            let chunk_predicate = predicate.slice(filter_pos, chunk_len, to_copy);
 
             // Copy all collected indices in one call per array
             for in_progress in self.in_progress_arrays.iter_mut() {
@@ -567,7 +558,7 @@ impl BatchCoalescer {
             .iter_mut()
             .zip(arrays)
             .for_each(|(in_progress, array)| {
-                in_progress.set_source(Some(array));
+                in_progress.set_source(Some(array), Some(1.0));
             });
 
         // If pushing this batch would exceed the target batch size,
@@ -604,7 +595,7 @@ impl BatchCoalescer {
 
         // clear in progress sources (to allow the memory to be freed)
         for in_progress in self.in_progress_arrays.iter_mut() {
-            in_progress.set_source(None);
+            in_progress.set_source(None, None);
         }
 
         Ok(())
@@ -699,7 +690,7 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     ///
     /// Calls to [`Self::copy_rows`] will copy rows from this array into the
     /// current in-progress array
-    fn set_source(&mut self, source: Option<ArrayRef>);
+    fn set_source(&mut self, source: Option<ArrayRef>, selectivity: Option<f64>);
 
     /// Copy rows from the current source array into the in-progress array
     ///

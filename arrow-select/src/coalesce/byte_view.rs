@@ -280,18 +280,34 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 }
 
 impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
-    fn set_source(&mut self, source: Option<ArrayRef>) {
+    fn set_source(&mut self, source: Option<ArrayRef>, selectivity: Option<f64>) {
         self.source = source.map(|array| {
             let s = array.as_byte_view::<B>();
 
             let (need_gc, ideal_buffer_size) = if s.data_buffers().is_empty() {
                 (false, 0)
             } else {
+                // If selectivity is very low, it's almost certain that we want to GC
+                // because we are only taking a tiny fraction of the data.
+                // In this case, we avoid the expensive O(N) total_buffer_bytes_used() call.
+                //
+                // We use a threshold of 0.1 (10% selectivity).
+                if let Some(sel) = selectivity {
+                    if sel < 0.1 {
+                        return Source {
+                            array,
+                            need_gc: true,
+                            ideal_buffer_size: 0, // 0 hint uses default block sizes, avoiding huge allocations
+                        };
+                    }
+                }
+
+                let actual_buffer_size =
+                    s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
+
                 let ideal_buffer_size = s.total_buffer_bytes_used();
                 // We don't use get_buffer_memory_size here, because gc is for the contents of the
                 // data buffers, not views and nulls.
-                let actual_buffer_size =
-                    s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
                 // copying strings is expensive, so only do it if the array is
                 // sparse (uses at least 2x the memory it needs)
                 let need_gc =
