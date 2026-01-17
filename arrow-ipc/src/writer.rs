@@ -829,6 +829,7 @@ pub enum DictionaryUpdate {
 /// isn't allowed in the `FileWriter`.
 #[derive(Debug)]
 pub struct DictionaryTracker {
+    // NOTE: When adding fields, update the clear() method accordingly.
     written: HashMap<i64, ArrayData>,
     dict_ids: Vec<i64>,
     error_on_replacement: bool,
@@ -987,12 +988,12 @@ impl DictionaryTracker {
         }
     }
 
-    /// Resets the state of the dictionary tracker.
+    /// Clears the state of the dictionary tracker.
     ///
     /// This allows the dictionary tracker to be reused for a new IPC stream while avoiding the
     /// allocation cost of creating a new instance. This method should not be called if
     /// the dictionary tracker will be used to continue writing to an existing IPC stream.
-    pub fn reset(&mut self) {
+    pub fn clear(&mut self) {
         self.dict_ids.clear();
         self.written.clear();
     }
@@ -1204,7 +1205,7 @@ impl<W: Write> FileWriter<W> {
         let record_batches = fbb.create_vector(&self.record_blocks);
 
         // dictionaries are already written, so we can reset dictionary tracker to reuse for schema
-        self.dictionary_tracker.reset();
+        self.dictionary_tracker.clear();
         let schema = IpcSchemaEncoder::new()
             .with_dictionary_tracker(&mut self.dictionary_tracker)
             .schema_to_fb_offset(&mut fbb, &self.schema);
@@ -4239,7 +4240,7 @@ mod tests {
         assert_eq!(read_batch, batch1);
 
         // reset the dictionary tracker so it can be used for next stream
-        dictionary_tracker.reset();
+        dictionary_tracker.clear();
 
         // now write a 2nd stream and ensure we can also read it:
         let batch2 = RecordBatch::try_new(
