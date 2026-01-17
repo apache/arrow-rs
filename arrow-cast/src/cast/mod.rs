@@ -2767,9 +2767,50 @@ mod tests {
 
     #[test]
     fn test_decimal128_to_float16_cast() {
-        use arrow_array::{Decimal128Array, Float16Array};
+        use half::f16;
+        // Case 1: Decimal128 cast to Float16
+        let decimal = Decimal128Array::from(vec![
+            Some(12345), // 123.45
+            None,
+            Some(-6789), // -67.89
+        ])
+        .with_precision_and_scale(10, 2)
+        .unwrap();
 
-        let decimal = Decimal128Array::from(vec![Some(12345), None])
+        let result = cast(&decimal, &DataType::Float16).unwrap();
+        let float_arr = result.as_any().downcast_ref::<Float16Array>().unwrap();
+
+        assert_eq!(float_arr.len(), 3);
+        assert!(float_arr.is_valid(0));
+        assert!(float_arr.is_null(1));
+        assert!(float_arr.is_valid(2));
+
+        // Exact comparison using f16
+        assert_eq!(float_arr.value(0), f16::from_f32(123.45));
+        assert_eq!(float_arr.value(2), f16::from_f32(-67.89));
+    }
+
+    #[test]
+    fn test_decimal32_to_float16_cast() {
+        use half::f16;
+        // Case 2: Decimal32 cast to Float16
+        let decimal = Decimal32Array::from(vec![Some(1234), None])
+            .with_precision_and_scale(6, 2)
+            .unwrap();
+
+        let result = cast(&decimal, &DataType::Float16).unwrap();
+        let float_arr = result.as_any().downcast_ref::<Float16Array>().unwrap();
+
+        assert_eq!(float_arr.len(), 2);
+        assert_eq!(float_arr.value(0), f16::from_f32(12.34));
+        assert!(float_arr.is_null(1));
+    }
+
+    #[test]
+    fn test_decimal64_to_float16_cast() {
+        use half::f16;
+        // Case 3: Decimal64 cast to Float16
+        let decimal = Decimal64Array::from(vec![Some(5678), None])
             .with_precision_and_scale(10, 2)
             .unwrap();
 
@@ -2777,11 +2818,34 @@ mod tests {
         let float_arr = result.as_any().downcast_ref::<Float16Array>().unwrap();
 
         assert_eq!(float_arr.len(), 2);
+        assert_eq!(float_arr.value(0), f16::from_f32(56.78));
+        assert!(float_arr.is_null(1));
+    }
+
+    #[test]
+    fn test_decimal256_to_float16_cast() {
+        use arrow_buffer::i256;
+        use half::f16;
+
+        // Case 4: Decimal256 cast to Float16
+        let decimal = Decimal256Array::from(vec![
+            Some(i256::from(12345)), // 123.45
+            None,
+        ])
+        .with_precision_and_scale(20, 2)
+        .unwrap();
+
+        let result = cast(&decimal, &DataType::Float16).unwrap();
+        let float_arr = result.as_any().downcast_ref::<Float16Array>().unwrap();
+
+        assert_eq!(float_arr.len(), 2);
+        assert_eq!(float_arr.value(0), f16::from_f32(123.45));
         assert!(float_arr.is_null(1));
     }
 
     #[derive(Clone)]
     struct DecimalCastTestConfig {
+        // ... baaki code same rahega ...
         input_prec: u8,
         input_scale: i8,
         input_repr: i128,
