@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-use arrow_buffer::{NullBuffer, ScalarBuffer};
+use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
 use arrow_data::{ArrayData, ArrayDataBuilder};
 use arrow_schema::{ArrowError, DataType, FieldRef};
 use std::any::Any;
@@ -576,23 +576,23 @@ impl<OffsetSize: OffsetSizeTrait> From<FixedSizeListArray> for GenericListViewAr
 
 impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
     fn try_new_from_array_data(data: ArrayData) -> Result<Self, ArrowError> {
-        let (data_type, len, nulls, offset, mut buffers, mut child_data) = data.into_parts();
+        let (data_type, len, nulls, offset, buffers, child_data) = data.into_parts();
 
-        if buffers.len() != 2 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "ListViewArray data should contain two buffers (value offsets & value sizes), had {}",
-                buffers.len()
-            )));
-        }
+        // ArrayData is valid, and verified type above
+        // buffer[0] is offsets, buffer[1] is sizes
+        let num_buffers = buffers.len();
+        let [offsets_buffer, sizes_buffer] : [Buffer; 2] = buffers.try_into().map_err(|_| {
+             ArrowError::InvalidArgumentError(format!(
+                "ListViewArray data should contain two buffers (value offsets & value sizes), had {num_buffers}",
+            ))
+        })?;
 
-        if child_data.len() != 1 {
-            return Err(ArrowError::InvalidArgumentError(format!(
-                "ListViewArray should contain a single child array (values array), had {}",
-                child_data.len()
-            )));
-        }
-
-        let values = child_data.pop().expect("checked above");
+        let num_child = child_data.len();
+        let [values]: [ArrayData; 1] = child_data.try_into().map_err(|_| {
+            ArrowError::InvalidArgumentError(format!(
+                "ListViewArray should contain a single child array (values array), had {num_child}",
+            ))
+        })?;
 
         if let Some(child_data_type) = Self::get_type(&data_type) {
             if values.data_type() != child_data_type {
@@ -614,10 +614,6 @@ impl<OffsetSize: OffsetSizeTrait> GenericListViewArray<OffsetSize> {
         }
 
         let values = make_array(values);
-        // ArrayData is valid, and verified type above
-        // buffer[0] is offsets, buffer[1] is sizes
-        let sizes_buffer = buffers.pop().expect("checked above");
-        let offsets_buffer = buffers.pop().expect("checked above");
         let value_offsets = ScalarBuffer::new(offsets_buffer, offset, len);
         let value_sizes = ScalarBuffer::new(sizes_buffer, offset, len);
 
