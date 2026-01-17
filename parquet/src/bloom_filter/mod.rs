@@ -623,7 +623,7 @@ mod tests {
             let logfinner = if i == 0 {
                 f64::NEG_INFINITY // log(0) = -infinity, contributes 0 to result
             } else {
-                BUCKET_WORDS * (1.0 - (1.0 - 1.0 / WORD_BITS).powf(i_f64)).ln()
+                BUCKET_WORDS * (-(1.0 - 1.0 / WORD_BITS).powf(i_f64)).log1p()
             };
 
             // Probability of hash collision (two elements map to same block)
