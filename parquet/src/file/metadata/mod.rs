@@ -1067,6 +1067,10 @@ impl ColumnChunkMetaData {
 
     /// Returns the page encoding statistics, or `None` if no page encoding statistics
     /// are available (or they were converted to a mask).
+    ///
+    /// Note: By default, this crate converts page encoding statistics to a mask for performance
+    /// reasons. To get the full statistics, you must set [`ParquetMetaDataOptions::with_encoding_stats_as_mask`]
+    /// to `false`.
     pub fn page_encoding_stats(&self) -> Option<&Vec<PageEncodingStats>> {
         match self.encoding_stats.as_ref() {
             Some(ParquetPageEncodingStats::Full(stats)) => Some(stats),
@@ -1076,6 +1080,8 @@ impl ColumnChunkMetaData {
 
     /// Returns the page encoding statistics reduced to a bitmask, or `None` if statistics are
     /// not available (or they were left in their original form).
+    ///
+    /// Note: This is the default behavior for this crate.
     ///
     /// The [`PageEncodingStats`] struct was added to the Parquet specification specifically to
     /// enable fast determination of whether all pages in a column chunk are dictionary encoded
@@ -1674,7 +1680,9 @@ impl OffsetIndexBuilder {
 mod tests {
     use super::*;
     use crate::basic::{PageType, SortOrder};
-    use crate::file::metadata::thrift::tests::{read_column_chunk, read_row_group};
+    use crate::file::metadata::thrift::tests::{
+        read_column_chunk, read_column_chunk_with_options, read_row_group,
+    };
 
     #[test]
     fn test_row_group_metadata_thrift_conversion() {
@@ -1829,7 +1837,72 @@ mod tests {
         let mut buf = Vec::new();
         let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
         col_metadata.write_thrift(&mut writer).unwrap();
-        let col_chunk_res = read_column_chunk(&mut buf, column_descr).unwrap();
+        let col_chunk_res = read_column_chunk(&mut buf, column_descr.clone()).unwrap();
+
+        let expected_metadata = ColumnChunkMetaData::builder(column_descr)
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
+            .set_file_path("file_path".to_owned())
+            .set_num_values(1000)
+            .set_compression(Compression::SNAPPY)
+            .set_total_compressed_size(2000)
+            .set_total_uncompressed_size(3000)
+            .set_data_page_offset(4000)
+            .set_dictionary_page_offset(Some(5000))
+            .set_page_encoding_stats_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
+            .set_bloom_filter_offset(Some(6000))
+            .set_bloom_filter_length(Some(25))
+            .set_offset_index_offset(Some(7000))
+            .set_offset_index_length(Some(25))
+            .set_column_index_offset(Some(8000))
+            .set_column_index_length(Some(25))
+            .set_unencoded_byte_array_data_bytes(Some(2000))
+            .set_repetition_level_histogram(Some(LevelHistogram::from(vec![100, 100])))
+            .set_definition_level_histogram(Some(LevelHistogram::from(vec![0, 200])))
+            .build()
+            .unwrap();
+
+        assert_eq!(col_chunk_res, expected_metadata);
+    }
+
+    #[test]
+    fn test_column_chunk_metadata_thrift_conversion_full_stats() {
+        let column_descr = get_test_schema_descr().column(0);
+        let stats = vec![
+            PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::PLAIN,
+                count: 3,
+            },
+            PageEncodingStats {
+                page_type: PageType::DATA_PAGE,
+                encoding: Encoding::RLE,
+                count: 5,
+            },
+        ];
+        let col_metadata = ColumnChunkMetaData::builder(column_descr.clone())
+            .set_encodings_mask(EncodingMask::new_from_encodings(
+                [Encoding::PLAIN, Encoding::RLE].iter(),
+            ))
+            .set_num_values(1000)
+            .set_compression(Compression::SNAPPY)
+            .set_total_compressed_size(2000)
+            .set_total_uncompressed_size(3000)
+            .set_data_page_offset(4000)
+            .set_page_encoding_stats(stats)
+            .build()
+            .unwrap();
+
+        let mut buf = Vec::new();
+        let mut writer = ThriftCompactOutputProtocol::new(&mut buf);
+        col_metadata.write_thrift(&mut writer).unwrap();
+
+        let options = ParquetMetaDataOptions::new().with_encoding_stats_as_mask(false);
+        let col_chunk_res =
+            read_column_chunk_with_options(&mut buf, column_descr, Some(&options)).unwrap();
 
         assert_eq!(col_chunk_res, col_metadata);
     }

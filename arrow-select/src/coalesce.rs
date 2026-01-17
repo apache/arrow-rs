@@ -615,6 +615,7 @@ mod tests {
     use crate::concat::concat_batches;
     use arrow_array::builder::StringViewBuilder;
     use arrow_array::cast::AsArray;
+    use arrow_array::types::Int32Type;
     use arrow_array::{
         BinaryViewArray, Int32Array, Int64Array, RecordBatchOptions, StringArray, StringViewArray,
         TimestampNanosecondArray, UInt32Array, UInt64Array,
@@ -1625,6 +1626,11 @@ mod tests {
         // Now should have a completed batch (100 rows total)
         assert!(coalescer.has_completed_batch());
         let output_batch = coalescer.next_completed_batch().unwrap();
+        let size = output_batch
+            .column(0)
+            .as_primitive::<Int32Type>()
+            .get_buffer_memory_size();
+        assert_eq!(size, 400); // 100 rows * 4 bytes each
         assert_eq!(output_batch.num_rows(), 100);
 
         assert_eq!(coalescer.get_buffered_rows(), 0);

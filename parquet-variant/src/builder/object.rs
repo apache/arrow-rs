@@ -24,12 +24,48 @@ use crate::{
 use arrow_schema::ArrowError;
 use indexmap::IndexMap;
 
-fn object_header(large: bool, id_size: u8, offset_size: u8) -> u8 {
-    let large_bit = if large { 1 } else { 0 };
-    (large_bit << (BASIC_TYPE_BITS + 4))
-        | ((id_size - 1) << (BASIC_TYPE_BITS + 2))
-        | ((offset_size - 1) << BASIC_TYPE_BITS)
+fn object_header<const LARGE_BIT: u8, const ID_SIZE: u8, const OFFSET_SIZE: u8>() -> u8 {
+    (LARGE_BIT << (BASIC_TYPE_BITS + 4))
+        | ((ID_SIZE - 1) << (BASIC_TYPE_BITS + 2))
+        | ((OFFSET_SIZE - 1) << BASIC_TYPE_BITS)
         | VariantBasicType::Object as u8
+}
+
+struct ObjectHeaderWriter<const OFFSET_SIZE: u8, const ID_SIZE: u8>();
+
+impl<const OFFSET_SIZE: u8, const ID_SIZE: u8> ObjectHeaderWriter<OFFSET_SIZE, ID_SIZE> {
+    fn write(
+        dst: &mut Vec<u8>,
+        num_fields: usize,
+        field_ids: impl Iterator<Item = u32>,
+        offsets: impl Iterator<Item = usize>,
+        data_size: usize,
+    ) {
+        let is_large = num_fields > u8::MAX as usize;
+        // num_fields will consume 4 bytes when it is larger than u8::MAX
+        if is_large {
+            dst.push(object_header::<1, { ID_SIZE }, { OFFSET_SIZE }>());
+            append_packed_u32::<4>(dst, num_fields);
+        } else {
+            dst.push(object_header::<0, { ID_SIZE }, { OFFSET_SIZE }>());
+            append_packed_u32::<1>(dst, num_fields);
+        }
+
+        for id in field_ids {
+            append_packed_u32::<ID_SIZE>(dst, id as usize);
+        }
+
+        for off in offsets {
+            append_packed_u32::<OFFSET_SIZE>(dst, off);
+        }
+
+        append_packed_u32::<OFFSET_SIZE>(dst, data_size);
+    }
+}
+
+#[inline(always)]
+fn append_packed_u32<const SIZE: u8>(dest: &mut Vec<u8>, value: usize) {
+    dest.extend_from_slice(&value.to_le_bytes()[..SIZE as usize]);
 }
 
 /// A builder for creating [`Variant::Object`] values.
@@ -245,41 +281,45 @@ impl<'a, S: BuilderSpecificState> ObjectBuilder<'a, S> {
             (num_fields * id_size as usize) + // field IDs
             ((num_fields + 1) * offset_size as usize); // field offsets + data_size
 
+        let mut bytes_to_splice = Vec::with_capacity(header_size);
+
+        macro_rules! write_header {
+            ($offset_size:expr, $id_size:expr) => {
+                ObjectHeaderWriter::<{ $offset_size as u8 }, { $id_size as u8 }>::write(
+                    &mut bytes_to_splice,
+                    num_fields,
+                    self.fields.keys().copied(),
+                    self.fields.values().copied(),
+                    data_size,
+                )
+            };
+        }
+
+        use crate::decoder::OffsetSizeBytes::*;
+        match (offset_size, id_size) {
+            (One, One) => write_header!(One, One),
+            (One, Two) => write_header!(One, Two),
+            (One, Three) => write_header!(One, Three),
+            (One, Four) => write_header!(One, Four),
+            (Two, One) => write_header!(Two, One),
+            (Two, Two) => write_header!(Two, Two),
+            (Two, Three) => write_header!(Two, Three),
+            (Two, Four) => write_header!(Two, Four),
+            (Three, One) => write_header!(Three, One),
+            (Three, Two) => write_header!(Three, Two),
+            (Three, Three) => write_header!(Three, Three),
+            (Three, Four) => write_header!(Three, Four),
+            (Four, One) => write_header!(Four, One),
+            (Four, Two) => write_header!(Four, Two),
+            (Four, Three) => write_header!(Four, Three),
+            (Four, Four) => write_header!(Four, Four),
+        }
+
         // Shift existing data to make room for the header
-        value_builder.inner_mut().splice(
-            starting_offset..starting_offset,
-            std::iter::repeat_n(0u8, header_size),
-        );
+        value_builder
+            .inner_mut()
+            .splice(starting_offset..starting_offset, bytes_to_splice);
 
-        // Write header at the original start position
-        let mut header_pos = starting_offset;
-
-        // Write header byte
-        let header = object_header(is_large, id_size, offset_size);
-
-        header_pos = self
-            .parent_state
-            .value_builder()
-            .append_header_start_from_buf_pos(header_pos, header, is_large, num_fields);
-
-        header_pos = self
-            .parent_state
-            .value_builder()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.keys().copied().map(|id| id as usize),
-                None,
-                id_size,
-            );
-
-        self.parent_state
-            .value_builder()
-            .append_offset_array_start_from_buf_pos(
-                header_pos,
-                self.fields.values().copied(),
-                Some(data_size),
-                offset_size,
-            );
         self.parent_state.finish();
     }
 }

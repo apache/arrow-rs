@@ -415,6 +415,8 @@ impl<OffsetSize: OffsetSizeTrait> ArrayAccessor for &GenericListViewArray<Offset
     }
 }
 
+impl<OffsetSize: OffsetSizeTrait> super::private::Sealed for GenericListViewArray<OffsetSize> {}
+
 impl<OffsetSize: OffsetSizeTrait> Array for GenericListViewArray<OffsetSize> {
     fn as_any(&self) -> &dyn Any {
         self

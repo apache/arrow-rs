@@ -20,7 +20,7 @@
 mod binary_array;
 
 use crate::types::*;
-use arrow_buffer::{ArrowNativeType, NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow_buffer::{ArrowNativeType, Buffer, NullBuffer, OffsetBuffer, ScalarBuffer};
 use arrow_data::ArrayData;
 use arrow_schema::{DataType, IntervalUnit, TimeUnit};
 use std::any::Any;
@@ -78,8 +78,18 @@ pub use list_view_array::*;
 
 use crate::iterator::ArrayIter;
 
+mod private {
+    /// Private marker trait to ensure [`super::Array`] can not be implemented outside this crate
+    pub trait Sealed {}
+
+    impl<T: Sealed> Sealed for &T {}
+}
+
 /// An array in the [arrow columnar format](https://arrow.apache.org/docs/format/Columnar.html)
-pub trait Array: std::fmt::Debug + Send + Sync {
+///
+/// This trait is sealed as it is not intended for custom array types, rather only
+/// those defined in this crate.
+pub trait Array: std::fmt::Debug + Send + Sync + private::Sealed {
     /// Returns the array as [`Any`] so that it can be
     /// downcasted to a specific implementation.
     ///
@@ -340,6 +350,8 @@ pub trait Array: std::fmt::Debug + Send + Sync {
 
 /// A reference-counted reference to a generic `Array`
 pub type ArrayRef = Arc<dyn Array>;
+
+impl private::Sealed for ArrayRef {}
 
 /// Ergonomics: Allow use of an ArrayRef as an `&dyn Array`
 impl Array for ArrayRef {
@@ -745,8 +757,36 @@ impl<R: RunEndIndexType> PartialEq for RunArray<R> {
     }
 }
 
-/// Constructs an array using the input `data`.
-/// Returns a reference-counted `Array` instance.
+/// Constructs an [`ArrayRef`] from an [`ArrayData`].
+///
+/// # Notes:
+///
+/// It is more efficient to directly construct the concrete array type rather
+/// than using this function as creating an `ArrayData` requires at least one
+/// additional allocation (the Vec of buffers).
+///
+/// # Example:
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow_data::ArrayData;
+/// # use arrow_array::{make_array, ArrayRef, Int32Array};
+/// # use arrow_buffer::{Buffer, ScalarBuffer};
+/// # use arrow_schema::DataType;
+/// // Create an Int32Array with values [1, 2, 3]
+/// let values_buffer = Buffer::from_slice_ref(&[1, 2, 3]);
+/// // ArrayData can be constructed using ArrayDataBuilder
+///  let builder = ArrayData::builder(DataType::Int32)
+///    .len(3)
+///    .add_buffer(values_buffer.clone());
+/// let array_data = builder.build().unwrap();
+/// // Create the ArrayRef from the ArrayData
+/// let array = make_array(array_data);
+///
+/// // It is equivalent to directly constructing the Int32Array
+/// let scalar_buffer = ScalarBuffer::from(values_buffer);
+/// let int32_array: ArrayRef = Arc::new(Int32Array::new(scalar_buffer, None));
+/// assert_eq!(&array, &int32_array);
+/// ```
 pub fn make_array(data: ArrayData) -> ArrayRef {
     match data.data_type() {
         DataType::Boolean => Arc::new(BooleanArray::from(data)) as ArrayRef,
@@ -897,6 +937,27 @@ unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
             unsafe { OffsetBuffer::new_unchecked(buffer) }
         }
     }
+}
+
+/// Helper function that creates an [`OffsetBuffer`] from a buffer and array offset/ length
+///
+/// # Safety
+///
+/// - buffer must contain valid arrow offsets ( [`OffsetBuffer`] ) for the
+///   given length and offset.
+unsafe fn get_offsets_from_buffer<O: ArrowNativeType>(
+    buffer: Buffer,
+    offset: usize,
+    len: usize,
+) -> OffsetBuffer<O> {
+    if len == 0 && buffer.is_empty() {
+        return OffsetBuffer::new_empty();
+    }
+
+    let scalar_buffer = ScalarBuffer::new(buffer, offset, len + 1);
+    // Safety:
+    // Arguments were valid
+    unsafe { OffsetBuffer::new_unchecked(scalar_buffer) }
 }
 
 /// Helper function for printing potentially long arrays.

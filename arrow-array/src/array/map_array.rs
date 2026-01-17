@@ -361,6 +361,8 @@ impl MapArray {
     }
 }
 
+impl super::private::Sealed for MapArray {}
+
 impl Array for MapArray {
     fn as_any(&self) -> &dyn Any {
         self
