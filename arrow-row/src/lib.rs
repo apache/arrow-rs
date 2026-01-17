@@ -1591,10 +1591,19 @@ fn row_lengths(cols: &[ArrayRef], encoders: &[Encoder]) -> LengthTracker {
             }
             Encoder::Struct(rows, null) => {
                 let array = as_struct_array(array);
-                tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
-                    true => 1 + rows.row_len(idx),
-                    false => 1 + null.data.len(),
-                }));
+                if rows.num_rows() > 0 {
+                    // Only calculate row length if there are rows
+                    tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
+                        true => 1 + rows.row_len(idx),
+                        false => 1 + null.data.len(),
+                    }));
+                } else {
+                    // Edge case for Struct([]) arrays (no child fields)
+                    tracker.push_variable((0..array.len()).map(|idx| match array.is_valid(idx) {
+                        true => 1,
+                        false => 1 + null.data.len(),
+                    }));
+                }
             }
             Encoder::List(rows) => match array.data_type() {
                 DataType::List(_) => {
@@ -1774,22 +1783,50 @@ fn encode_column(
             }
         }
         Encoder::Struct(rows, null) => {
+            fn struct_encode_helper<const NO_CHILD_FIELDS: bool>(
+                array: &StructArray,
+                offsets: &mut [usize],
+                null_sentinel: u8,
+                rows: &Rows,
+                null: &Row<'_>,
+                data: &mut [u8],
+            ) {
+                let empty_row = Row {
+                    data: &[],
+                    config: &rows.config,
+                };
+
+                offsets
+                    .iter_mut()
+                    .skip(1)
+                    .enumerate()
+                    .for_each(|(idx, offset)| {
+                        let (row, sentinel) = match array.is_valid(idx) {
+                            true => (
+                                if NO_CHILD_FIELDS {
+                                    empty_row
+                                } else {
+                                    rows.row(idx)
+                                },
+                                0x01,
+                            ),
+                            false => (*null, null_sentinel),
+                        };
+                        let end_offset = *offset + 1 + row.as_ref().len();
+                        data[*offset] = sentinel;
+                        data[*offset + 1..end_offset].copy_from_slice(row.as_ref());
+                        *offset = end_offset;
+                    })
+            }
+
             let array = as_struct_array(column);
             let null_sentinel = null_sentinel(opts);
-            offsets
-                .iter_mut()
-                .skip(1)
-                .enumerate()
-                .for_each(|(idx, offset)| {
-                    let (row, sentinel) = match array.is_valid(idx) {
-                        true => (rows.row(idx), 0x01),
-                        false => (*null, null_sentinel),
-                    };
-                    let end_offset = *offset + 1 + row.as_ref().len();
-                    data[*offset] = sentinel;
-                    data[*offset + 1..end_offset].copy_from_slice(row.as_ref());
-                    *offset = end_offset;
-                })
+            if rows.num_rows() == 0 {
+                // Edge case for Struct([]) arrays (no child fields)
+                struct_encode_helper::<true>(array, offsets, null_sentinel, rows, null, data);
+            } else {
+                struct_encode_helper::<false>(array, offsets, null_sentinel, rows, null, data);
+            }
         }
         Encoder::List(rows) => match column.data_type() {
             DataType::List(_) => list::encode(data, offsets, rows, opts, as_list_array(column)),
@@ -4366,6 +4403,28 @@ mod tests {
             empty_rows_size_with_preallocate_data > empty_rows_size_without_preallocate,
             "{empty_rows_size_with_preallocate_data} should be larger than {empty_rows_size_without_preallocate}"
         );
+    }
+
+    #[test]
+    fn test_struct_no_child_fields() {
+        fn run_test(array: ArrayRef) {
+            let sort_fields = vec![SortField::new(array.data_type().clone())];
+            let converter = RowConverter::new(sort_fields).unwrap();
+            let r = converter.convert_columns(&[Arc::clone(&array)]).unwrap();
+
+            let back = converter.convert_rows(&r).unwrap();
+            assert_eq!(back.len(), 1);
+            assert_eq!(&back[0], &array);
+        }
+
+        let s = Arc::new(StructArray::new_empty_fields(5, None)) as ArrayRef;
+        run_test(s);
+
+        let s = Arc::new(StructArray::new_empty_fields(
+            5,
+            Some(vec![true, false, true, false, false].into()),
+        )) as ArrayRef;
+        run_test(s);
     }
 
     #[test]
