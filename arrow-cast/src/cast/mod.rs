@@ -75,10 +75,28 @@ use crate::cast::list_view::{cast_list_to_list_view, cast_list_view, cast_list_v
 pub use decimal::{DecimalCast, rescale_decimal};
 
 /// CastOptions provides a way to override the default cast behaviors
+///
+/// # Behavior Matrix
+///
+/// | `safe`  |  `lossy` | Behavior |
+/// | ---     |   ---    |     ---  |
+/// | `true`  |  `false` | Default.  Invalid casts return Null, Lossy casts(e.g., float to int) return NULL. |
+/// | `true`  |  `true`  | Invalid casts return Null, Lossy casts are allowed (truncation occurs).  |
+/// | `false` |  `false` | Invalid casts return an error. Lossy casts return an error.  |
+/// | `false` |  `true`  | Invalid casts return an error. Lossy casts are allowed (truncation occurs). |
+///
+/// # Examples
+/// - **Invalid cast**: Casting "abc" to `Int32`
+/// - **Lossy cast**: Casting `3.7_f64` to `Int32` (loses decimal part, becomes `3`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct CastOptions<'a> {
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     pub safe: bool,
+    /// whether to allow lossy casts (e.g. float to int)
+    ///
+    /// When `false`, lossy casts follow `safe` behavior (NUL or error).
+    /// When `true`, lossy casts are performed with potential precision loss.
+    pub lossy: bool,
     /// Formatting options when casting from temporal types to string
     pub format_options: FormatOptions<'a>,
 }
@@ -87,6 +105,7 @@ impl Default for CastOptions<'_> {
     fn default() -> Self {
         Self {
             safe: true,
+            lossy: false,
             format_options: FormatOptions::default(),
         }
     }
@@ -2773,7 +2792,7 @@ mod tests {
 
             let cast_option = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let result = cast_with_options($INPUT_ARRAY, $OUTPUT_TYPE, &cast_option).unwrap();
             assert_eq!($OUTPUT_TYPE, result.data_type());
@@ -3178,7 +3197,7 @@ mod tests {
             &output_type,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3226,7 +3245,7 @@ mod tests {
             &output_type,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3284,7 +3303,7 @@ mod tests {
                 &output_type,
                 &CastOptions {
                     safe: false,
-                    format_options: FormatOptions::default(),
+                    ..Default::default()
                 },
             );
             assert!(
@@ -3308,7 +3327,7 @@ mod tests {
             &output_type,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3330,7 +3349,7 @@ mod tests {
             &output_type,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3409,7 +3428,7 @@ mod tests {
             &output_type,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3430,7 +3449,7 @@ mod tests {
             &output_type,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3608,7 +3627,7 @@ mod tests {
             &DataType::UInt8,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3621,7 +3640,7 @@ mod tests {
             &DataType::UInt8,
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -3635,7 +3654,7 @@ mod tests {
             &DataType::Int8,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3648,7 +3667,7 @@ mod tests {
             &DataType::Int8,
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -3811,7 +3830,7 @@ mod tests {
             &DataType::Int8,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -3824,7 +3843,7 @@ mod tests {
             &DataType::Int8,
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -4241,7 +4260,7 @@ mod tests {
         // overflow with the error
         let cast_option = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let result = cast_with_options(&array, &DataType::UInt8, &cast_option);
         assert!(result.is_err());
@@ -4453,7 +4472,7 @@ mod tests {
             &DataType::Int32,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         match result {
@@ -4492,7 +4511,7 @@ mod tests {
             &DataType::Boolean,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         match casted {
@@ -4827,7 +4846,7 @@ mod tests {
 
         let options = CastOptions {
             safe: true,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let res = cast_with_options(&str, &DataType::Int16, &options).expect("should cast to i16");
         let expected =
@@ -4900,7 +4919,7 @@ mod tests {
 
                 let options = CastOptions {
                     safe: false,
-                    format_options: FormatOptions::default(),
+                    ..Default::default()
                 };
                 let err = cast_with_options(array, &to_type, &options).unwrap_err();
                 assert_eq!(
@@ -4946,7 +4965,7 @@ mod tests {
 
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(
@@ -4969,7 +4988,7 @@ mod tests {
         let to_type = DataType::Date32;
         let options = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let b = cast_with_options(&array, &to_type, &options).unwrap();
         let c = b.as_primitive::<Date32Type>();
@@ -4989,7 +5008,7 @@ mod tests {
         let to_type = DataType::Date32;
         let options = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let err = cast_with_options(&array, &to_type, &options).unwrap_err();
         assert_eq!(
@@ -5017,7 +5036,7 @@ mod tests {
             let to_type = DataType::Date32;
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let result = cast_with_options(&array, &to_type, &options).unwrap();
             let c = result.as_primitive::<Date32Type>();
@@ -5067,7 +5086,7 @@ mod tests {
 
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(
@@ -5112,7 +5131,7 @@ mod tests {
 
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(
@@ -5149,7 +5168,7 @@ mod tests {
 
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(
@@ -5186,7 +5205,7 @@ mod tests {
 
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(
@@ -5223,7 +5242,7 @@ mod tests {
 
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let err = cast_with_options(array, &to_type, &options).unwrap_err();
             assert_eq!(
@@ -5239,7 +5258,7 @@ mod tests {
 
             let options = CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
 
             let target_interval_array = cast_with_options(
@@ -5366,7 +5385,7 @@ mod tests {
             let string_array = Arc::new(StringArray::from($data_vec.clone())) as ArrayRef;
             let options = CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             };
             let arrow_err = cast_with_options(
                 &string_array.clone(),
@@ -5475,7 +5494,7 @@ mod tests {
             &DataType::FixedSizeBinary(5),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(array_ref.is_err());
@@ -5485,7 +5504,7 @@ mod tests {
             &DataType::FixedSizeBinary(5),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(array_ref.is_err());
@@ -5690,7 +5709,7 @@ mod tests {
         let array = TimestampSecondArray::from(vec![Some(i64::MAX)]);
         let options = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let b = cast_with_options(&array, &DataType::Date64, &options);
         assert!(b.is_err());
@@ -6256,6 +6275,7 @@ mod tests {
         let tz = "+0545"; // UTC + 0545 is Asia/Kathmandu
         let cast_options = CastOptions {
             safe: true,
+            lossy: false,
             format_options: FormatOptions::default()
                 .with_timestamp_format(Some(ts_format))
                 .with_timestamp_tz_format(Some(ts_format)),
@@ -9217,7 +9237,7 @@ mod tests {
             &DataType::Decimal128(38, 30),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -9228,7 +9248,7 @@ mod tests {
             &DataType::Decimal128(38, 30),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_err());
@@ -9243,7 +9263,7 @@ mod tests {
             &DataType::Decimal256(76, 76),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -9254,7 +9274,7 @@ mod tests {
             &DataType::Decimal256(76, 76),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_err());
@@ -9269,7 +9289,7 @@ mod tests {
             &DataType::Decimal128(2, 2),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -9280,7 +9300,7 @@ mod tests {
             &DataType::Decimal128(2, 2),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         let err = casted_array.unwrap_err().to_string();
@@ -9300,7 +9320,7 @@ mod tests {
             &DataType::Decimal256(2, 2),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -9311,7 +9331,7 @@ mod tests {
             &DataType::Decimal256(2, 2),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         let err = casted_array.unwrap_err().to_string();
@@ -9328,7 +9348,7 @@ mod tests {
             &DataType::Decimal128(38, 30),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -9339,7 +9359,7 @@ mod tests {
             &DataType::Decimal128(38, 30),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         let err = casted_array.unwrap_err().to_string();
@@ -9359,7 +9379,7 @@ mod tests {
             &DataType::Decimal256(76, 50),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -9370,7 +9390,7 @@ mod tests {
             &DataType::Decimal256(76, 50),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         let err = casted_array.unwrap_err().to_string();
@@ -9865,7 +9885,7 @@ mod tests {
         let array = Arc::new(str_array) as ArrayRef;
         let option = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let casted_err = cast_with_options(&array, &output_type, &option).unwrap_err();
         assert!(
@@ -9911,7 +9931,7 @@ mod tests {
             &DataType::Decimal128(10, 8),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -9922,7 +9942,7 @@ mod tests {
             &DataType::Decimal128(10, 8),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -9997,7 +10017,7 @@ mod tests {
             &DataType::Decimal256(10, 8),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -10008,7 +10028,7 @@ mod tests {
             &DataType::Decimal256(10, 8),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -10057,7 +10077,7 @@ mod tests {
 
         let cast_options = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
 
         let result = cast_string_to_timestamp::<i32, TimestampNanosecondType>(
@@ -10185,7 +10205,7 @@ mod tests {
                 &DataType::Timestamp(TimeUnit::Nanosecond, Some(tz.clone())),
                 &CastOptions {
                     safe: false,
-                    format_options: FormatOptions::default(),
+                    ..Default::default()
                 },
             )
             .unwrap();
@@ -10236,7 +10256,7 @@ mod tests {
         let s = BinaryArray::from(vec![v1, v2]);
         let options = CastOptions {
             safe: true,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let array = cast_with_options(&s, &DataType::Utf8, &options).unwrap();
         let a = array.as_string::<i32>();
@@ -10405,7 +10425,7 @@ mod tests {
             &DataType::Decimal128(7, 3),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -10416,7 +10436,7 @@ mod tests {
             &DataType::Decimal128(7, 3),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -10434,7 +10454,7 @@ mod tests {
             &DataType::Decimal256(7, 3),
             &CastOptions {
                 safe: true,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_ok());
@@ -10445,7 +10465,7 @@ mod tests {
             &DataType::Decimal256(7, 3),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert_eq!(
@@ -10495,7 +10515,7 @@ mod tests {
             array,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_err());
@@ -10528,7 +10548,7 @@ mod tests {
             array,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_err());
@@ -10561,7 +10581,7 @@ mod tests {
             array,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         );
         assert!(casted_array.is_err());
@@ -10587,7 +10607,7 @@ mod tests {
             array,
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -10617,7 +10637,7 @@ mod tests {
         let nullable = CastOptions::default();
         let fallible = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
         let v = IntervalMonthDayNano::new(0, 0, 1234567);
 
@@ -10784,7 +10804,7 @@ mod tests {
             &DataType::Timestamp(TimeUnit::Nanosecond, Some("+00:00".into())),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         )
         .unwrap();
@@ -10845,6 +10865,7 @@ mod tests {
 
     const CAST_OPTIONS: CastOptions<'static> = CastOptions {
         safe: true,
+        lossy: false,
         format_options: FormatOptions::new(),
     };
 
@@ -10858,6 +10879,7 @@ mod tests {
     fn test_list_format_options() {
         let options = CastOptions {
             safe: false,
+            lossy: false,
             format_options: FormatOptions::default().with_null("null"),
         };
         let array = ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
@@ -11662,7 +11684,7 @@ mod tests {
             &DataType::Decimal32(1, 1),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -11677,7 +11699,7 @@ mod tests {
             &DataType::Decimal32(1, 1),
             &CastOptions {
                 safe: false,
-                format_options: FormatOptions::default(),
+                ..Default::default()
             },
         )
         .unwrap_err();
@@ -12002,7 +12024,7 @@ mod tests {
         );
         let cast_options = CastOptions {
             safe: false, // This should make it fail instead of returning nulls
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
 
         // This should fail due to run-end overflow
@@ -12032,7 +12054,7 @@ mod tests {
         );
         let cast_options = CastOptions {
             safe: true,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
 
         // This fails even though safe is true because the run_ends array has null values
@@ -12062,7 +12084,7 @@ mod tests {
         );
         let cast_options = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
 
         // This should succeed due to valid upcast
@@ -12098,7 +12120,7 @@ mod tests {
         );
         let cast_options = CastOptions {
             safe: false,
-            format_options: FormatOptions::default(),
+            ..Default::default()
         };
 
         // This should succeed
