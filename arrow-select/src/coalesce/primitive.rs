@@ -113,9 +113,10 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
                     "Internal Error: InProgressPrimitiveArray: source not set".to_string(),
                 )
             })?
-            .as_primitive::<T>();
+            .slice(offset, len);
+        let s = s.as_primitive::<T>();
 
-        let values = s.values().slice(offset, len);
+        let values = s.values();
         let count = filter.count();
 
         // Use the predicate's strategy for optimal iteration
