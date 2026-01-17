@@ -24,16 +24,16 @@ use crate::data_type::{DataType, Int96};
 use crate::errors::Result;
 use crate::schema::types::ColumnDescPtr;
 use arrow_array::{
-    Array, ArrayRef, Date64Array, Decimal64Array, Decimal128Array, Decimal256Array, Int8Array,
-    Int16Array, Int32Array, Int64Array, PrimitiveArray, UInt8Array, UInt16Array,
-    builder::PrimitiveDictionaryBuilder, cast::AsArray, downcast_integer, make_array, types::*,
+    Array, ArrayRef, BooleanArray, Date64Array, Decimal64Array, Decimal128Array, Decimal256Array,
+    Float32Array, Float64Array, Int8Array, Int16Array, Int32Array, Int64Array, PrimitiveArray,
+    UInt8Array, UInt16Array, builder::PrimitiveDictionaryBuilder, cast::AsArray, downcast_integer,
+    types::*,
 };
 use arrow_array::{
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt32Array, UInt64Array,
 };
-use arrow_buffer::{BooleanBuffer, Buffer, i256};
-use arrow_data::ArrayDataBuilder;
+use arrow_buffer::{BooleanBuffer, Buffer, NullBuffer, ScalarBuffer, i256};
 use arrow_schema::{DataType as ArrowType, TimeUnit};
 use std::any::Any;
 use std::sync::Arc;
@@ -151,31 +151,49 @@ where
 
     fn consume_batch(&mut self) -> Result<ArrayRef> {
         let target_type = &self.data_type;
-        let arrow_data_type = match T::get_physical_type() {
-            PhysicalType::BOOLEAN => ArrowType::Boolean,
-            PhysicalType::INT32 => ArrowType::Int32,
-            PhysicalType::INT64 => ArrowType::Int64,
-            PhysicalType::FLOAT => ArrowType::Float32,
-            PhysicalType::DOUBLE => ArrowType::Float64,
-            PhysicalType::INT96 => ArrowType::Int64,
-            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
-                unreachable!("PrimitiveArrayReaders don't support complex physical types");
-            }
-        };
 
-        // Convert to equivalent arrow type to parquet physical type
+        // Convert physical data to equivalent arrow type, and then perform
+        // coercion as needed
         let record_data = self
             .record_reader
             .consume_record_data()
             .into_buffer(target_type);
 
-        let array_data = ArrayDataBuilder::new(arrow_data_type)
-            .len(self.record_reader.num_values())
-            .add_buffer(record_data)
-            .null_bit_buffer(self.record_reader.consume_bitmap_buffer());
+        let len = self.record_reader.num_values();
+        let nulls = self
+            .record_reader
+            .consume_bitmap_buffer()
+            .map(|b| NullBuffer::new(BooleanBuffer::new(b, 0, len)));
 
-        let array_data = unsafe { array_data.build_unchecked() };
-        let array: ArrayRef = make_array(array_data);
+        let array: ArrayRef = match T::get_physical_type() {
+            PhysicalType::BOOLEAN => Arc::new(BooleanArray::new(
+                BooleanBuffer::new(record_data, 0, len),
+                nulls,
+            )),
+            PhysicalType::INT32 => Arc::new(Int32Array::new(
+                ScalarBuffer::new(record_data, 0, len),
+                nulls,
+            )),
+            PhysicalType::INT64 => Arc::new(Int64Array::new(
+                ScalarBuffer::new(record_data, 0, len),
+                nulls,
+            )),
+            PhysicalType::FLOAT => Arc::new(Float32Array::new(
+                ScalarBuffer::new(record_data, 0, len),
+                nulls,
+            )),
+            PhysicalType::DOUBLE => Arc::new(Float64Array::new(
+                ScalarBuffer::new(record_data, 0, len),
+                nulls,
+            )),
+            PhysicalType::INT96 => Arc::new(Int64Array::new(
+                ScalarBuffer::new(record_data, 0, len),
+                nulls,
+            )),
+            PhysicalType::BYTE_ARRAY | PhysicalType::FIXED_LEN_BYTE_ARRAY => {
+                unreachable!("PrimitiveArrayReaders don't support complex physical types");
+            }
+        };
 
         // Coerce the arrow type to the desired array type
         let array = coerce_array(array, target_type)?;
@@ -218,7 +236,7 @@ fn coerce_array(array: ArrayRef, target_type: &ArrowType) -> Result<ArrayRef> {
         ArrowType::Int32 => coerce_i32(array.as_primitive(), target_type),
         ArrowType::Int64 => coerce_i64(array.as_primitive(), target_type),
         ArrowType::Boolean | ArrowType::Float32 | ArrowType::Float64 => Ok(array),
-        _ => unreachable!(),
+        _ => unreachable!("Cannot coerce array of type {}", array.data_type()),
     }
 }
 

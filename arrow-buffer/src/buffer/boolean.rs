@@ -366,6 +366,20 @@ impl BooleanBuffer {
             .count_set_bits_offset(self.bit_offset, self.bit_len)
     }
 
+    /// Finds the position of the n-th set bit (1-based) starting from `start` index.
+    /// If fewer than `n` set bits are found, returns the length of the buffer.
+    pub fn find_nth_set_bit_position(&self, start: usize, n: usize) -> usize {
+        if n == 0 {
+            return start;
+        }
+
+        self.slice(start, self.bit_len - start)
+            .set_indices()
+            .nth(n - 1)
+            .map(|idx| start + idx + 1)
+            .unwrap_or(self.bit_len)
+    }
+
     /// Returns a [`BitChunks`] instance which can be used to iterate over
     /// this buffer's bits in `u64` chunks
     #[inline]
@@ -799,5 +813,91 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_extend_trusted_len_sets_byte_len() {
+        // Ensures extend_trusted_len keeps the underlying byte length in sync with bit length.
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools: Vec<_> = (0..10).map(|i| i % 2 == 0).collect();
+        unsafe { builder.extend_trusted_len(bools.into_iter()) };
+        assert_eq!(builder.as_slice().len(), bit_util::ceil(builder.len(), 8));
+    }
+
+    #[test]
+    fn test_extend_trusted_len_then_append() {
+        // Exercises append after extend_trusted_len to validate byte length and values.
+        let mut builder = BooleanBufferBuilder::new(0);
+        let bools: Vec<_> = (0..9).map(|i| i % 3 == 0).collect();
+        unsafe { builder.extend_trusted_len(bools.clone().into_iter()) };
+        builder.append(true);
+        assert_eq!(builder.as_slice().len(), bit_util::ceil(builder.len(), 8));
+        let finished = builder.finish();
+        for (i, v) in bools.into_iter().chain(std::iter::once(true)).enumerate() {
+            assert_eq!(finished.value(i), v, "at index {}", i);
+        }
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position() {
+        let bools = vec![true, false, true, true, false, true];
+        let buffer = BooleanBuffer::from(bools);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 1);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 2), 3);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 3), 4);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 4), 6);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 5), 6);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(1, 1), 3);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(3, 1), 4);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(3, 2), 6);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_large() {
+        let mut bools = vec![false; 1000];
+        bools[100] = true;
+        bools[500] = true;
+        bools[999] = true;
+        let buffer = BooleanBuffer::from(bools);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 101);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 2), 501);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 3), 1000);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 4), 1000);
+
+        assert_eq!(buffer.clone().find_nth_set_bit_position(101, 1), 501);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_sliced() {
+        let bools = vec![false, true, false, true, true, false, true]; // [F, T, F, T, T, F, T]
+        let buffer = BooleanBuffer::from(bools);
+        let slice = buffer.slice(1, 6); // [T, F, T, T, F, T]
+
+        assert_eq!(slice.len(), 6);
+        // Logical indices: 0, 1, 2, 3, 4, 5
+        // Logical values: T, F, T, T, F, T
+
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 1), 1);
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 2), 3);
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 3), 4);
+        assert_eq!(slice.clone().find_nth_set_bit_position(0, 4), 6);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_all_set() {
+        let buffer = BooleanBuffer::new_set(100);
+        for i in 1..=100 {
+            assert_eq!(buffer.clone().find_nth_set_bit_position(0, i), i);
+        }
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 101), 100);
+    }
+
+    #[test]
+    fn test_find_nth_set_bit_position_none_set() {
+        let buffer = BooleanBuffer::new_unset(100);
+        assert_eq!(buffer.clone().find_nth_set_bit_position(0, 1), 100);
     }
 }

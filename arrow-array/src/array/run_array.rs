@@ -136,6 +136,16 @@ impl<R: RunEndIndexType> RunArray<R> {
         &self.values
     }
 
+    /// Similar to [`values`] but accounts for logical slicing, returning only the values
+    /// that are part of the logical slice of this array.
+    ///
+    /// [`values`]: Self::values
+    pub fn values_slice(&self) -> ArrayRef {
+        let start = self.get_start_physical_index();
+        let end = self.get_end_physical_index();
+        self.values.slice(start, end - start + 1)
+    }
+
     /// Returns the physical index at which the array slice starts.
     ///
     /// See [`RunEndBuffer::get_start_physical_index`].
@@ -1131,5 +1141,36 @@ mod tests {
         let array_i16_2 = RunArray::<Int16Type>::try_new(&run_ends_i16_2, &values_i16_2).unwrap();
 
         assert_eq!(array_i16_1, array_i16_2);
+    }
+
+    #[test]
+    fn test_run_array_values_slice() {
+        // 0, 0, 1, 1, 1, 2...2 (15 2s)
+        let run_ends: PrimitiveArray<Int32Type> = vec![2, 5, 20].into();
+        let values: PrimitiveArray<Int32Type> = vec![0, 1, 2].into();
+        let array = RunArray::<Int32Type>::try_new(&run_ends, &values).unwrap();
+
+        let slice = array.slice(1, 4); // 0 | 1, 1, 1 |
+        // logical indices: 1, 2, 3, 4
+        // physical indices: 0, 1, 1, 1
+        // values at 0 is 0
+        // values at 1 is 1
+        // values slice should be [0, 1]
+        assert_eq!(slice.get_start_physical_index(), 0);
+        assert_eq!(slice.get_end_physical_index(), 1);
+
+        let values_slice = slice.values_slice();
+        let values_slice = values_slice.as_primitive::<Int32Type>();
+        assert_eq!(values_slice.values(), &[0, 1]);
+
+        let slice2 = array.slice(2, 3); // 1, 1, 1
+        // logical indices: 2, 3, 4
+        // physical indices: 1, 1, 1
+        assert_eq!(slice2.get_start_physical_index(), 1);
+        assert_eq!(slice2.get_end_physical_index(), 1);
+
+        let values_slice2 = slice2.values_slice();
+        let values_slice2 = values_slice2.as_primitive::<Int32Type>();
+        assert_eq!(values_slice2.values(), &[1]);
     }
 }

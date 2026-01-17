@@ -1597,18 +1597,21 @@ impl<T: ArrowTimestampType> PrimitiveArray<T> {
 /// Constructs a `PrimitiveArray` from an array data reference.
 impl<T: ArrowPrimitiveType> From<ArrayData> for PrimitiveArray<T> {
     fn from(data: ArrayData) -> Self {
-        Self::assert_compatible(data.data_type());
+        let (data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
+
+        Self::assert_compatible(&data_type);
         assert_eq!(
-            data.buffers().len(),
+            buffers.len(),
             1,
             "PrimitiveArray data should contain a single buffer only (values buffer)"
         );
+        let buffer = buffers.pop().expect("checked above");
 
-        let values = ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len());
+        let values = ScalarBuffer::new(buffer, offset, len);
         Self {
-            data_type: data.data_type().clone(),
+            data_type,
             values,
-            nulls: data.nulls().cloned(),
+            nulls,
         }
     }
 }
