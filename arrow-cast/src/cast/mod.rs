@@ -3887,6 +3887,25 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_decimal_to_numeric_negative_scale() {
+        let value_array: Vec<Option<i256>> = vec![
+            Some(i256::from_i128(125)),
+            Some(i256::from_i128(225)),
+            Some(i256::from_i128(325)),
+            None,
+            Some(i256::from_i128(525)),
+        ];
+        let array = create_decimal256_array(value_array, 38, -1).unwrap();
+
+        generate_cast_test_case!(
+            &array,
+            Int64Array,
+            &DataType::Int64,
+            vec![Some(1_250), Some(2_250), Some(3_250), None, Some(5_250)]
+        );
+    }
+
+    #[test]
     fn test_cast_numeric_to_decimal128() {
         let decimal_type = DataType::Decimal128(38, 6);
         // u8, u16, u32, u64

@@ -816,7 +816,7 @@ where
 {
     let array = array.as_primitive::<D>();
 
-    let div: D::Native = base.pow_checked(scale as u32).map_err(|_| {
+    let div: D::Native = base.pow_checked(scale.unsigned_abs() as u32).map_err(|_| {
         ArrowError::CastError(format!(
             "Cannot cast to {:?}. The scale {} causes overflow.",
             D::PREFIX,
@@ -831,11 +831,12 @@ where
             if array.is_null(i) {
                 value_builder.append_null();
             } else {
-                let v = array
-                    .value(i)
-                    .div_checked(div)
-                    .ok()
-                    .and_then(<T::Native as NumCast>::from::<D::Native>);
+                let v = if scale < 0 {
+                    array.value(i).mul_checked(div).ok()
+                } else {
+                    array.value(i).div_checked(div).ok()
+                }
+                .and_then(<T::Native as NumCast>::from::<D::Native>);
 
                 value_builder.append_option(v);
             }
@@ -845,7 +846,11 @@ where
             if array.is_null(i) {
                 value_builder.append_null();
             } else {
-                let v = array.value(i).div_checked(div)?;
+                let v = if scale < 0 {
+                    array.value(i).mul_checked(div)?
+                } else {
+                    array.value(i).div_checked(div)?
+                };
 
                 let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
                     ArrowError::CastError(format!(
