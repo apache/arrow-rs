@@ -414,7 +414,9 @@ impl_append_to_variant_builder!(PrimitiveArray<Float32Type>);
 impl_append_to_variant_builder!(PrimitiveArray<Float64Type>);
 
 impl_append_to_variant_builder!(PrimitiveArray<Date32Type>, |days_since_epoch| {
-    Date32Type::to_naive_date(days_since_epoch)
+    Date32Type::to_naive_date_opt(days_since_epoch).ok_or_else(|| {
+        ArrowError::InvalidArgumentError(format!("Invalid Date32 value: {days_since_epoch}"))
+    })?
 });
 
 impl_append_to_variant_builder!(

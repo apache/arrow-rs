@@ -45,7 +45,7 @@ use crate::bloom_filter::{
     SBBF_HEADER_SIZE_ESTIMATE, Sbbf, chunk_read_bloom_filter_header_and_offset,
 };
 use crate::errors::{ParquetError, Result};
-use crate::file::metadata::{PageIndexPolicy, ParquetMetaData, ParquetMetaDataReader};
+use crate::file::metadata::{ParquetMetaData, ParquetMetaDataReader};
 
 mod metadata;
 pub use metadata::*;
@@ -165,11 +165,14 @@ impl<T: AsyncRead + AsyncSeek + Unpin + Send> AsyncFileReader for T {
     ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
         async move {
             let metadata_opts = options.map(|o| o.metadata_options().clone());
-            let metadata_reader = ParquetMetaDataReader::new()
-                .with_page_index_policy(PageIndexPolicy::from(
-                    options.is_some_and(|o| o.page_index()),
-                ))
-                .with_metadata_options(metadata_opts);
+            let mut metadata_reader =
+                ParquetMetaDataReader::new().with_metadata_options(metadata_opts);
+
+            if let Some(opts) = options {
+                metadata_reader = metadata_reader
+                    .with_column_index_policy(opts.column_index_policy())
+                    .with_offset_index_policy(opts.offset_index_policy());
+            }
 
             #[cfg(feature = "encryption")]
             let metadata_reader = metadata_reader.with_decryption_properties(
@@ -775,6 +778,7 @@ mod tests {
     use crate::arrow::arrow_reader::{ArrowReaderMetadata, ArrowReaderOptions};
     use crate::arrow::schema::virtual_type::RowNumber;
     use crate::arrow::{ArrowWriter, AsyncArrowWriter, ProjectionMask};
+    use crate::file::metadata::PageIndexPolicy;
     use crate::file::metadata::ParquetMetaDataReader;
     use crate::file::properties::WriterProperties;
     use arrow::compute::kernels::cmp::eq;
@@ -829,9 +833,12 @@ mod tests {
             &'a mut self,
             options: Option<&'a ArrowReaderOptions>,
         ) -> BoxFuture<'a, Result<Arc<ParquetMetaData>>> {
-            let metadata_reader = ParquetMetaDataReader::new().with_page_index_policy(
-                PageIndexPolicy::from(options.is_some_and(|o| o.page_index())),
-            );
+            let mut metadata_reader = ParquetMetaDataReader::new();
+            if let Some(opts) = options {
+                metadata_reader = metadata_reader
+                    .with_column_index_policy(opts.column_index_policy())
+                    .with_offset_index_policy(opts.offset_index_policy());
+            }
             self.metadata = Some(Arc::new(
                 metadata_reader.parse_and_finish(&self.data).unwrap(),
             ));
@@ -953,7 +960,7 @@ mod tests {
 
         let async_reader = TestReader::new(data.clone());
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();
@@ -1055,7 +1062,7 @@ mod tests {
 
         let async_reader = TestReader::new(data.clone());
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();
@@ -1129,7 +1136,8 @@ mod tests {
 
             let async_reader = TestReader::new(data.clone());
 
-            let options = ArrowReaderOptions::new().with_page_index(true);
+            let options =
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
             let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
                 .await
                 .unwrap();
@@ -1191,7 +1199,7 @@ mod tests {
 
         let async_reader = TestReader::new(data.clone());
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();
@@ -1252,7 +1260,7 @@ mod tests {
 
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
         )
         .await
         .unwrap();
@@ -1274,7 +1282,7 @@ mod tests {
         // If the Reader chooses mask to handle filter, it might cause panic because the mid 4 pages may not be decoded.
         let stream = ParquetRecordBatchStreamBuilder::new_with_options(
             TestReader::new(data.clone()),
-            ArrowReaderOptions::new().with_page_index(true),
+            ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
         )
         .await
         .unwrap()
@@ -1557,7 +1565,7 @@ mod tests {
 
         let mask = ProjectionMask::leaves(&parquet_schema, vec![0, 2]);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let stream = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap()
@@ -1835,7 +1843,7 @@ mod tests {
             // Read data
             let mut reader = ParquetRecordBatchStreamBuilder::new_with_options(
                 tokio::fs::File::from_std(file.try_clone().unwrap()),
-                ArrowReaderOptions::new().with_page_index(true),
+                ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required),
             )
             .await
             .unwrap();
@@ -1957,7 +1965,7 @@ mod tests {
             .unwrap();
 
         metadata.set_offset_index(Some(vec![]));
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =
             ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
@@ -1982,7 +1990,7 @@ mod tests {
             .await
             .unwrap();
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =
             ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
@@ -2034,7 +2042,7 @@ mod tests {
         write_metadata_to_local_file(metadata, &metadata_path);
         let metadata = read_metadata_from_local_file(&metadata_path);
 
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
         let reader =
             ParquetRecordBatchStreamBuilder::new_with_metadata(file, arrow_reader_metadata)
@@ -2060,7 +2068,7 @@ mod tests {
         let async_reader = TestReader::new(data);
 
         // Enable page index so the fetch logic loads only required pages
-        let options = ArrowReaderOptions::new().with_page_index(true);
+        let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::Required);
         let builder = ParquetRecordBatchStreamBuilder::new_with_options(async_reader, options)
             .await
             .unwrap();

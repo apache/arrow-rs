@@ -1029,7 +1029,7 @@ fn typed_value_to_variant<'a>(
             generic_conversion_single_value!(
                 Date32Type,
                 as_primitive,
-                Date32Type::to_naive_date,
+                |v| Date32Type::to_naive_date_opt(v).unwrap(),
                 typed_value,
                 index
             )
