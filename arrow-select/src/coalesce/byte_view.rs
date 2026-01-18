@@ -293,7 +293,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 //
                 // We use a threshold of 0.1 (10% selectivity).
                 if let Some(sel) = selectivity {
-                    if sel < 0.1 {
+                    if sel < 0.5 {
                         return Source {
                             array,
                             need_gc: true,
