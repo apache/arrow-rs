@@ -8,7 +8,7 @@ use arrow_schema::ArrowError;
 use indexmap::IndexMap;
 use std::ops::Range;
 
-const DEFAULT_HEADER_SIZE_HINT: u64 = 64 * 1024; // 64 KB
+const DEFAULT_HEADER_SIZE_HINT: u64 = 16 * 1024; // 16 KB
 
 /// Builder for an asynchronous Avro file reader.
 pub struct AsyncAvroFileReaderBuilder<R: AsyncFileReader> {
