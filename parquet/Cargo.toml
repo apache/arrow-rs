@@ -152,11 +152,6 @@ required-features = ["cli"]
 path = "./examples/write_parquet.rs"
 
 [[example]]
-name = "async_read_parquet"
-required-features = ["arrow", "async"]
-path = "./examples/async_read_parquet.rs"
-
-[[example]]
 name = "read_with_rowgroup"
 required-features = ["arrow", "async"]
 path = "./examples/read_with_rowgroup.rs"

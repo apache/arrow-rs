@@ -861,7 +861,7 @@ impl ArrowReaderMetadata {
     /// Create [`ArrowReaderMetadata`] from the provided [`ArrowReaderOptions`]
     /// and [`ChunkReader`]
     ///
-    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for an
+    /// Seenano parquet/src/arrow/arrow_reader/mod.rs [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for an
     /// example of how this can be used
     ///
     /// # Notes
@@ -884,9 +884,7 @@ impl ArrowReaderMetadata {
 
     /// Create a new [`ArrowReaderMetadata`] from a pre-existing
     /// [`ParquetMetaData`] and [`ArrowReaderOptions`].
-    ///
     /// # Notes
-    ///
     /// This function will not attempt to load the PageIndex if not present in the metadata, regardless
     /// of the settings in `options`. See [`Self::load`] to load metadata including the page index if needed.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
@@ -1024,8 +1022,6 @@ pub type ParquetRecordBatchReaderBuilder<T> = ArrowReaderBuilder<SyncReader<T>>;
 
 impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// Create a new [`ParquetRecordBatchReaderBuilder`]
-    ///
-    /// ```
     /// # use std::sync::Arc;
     /// # use bytes::Bytes;
     /// # use arrow_array::{Int32Array, RecordBatch};
@@ -1050,7 +1046,18 @@ impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     ///
     /// // Read data
     /// let _batch = reader.next().unwrap().unwrap();
-    /// ```
+    /// # Example
+    /// rust,no_run
+    /// use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+    ///
+    /// let file = std::fs::File::open("data.parquet")?;
+    /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
+    /// let mut reader = builder.build()?;
+    ///
+    /// while let Some(batch) = reader.next().transpose()? {
+    ///     println!("Read {} rows", batch.num_rows());
+    /// }
+    /// # Ok::<(), parquet::errors::ParquetError>(())
     pub fn try_new(reader: T) -> Result<Self> {
         Self::try_new_with_options(reader, Default::default())
     }
