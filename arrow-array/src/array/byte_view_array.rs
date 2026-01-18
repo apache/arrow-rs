@@ -438,6 +438,26 @@ impl<T: ByteViewType + ?Sized> GenericByteViewArray<T> {
         })
     }
 
+    /// Return an iterator over the length of each array element, including null values.
+    ///
+    /// Null values length would equal to the underlying bytes length and NOT 0
+    ///
+    /// Example of getting 0 for null values
+    /// ```rust
+    /// # use arrow_array::StringViewArray;
+    /// # use arrow_array::Array;
+    /// use arrow_data::ByteView;
+    ///
+    /// fn lengths_with_zero_for_nulls(view: &StringViewArray) -> impl Iterator<Item = u32> {
+    ///     view.lengths()
+    ///         .enumerate()
+    ///         .map(|(index, length)| if view.is_null(index) { 0 } else { length })
+    /// }
+    /// ```
+    pub fn lengths(&self) -> impl ExactSizeIterator<Item = u32> + Clone {
+        self.views().iter().map(|v| *v as u32)
+    }
+
     /// Returns a zero-copy slice of this array with the indicated offset and length.
     pub fn slice(&self, offset: usize, length: usize) -> Self {
         Self {
@@ -968,14 +988,20 @@ impl<'a, T: ByteViewType + ?Sized> IntoIterator for &'a GenericByteViewArray<T> 
 
 impl<T: ByteViewType + ?Sized> From<ArrayData> for GenericByteViewArray<T> {
     fn from(data: ArrayData) -> Self {
-        let (_data_type, len, nulls, offset, mut buffers, _child_data) = data.into_parts();
-        let views = buffers.remove(0); // need to maintain order of remaining buffers
-        let buffers = Arc::from(buffers);
-        let views = ScalarBuffer::new(views, offset, len);
+        let (data_type, len, nulls, offset, buffers, _child_data) = data.into_parts();
+        assert_eq!(
+            data_type,
+            T::DATA_TYPE,
+            "Mismatched data type, expected {}, got {data_type}",
+            T::DATA_TYPE
+        );
+        let mut buffers = buffers.into_iter();
+        // first buffer is views, remaining are data buffers
+        let views = ScalarBuffer::new(buffers.next().unwrap(), offset, len);
         Self {
-            data_type: T::DATA_TYPE,
+            data_type,
             views,
-            buffers,
+            buffers: Arc::from_iter(buffers),
             nulls,
             phantom: Default::default(),
         }
@@ -1184,10 +1210,12 @@ mod tests {
     use crate::{
         Array, BinaryViewArray, GenericBinaryArray, GenericByteViewArray, StringViewArray,
     };
-    use arrow_buffer::{Buffer, ScalarBuffer};
-    use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
+    use arrow_buffer::{Buffer, NullBuffer, ScalarBuffer};
+    use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
+    use arrow_schema::DataType;
     use rand::prelude::StdRng;
     use rand::{Rng, SeedableRng};
+    use std::str::from_utf8;
 
     const BLOCK_SIZE: u32 = 8;
 
@@ -1680,5 +1708,160 @@ mod tests {
                 "Key compare failed: key({v1:?})=0x{key1:032x} !< key({v2:?})=0x{key2:032x}",
             );
         }
+    }
+
+    #[test]
+    fn empty_array_should_return_empty_lengths_iterator() {
+        let empty = GenericByteViewArray::<BinaryViewType>::from(Vec::<&[u8]>::new());
+
+        let mut lengths_iter = empty.lengths();
+        assert_eq!(lengths_iter.len(), 0);
+        assert_eq!(lengths_iter.next(), None);
+    }
+
+    #[test]
+    fn array_lengths_should_return_correct_length_for_both_inlined_and_non_inlined() {
+        let cases = GenericByteViewArray::<BinaryViewType>::from(vec![
+            // Not inlined as longer than 12 bytes
+            b"Supercalifragilisticexpialidocious" as &[u8],
+            // Inlined as shorter than 12 bytes
+            b"Hello",
+            // Empty value
+            b"",
+            // Exactly 12 bytes
+            b"abcdefghijkl",
+        ]);
+
+        let mut lengths_iter = cases.lengths();
+
+        assert_eq!(lengths_iter.len(), cases.len());
+
+        let cases_iter = cases.iter();
+
+        for case in cases_iter {
+            let case_value = case.unwrap();
+            let length = lengths_iter.next().expect("Should have a length");
+
+            assert_eq!(case_value.len(), length as usize);
+        }
+
+        assert_eq!(lengths_iter.next(), None, "Should not have more lengths");
+    }
+
+    #[test]
+    fn array_lengths_should_return_the_underlying_length_for_null_values() {
+        let cases = GenericByteViewArray::<BinaryViewType>::from(vec![
+            // Not inlined as longer than 12 bytes
+            b"Supercalifragilisticexpialidocious" as &[u8],
+            // Inlined as shorter than 12 bytes
+            b"Hello",
+            // Empty value
+            b"",
+            // Exactly 12 bytes
+            b"abcdefghijkl",
+        ]);
+
+        let (views, buffer, _) = cases.clone().into_parts();
+
+        // Keeping the values but just adding nulls on top
+        let cases_with_all_nulls = GenericByteViewArray::<BinaryViewType>::new(
+            views,
+            buffer,
+            Some(NullBuffer::new_null(cases.len())),
+        );
+
+        let lengths_iter = cases.lengths();
+        let mut all_nulls_lengths_iter = cases_with_all_nulls.lengths();
+
+        assert_eq!(lengths_iter.len(), all_nulls_lengths_iter.len());
+
+        for expected_length in lengths_iter {
+            let actual_length = all_nulls_lengths_iter.next().expect("Should have a length");
+
+            assert_eq!(expected_length, actual_length);
+        }
+
+        assert_eq!(
+            all_nulls_lengths_iter.next(),
+            None,
+            "Should not have more lengths"
+        );
+    }
+
+    #[test]
+    fn array_lengths_on_sliced_should_only_return_lengths_for_sliced_data() {
+        let array = GenericByteViewArray::<BinaryViewType>::from(vec![
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaa" as &[u8],
+            b"Hello",
+            b"something great",
+            b"is",
+            b"coming soon!",
+            b"when you find what it is",
+            b"let me know",
+            b"cause",
+            b"I",
+            b"have no idea",
+            b"what it",
+            b"is",
+        ]);
+
+        let sliced_array = array.slice(2, array.len() - 3);
+
+        let mut lengths_iter = sliced_array.lengths();
+
+        assert_eq!(lengths_iter.len(), sliced_array.len());
+
+        let values_iter = sliced_array.iter();
+
+        for value in values_iter {
+            let value = value.unwrap();
+            let length = lengths_iter.next().expect("Should have a length");
+
+            assert_eq!(value.len(), length as usize);
+        }
+
+        assert_eq!(lengths_iter.next(), None, "Should not have more lengths");
+    }
+
+    #[should_panic(expected = "Mismatched data type, expected Utf8View, got BinaryView")]
+    #[test]
+    fn invalid_casting_from_array_data() {
+        // Should not be able to cast to StringViewArray due to invalid UTF-8
+        let array_data = binary_view_array_with_invalid_utf8_data().into_data();
+        let _ = StringViewArray::from(array_data);
+    }
+
+    #[should_panic(expected = "invalid utf-8 sequence")]
+    #[test]
+    fn invalid_array_data() {
+        let (views, buffers, nulls) = binary_view_array_with_invalid_utf8_data().into_parts();
+
+        // manually try and add invalid array data with Utf8View data type
+        let mut builder = ArrayDataBuilder::new(DataType::Utf8View)
+            .add_buffer(views.into_inner())
+            .len(3);
+        for buffer in buffers.iter() {
+            builder = builder.add_buffer(buffer.clone())
+        }
+        builder = builder.nulls(nulls);
+
+        let data = builder.build().unwrap(); // should fail validation
+        let _arr = StringViewArray::from(data);
+    }
+
+    /// Returns a BinaryViewArray with one invalid UTF-8 value
+    fn binary_view_array_with_invalid_utf8_data() -> BinaryViewArray {
+        let array = GenericByteViewArray::<BinaryViewType>::from(vec![
+            b"aaaaaaaaaaaaaaaaaaaaaaaaaaa" as &[u8],
+            &[
+                0xf0, 0x80, 0x80, 0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
+            ],
+            b"good",
+        ]);
+        assert!(from_utf8(array.value(0)).is_ok());
+        assert!(from_utf8(array.value(1)).is_err()); // value 1 is invalid utf8
+        assert!(from_utf8(array.value(2)).is_ok());
+        array
     }
 }

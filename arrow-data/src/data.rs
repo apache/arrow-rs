@@ -699,34 +699,41 @@ impl ArrayData {
                     (buffers, children, false)
                 }
                 DataType::RunEndEncoded(r, v) => {
-                    let runs = match r.data_type() {
-                        DataType::Int16 => {
-                            let i = i16::from_usize(len).expect("run overflow");
-                            Buffer::from_slice_ref([i])
-                        }
-                        DataType::Int32 => {
-                            let i = i32::from_usize(len).expect("run overflow");
-                            Buffer::from_slice_ref([i])
-                        }
-                        DataType::Int64 => {
-                            let i = i64::from_usize(len).expect("run overflow");
-                            Buffer::from_slice_ref([i])
-                        }
-                        dt => unreachable!("Invalid run ends data type {dt}"),
-                    };
+                    if len == 0 {
+                        // For empty arrays, create zero-length child arrays.
+                        let runs = ArrayData::new_empty(r.data_type());
+                        let values = ArrayData::new_empty(v.data_type());
+                        (vec![], vec![runs, values], false)
+                    } else {
+                        let runs = match r.data_type() {
+                            DataType::Int16 => {
+                                let i = i16::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            DataType::Int32 => {
+                                let i = i32::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            DataType::Int64 => {
+                                let i = i64::from_usize(len).expect("run overflow");
+                                Buffer::from_slice_ref([i])
+                            }
+                            dt => unreachable!("Invalid run ends data type {dt}"),
+                        };
 
-                    let builder = ArrayData::builder(r.data_type().clone())
-                        .len(1)
-                        .buffers(vec![runs]);
+                        let builder = ArrayData::builder(r.data_type().clone())
+                            .len(1)
+                            .buffers(vec![runs]);
 
-                    // SAFETY:
-                    // Valid by construction
-                    let runs = unsafe { builder.build_unchecked() };
-                    (
-                        vec![],
-                        vec![runs, ArrayData::new_null(v.data_type(), 1)],
-                        false,
-                    )
+                        // SAFETY:
+                        // Valid by construction
+                        let runs = unsafe { builder.build_unchecked() };
+                        (
+                            vec![],
+                            vec![runs, ArrayData::new_null(v.data_type(), 1)],
+                            false,
+                        )
+                    }
                 }
                 // Handled by Some(width) branch above
                 DataType::Int8

@@ -42,6 +42,7 @@ use parquet::arrow::arrow_reader::{
     ParquetRecordBatchReaderBuilder, RowFilter,
 };
 use parquet::arrow::{ParquetRecordBatchStreamBuilder, ProjectionMask};
+use parquet::file::metadata::PageIndexPolicy;
 use parquet::schema::types::SchemaDescriptor;
 use std::fmt::{Display, Formatter};
 use std::path::{Path, PathBuf};
@@ -847,7 +848,7 @@ fn column_indices(schema: &SchemaDescriptor, column_names: &Vec<&str>) -> Vec<us
 /// Loads Parquet metadata from the given path, including page indexes
 fn load_metadata(path: &Path) -> ArrowReaderMetadata {
     let file = std::fs::File::open(path).unwrap();
-    let options = ArrowReaderOptions::new().with_page_index(true);
+    let options = ArrowReaderOptions::new().with_page_index_policy(PageIndexPolicy::from(true));
     let orig_metadata =
         ArrowReaderMetadata::load(&file, options.clone()).expect("parquet-metadata loading failed");
 

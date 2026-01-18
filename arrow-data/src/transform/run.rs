@@ -206,7 +206,7 @@ pub fn build_extend(array: &ArrayData) -> Extend<'_> {
                     let (run_ends_bytes, values_range) = build_extend_arrays::<$run_end_type>(
                         source_buffer,
                         source_run_ends.len(),
-                        start,
+                        start + array.offset(),
                         len,
                         dest_last_run_end,
                     );
