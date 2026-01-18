@@ -189,7 +189,7 @@ async fn read_remote_parquet_file_with_metadata(
 ) -> Vec<RecordBatch> {
     let options = ArrowReaderOptions::new()
         // tell the reader to read the page index
-        .with_page_index(true);
+        .with_page_index_policy(PageIndexPolicy::from(true));
     // create a reader with pre-existing metadata
     let arrow_reader_metadata = ArrowReaderMetadata::try_new(metadata.into(), options).unwrap();
     let reader =
