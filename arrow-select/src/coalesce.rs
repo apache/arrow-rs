@@ -629,7 +629,7 @@ mod tests {
     fn test_coalesce() {
         let batch = uint32_batch(0..8);
         Test::new("coalesce")
-            .with_additional_batches(std::iter::repeat_n(batch, 10))
+            .with_batches(std::iter::repeat_n(batch, 10))
             // expected output is exactly 21 rows (except for the final batch)
             .with_batch_size(21)
             .with_expected_output_sizes(vec![21, 21, 21, 17])
@@ -640,7 +640,7 @@ mod tests {
     fn test_coalesce_one_by_one() {
         let batch = uint32_batch(0..1); // single row input
         Test::new("coalesce_one_by_one")
-            .with_additional_batches(std::iter::repeat_n(batch, 97))
+            .with_batches(std::iter::repeat_n(batch, 97))
             // expected output is exactly 20 rows (except for the final batch)
             .with_batch_size(20)
             .with_expected_output_sizes(vec![20, 20, 20, 20, 17])
@@ -652,7 +652,7 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::UInt32, false)]));
 
         Test::new("coalesce_empty")
-            .with_additional_batches(vec![])
+            .with_batches(vec![])
             .with_schema(schema)
             .with_batch_size(21)
             .with_expected_output_sizes(vec![])
@@ -731,7 +731,6 @@ mod tests {
                 .with_batch(multi_column_batch(0..8000))
                 .with_filter(filter_builder.next_filter())
         }
-
         test.with_batch_size(15)
             .with_expected_output_sizes(vec![15, 15, 15, 13])
             .run();
@@ -1095,7 +1094,7 @@ mod tests {
         // The strings are designed to exactly fit into buffers that are powers of 2 long
         let batch = stringview_batch_repeated(100, [Some("This string is a power of two=32")]);
         let output_batches = Test::new("coalesce_string_view_many_small_boundary")
-            .with_additional_batches(std::iter::repeat_n(batch, 20))
+            .with_batches(std::iter::repeat_n(batch, 20))
             .with_batch_size(900)
             .with_expected_output_sizes(vec![900, 900, 200])
             .run();
@@ -1283,15 +1282,6 @@ mod tests {
         /// Extend the filters with `filter`
         fn with_filter(mut self, filter: BooleanArray) -> Self {
             self.filters.push(filter);
-            self
-        }
-
-        /// Extends the input batches with `batches`
-        fn with_additional_batches(
-            mut self,
-            batches: impl IntoIterator<Item = RecordBatch>,
-        ) -> Self {
-            self.input_batches.extend(batches);
             self
         }
 
