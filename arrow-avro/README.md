@@ -51,7 +51,7 @@ Disable defaults and pick only what you need (see **Feature Flags**):
 
 ```toml
 [dependencies]
-arrow-avro = { version = "57.0.0", default-features = false, features = ["deflate", "snappy"] }
+arrow-avro = { version = "58.0.0", default-features = false, features = ["deflate", "snappy"] }
 ```
 
 ---
@@ -186,22 +186,22 @@ async fn main() -> anyhow::Result<()> {
 * Minimal, fast build (common pipelines):
 
   ```toml
-  arrow-avro = { version = "56", default-features = false, features = ["deflate", "snappy"] }
+  arrow-avro = { version = "58", default-features = false, features = ["deflate", "snappy"] }
   ```
 * Include Zstandard too (modern data lakes):
 
   ```toml
-  arrow-avro = { version = "56", default-features = false, features = ["deflate", "snappy", "zstd"] }
+  arrow-avro = { version = "58", default-features = false, features = ["deflate", "snappy", "zstd"] }
   ```
 * Async reading from object stores (S3, GCS, etc.):
 
   ```toml
-  arrow-avro = { version = "56", features = ["object_store"] }
+  arrow-avro = { version = "58", features = ["object_store"] }
   ```
 * Fingerprint helpers:
 
   ```toml
-  arrow-avro = { version = "56", features = ["md5", "sha256"] }
+  arrow-avro = { version = "58", features = ["md5", "sha256"] }
   ```
   
 ---

@@ -3,7 +3,7 @@ use crate::reader::async_reader::ReaderState;
 use crate::reader::header::{Header, HeaderDecoder};
 use crate::reader::record::RecordDecoder;
 use crate::reader::{AsyncAvroFileReader, AsyncFileReader, Decoder};
-use crate::schema::{AvroSchema, FingerprintAlgorithm};
+use crate::schema::{AvroSchema, FingerprintAlgorithm, SCHEMA_METADATA_KEY};
 use arrow_schema::ArrowError;
 use indexmap::IndexMap;
 use std::ops::Range;
@@ -17,7 +17,10 @@ pub struct AsyncAvroFileReaderBuilder<R: AsyncFileReader> {
     batch_size: usize,
     range: Option<Range<u64>>,
     reader_schema: Option<AvroSchema>,
+    projection: Option<Vec<usize>>,
     header_size_hint: Option<u64>,
+    utf8_view: bool,
+    strict_mode: bool,
 }
 
 impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
@@ -28,7 +31,10 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
             batch_size,
             range: None,
             reader_schema: None,
+            projection: None,
             header_size_hint: None,
+            utf8_view: false,
+            strict_mode: false,
         }
     }
 
@@ -54,11 +60,33 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
         }
     }
 
+    /// Specify a projection of column indices to read from the Avro file.
+    /// This can help optimize reading by only fetching the necessary columns.
+    pub fn with_projection(self, projection: Vec<usize>) -> Self {
+        Self {
+            projection: Some(projection),
+            ..self
+        }
+    }
+
     /// Provide a hint for the expected size of the Avro header in bytes.
     /// This can help optimize the initial read operation when fetching the header.
     pub fn with_header_size_hint(self, hint: u64) -> Self {
         Self {
             header_size_hint: Some(hint),
+            ..self
+        }
+    }
+
+    /// Enable usage of Utf8View types when reading string data.
+    pub fn with_utf8_view(self, utf8_view: bool) -> Self {
+        Self { utf8_view, ..self }
+    }
+
+    /// Enable strict mode for schema validation and data reading.
+    pub fn with_strict_mode(self, strict_mode: bool) -> Self {
+        Self {
+            strict_mode,
             ..self
         }
     }
@@ -101,6 +129,7 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
         }
 
         // Start by reading the header from the beginning of the avro file
+        // take the writer schema from the header
         let (header, header_len) = self.read_header().await?;
         let writer_schema = header
             .schema()
@@ -109,18 +138,52 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
                 ArrowError::ParseError("No Avro schema present in file header".into())
             })?;
 
+        // If projection exists, project the reader schema,
+        // if no reader schema is provided, parse it from the header(get the raw writer schema), and project that
+        // this projected schema will be the schema used for reading.
+        let projected_reader_schema = self
+            .projection
+            .as_deref()
+            .map(|projection| {
+                let base_schema = if let Some(reader_schema) = &self.reader_schema {
+                    reader_schema.clone()
+                } else {
+                    let raw = header.get(SCHEMA_METADATA_KEY).ok_or_else(|| {
+                        ArrowError::ParseError("No Avro schema present in file header".to_string())
+                    })?;
+                    let json_string = std::str::from_utf8(raw)
+                        .map_err(|e| {
+                            ArrowError::ParseError(format!(
+                                "Invalid UTF-8 in Avro schema header: {e}"
+                            ))
+                        })?
+                        .to_string();
+                    AvroSchema::new(json_string)
+                };
+                base_schema.project(projection)
+            })
+            .transpose()?;
+
+        // Use either the projected reader schema or the original reader schema(if no projection)
+        // (both optional, at worst no reader schema is provided, in which case we read with the writer schema)
+        let effective_reader_schema = projected_reader_schema
+            .as_ref()
+            .or(self.reader_schema.as_ref())
+            .map(|s| s.schema())
+            .transpose()?;
+
         let root = {
-            let field_builder = AvroFieldBuilder::new(&writer_schema);
-            if let Some(provided_schema) = self.reader_schema.as_ref() {
-                let reader_schema = provided_schema.schema()?;
-                field_builder.with_reader_schema(&reader_schema).build()
-            } else {
-                field_builder.build()
+            let mut builder = AvroFieldBuilder::new(&writer_schema);
+            if let Some(reader_schema) = &effective_reader_schema {
+                builder = builder.with_reader_schema(reader_schema);
             }
+            builder
+                .with_utf8view(self.utf8_view)
+                .with_strict_mode(self.strict_mode)
+                .build()
         }?;
 
         let record_decoder = RecordDecoder::try_new_with_options(root.data_type())?;
-
         let decoder = Decoder::from_parts(
             self.batch_size,
             record_decoder,
@@ -134,7 +197,7 @@ impl<R: AsyncFileReader + Unpin + 'static> AsyncAvroFileReaderBuilder<R> {
                 // But then we need to seek back 16 bytes to include the sync marker for the first block,
                 // as the logic in this reader searches the data for the first sync marker(after which a block starts),
                 // then reads blocks from the count, size etc.
-                let start = r.start.max(header_len.checked_sub(16).unwrap());
+                let start = r.start.max(header_len.checked_sub(16).ok_or(ArrowError::ParseError("Avro header length overflow, header was not long enough to contain avro bytes".to_string()))?);
                 let end = r.end.max(start).min(self.file_size); // Ensure end is not less than start, worst case range is empty
                 start..end
             }

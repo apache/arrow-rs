@@ -133,7 +133,7 @@
 //! is enabled, [`AvroObjectReader`] provides integration with object storage services
 //! such as S3 via the [object_store] crate.
 //!
-//! ```ignore
+//! ```
 //! use std::sync::Arc;
 //! use arrow_avro::reader::{AsyncAvroFileReader, AvroObjectReader};
 //! use futures::TryStreamExt;

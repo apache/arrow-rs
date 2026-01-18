@@ -43,7 +43,7 @@ pub struct BlockDecoder {
 }
 
 #[derive(Debug)]
-enum BlockDecoderState {
+pub(crate) enum BlockDecoderState {
     Count,
     Size,
     Data,
@@ -137,5 +137,16 @@ impl BlockDecoder {
             }
             _ => None,
         }
+    }
+}
+
+#[cfg(feature = "async")]
+impl BlockDecoder {
+    pub(crate) fn state(&self) -> &BlockDecoderState {
+        &self.state
+    }
+
+    pub(crate) fn bytes_remaining(&self) -> usize {
+        self.bytes_remaining
     }
 }
