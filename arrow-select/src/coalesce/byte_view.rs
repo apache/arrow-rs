@@ -297,7 +297,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                         return Source {
                             array,
                             need_gc: true,
-                            ideal_buffer_size: 0, // 0 hint uses default block sizes, avoiding huge allocations
+                            ideal_buffer_size: 1, // 1 hint uses default block sizes, avoiding huge allocations
                         };
                     }
                 }
@@ -347,7 +347,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
-        if s.data_buffers().is_empty() {
+        if source.ideal_buffer_size == 0 {
             self.views.extend_from_slice(views);
             self.source = Some(source);
             return Ok(());
