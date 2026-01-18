@@ -347,7 +347,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
 
         // If there are no data buffers in s (all inlined views), can append the
         // views/nulls and done
-        if source.ideal_buffer_size == 0 {
+        if s.data_buffers().is_empty() {
             self.views.extend_from_slice(views);
             self.source = Some(source);
             return Ok(());
