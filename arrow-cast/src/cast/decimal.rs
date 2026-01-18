@@ -802,6 +802,11 @@ where
     }
 }
 
+type ScaleOp<D> = fn(
+    <D as ArrowPrimitiveType>::Native,
+    <D as ArrowPrimitiveType>::Native,
+) -> Result<<D as ArrowPrimitiveType>::Native, ArrowError>;
+
 pub(crate) fn cast_decimal_to_integer<D, T>(
     array: &dyn Array,
     base: D::Native,
@@ -826,7 +831,7 @@ where
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
-    let scale_op: fn(D::Native, D::Native) -> Result<D::Native, ArrowError> =
+    let scale_op: ScaleOp<D> =
         if scale < 0 {
             <D::Native as ArrowNativeTypeOp>::mul_checked
         } else {
