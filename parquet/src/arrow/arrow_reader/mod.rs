@@ -816,7 +816,7 @@ impl ArrowReaderMetadata {
     /// Create [`ArrowReaderMetadata`] from the provided [`ArrowReaderOptions`]
     /// and [`ChunkReader`]
     ///
-    /// Seenano parquet/src/arrow/arrow_reader/mod.rs [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for an
+    /// See [`ParquetRecordBatchReaderBuilder::new_with_metadata`] for an
     /// example of how this can be used
     ///
     /// # Notes
