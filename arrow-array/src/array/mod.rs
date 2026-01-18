@@ -921,24 +921,6 @@ pub fn new_null_array(data_type: &DataType, length: usize) -> ArrayRef {
     make_array(ArrayData::new_null(data_type, length))
 }
 
-/// Helper function that gets offset from an [`ArrayData`]
-///
-/// # Safety
-///
-/// - ArrayData must contain a valid [`OffsetBuffer`] as its first buffer
-unsafe fn get_offsets<O: ArrowNativeType>(data: &ArrayData) -> OffsetBuffer<O> {
-    match data.is_empty() && data.buffers()[0].is_empty() {
-        true => OffsetBuffer::new_empty(),
-        false => {
-            let buffer =
-                ScalarBuffer::new(data.buffers()[0].clone(), data.offset(), data.len() + 1);
-            // Safety:
-            // ArrayData is valid
-            unsafe { OffsetBuffer::new_unchecked(buffer) }
-        }
-    }
-}
-
 /// Helper function that creates an [`OffsetBuffer`] from a buffer and array offset/ length
 ///
 /// # Safety
