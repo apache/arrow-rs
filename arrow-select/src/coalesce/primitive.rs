@@ -226,7 +226,7 @@ impl<T: ArrowPrimitiveType + Debug> InProgressArray for InProgressPrimitiveArray
             }
             IterationStrategy::All => {
                 // Copy all values
-                self.current.extend_from_slice(&values);
+                self.current.extend_from_slice(values);
                 if let Some(nulls) = s.nulls() {
                     self.nulls.append_buffer(nulls);
                 } else {
