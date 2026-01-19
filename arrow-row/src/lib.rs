@@ -2128,10 +2128,6 @@ unsafe fn decode_column(
 
 #[cfg(test)]
 mod tests {
-    use rand::distr::uniform::SampleUniform;
-    use rand::distr::{Distribution, StandardUniform};
-    use rand::{Rng, RngCore, rng};
-
     use arrow_array::builder::*;
     use arrow_array::types::*;
     use arrow_array::*;
@@ -2139,6 +2135,10 @@ mod tests {
     use arrow_buffer::{NullBuffer, i256};
     use arrow_cast::display::{ArrayFormatter, FormatOptions};
     use arrow_ord::sort::{LexicographicalComparator, SortColumn};
+    use rand::distr::uniform::SampleUniform;
+    use rand::distr::{Distribution, StandardUniform};
+    use rand::prelude::StdRng;
+    use rand::{Rng, RngCore, SeedableRng, rng};
 
     use super::*;
 
@@ -3874,7 +3874,7 @@ mod tests {
     #[test]
     #[cfg_attr(miri, ignore)]
     fn fuzz_test() {
-        let mut rng = rng();
+        let mut rng = StdRng::seed_from_u64(42);
         for _ in 0..100 {
             for null_behavior in [Nulls::AsIs, Nulls::Different, Nulls::None] {
                 let num_columns = rng.random_range(1..5);
