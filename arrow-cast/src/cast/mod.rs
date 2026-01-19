@@ -5580,6 +5580,293 @@ mod tests {
     }
 
     #[test]
+    fn test_cast_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec!["one", "null", "three", "one"]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+    }
+
+    #[test]
+    fn test_cast_string_view_array_to_dict_utf8_view() {
+        let array = StringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+        let view = cast(&array, &DataType::Utf8View).unwrap();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        let cast_array = cast(view.as_ref(), &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec!["one", "null", "three", "one"]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+    }
+
+    #[test]
+    fn test_cast_string_view_slice_to_dict_utf8_view() {
+        let array = StringArray::from(vec![
+            Some("zero"),
+            Some("one"),
+            None,
+            Some("three"),
+            Some("one"),
+        ]);
+        let view = cast(&array, &DataType::Utf8View).unwrap();
+        let view = view.slice(1, 4);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        let cast_array = cast(view.as_ref(), &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec!["one", "null", "three", "one"]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2);
+    }
+
+    #[test]
+    fn test_cast_binary_array_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i32>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"hiiii");
+        builder.append_value(b"hiiii"); // duplicate
+        builder.append_null();
+        builder.append_value(b"rustt");
+
+        let array = builder.finish();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec![
+                "68656c6c6f",
+                "6869696969",
+                "6869696969",
+                "null",
+                "7275737474"
+            ]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 3);
+    }
+
+    #[test]
+    fn test_cast_binary_view_array_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i32>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"hiiii");
+        builder.append_value(b"hiiii"); // duplicate
+        builder.append_null();
+        builder.append_value(b"rustt");
+
+        let array = builder.finish();
+        let view = cast(&array, &DataType::BinaryView).unwrap();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        let cast_array = cast(view.as_ref(), &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec![
+                "68656c6c6f",
+                "6869696969",
+                "6869696969",
+                "null",
+                "7275737474"
+            ]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 3);
+    }
+
+    #[test]
+    fn test_cast_binary_view_slice_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i32>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"hiiii");
+        builder.append_value(b"hiiii"); // duplicate
+        builder.append_null();
+        builder.append_value(b"rustt");
+
+        let array = builder.finish();
+        let view = cast(&array, &DataType::BinaryView).unwrap();
+        let view = view.slice(1, 4);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        let cast_array = cast(view.as_ref(), &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec!["6869696969", "6869696969", "null", "7275737474"]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 2);
+    }
+
+    #[test]
+    fn test_cast_string_array_to_dict_utf8_view_key_overflow_u8() {
+        let array = StringArray::from_iter_values((0..257).map(|i| format!("v{i}")));
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt8), Box::new(DataType::Utf8View));
+        let err = cast(&array, &cast_type).unwrap_err();
+        assert!(matches!(err, ArrowError::DictionaryKeyOverflowError));
+    }
+
+    #[test]
+    fn test_cast_large_string_array_to_dict_utf8_view() {
+        let array = LargeStringArray::from(vec![Some("one"), None, Some("three"), Some("one")]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec!["one", "null", "three", "one"]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::Utf8View);
+        assert_eq!(dict_array.values().len(), 2); // "one" and "three" deduplicated
+    }
+
+    #[test]
+    fn test_cast_large_binary_array_to_dict_binary_view() {
+        let mut builder = GenericBinaryBuilder::<i64>::new();
+        builder.append_value(b"hello");
+        builder.append_value(b"world");
+        builder.append_value(b"hello"); // duplicate
+        builder.append_null();
+
+        let array = builder.finish();
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(
+            array_to_strings(&cast_array),
+            vec!["68656c6c6f", "776f726c64", "68656c6c6f", "null"]
+        );
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().data_type(), &DataType::BinaryView);
+        assert_eq!(dict_array.values().len(), 2); // "hello" and "world" deduplicated
+    }
+
+    #[test]
+    fn test_cast_empty_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(Vec::<Option<&str>>::new());
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_empty_binary_array_to_dict_binary_view() {
+        let array = BinaryArray::from(Vec::<Option<&[u8]>>::new());
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(cast_array.len(), 0);
+    }
+
+    #[test]
+    fn test_cast_all_null_string_array_to_dict_utf8_view() {
+        let array = StringArray::from(vec![None::<&str>, None, None]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::Utf8View));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(array_to_strings(&cast_array), vec!["null", "null", "null"]);
+        assert_eq!(cast_array.null_count(), 3);
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().len(), 0);
+    }
+
+    #[test]
+    fn test_cast_all_null_binary_array_to_dict_binary_view() {
+        let array = BinaryArray::from(vec![None::<&[u8]>, None, None]);
+
+        let cast_type =
+            DataType::Dictionary(Box::new(DataType::UInt16), Box::new(DataType::BinaryView));
+        let cast_array = cast(&array, &cast_type).unwrap();
+        assert_eq!(cast_array.data_type(), &cast_type);
+        assert_eq!(array_to_strings(&cast_array), vec!["null", "null", "null"]);
+        assert_eq!(cast_array.null_count(), 3);
+
+        let dict_array = cast_array
+            .as_any()
+            .downcast_ref::<DictionaryArray<UInt16Type>>()
+            .unwrap();
+        assert_eq!(dict_array.values().len(), 0);
+    }
+
+    #[test]
     fn test_numeric_to_binary() {
         let a = Int16Array::from(vec![Some(1), Some(511), None]);
 
