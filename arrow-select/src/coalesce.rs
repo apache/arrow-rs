@@ -296,11 +296,6 @@ impl BatchCoalescer {
         let mut filter_pos = 0; // Position in the filter array
 
         // Build an optimized filter predicate once for the whole input batch
-        let mut filter_builder = FilterBuilder::new(filter);
-        if is_optimize_beneficial {
-            filter_builder = filter_builder.optimize();
-        }
-        let predicate = filter_builder.build();
 
         // We need to process the filter in chunks that fit the target batch size
         while remaining > 0 {
@@ -318,7 +313,13 @@ impl BatchCoalescer {
                     - filter_pos
             };
 
-            let chunk_predicate = predicate.slice(filter_pos, chunk_len, to_copy);
+            let chunk_filter = filter.slice(filter_pos, chunk_len);
+            let mut filter_builder = FilterBuilder::new(&chunk_filter);
+
+            if is_optimize_beneficial {
+                filter_builder = filter_builder.optimize();
+            }
+            let chunk_predicate = filter_builder.build();
 
             // Copy all collected indices in one call per array
             for in_progress in self.in_progress_arrays.iter_mut() {
