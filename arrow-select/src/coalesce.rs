@@ -1320,7 +1320,10 @@ mod tests {
                 extra_tests.push(test);
             }
 
+            // Run original test case first, so any obvious errors are caught
+            // by an easier to understand test case
             let results = self.run_inner();
+            // Run the extra cases to expand coverage
             for extra in extra_tests {
                 extra.run_inner();
             }
