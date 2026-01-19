@@ -16,11 +16,11 @@
 // under the License.
 
 use crate::coalesce::InProgressArray;
-use crate::filter::FilterPredicate;
+use crate::filter::{FilterPredicate, IndexIterator, IterationStrategy, SlicesIterator};
 use arrow_array::cast::AsArray;
 use arrow_array::types::ByteViewType;
-use arrow_array::{Array, ArrayRef, GenericByteViewArray};
-use arrow_buffer::{Buffer, NullBufferBuilder};
+use arrow_array::{Array, ArrayRef, BooleanArray, GenericByteViewArray};
+use arrow_buffer::{Buffer, NullBuffer, NullBufferBuilder};
 use arrow_data::{ByteView, MAX_INLINE_VIEW_LEN};
 use arrow_schema::ArrowError;
 use std::marker::PhantomData;
@@ -370,25 +370,115 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         offset: usize,
         len: usize,
     ) -> Result<(), ArrowError> {
-        // Temporarily swap out the source with a filtered slice
-        let Some(source) = self.source.as_mut() else {
-            return Err(ArrowError::InvalidArgumentError(
+        match filter.strategy() {
+            IterationStrategy::None => return Ok(()),
+            IterationStrategy::All => return self.copy_rows(offset, len),
+            _ => {}
+        }
+
+        self.ensure_capacity();
+        let source = self.source.take().ok_or_else(|| {
+            ArrowError::InvalidArgumentError(
                 "Internal Error: InProgressByteViewArray: source not set".to_string(),
-            ));
-        };
-        // TODO special case offset 0 to skip this nonsense
-        let source_slice = source.array.slice(offset, len);
-        let filtered = filter.filter(&source_slice)?;
-        let old_source = std::mem::replace(&mut source.array, filtered);
-        // Now copy rows with the filtered source (don't return until replaced the old source)
-        let res = self.copy_rows(0, filter.count());
-        let Some(source) = self.source.as_mut() else {
-            return Err(ArrowError::InvalidArgumentError(
-                "Internal Error: InProgressByteViewArray: source not set".to_string(),
-            ));
-        };
-        source.array = old_source;
-        res
+            )
+        })?;
+
+        let s = source.array.as_byte_view::<B>();
+        let views = &s.views().as_ref()[offset..offset + len];
+        let buffers = s.data_buffers();
+
+        // Handle nulls
+        if let Some(nulls) = s.nulls() {
+            let null_array = BooleanArray::new(nulls.inner().clone(), None).slice(offset, len);
+            let filtered_nulls = filter.filter(&null_array)?;
+            let filtered_nulls = filtered_nulls.as_boolean();
+            self.nulls
+                .append_buffer(&NullBuffer::new(filtered_nulls.values().clone()));
+        } else {
+            self.nulls.append_n_non_nulls(filter.count());
+        }
+
+        if source.need_gc {
+            // TODO: avoid allocation here
+            let mut filtered_views = Vec::with_capacity(filter.count());
+            let mut total_bytes = 0;
+
+            match filter.strategy() {
+                IterationStrategy::None | IterationStrategy::All => unreachable!(),
+                IterationStrategy::SlicesIterator => {
+                    for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                        for &v in &views[start..end] {
+                            filtered_views.push(v);
+                            let b = ByteView::from(v);
+                            if b.length > MAX_INLINE_VIEW_LEN {
+                                total_bytes += b.length as usize;
+                            }
+                        }
+                    }
+                }
+                IterationStrategy::IndexIterator => {
+                    for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
+                        let v = views[idx];
+                        filtered_views.push(v);
+                        let b = ByteView::from(v);
+                        if b.length > MAX_INLINE_VIEW_LEN {
+                            total_bytes += b.length as usize;
+                        }
+                    }
+                }
+                IterationStrategy::Indices(indices) => {
+                    for &idx in indices {
+                        let v = views[idx];
+                        filtered_views.push(v);
+                        let b = ByteView::from(v);
+                        if b.length > MAX_INLINE_VIEW_LEN {
+                            total_bytes += b.length as usize;
+                        }
+                    }
+                }
+                IterationStrategy::Slices(slices) => {
+                    for (start, end) in slices {
+                        for &v in &views[*start..*end] {
+                            filtered_views.push(v);
+                            let b = ByteView::from(v);
+                            if b.length > MAX_INLINE_VIEW_LEN {
+                                total_bytes += b.length as usize;
+                            }
+                        }
+                    }
+                }
+            }
+            self.append_views_and_copy_strings(&filtered_views, total_bytes, buffers);
+        } else {
+            // TODO: avoid allocation here
+            let mut filtered_views = Vec::with_capacity(filter.count());
+            match filter.strategy() {
+                IterationStrategy::None | IterationStrategy::All => unreachable!(),
+                IterationStrategy::SlicesIterator => {
+                    for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                        filtered_views.extend_from_slice(&views[start..end]);
+                    }
+                }
+                IterationStrategy::IndexIterator => {
+                    for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
+                        filtered_views.push(views[idx]);
+                    }
+                }
+                IterationStrategy::Indices(indices) => {
+                    for &idx in indices {
+                        filtered_views.push(views[idx]);
+                    }
+                }
+                IterationStrategy::Slices(slices) => {
+                    for (start, end) in slices {
+                        filtered_views.extend_from_slice(&views[*start..*end]);
+                    }
+                }
+            }
+            self.append_views_and_update_buffer_index(&filtered_views, buffers);
+        }
+        self.source = Some(source);
+        Ok(())
     }
 
     fn finish(&mut self) -> Result<ArrayRef, ArrowError> {
