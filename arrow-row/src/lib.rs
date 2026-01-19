@@ -2138,7 +2138,7 @@ mod tests {
     use rand::distr::uniform::SampleUniform;
     use rand::distr::{Distribution, StandardUniform};
     use rand::prelude::StdRng;
-    use rand::{Rng, RngCore, SeedableRng, rng};
+    use rand::{Rng, RngCore, SeedableRng};
 
     use super::*;
 
@@ -3955,6 +3955,38 @@ mod tests {
                             print_col_types(&sort_columns)
                         );
                     }
+                }
+
+                // Validate rows length iterator
+                {
+                    let mut rows_iter = rows.iter();
+                    let mut rows_lengths_iter = rows.lengths();
+                    for (index, row) in rows_iter.by_ref().enumerate() {
+                        let len = rows_lengths_iter
+                            .next()
+                            .expect("Reached end of length iterator while still have rows");
+                        assert_eq!(
+                            row.data.len(),
+                            len,
+                            "Row length mismatch: {} vs {}",
+                            row.data.len(),
+                            len
+                        );
+                        assert_eq!(
+                            len,
+                            rows.row_len(index),
+                            "Row length mismatch at index {}: {} vs {}",
+                            index,
+                            len,
+                            rows.row_len(index)
+                        );
+                    }
+
+                    assert_eq!(
+                        rows_lengths_iter.next(),
+                        None,
+                        "Length iterator did not reach end"
+                    );
                 }
 
                 // Convert rows produced from convert_columns().
