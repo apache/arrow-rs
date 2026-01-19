@@ -457,7 +457,6 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 .current
                 .take()
                 .unwrap_or_else(|| self.buffer_source.next_buffer(0));
-            let mut views_vec = std::mem::take(&mut self.views);
 
             match filter.strategy() {
                 IterationStrategy::None | IterationStrategy::All => unreachable!(),
@@ -465,7 +464,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                     for (start, end) in SlicesIterator::new(filter.filter_array()) {
                         // Safety: filter created valid indices
                         let slice = unsafe { views.get_unchecked(start..end) };
-                        views_vec.extend(slice.iter().map(|&v| {
+                        self.views.extend(slice.iter().map(|&v| {
                             Self::translate_view_gc(
                                 v,
                                 buffers,
@@ -477,7 +476,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                     }
                 }
                 IterationStrategy::IndexIterator => {
-                    views_vec.extend(
+                    self.views.extend(
                         IndexIterator::new(filter.filter_array(), filter.count()).map(|idx| {
                             // Safety: filter created valid indices
                             let v = unsafe { *views.get_unchecked(idx) };
@@ -492,7 +491,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                     );
                 }
                 IterationStrategy::Indices(indices) => {
-                    views_vec.extend(indices.iter().map(|&idx| {
+                    self.views.extend(indices.iter().map(|&idx| {
                         // Safety: filter created valid indices
                         let v = unsafe { *views.get_unchecked(idx) };
                         Self::translate_view_gc(
@@ -509,7 +508,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                         // Safety: filter created valid indices
                         let slice = unsafe { views.get_unchecked(*start..*end) };
 
-                        views_vec.extend(slice.iter().map(|&v| {
+                        self.views.extend(slice.iter().map(|&v| {
                             Self::translate_view_gc(
                                 v,
                                 buffers,
@@ -522,7 +521,6 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 }
             }
             self.current = Some(current);
-            self.views = views_vec;
         } else {
             if let Some(buffer) = self.current.take() {
                 self.completed.push(buffer.into());
