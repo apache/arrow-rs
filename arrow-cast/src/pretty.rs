@@ -1799,7 +1799,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(string_array)]).unwrap();
 
         let options_none = FormatOptions::new().with_null("NULL");
-        let table = pretty_format_batches_with_options(&[batch.clone()], &options_none)
+        let table = pretty_format_batches_with_options(std::slice::from_ref(&batch), &options_none)
             .unwrap()
             .to_string();
 
@@ -1883,7 +1883,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).unwrap();
 
         let options_none = FormatOptions::new();
-        let table = pretty_format_batches_with_options(&[batch.clone()], &options_none)
+        let table = pretty_format_batches_with_options(std::slice::from_ref(&batch), &options_none)
             .unwrap()
             .to_string();
 
