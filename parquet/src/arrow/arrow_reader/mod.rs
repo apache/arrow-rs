@@ -838,7 +838,9 @@ impl ArrowReaderMetadata {
 
     /// Create a new [`ArrowReaderMetadata`] from a pre-existing
     /// [`ParquetMetaData`] and [`ArrowReaderOptions`].
+    ///
     /// # Notes
+    ///
     /// This function will not attempt to load the PageIndex if not present in the metadata, regardless
     /// of the settings in `options`. See [`Self::load`] to load metadata including the page index if needed.
     pub fn try_new(metadata: Arc<ParquetMetaData>, options: ArrowReaderOptions) -> Result<Self> {
@@ -976,42 +978,35 @@ pub type ParquetRecordBatchReaderBuilder<T> = ArrowReaderBuilder<SyncReader<T>>;
 
 impl<T: ChunkReader + 'static> ParquetRecordBatchReaderBuilder<T> {
     /// Create a new [`ParquetRecordBatchReaderBuilder`]
+    ///
+    /// ```
     /// # use std::sync::Arc;
     /// # use bytes::Bytes;
     /// # use arrow_array::{Int32Array, RecordBatch};
     /// # use arrow_schema::{DataType, Field, Schema};
     /// # use parquet::arrow::arrow_reader::{ParquetRecordBatchReader, ParquetRecordBatchReaderBuilder};
     /// # use parquet::arrow::ArrowWriter;
-    /// # let mut file: Vec::<u8> = Vec::with_capacity(1024);
+    /// # let mut file: Vec<u8> = Vec::with_capacity(1024);
     /// # let schema = Arc::new(Schema::new(vec![Field::new("i32", DataType::Int32, false)]));
     /// # let mut writer = ArrowWriter::try_new(&mut file, schema.clone(), None).unwrap();
     /// # let batch = RecordBatch::try_new(schema, vec![Arc::new(Int32Array::from(vec![1, 2, 3]))]).unwrap();
     /// # writer.write(&batch).unwrap();
     /// # writer.close().unwrap();
     /// # let file = Bytes::from(file);
-    /// #
+    /// // Build the reader from anything that implements `ChunkReader`
+    /// // such as a `File`, or `Bytes`
     /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(file).unwrap();
-    ///
-    /// // Inspect metadata
+    /// // The builder has access to ParquetMetaData such
+    /// // as the number and layout of row groups
     /// assert_eq!(builder.metadata().num_row_groups(), 1);
-    ///
-    /// // Construct reader
-    /// let mut reader: ParquetRecordBatchReader = builder.with_row_groups(vec![0]).build().unwrap();
-    ///
+    /// // Call build to create the reader
+    /// let mut reader: ParquetRecordBatchReader = builder.build().unwrap();
     /// // Read data
-    /// let _batch = reader.next().unwrap().unwrap();
-    /// # Example
-    /// rust,no_run
-    /// use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-    ///
-    /// let file = std::fs::File::open("data.parquet")?;
-    /// let mut builder = ParquetRecordBatchReaderBuilder::try_new(file)?;
-    /// let mut reader = builder.build()?;
-    ///
     /// while let Some(batch) = reader.next().transpose()? {
     ///     println!("Read {} rows", batch.num_rows());
     /// }
     /// # Ok::<(), parquet::errors::ParquetError>(())
+    /// ```
     pub fn try_new(reader: T) -> Result<Self> {
         Self::try_new_with_options(reader, Default::default())
     }
