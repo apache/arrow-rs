@@ -1779,7 +1779,11 @@ mod tests {
 
     #[test]
     fn test_quoted_strings() {
-        let schema = Arc::new(Schema::new(vec![Field::new("strings", DataType::Utf8, true)]));
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "strings",
+            DataType::Utf8,
+            true,
+        )]));
 
         let string_array = StringArray::from(vec![
             Some("hello"),
@@ -1792,8 +1796,7 @@ mod tests {
             None,
         ]);
 
-        let batch =
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(string_array)]).unwrap();
+        let batch = RecordBatch::try_new(schema.clone(), vec![Arc::new(string_array)]).unwrap();
 
         let options_none = FormatOptions::new().with_null("NULL");
         let table = pretty_format_batches_with_options(&[batch.clone()], &options_none)
@@ -1877,8 +1880,7 @@ mod tests {
             false,
         )]));
 
-        let batch =
-            RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).unwrap();
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(struct_array)]).unwrap();
 
         let options_none = FormatOptions::new();
         let table = pretty_format_batches_with_options(&[batch.clone()], &options_none)
