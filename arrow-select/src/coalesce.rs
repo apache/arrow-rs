@@ -1469,11 +1469,11 @@ mod tests {
                 .into_iter()
                 .flat_map(|batch| [empty_batch.clone(), batch])
                 .collect();
-            let emtpy_filter = BooleanArray::builder(0).finish();
+            let empty_filters = BooleanArray::builder(0).finish();
             self.filters = self
                 .filters
                 .into_iter()
-                .flat_map(|filter| [emtpy_filter.clone(), filter])
+                .flat_map(|filter| [empty_filters.clone(), filter])
                 .collect();
             self.with_description("empty batches inserted")
         }
@@ -1488,6 +1488,7 @@ mod tests {
             let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
             RecordBatch::try_new_with_options(batch.schema(), new_columns, &options).unwrap()
         }
+
         fn remove_nulls_from_array(array: &ArrayRef) -> ArrayRef {
             make_array(array.to_data().into_builder().nulls(None).build().unwrap())
         }
@@ -1505,7 +1506,6 @@ mod tests {
 
                 let single_column_batches = self.input_batches.iter().map(|batch| {
                     let single_column = batch.column_by_name(column.name()).unwrap();
-
                     RecordBatch::try_new(
                         Arc::clone(&single_column_schema),
                         vec![single_column.clone()],
