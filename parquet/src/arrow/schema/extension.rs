@@ -27,7 +27,6 @@ use crate::basic::LogicalType;
 use crate::errors::ParquetError;
 use crate::schema::types::Type;
 use arrow_schema::Field;
-use arrow_schema::extension::ExtensionType;
 
 /// Adds extension type metadata, if necessary, based on the Parquet field's
 /// [`LogicalType`]
@@ -36,7 +35,7 @@ use arrow_schema::extension::ExtensionType;
 /// Arrow DataType, and instead are represented by an Arrow ExtensionType.
 /// Extension types are attached to Arrow Fields via metadata.
 pub(crate) fn try_add_extension_type(
-    mut arrow_field: Field,
+    arrow_field: Field,
     parquet_type: &Type,
 ) -> Result<Field, ParquetError> {
     let Some(parquet_logical_type) = parquet_type.get_basic_info().logical_type_ref() else {
@@ -172,7 +171,7 @@ pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary(_field: &Field) -> Option<LogicalType> {
     None
 }
 
@@ -182,6 +181,6 @@ pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType>
 }
 
 #[cfg(not(feature = "geospatial"))]
-pub(crate) fn logical_type_for_binary_view(field: &Field) -> Option<LogicalType> {
+pub(crate) fn logical_type_for_binary_view(_field: &Field) -> Option<LogicalType> {
     None
 }
