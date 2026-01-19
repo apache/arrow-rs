@@ -179,39 +179,6 @@ use crate::variable::{decode_binary, decode_string};
 use arrow_array::types::{Int16Type, Int32Type, Int64Type};
 
 mod fixed;
-
-/// Computes the minimum offset and maximum end (offset + size) for a ListView array.
-/// Returns (min_offset, max_end) which can be used to slice the values array.
-fn compute_list_view_bounds<O: OffsetSizeTrait>(array: &GenericListViewArray<O>) -> (usize, usize) {
-    if array.is_empty() {
-        return (0, 0);
-    }
-
-    let offsets = array.value_offsets();
-    let sizes = array.value_sizes();
-
-    let mut min_offset = usize::MAX;
-    let mut max_end = 0usize;
-
-    for i in 0..array.len() {
-        let offset = offsets[i].as_usize();
-        let size = sizes[i].as_usize();
-        let end = offset + size;
-
-        if size > 0 {
-            min_offset = min_offset.min(offset);
-            max_end = max_end.max(end);
-        }
-    }
-
-    if min_offset == usize::MAX {
-        // All lists are empty
-        (0, 0)
-    } else {
-        (min_offset, max_end)
-    }
-}
-
 mod list;
 mod run;
 mod variable;
@@ -537,6 +504,38 @@ enum Codec {
     /// Row converters for each union field (indexed by type_id)
     /// and the encoding of null rows for each field
     Union(Vec<RowConverter>, Vec<OwnedRow>),
+}
+
+/// Computes the minimum offset and maximum end (offset + size) for a ListView array.
+/// Returns (min_offset, max_end) which can be used to slice the values array.
+fn compute_list_view_bounds<O: OffsetSizeTrait>(array: &GenericListViewArray<O>) -> (usize, usize) {
+    if array.is_empty() {
+        return (0, 0);
+    }
+
+    let offsets = array.value_offsets();
+    let sizes = array.value_sizes();
+
+    let mut min_offset = usize::MAX;
+    let mut max_end = 0usize;
+
+    for i in 0..array.len() {
+        let offset = offsets[i].as_usize();
+        let size = sizes[i].as_usize();
+        let end = offset + size;
+
+        if size > 0 {
+            min_offset = min_offset.min(offset);
+            max_end = max_end.max(end);
+        }
+    }
+
+    if min_offset == usize::MAX {
+        // All lists are empty
+        (0, 0)
+    } else {
+        (min_offset, max_end)
+    }
 }
 
 impl Codec {
