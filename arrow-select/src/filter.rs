@@ -117,8 +117,6 @@ impl Iterator for IndexIterator<'_> {
     }
 }
 
-impl ExactSizeIterator for IndexIterator<'_> {}
-
 /// Counts the number of set bits in `filter`
 fn filter_count(filter: &BooleanArray) -> usize {
     filter.values().count_set_bits()

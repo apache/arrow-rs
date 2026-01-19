@@ -147,13 +147,6 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// - `views` - the views to append
     /// - `view_buffer_size` - the total number of bytes pointed to by all
     ///   views (used to allocate new buffers if needed)
-    /// Append views to self.views, copying data from the buffers into
-    /// self.buffers and updating the buffer index as necessary.
-    ///
-    /// # Arguments
-    /// - `views` - the views to append
-    /// - `view_buffer_size` - the total number of bytes pointed to by all
-    ///   views (used to allocate new buffers if needed)
     /// - `buffers` - the buffers the reviews point to
     #[inline(never)]
     fn append_views_and_copy_strings(
@@ -162,23 +155,12 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         view_buffer_size: usize,
         buffers: &[Buffer],
     ) {
-        self.append_views_and_copy_strings_iter(views.iter().copied(), view_buffer_size, buffers);
-    }
-
-    /// Iterator version of [`Self::append_views_and_copy_strings`]
-    #[inline(never)]
-    fn append_views_and_copy_strings_iter(
-        &mut self,
-        views: impl ExactSizeIterator<Item = u128>,
-        view_buffer_size: usize,
-        buffers: &[Buffer],
-    ) {
         // Note: the calculations below are designed to avoid any reallocations
         // of the current buffer, and to only allocate new buffers when
         // necessary, which is critical for performance.
 
         // If there is no current buffer, allocate a new one
-        let Some(mut current) = self.current.take() else {
+        let Some(current) = self.current.take() else {
             let new_buffer = self.buffer_source.next_buffer(view_buffer_size);
             self.append_views_and_copy_strings_inner(views, new_buffer, buffers);
             return;
@@ -186,59 +168,42 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
 
         // If there is a current buffer with enough space, append the views and
         // copy the strings into the existing buffer.
-        let remaining_capacity = current.capacity() - current.len();
+        let mut remaining_capacity = current.capacity() - current.len();
         if view_buffer_size <= remaining_capacity {
             self.append_views_and_copy_strings_inner(views, current, buffers);
             return;
         }
 
         // Here there is a current buffer, but it doesn't have enough space to
-        // hold all the strings. Fill up the current buffer with as many views
-        // as we can, and then allocate a new buffer for the remaining views.
-        let mut views = views.peekable();
-        while let Some(view) = views.peek() {
+        // hold all the strings. Copy as many views as we can into the current
+        // buffer and then allocate a new buffer for the remaining views
+        //
+        // TODO: should we copy the strings too at the same time?
+        let mut num_view_to_current = 0;
+        for view in views {
             let b = ByteView::from(*view);
-            if b.length > MAX_INLINE_VIEW_LEN {
-                if (b.length as usize) > current.capacity() - current.len() {
-                    break;
-                }
+            let str_len = b.length;
+            if remaining_capacity < str_len as usize {
+                break;
             }
-            // Consuming the view
-            let v = views.next().unwrap();
-            let mut b = ByteView::from(v);
-            let new_buffer_index = self.completed.len() as u32;
-
-            if b.length > MAX_INLINE_VIEW_LEN {
-                let str_len = b.length as usize;
-                let buffer_index = b.buffer_index as usize;
-                let buffer_offset = b.offset as usize;
-
-                b.offset = current.len() as u32;
-                b.buffer_index = new_buffer_index;
-
-                let src = unsafe {
-                    buffers
-                        .get_unchecked(buffer_index)
-                        .get_unchecked(buffer_offset..buffer_offset + str_len)
-                };
-                current.extend_from_slice(src);
+            if str_len > MAX_INLINE_VIEW_LEN {
+                remaining_capacity -= str_len as usize;
             }
-            self.views.push(b.as_u128());
+            num_view_to_current += 1;
         }
 
-        self.completed.push(current.into());
+        let first_views = &views[0..num_view_to_current];
+        let string_bytes_to_copy = current.capacity() - current.len() - remaining_capacity;
+        let remaining_view_buffer_size = view_buffer_size - string_bytes_to_copy;
 
-        if views.len() == 0 {
-            return;
-        }
+        self.append_views_and_copy_strings_inner(first_views, current, buffers);
+        let completed = self.current.take().expect("completed");
+        self.completed.push(completed.into());
 
-        // Copy any remaining views into a new buffer.
-        // We need to re-calculate the remaining view_buffer_size if we want to be precise,
-        // but often BufferSource will handle it.
-        // A simple way is to sum them up, but that requires another pass.
-        // For now, let's just use the original view_buffer_size as a hint.
-        let next_buffer = self.buffer_source.next_buffer(0); // Use 0 to let it grow or use next size
-        self.append_views_and_copy_strings_inner(views, next_buffer, buffers);
+        // Copy any remaining views into a new buffer
+        let remaining_views = &views[num_view_to_current..];
+        let new_buffer = self.buffer_source.next_buffer(remaining_view_buffer_size);
+        self.append_views_and_copy_strings_inner(remaining_views, new_buffer, buffers);
     }
 
     /// Append views to self.views, copying data from the buffers into
@@ -251,22 +216,45 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     #[inline(never)]
     fn append_views_and_copy_strings_inner(
         &mut self,
-        views: impl ExactSizeIterator<Item = u128>,
+        views: &[u128],
         mut dst_buffer: Vec<u8>,
         buffers: &[Buffer],
     ) {
         assert!(self.current.is_none(), "current buffer should be None");
 
-        if views.len() == 0 {
+        if views.is_empty() {
             self.current = Some(dst_buffer);
             return;
         }
 
         let new_buffer_index: u32 = self.completed.len().try_into().expect("too many buffers");
 
+        // In debug builds, check that the vector has enough capacity to copy
+        // the views into it without reallocating.
+        #[cfg(debug_assertions)]
+        {
+            let total_length: usize = views
+                .iter()
+                .filter_map(|v| {
+                    let b = ByteView::from(*v);
+                    if b.length > MAX_INLINE_VIEW_LEN {
+                        Some(b.length as usize)
+                    } else {
+                        None
+                    }
+                })
+                .sum();
+            debug_assert!(
+                dst_buffer.capacity() >= total_length,
+                "dst_buffer capacity {} is less than total length {}",
+                dst_buffer.capacity(),
+                total_length
+            );
+        }
+
         // Copy the views, updating the buffer index and copying the data as needed
-        let new_views = views.map(|v| {
-            let mut b: ByteView = ByteView::from(v);
+        let new_views = views.iter().map(|v| {
+            let mut b: ByteView = ByteView::from(*v);
             if b.length > MAX_INLINE_VIEW_LEN {
                 let buffer_index = b.buffer_index as usize;
                 let buffer_offset = b.offset as usize;
@@ -462,67 +450,32 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             }
             self.append_views_and_copy_strings(&filtered_views, total_bytes, buffers);
         } else {
-            if let Some(current) = self.current.take() {
-                self.completed.push(current.into());
-            }
-            let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
-            self.completed.extend_from_slice(buffers);
-
+            // TODO: avoid allocation here
+            let mut filtered_views = Vec::with_capacity(filter.count());
             match filter.strategy() {
                 IterationStrategy::None | IterationStrategy::All => unreachable!(),
                 IterationStrategy::SlicesIterator => {
                     for (start, end) in SlicesIterator::new(filter.filter_array()) {
-                        let slice = &views[start..end];
-                        if starting_buffer == 0 {
-                            self.views.extend_from_slice(slice);
-                        } else {
-                            self.views.extend(slice.iter().map(|&v| {
-                                let mut byte_view = ByteView::from(v);
-                                if byte_view.length > MAX_INLINE_VIEW_LEN {
-                                    byte_view.buffer_index += starting_buffer;
-                                };
-                                byte_view.as_u128()
-                            }));
-                        }
+                        filtered_views.extend_from_slice(&views[start..end]);
                     }
                 }
                 IterationStrategy::IndexIterator => {
-                    self.views.extend(
-                        IndexIterator::new(filter.filter_array(), filter.count()).map(|idx| {
-                            let mut byte_view = ByteView::from(views[idx]);
-                            if byte_view.length > MAX_INLINE_VIEW_LEN {
-                                byte_view.buffer_index += starting_buffer;
-                            };
-                            byte_view.as_u128()
-                        }),
-                    );
+                    for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
+                        filtered_views.push(views[idx]);
+                    }
                 }
                 IterationStrategy::Indices(indices) => {
-                    self.views.extend(indices.iter().map(|&idx| {
-                        let mut byte_view = ByteView::from(views[idx]);
-                        if byte_view.length > MAX_INLINE_VIEW_LEN {
-                            byte_view.buffer_index += starting_buffer;
-                        };
-                        byte_view.as_u128()
-                    }));
+                    for &idx in indices {
+                        filtered_views.push(views[idx]);
+                    }
                 }
                 IterationStrategy::Slices(slices) => {
                     for (start, end) in slices {
-                        let slice = &views[*start..*end];
-                        if starting_buffer == 0 {
-                            self.views.extend_from_slice(slice);
-                        } else {
-                            self.views.extend(slice.iter().map(|&v| {
-                                let mut byte_view = ByteView::from(v);
-                                if byte_view.length > MAX_INLINE_VIEW_LEN {
-                                    byte_view.buffer_index += starting_buffer;
-                                };
-                                byte_view.as_u128()
-                            }));
-                        }
+                        filtered_views.extend_from_slice(&views[*start..*end]);
                     }
                 }
             }
+            self.append_views_and_update_buffer_index(&filtered_views, buffers);
         }
         self.source = Some(source);
         Ok(())
