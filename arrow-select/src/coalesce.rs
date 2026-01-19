@@ -267,9 +267,9 @@ impl BatchCoalescer {
         assert_eq!(arrays.len(), self.in_progress_arrays.len());
         self.in_progress_arrays
             .iter_mut()
-            .zip(&arrays)
+            .zip(arrays)
             .for_each(|(in_progress, array)| {
-                in_progress.set_source(Some(Arc::clone(array)), selectivity);
+                in_progress.set_source(Some(array), selectivity);
             });
 
         // Choose iteration strategy based on the optimized predicate
