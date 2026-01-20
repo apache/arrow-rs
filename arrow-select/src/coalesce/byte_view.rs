@@ -286,6 +286,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         current: &mut Vec<u8>,
         completed: &mut Vec<Buffer>,
         buffer_source: &mut BufferSource,
+        ideal_buffer_size: usize,
     ) -> u128 {
         if (v as u32) <= MAX_INLINE_VIEW_LEN {
             return v;
@@ -294,7 +295,7 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
         let mut b = ByteView::from(v);
         let str_len = b.length as usize;
         if current.len() + str_len > current.capacity() {
-            let next = buffer_source.next_buffer(str_len);
+            let next = buffer_source.next_buffer(ideal_buffer_size);
             let prev = std::mem::replace(current, next);
             completed.push(prev.into());
         }
@@ -429,8 +430,10 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             }
 
             let actual_buffer_size = s.data_buffers().iter().map(|b| b.capacity()).sum::<usize>();
-            let need_gc = ideal_buffer_size != 0 && actual_buffer_size > (ideal_buffer_size * 2);
 
+            let need_gc = ideal_buffer_size != 0 && actual_buffer_size > (ideal_buffer_size * 2);
+            let fraction = filter.count() as f64 / s.len() as f64;
+            let ideal_buffer_size = (ideal_buffer_size as f64 * (1.0 / fraction)).round() as usize;
             Source {
                 array,
                 need_gc,
@@ -546,10 +549,11 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                 }
             }
         } else if source.need_gc {
+            let ideal_buffer_size = source.ideal_buffer_size;
             let mut current = self
                 .current
                 .take()
-                .unwrap_or_else(|| self.buffer_source.next_buffer(source.ideal_buffer_size));
+                .unwrap_or_else(|| self.buffer_source.next_buffer(ideal_buffer_size));
 
             match filter.strategy() {
                 IterationStrategy::None | IterationStrategy::All => unreachable!(),
@@ -564,6 +568,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                                 &mut current,
                                 &mut self.completed,
                                 &mut self.buffer_source,
+                                ideal_buffer_size,
                             )
                         }));
                     }
@@ -579,6 +584,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                                 &mut current,
                                 &mut self.completed,
                                 &mut self.buffer_source,
+                                ideal_buffer_size,
                             )
                         }),
                     );
@@ -593,6 +599,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                             &mut current,
                             &mut self.completed,
                             &mut self.buffer_source,
+                            ideal_buffer_size,
                         )
                     }));
                 }
@@ -608,6 +615,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
                                 &mut current,
                                 &mut self.completed,
                                 &mut self.buffer_source,
+                                ideal_buffer_size,
                             )
                         }));
                     }
