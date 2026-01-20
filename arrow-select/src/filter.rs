@@ -100,7 +100,7 @@ impl<'a> IndexIterator<'a> {
         for i in 0..len {
             // SAFETY: we have allocated enough space in `result`
             unsafe {
-                *ptr.add(i) = self.iter.next().expect("IndexIterator exhausted early");
+                *ptr.add(i) = self.iter.next().unwrap_unchecked();
             }
         }
         // SAFETY: we have initialized `len` elements
