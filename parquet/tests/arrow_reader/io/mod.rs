@@ -288,7 +288,7 @@ impl TestRowGroups {
                     .enumerate()
                     .map(|(col_idx, col_meta)| {
                         let column_name = col_meta.column_descr().name().to_string();
-                        let page_locations = offset_index[rg_index][col_idx].page_locations();
+                        let page_locations = offset_index[rg_index][col_idx].as_ref().unwrap().page_locations();
                         let dictionary_page_location = col_meta.dictionary_page_offset();
 
                         // We can find the byte range of the entire column chunk

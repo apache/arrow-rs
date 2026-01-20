@@ -254,12 +254,16 @@ impl RowSelection {
     fn selection_skips_any_page(
         &self,
         projection: &ProjectionMask,
-        columns: &[OffsetIndexMetaData],
+        columns: &[Option<OffsetIndexMetaData>],
     ) -> bool {
         columns.iter().enumerate().any(|(leaf_idx, column)| {
             if !projection.leaf_included(leaf_idx) {
                 return false;
             }
+
+            let Some(column) = column else {
+                return false;
+            };
 
             let locations = column.page_locations();
             if locations.is_empty() {
@@ -275,7 +279,7 @@ impl RowSelection {
     pub(crate) fn should_force_selectors(
         &self,
         projection: &ProjectionMask,
-        offset_index: Option<&[OffsetIndexMetaData]>,
+        offset_index: Option<&[Option<OffsetIndexMetaData>]>,
     ) -> bool {
         match offset_index {
             Some(columns) => self.selection_skips_any_page(projection, columns),

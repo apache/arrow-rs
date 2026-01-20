@@ -2256,9 +2256,9 @@ mod tests {
         );
 
         assert!(reader.metadata().offset_index().is_some());
-        let offset_indexes = &reader.metadata().offset_index().unwrap()[0];
+        let offset_indexes = &reader.metadata().offset_index().expect("offset index should be present when page index is enabled")[0];
 
-        let page_locations = offset_indexes[0].page_locations.clone();
+        let page_locations = offset_indexes[0].as_ref().expect("offset index should be present for column 0").page_locations.clone();
 
         // We should fallback to PLAIN encoding after the first row and our max page size is 1 bytes
         // so we expect one dictionary encoded page and then a page per row thereafter.
@@ -4029,12 +4029,12 @@ mod tests {
         let bytes = Bytes::from(buf);
         let options = ReadOptionsBuilder::new().with_page_index().build();
         let reader = SerializedFileReader::new_with_options(bytes, options).unwrap();
-        let index = reader.metadata().offset_index().unwrap();
+        let index = reader.metadata().offset_index().expect("offset index should be present when page index is enabled");
 
         assert_eq!(index.len(), 1);
         assert_eq!(index[0].len(), 2); // 2 columns
-        assert_eq!(index[0][0].page_locations().len(), 1); // 1 page
-        assert_eq!(index[0][1].page_locations().len(), 1); // 1 page
+        assert_eq!(index[0][0].as_ref().expect("offset index should be present for column 0").page_locations().len(), 1); // 1 page
+        assert_eq!(index[0][1].as_ref().expect("offset index should be present for column 1").page_locations().len(), 1); // 1 page
     }
 
     #[test]
@@ -4095,21 +4095,21 @@ mod tests {
         // The column chunk for column "b" shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let offset_index = reader.metadata().offset_index().unwrap();
+        let offset_index = reader.metadata().offset_index().expect("offset index should be present when page index is enabled");
         assert_eq!(offset_index.len(), 1); // 1 row group
         assert_eq!(offset_index[0].len(), 2); // 2 columns
 
-        let column_index = reader.metadata().column_index().unwrap();
+        let column_index = reader.metadata().column_index().expect("column index should be present when page index is enabled");
         assert_eq!(column_index.len(), 1); // 1 row group
         assert_eq!(column_index[0].len(), 2); // 2 columns
 
         let a_idx = &column_index[0][0];
         assert!(
-            matches!(a_idx, ColumnIndexMetaData::BYTE_ARRAY(_)),
+            matches!(a_idx, Some(ColumnIndexMetaData::BYTE_ARRAY(_))),
             "{a_idx:?}"
         );
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, None), "{b_idx:?}");
     }
 
     #[test]
@@ -4170,14 +4170,14 @@ mod tests {
         // The column chunk for column "b"  shouldn't have statistics
         assert!(b_col.statistics().is_none());
 
-        let column_index = reader.metadata().column_index().unwrap();
+        let column_index = reader.metadata().column_index().expect("column index should be present");
         assert_eq!(column_index.len(), 1); // 1 row group
         assert_eq!(column_index[0].len(), 2); // 2 columns
 
         let a_idx = &column_index[0][0];
-        assert!(matches!(a_idx, ColumnIndexMetaData::NONE), "{a_idx:?}");
+        assert!(matches!(a_idx, None), "{a_idx:?}");
         let b_idx = &column_index[0][1];
-        assert!(matches!(b_idx, ColumnIndexMetaData::NONE), "{b_idx:?}");
+        assert!(matches!(b_idx, None), "{b_idx:?}");
     }
 
     #[test]

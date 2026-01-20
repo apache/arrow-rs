@@ -510,7 +510,11 @@ macro_rules! colidx_enum_func {
 pub enum ColumnIndexMetaData {
     /// Sometimes reading page index from parquet file
     /// will only return pageLocations without min_max index,
-    /// `NONE` represents this lack of index information
+    /// `NONE` represents this lack of index information.
+    ///
+    /// Note: This is a legacy marker and should not be used to represent
+    /// missing column indexes in `ParquetColumnIndex` (that is now done via
+    /// `None` on the `Option`).
     NONE,
     /// Boolean type index
     BOOLEAN(PrimitiveColumnIndex<bool>),
