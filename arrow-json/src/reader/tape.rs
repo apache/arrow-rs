@@ -315,6 +315,35 @@ macro_rules! next_non_whitespace {
     };
 }
 
+/// Dispatches value type detection with optional special case and custom transition function
+macro_rules! dispatch_value {
+    ($self:ident, $b:expr, |$s:ident| $transition:expr $(, $special:pat => $special_body:expr)?) => {{
+        let $s = match $b {
+            $($special => $special_body,)?
+            b'"' => DecoderState::String,
+            b @ (b'-' | b'0'..=b'9') => {
+                $self.bytes.push(b);
+                DecoderState::Number
+            }
+            b'n' => DecoderState::Literal(Literal::Null, 1),
+            b'f' => DecoderState::Literal(Literal::False, 1),
+            b't' => DecoderState::Literal(Literal::True, 1),
+            b'[' => {
+                let idx = $self.elements.len() as u32;
+                $self.elements.push(TapeElement::StartList(u32::MAX));
+                DecoderState::List(idx)
+            }
+            b'{' => {
+                let idx = $self.elements.len() as u32;
+                $self.elements.push(TapeElement::StartObject(u32::MAX));
+                DecoderState::Object(idx)
+            }
+            b => return Err(err(b, "parsing value")),
+        };
+        $transition
+    }};
+}
+
 /// Implements a state machine for decoding JSON to a tape
 pub struct TapeDecoder {
     elements: Vec<TapeElement>,
@@ -360,17 +389,19 @@ impl TapeDecoder {
     }
 
     /// Write the closing elements for an object to the tape
-    fn write_end_object(&mut self, start_idx: u32) {
+    fn end_object(&mut self, start_idx: u32) {
         let end_idx = self.elements.len() as u32;
         self.elements[start_idx as usize] = TapeElement::StartObject(end_idx);
         self.elements.push(TapeElement::EndObject(start_idx));
+        self.stack.pop();
     }
 
     /// Write the closing elements for a list to the tape
-    fn write_end_list(&mut self, start_idx: u32) {
+    fn end_list(&mut self, start_idx: u32) {
         let end_idx = self.elements.len() as u32;
         self.elements[start_idx as usize] = TapeElement::StartList(end_idx);
         self.elements.push(TapeElement::EndList(start_idx));
+        self.stack.pop();
     }
 
     pub fn decode(&mut self, buf: &[u8]) -> Result<usize, ArrowError> {
@@ -393,27 +424,7 @@ impl TapeDecoder {
                     self.cur_row += 1;
 
                     // Detect value type and push appropriate state
-                    match b {
-                        b'"' => self.stack.push(DecoderState::String),
-                        b @ (b'-' | b'0'..=b'9') => {
-                            self.bytes.push(b);
-                            self.stack.push(DecoderState::Number);
-                        }
-                        b'n' => self.stack.push(DecoderState::Literal(Literal::Null, 1)),
-                        b'f' => self.stack.push(DecoderState::Literal(Literal::False, 1)),
-                        b't' => self.stack.push(DecoderState::Literal(Literal::True, 1)),
-                        b'[' => {
-                            let idx = self.elements.len() as u32;
-                            self.elements.push(TapeElement::StartList(u32::MAX));
-                            self.stack.push(DecoderState::List(idx));
-                        }
-                        b'{' => {
-                            let idx = self.elements.len() as u32;
-                            self.elements.push(TapeElement::StartObject(u32::MAX));
-                            self.stack.push(DecoderState::Object(idx));
-                        }
-                        b => return Err(err(b, "parsing value")),
-                    }
+                    dispatch_value!(self, b, |s| self.stack.push(s));
 
                     self.stack.last_mut().unwrap()
                 }
@@ -429,10 +440,7 @@ impl TapeDecoder {
                             self.stack.push(DecoderState::Colon);
                             self.stack.push(DecoderState::String);
                         }
-                        b'}' => {
-                            self.write_end_object(start_idx);
-                            self.stack.pop();
-                        }
+                        b'}' => self.end_object(start_idx),
                         b => return Err(err(b, "expected '\"' or '}'")),
                     }
                 }
@@ -440,72 +448,33 @@ impl TapeDecoder {
                 DecoderState::ObjectAfterValue(start_idx) => {
                     let start_idx = *start_idx;
                     match next_non_whitespace!(iter) {
-                        b',' => {
-                            *state = DecoderState::Object(start_idx);
-                        }
-                        b'}' => {
-                            self.write_end_object(start_idx);
-                            self.stack.pop();
-                        }
+                        b',' => *state = DecoderState::Object(start_idx),
+                        b'}' => self.end_object(start_idx),
                         b => return Err(err(b, "expected ',' or '}'")),
                     }
                 }
                 // Decoding a list - awaiting next element or ']'
                 DecoderState::List(start_idx) => {
                     let start_idx = *start_idx;
-                    match next_non_whitespace!(iter) {
+                    dispatch_value!(
+                        self,
+                        next_non_whitespace!(iter),
+                        |s| {
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(s);
+                        },
                         b']' => {
-                            self.write_end_list(start_idx);
-                            self.stack.pop();
+                            self.end_list(start_idx);
+                            continue;
                         }
-                        // Inline value detection to avoid redundant WS check
-                        b'"' => {
-                            *state = DecoderState::ListAfterValue(start_idx);
-                            self.stack.push(DecoderState::String);
-                        }
-                        b @ (b'-' | b'0'..=b'9') => {
-                            self.bytes.push(b);
-                            *state = DecoderState::ListAfterValue(start_idx);
-                            self.stack.push(DecoderState::Number);
-                        }
-                        b'n' => {
-                            *state = DecoderState::ListAfterValue(start_idx);
-                            self.stack.push(DecoderState::Literal(Literal::Null, 1));
-                        }
-                        b'f' => {
-                            *state = DecoderState::ListAfterValue(start_idx);
-                            self.stack.push(DecoderState::Literal(Literal::False, 1));
-                        }
-                        b't' => {
-                            *state = DecoderState::ListAfterValue(start_idx);
-                            self.stack.push(DecoderState::Literal(Literal::True, 1));
-                        }
-                        b'[' => {
-                            let idx = self.elements.len() as u32;
-                            self.elements.push(TapeElement::StartList(u32::MAX));
-                            *state = DecoderState::ListAfterValue(start_idx);
-                            self.stack.push(DecoderState::List(idx));
-                        }
-                        b'{' => {
-                            let idx = self.elements.len() as u32;
-                            self.elements.push(TapeElement::StartObject(u32::MAX));
-                            *state = DecoderState::ListAfterValue(start_idx);
-                            self.stack.push(DecoderState::Object(idx));
-                        }
-                        b => return Err(err(b, "parsing value")),
-                    }
+                    );
                 }
                 // After value in a list - expecting comma or close bracket
                 DecoderState::ListAfterValue(start_idx) => {
                     let start_idx = *start_idx;
                     match next_non_whitespace!(iter) {
-                        b',' => {
-                            *state = DecoderState::List(start_idx);
-                        }
-                        b']' => {
-                            self.write_end_list(start_idx);
-                            self.stack.pop();
-                        }
+                        b',' => *state = DecoderState::List(start_idx),
+                        b']' => self.end_list(start_idx),
                         b => return Err(err(b, "expected ',' or ']'")),
                     }
                 }
@@ -527,27 +496,7 @@ impl TapeDecoder {
                 }
                 // Skip whitespace and detect value type
                 DecoderState::Value => {
-                    *state = match next_non_whitespace!(iter) {
-                        b'"' => DecoderState::String,
-                        b @ b'-' | b @ b'0'..=b'9' => {
-                            self.bytes.push(b);
-                            DecoderState::Number
-                        }
-                        b'n' => DecoderState::Literal(Literal::Null, 1),
-                        b'f' => DecoderState::Literal(Literal::False, 1),
-                        b't' => DecoderState::Literal(Literal::True, 1),
-                        b'[' => {
-                            let idx = self.elements.len() as u32;
-                            self.elements.push(TapeElement::StartList(u32::MAX));
-                            DecoderState::List(idx)
-                        }
-                        b'{' => {
-                            let idx = self.elements.len() as u32;
-                            self.elements.push(TapeElement::StartObject(u32::MAX));
-                            DecoderState::Object(idx)
-                        }
-                        b => return Err(err(b, "parsing value")),
-                    };
+                    *state = dispatch_value!(self, next_non_whitespace!(iter), |s| s);
                 }
                 DecoderState::Number => {
                     let s = iter.advance_until(|b| {
