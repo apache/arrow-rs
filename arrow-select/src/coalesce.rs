@@ -318,11 +318,7 @@ impl BatchCoalescer {
             let chunk_len = if remaining <= space_in_batch {
                 filter.len() - filter_pos
             } else {
-                filter
-                    .filter_array()
-                    .values()
-                    .find_nth_set_bit_position(filter_pos, to_copy)
-                    - filter_pos
+                filter.find_nth_set_bit_position(filter_pos, to_copy) - filter_pos
             };
 
             let chunk_predicate = filter.slice_with_count(filter_pos, chunk_len, to_copy);

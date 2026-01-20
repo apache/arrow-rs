@@ -486,6 +486,45 @@ impl FilterPredicate {
     pub fn filter_array(&self) -> &BooleanArray {
         &self.filter
     }
+
+    /// Returns the bit position of the `n`-th set bit in the filter, starting the search at `start`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `n` bits are not found.
+    pub fn find_nth_set_bit_position(&self, start: usize, n: usize) -> usize {
+        if n == 0 {
+            return start;
+        }
+
+        match &self.strategy {
+            IterationStrategy::Indices(indices) => {
+                // If we have precomputed indices, we can find the nth bit directly.
+                // Since this predicate might be a slice, the indices are relative to the start of this predicate.
+                // However, the `start` parameter is also relative to the start of this predicate.
+                let offset = indices.partition_point(|&idx| idx < start);
+                indices[offset + n - 1] + 1
+            }
+            IterationStrategy::Slices(slices) => {
+                let mut remaining = n;
+                for &(s_start, s_end) in slices {
+                    if s_end <= start {
+                        continue;
+                    }
+                    let effective_start = s_start.max(start);
+                    let len = s_end - effective_start;
+                    if len >= remaining {
+                        return effective_start + remaining;
+                    }
+                    remaining -= len;
+                }
+                panic!("n bits not found in slices")
+            }
+            IterationStrategy::All => start + n,
+            IterationStrategy::None => panic!("No bits in None strategy"),
+            _ => self.filter.values().find_nth_set_bit_position(start, n),
+        }
+    }
 }
 
 fn filter_array(values: &dyn Array, predicate: &FilterPredicate) -> Result<ArrayRef, ArrowError> {
