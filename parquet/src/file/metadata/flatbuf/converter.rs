@@ -24,7 +24,8 @@ use std::sync::Arc;
 
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 
-use crate::basic::{ColumnOrder, Compression, Encoding, LogicalType, Repetition, Type};
+use crate::basic::{ColumnOrder, Compression, Encoding, LogicalType, PageType, Repetition, Type};
+use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
 use crate::file::metadata::{
     ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue,
@@ -273,7 +274,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let schema_descr = file_metadata.schema_descr();
 
         // Build schema elements
-        let schema_offsets = self.build_schema(schema_descr);
+        let schema_offsets = self.build_schema(schema_descr, file_metadata.column_orders());
         let schema = self.builder.create_vector(&schema_offsets);
 
         // Build row groups
@@ -293,9 +294,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         });
 
         // Build created_by
-        let created_by = file_metadata
-            .created_by()
-            .map(|s| self.builder.create_string(s));
+        let created_by =
+            self.builder
+                .create_string(file_metadata.created_by().unwrap_or(""));
 
         // Build FileMetaData
         let file_meta_data = fb::FileMetaData::create(
@@ -306,7 +307,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 num_rows: file_metadata.num_rows(),
                 row_groups: Some(row_groups),
                 kv,
-                created_by,
+                created_by: Some(created_by),
             },
         );
 
@@ -317,10 +318,19 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
     fn build_schema(
         &mut self,
         schema_descr: &SchemaDescriptor,
+        column_orders: Option<&Vec<ColumnOrder>>,
     ) -> Vec<WIPOffset<fb::SchemaElement<'a>>> {
         let root_schema = schema_descr.root_schema();
         let mut elements = Vec::new();
-        self.build_schema_element(root_schema, &mut elements, true, schema_descr);
+        let mut leaf_idx = 0;
+        self.build_schema_element(
+            root_schema,
+            &mut elements,
+            true,
+            schema_descr,
+            column_orders,
+            &mut leaf_idx,
+        );
         elements
     }
 
@@ -330,6 +340,8 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         elements: &mut Vec<WIPOffset<fb::SchemaElement<'a>>>,
         is_root: bool,
         _schema_descr: &SchemaDescriptor,
+        column_orders: Option<&Vec<ColumnOrder>>,
+        leaf_idx: &mut usize,
     ) {
         let name = self.builder.create_string(schema_type.name());
 
@@ -371,16 +383,25 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let (logical_type_type, logical_type) =
             self.build_logical_type(schema_type.get_basic_info().logical_type_ref());
 
-        // Build column order for leaf nodes
+        // Build column order for leaf nodes when provided
         let (column_order_type, column_order) = if !schema_type.is_group() {
-            // For leaf nodes, add column order
-            (
-                fb::ColumnOrder::TypeDefinedOrder,
-                Some(
-                    fb::Empty::create(&mut self.builder, &fb::EmptyArgs {})
-                        .as_union_value(),
-                ),
-            )
+            let mut order = None;
+            if let Some(orders) = column_orders {
+                if let Some(col_order) = orders.get(*leaf_idx) {
+                    if matches!(col_order, ColumnOrder::TYPE_DEFINED_ORDER(_)) {
+                        order = Some(
+                            fb::Empty::create(&mut self.builder, &fb::EmptyArgs {})
+                                .as_union_value(),
+                        );
+                    }
+                }
+            }
+            *leaf_idx += 1;
+            if let Some(order) = order {
+                (fb::ColumnOrder::TypeDefinedOrder, Some(order))
+            } else {
+                (fb::ColumnOrder::NONE, None)
+            }
         } else {
             (fb::ColumnOrder::NONE, None)
         };
@@ -405,7 +426,14 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         // Recursively add children
         if schema_type.is_group() {
             for field in schema_type.get_fields() {
-                self.build_schema_element(field, elements, false, _schema_descr);
+                self.build_schema_element(
+                    field,
+                    elements,
+                    false,
+                    _schema_descr,
+                    column_orders,
+                    leaf_idx,
+                );
             }
         }
     }
@@ -578,9 +606,6 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
             self.builder.create_vector(&sc_offsets)
         });
 
-        // Calculate total compressed size
-        let total_compressed_size: i64 = rg.columns().iter().map(|c| c.compressed_size()).sum();
-
         fb::RowGroup::create(
             &mut self.builder,
             &fb::RowGroupArgs {
@@ -589,7 +614,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 num_rows: rg.num_rows(),
                 sorting_columns,
                 file_offset: rg.file_offset().unwrap_or(0),
-                total_compressed_size,
+                total_compressed_size: rg.columns().iter().map(|c| c.compressed_size()).sum(),
                 ordinal: rg.ordinal(),
             },
         )
@@ -603,12 +628,10 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
     ) -> WIPOffset<fb::ColumnChunk<'a>> {
         let meta_data = self.build_column_metadata(cc, rg);
 
-        let file_path = cc.file_path().map(|s| self.builder.create_string(s));
-
         fb::ColumnChunk::create(
             &mut self.builder,
             &fb::ColumnChunkArgs {
-                file_path,
+                file_path: None,
                 meta_data: Some(meta_data),
             },
         )
@@ -626,10 +649,14 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let statistics = cc.statistics().map(|stats| self.build_statistics(stats, cc.column_type()));
 
         // Determine if fully dictionary encoded
-        let is_fully_dict_encoded = cc.dictionary_page_offset().is_some()
-            && cc.page_encoding_stats_mask().is_some_and(|mask| {
-                mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY)
-            });
+        let is_fully_dict_encoded = is_fully_dict_encoded(cc);
+
+        let rg_file_offset = rg.file_offset().unwrap_or(0);
+        let data_page_offset = if cc.data_page_offset() == rg_file_offset {
+            0
+        } else {
+            cc.data_page_offset()
+        };
 
         // Only store num_values if different from row group num_rows
         let num_values = if cc.num_values() != rg.num_rows() {
@@ -646,7 +673,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 total_uncompressed_size: cc.uncompressed_size(),
                 total_compressed_size: cc.compressed_size(),
                 key_value_metadata,
-                data_page_offset: cc.data_page_offset(),
+                data_page_offset,
                 index_page_offset: cc.index_page_offset(),
                 dictionary_page_offset: cc.dictionary_page_offset(),
                 statistics,
@@ -671,9 +698,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
             let packed = pack_statistics(
                 physical_type,
                 min,
-                stats.is_min_max_backwards_compatible(),
+                stats.min_is_exact(),
                 max,
-                stats.is_min_max_backwards_compatible(),
+                stats.max_is_exact(),
             );
             (Some(packed.min), Some(packed.max), packed.prefix)
         } else {
@@ -750,7 +777,9 @@ impl FlatBufferConverter {
         let version = fb_meta.version();
         let num_rows = fb_meta.num_rows();
 
-        let created_by = fb_meta.created_by().map(|s| s.to_string());
+        let created_by = fb_meta
+            .created_by()
+            .and_then(|s| if s.is_empty() { None } else { Some(s.to_string()) });
 
         let key_value_metadata = fb_meta.kv().map(|kvs| {
             kvs.iter()
@@ -761,18 +790,12 @@ impl FlatBufferConverter {
                 .collect()
         });
 
-        // Extract column orders from schema elements
+        // Extract column orders from schema elements (C++ assumes type-defined for leaves)
         let column_orders = fb_meta.schema().map(|schema| {
             schema
                 .iter()
                 .filter(|e| e.num_children() == 0) // Only leaf nodes
-                .map(|e| {
-                    if e.column_order_type() == fb::ColumnOrder::TypeDefinedOrder {
-                        ColumnOrder::TYPE_DEFINED_ORDER(crate::basic::SortOrder::SIGNED)
-                    } else {
-                        ColumnOrder::UNDEFINED
-                    }
-                })
+                .map(|_| ColumnOrder::TYPE_DEFINED_ORDER(crate::basic::SortOrder::SIGNED))
                 .collect()
         });
 
@@ -853,12 +876,18 @@ impl FlatBufferConverter {
         })?;
 
         let physical_type = column_descr.physical_type();
+        let data_page_offset = if fb_meta.data_page_offset() == 0 {
+            fb_rg.file_offset()
+        } else {
+            fb_meta.data_page_offset()
+        };
+
         let mut builder = ColumnChunkMetaDataBuilder::new(column_descr)
             .set_compression(convert_compression_from_fb(fb_meta.codec()))
             .set_num_values(fb_meta.num_values().unwrap_or(fb_rg.num_rows()))
             .set_total_compressed_size(fb_meta.total_compressed_size())
             .set_total_uncompressed_size(fb_meta.total_uncompressed_size())
-            .set_data_page_offset(fb_meta.data_page_offset());
+            .set_data_page_offset(data_page_offset);
 
         if let Some(offset) = fb_meta.index_page_offset() {
             builder = builder.set_index_page_offset(Some(offset));
@@ -884,11 +913,6 @@ impl FlatBufferConverter {
             }
         }
 
-        // Set file path if present
-        if let Some(path) = fb_cc.file_path() {
-            builder = builder.set_file_path(path.to_string());
-        }
-
         builder.build()
     }
 
@@ -896,8 +920,8 @@ impl FlatBufferConverter {
         let null_count = fb_stats.null_count().map(|n| n as u64);
 
         // Unpack min/max values
-        let (min_bytes, max_bytes) = if fb_stats.min_len().is_some() && fb_stats.max_len().is_some()
-        {
+        let (min_bytes, min_exact, max_bytes, max_exact) =
+            if fb_stats.min_len().is_some() && fb_stats.max_len().is_some() {
             let packed = MinMax {
                 min: PackedStats {
                     lo4: fb_stats.min_lo4(),
@@ -915,86 +939,100 @@ impl FlatBufferConverter {
             };
 
             match unpack_statistics(physical_type, &packed) {
-                Some((min, _min_exact, max, _max_exact)) => (Some(min), Some(max)),
-                None => (None, None),
+                Some((min, min_exact, max, max_exact)) => {
+                    (Some(min), min_exact, Some(max), max_exact)
+                }
+                None => (None, false, None, false),
             }
         } else {
-            (None, None)
+            (None, false, None, false)
         };
 
         // Create statistics based on physical type
-        let stats = match physical_type {
-            Type::BOOLEAN => {
-                if let (Some(min), Some(max)) = (min_bytes.as_ref(), max_bytes.as_ref()) {
-                    Statistics::boolean(
-                        min.first().map(|&b| b != 0),
-                        max.first().map(|&b| b != 0),
-                        None,
-                        null_count,
-                        false,
-                    )
-                } else {
-                    return Ok(None);
-                }
+        let mut stats = match physical_type {
+            Type::BOOLEAN => Statistics::boolean(
+                min_bytes.as_ref().and_then(|min| min.first().map(|&b| b != 0)),
+                max_bytes.as_ref().and_then(|max| max.first().map(|&b| b != 0)),
+                None,
+                null_count,
+                false,
+            ),
+            Type::INT32 => Statistics::int32(
+                min_bytes
+                    .as_ref()
+                    .map(|min| i32::from_le_bytes(min[..4].try_into().unwrap())),
+                max_bytes
+                    .as_ref()
+                    .map(|max| i32::from_le_bytes(max[..4].try_into().unwrap())),
+                None,
+                null_count,
+                false,
+            ),
+            Type::INT64 => Statistics::int64(
+                min_bytes
+                    .as_ref()
+                    .map(|min| i64::from_le_bytes(min[..8].try_into().unwrap())),
+                max_bytes
+                    .as_ref()
+                    .map(|max| i64::from_le_bytes(max[..8].try_into().unwrap())),
+                None,
+                null_count,
+                false,
+            ),
+            Type::FLOAT => Statistics::float(
+                min_bytes
+                    .as_ref()
+                    .map(|min| f32::from_le_bytes(min[..4].try_into().unwrap())),
+                max_bytes
+                    .as_ref()
+                    .map(|max| f32::from_le_bytes(max[..4].try_into().unwrap())),
+                None,
+                null_count,
+                false,
+            ),
+            Type::DOUBLE => Statistics::double(
+                min_bytes
+                    .as_ref()
+                    .map(|min| f64::from_le_bytes(min[..8].try_into().unwrap())),
+                max_bytes
+                    .as_ref()
+                    .map(|max| f64::from_le_bytes(max[..8].try_into().unwrap())),
+                None,
+                null_count,
+                false,
+            ),
+            Type::INT96 => {
+                let min = match min_bytes.as_ref() {
+                    Some(min) => Some(Int96::try_from_le_slice(min)?),
+                    None => None,
+                };
+                let max = match max_bytes.as_ref() {
+                    Some(max) => Some(Int96::try_from_le_slice(max)?),
+                    None => None,
+                };
+                Statistics::int96(min, max, None, null_count, false)
             }
-            Type::INT32 => {
-                if let (Some(min), Some(max)) = (min_bytes.as_ref(), max_bytes.as_ref()) {
-                    Statistics::int32(
-                        Some(i32::from_le_bytes(min[..4].try_into().unwrap())),
-                        Some(i32::from_le_bytes(max[..4].try_into().unwrap())),
-                        None,
-                        null_count,
-                        false,
-                    )
-                } else {
-                    return Ok(None);
-                }
+            Type::BYTE_ARRAY => {
+                let min = min_bytes.as_ref().map(|min| ByteArray::from(min.clone()));
+                let max = max_bytes.as_ref().map(|max| ByteArray::from(max.clone()));
+                Statistics::byte_array(min, max, None, null_count, false)
             }
-            Type::INT64 => {
-                if let (Some(min), Some(max)) = (min_bytes.as_ref(), max_bytes.as_ref()) {
-                    Statistics::int64(
-                        Some(i64::from_le_bytes(min[..8].try_into().unwrap())),
-                        Some(i64::from_le_bytes(max[..8].try_into().unwrap())),
-                        None,
-                        null_count,
-                        false,
-                    )
-                } else {
-                    return Ok(None);
-                }
-            }
-            Type::FLOAT => {
-                if let (Some(min), Some(max)) = (min_bytes.as_ref(), max_bytes.as_ref()) {
-                    Statistics::float(
-                        Some(f32::from_le_bytes(min[..4].try_into().unwrap())),
-                        Some(f32::from_le_bytes(max[..4].try_into().unwrap())),
-                        None,
-                        null_count,
-                        false,
-                    )
-                } else {
-                    return Ok(None);
-                }
-            }
-            Type::DOUBLE => {
-                if let (Some(min), Some(max)) = (min_bytes.as_ref(), max_bytes.as_ref()) {
-                    Statistics::double(
-                        Some(f64::from_le_bytes(min[..8].try_into().unwrap())),
-                        Some(f64::from_le_bytes(max[..8].try_into().unwrap())),
-                        None,
-                        null_count,
-                        false,
-                    )
-                } else {
-                    return Ok(None);
-                }
-            }
-            Type::INT96 | Type::BYTE_ARRAY | Type::FIXED_LEN_BYTE_ARRAY => {
-                // For these types, we don't fully reconstruct statistics
-                // as they require more context
-                return Ok(None);
+            Type::FIXED_LEN_BYTE_ARRAY => {
+                let min =
+                    min_bytes.as_ref().map(|min| FixedLenByteArray::from(min.clone()));
+                let max =
+                    max_bytes.as_ref().map(|max| FixedLenByteArray::from(max.clone()));
+                Statistics::fixed_len_byte_array(min, max, None, null_count, false)
             }
         };
+
+        if min_bytes.is_none() && max_bytes.is_none() && null_count.is_none() {
+            return Ok(None);
+        }
+
+        stats = stats
+            .with_min_is_exact(min_exact)
+            .with_max_is_exact(max_exact);
 
         Ok(Some(stats))
     }
@@ -1100,6 +1138,47 @@ fn convert_edge_interpolation_to_fb(
         crate::basic::EdgeInterpolationAlgorithm::_Unknown(_) => {
             fb::EdgeInterpolationAlgorithm::SPHERICAL
         }
+    }
+}
+
+fn is_fully_dict_encoded(cc: &ColumnChunkMetaData) -> bool {
+    if let Some(stats) = cc.page_encoding_stats() {
+        for stat in stats {
+            if stat.page_type != PageType::DATA_PAGE && stat.page_type != PageType::DATA_PAGE_V2 {
+                continue;
+            }
+            if stat.encoding != Encoding::PLAIN_DICTIONARY
+                && stat.encoding != Encoding::RLE_DICTIONARY
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    if let Some(mask) = cc.page_encoding_stats_mask() {
+        return mask.is_only(Encoding::PLAIN_DICTIONARY)
+            || mask.is_only(Encoding::RLE_DICTIONARY);
+    }
+
+    let mut has_plain_dictionary_encoding = false;
+    let mut has_non_dictionary_encoding = false;
+    for encoding in cc.encodings() {
+        match encoding {
+            Encoding::PLAIN_DICTIONARY => {
+                has_plain_dictionary_encoding = true;
+            }
+            Encoding::RLE | Encoding::BIT_PACKED => {}
+            _ => {
+                has_non_dictionary_encoding = true;
+            }
+        }
+    }
+
+    if has_plain_dictionary_encoding {
+        !has_non_dictionary_encoding
+    } else {
+        false
     }
 }
 
