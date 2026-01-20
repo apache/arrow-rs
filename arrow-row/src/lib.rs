@@ -515,6 +515,7 @@ fn compute_list_view_bounds<O: OffsetSizeTrait>(array: &GenericListViewArray<O>)
 
     let offsets = array.value_offsets();
     let sizes = array.value_sizes();
+    let values_len = array.values().len();
 
     let mut min_offset = usize::MAX;
     let mut max_end = 0usize;
@@ -527,6 +528,13 @@ fn compute_list_view_bounds<O: OffsetSizeTrait>(array: &GenericListViewArray<O>)
         if size > 0 {
             min_offset = min_offset.min(offset);
             max_end = max_end.max(end);
+        }
+
+        // Early exit if we've found the full range of the values array. This is possible with
+        // ListViews since offsets and sizes are arbitrary and the full range can be covered early
+        // in the iteration contrary to regular Lists.
+        if min_offset == 0 && max_end == values_len {
+            break;
         }
     }
 
