@@ -56,7 +56,7 @@ use crate::arrow::async_reader::{MetadataFetch, MetadataSuffixFetch};
 ///
 /// # Example
 /// ```no_run
-/// # use parquet::file::metadata::ParquetMetaDataReader;
+/// # use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
 /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
 /// // read parquet metadata including page indexes from a file
 /// let file = open_parquet_file("some_path.parquet");
@@ -218,7 +218,7 @@ impl ParquetMetaDataReader {
     ///
     /// # Example
     /// ```no_run
-    /// # use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
     /// # fn open_parquet_file(path: &str) -> std::fs::File { unimplemented!(); }
     /// // read parquet metadata including page indexes
     /// let file = open_parquet_file("some_path.parquet");
@@ -257,7 +257,7 @@ impl ParquetMetaDataReader {
     ///
     /// # Example
     /// ```no_run
-    /// # use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
     /// # use parquet::errors::ParquetError;
     /// # use crate::parquet::file::reader::Length;
     /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<u64>) -> bytes::Bytes { unimplemented!(); }
@@ -285,7 +285,7 @@ impl ParquetMetaDataReader {
     /// to test for this. In the event the file metadata is present, re-parsing of the file
     /// metadata can be skipped by using [`Self::read_page_indexes_sized()`], as shown below.
     /// ```no_run
-    /// # use parquet::file::metadata::ParquetMetaDataReader;
+    /// # use parquet::file::metadata::{PageIndexPolicy, ParquetMetaDataReader};
     /// # use parquet::errors::ParquetError;
     /// # use crate::parquet::file::reader::Length;
     /// # fn get_bytes(file: &std::fs::File, range: std::ops::Range<u64>) -> bytes::Bytes { unimplemented!(); }
