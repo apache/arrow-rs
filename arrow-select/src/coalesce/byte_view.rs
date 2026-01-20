@@ -318,19 +318,15 @@ impl<B: ByteViewType> InProgressByteViewArray<B> {
     /// Update views and push to `self.views`
     #[inline]
     fn append_views_with_offset(&mut self, views: &[u128], offset: u32) {
-        if offset == 0 {
-            self.views.extend_from_slice(views);
-        } else {
-            let updated_views = views.iter().map(|v| {
-                let mut byte_view = ByteView::from(*v);
-                if byte_view.length > MAX_INLINE_VIEW_LEN {
-                    byte_view.buffer_index += offset;
-                };
-                byte_view.as_u128()
-            });
+        let updated_views = views.iter().map(|v| {
+            let mut byte_view = ByteView::from(*v);
+            if byte_view.length > MAX_INLINE_VIEW_LEN {
+                byte_view.buffer_index += offset;
+            };
+            byte_view.as_u128()
+        });
 
-            self.views.extend(updated_views);
-        }
+        self.views.extend(updated_views);
     }
 }
 
@@ -628,6 +624,40 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             }
             let starting_buffer: u32 = self.completed.len().try_into().expect("too many buffers");
             self.completed.extend_from_slice(buffers);
+
+            if starting_buffer == 0 {
+                match filter.strategy() {
+                    IterationStrategy::None | IterationStrategy::All => unreachable!(),
+                    IterationStrategy::SlicesIterator => {
+                        for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                            // Safety: filter created valid indices
+                            self.views
+                                .extend_from_slice(unsafe { views.get_unchecked(start..end) });
+                        }
+                    }
+                    IterationStrategy::IndexIterator => {
+                        self.views.extend(
+                            IndexIterator::new(filter.filter_array(), filter.count())
+                                .map(|idx| unsafe { *views.get_unchecked(idx) }),
+                        );
+                    }
+                    IterationStrategy::Indices(indices) => {
+                        self.views.extend(
+                            indices
+                                .iter()
+                                .map(|&idx| unsafe { *views.get_unchecked(idx) }),
+                        );
+                    }
+                    IterationStrategy::Slices(slices) => {
+                        for (start, end) in slices {
+                            // Safety: filter created valid indices
+                            self.views
+                                .extend_from_slice(unsafe { views.get_unchecked(*start..*end) });
+                        }
+                    }
+                }
+                return Ok(());
+            }
 
             match filter.strategy() {
                 IterationStrategy::None | IterationStrategy::All => unreachable!(),
