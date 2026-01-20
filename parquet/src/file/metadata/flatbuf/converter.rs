@@ -25,19 +25,16 @@ use std::sync::Arc;
 use flatbuffers::{FlatBufferBuilder, WIPOffset};
 
 use crate::basic::{ColumnOrder, Compression, Encoding, LogicalType, PageType, Repetition, Type};
-use crate::data_type::{ByteArray, FixedLenByteArray, Int96};
 use crate::errors::{ParquetError, Result};
+use crate::file::metadata::thrift::PageStatistics;
 use crate::file::metadata::{
-    ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue,
-    ParquetMetaData, RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
+    ColumnChunkMetaData, ColumnChunkMetaDataBuilder, FileMetaData, KeyValue, ParquetMetaData,
+    RowGroupMetaData, RowGroupMetaDataBuilder, SortingColumn,
 };
 use crate::file::statistics::Statistics;
-use crate::schema::types::{
-    ColumnDescriptor, SchemaDescPtr, SchemaDescriptor, Type as SchemaType,
-};
+use crate::schema::types::{ColumnDescriptor, SchemaDescPtr, SchemaDescriptor, Type as SchemaType};
 
 use super::parquet3_generated::parquet::format_3 as fb;
-
 
 /// Packed min/max statistics for FlatBuffers format
 #[derive(Debug, Default, Clone)]
@@ -152,12 +149,7 @@ fn pack_statistics(
 }
 
 /// Pack byte array statistics with common prefix extraction
-fn pack_byte_array_stats(
-    min: &[u8],
-    is_min_exact: bool,
-    max: &[u8],
-    is_max_exact: bool,
-) -> MinMax {
+fn pack_byte_array_stats(min: &[u8], is_min_exact: bool, max: &[u8], is_max_exact: bool) -> MinMax {
     // Find common prefix
     let prefix_len = min
         .iter()
@@ -242,7 +234,9 @@ fn unpack_statistics(
                     result.extend_from_slice(&p.lo8.to_be_bytes());
                     (result, true)
                 } else {
-                    result.extend_from_slice(&p.lo4.to_be_bytes()[..(p.len.unsigned_abs() as usize).min(4)]);
+                    result.extend_from_slice(
+                        &p.lo4.to_be_bytes()[..(p.len.unsigned_abs() as usize).min(4)],
+                    );
                     (result, p.len >= 0)
                 }
             };
@@ -294,9 +288,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         });
 
         // Build created_by
-        let created_by =
-            self.builder
-                .create_string(file_metadata.created_by().unwrap_or(""));
+        let created_by = self
+            .builder
+            .create_string(file_metadata.created_by().unwrap_or(""));
 
         // Build FileMetaData
         let file_meta_data = fb::FileMetaData::create(
@@ -308,6 +302,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 row_groups: Some(row_groups),
                 kv,
                 created_by: Some(created_by),
+                encryption_algorithm_type: fb::EncryptionAlgorithm::NONE,
+                encryption_algorithm: None,
+                footer_signing_key_metadata: None,
             },
         );
 
@@ -441,7 +438,10 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
     fn build_logical_type(
         &mut self,
         logical_type: Option<&LogicalType>,
-    ) -> (fb::LogicalType, Option<WIPOffset<flatbuffers::UnionWIPOffset>>) {
+    ) -> (
+        fb::LogicalType,
+        Option<WIPOffset<flatbuffers::UnionWIPOffset>>,
+    ) {
         match logical_type {
             None => (fb::LogicalType::NONE, None),
             Some(lt) => match lt {
@@ -565,7 +565,10 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                 }
                 LogicalType::Geography { crs, algorithm } => {
                     let crs_str = crs.as_ref().map(|s| self.builder.create_string(s));
-                    let algo = algorithm.as_ref().map(|a| convert_edge_interpolation_to_fb(*a)).unwrap_or(fb::EdgeInterpolationAlgorithm::SPHERICAL);
+                    let algo = algorithm
+                        .as_ref()
+                        .map(|a| convert_edge_interpolation_to_fb(*a))
+                        .unwrap_or(fb::EdgeInterpolationAlgorithm::SPHERICAL);
                     (
                         fb::LogicalType::GeographyType,
                         Some(
@@ -633,6 +636,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
             &fb::ColumnChunkArgs {
                 file_path: None,
                 meta_data: Some(meta_data),
+                crypto_metadata_type: fb::ColumnCryptoMetaData::NONE,
+                crypto_metadata: None,
+                encrypted_column_metadata: None,
             },
         )
     }
@@ -646,7 +652,9 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let key_value_metadata = None; // Column-level KV metadata not commonly used
 
         // Build statistics
-        let statistics = cc.statistics().map(|stats| self.build_statistics(stats, cc.column_type()));
+        let statistics = cc
+            .statistics()
+            .map(|stats| self.build_statistics(stats, cc.column_type()));
 
         // Determine if fully dictionary encoded
         let is_fully_dict_encoded = is_fully_dict_encoded(cc);
@@ -692,20 +700,19 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
         let null_count = stats.null_count_opt().map(|n| n as i32);
 
         // Pack min/max values
-        let (min_stats, max_stats, prefix_str) = if let (Some(min), Some(max)) =
-            (stats.min_bytes_opt(), stats.max_bytes_opt())
-        {
-            let packed = pack_statistics(
-                physical_type,
-                min,
-                stats.min_is_exact(),
-                max,
-                stats.max_is_exact(),
-            );
-            (Some(packed.min), Some(packed.max), packed.prefix)
-        } else {
-            (None, None, String::new())
-        };
+        let (min_stats, max_stats, prefix_str) =
+            if let (Some(min), Some(max)) = (stats.min_bytes_opt(), stats.max_bytes_opt()) {
+                let packed = pack_statistics(
+                    physical_type,
+                    min,
+                    stats.min_is_exact(),
+                    max,
+                    stats.max_is_exact(),
+                );
+                (Some(packed.min), Some(packed.max), packed.prefix)
+            } else {
+                (None, None, String::new())
+            };
 
         let prefix = if !prefix_str.is_empty() {
             Some(self.builder.create_string(&prefix_str))
@@ -777,9 +784,13 @@ impl FlatBufferConverter {
         let version = fb_meta.version();
         let num_rows = fb_meta.num_rows();
 
-        let created_by = fb_meta
-            .created_by()
-            .and_then(|s| if s.is_empty() { None } else { Some(s.to_string()) });
+        let created_by = fb_meta.created_by().and_then(|s| {
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        });
 
         let key_value_metadata = fb_meta.kv().map(|kvs| {
             kvs.iter()
@@ -916,125 +927,58 @@ impl FlatBufferConverter {
         builder.build()
     }
 
-    fn convert_statistics(fb_stats: &fb::Statistics, physical_type: Type) -> Result<Option<Statistics>> {
+    fn convert_statistics(
+        fb_stats: &fb::Statistics,
+        physical_type: Type,
+    ) -> Result<Option<Statistics>> {
         let null_count = fb_stats.null_count().map(|n| n as u64);
 
         // Unpack min/max values
         let (min_bytes, min_exact, max_bytes, max_exact) =
             if fb_stats.min_len().is_some() && fb_stats.max_len().is_some() {
-            let packed = MinMax {
-                min: PackedStats {
-                    lo4: fb_stats.min_lo4(),
-                    lo8: fb_stats.min_lo8(),
-                    hi8: fb_stats.min_hi8(),
-                    len: fb_stats.min_len().unwrap_or(0),
-                },
-                max: PackedStats {
-                    lo4: fb_stats.max_lo4(),
-                    lo8: fb_stats.max_lo8(),
-                    hi8: fb_stats.max_hi8(),
-                    len: fb_stats.max_len().unwrap_or(0),
-                },
-                prefix: fb_stats.prefix().unwrap_or("").to_string(),
+                let packed = MinMax {
+                    min: PackedStats {
+                        lo4: fb_stats.min_lo4(),
+                        lo8: fb_stats.min_lo8(),
+                        hi8: fb_stats.min_hi8(),
+                        len: fb_stats.min_len().unwrap_or(0),
+                    },
+                    max: PackedStats {
+                        lo4: fb_stats.max_lo4(),
+                        lo8: fb_stats.max_lo8(),
+                        hi8: fb_stats.max_hi8(),
+                        len: fb_stats.max_len().unwrap_or(0),
+                    },
+                    prefix: fb_stats.prefix().unwrap_or("").to_string(),
+                };
+
+                match unpack_statistics(physical_type, &packed) {
+                    Some((min, min_exact, max, max_exact)) => {
+                        (Some(min), min_exact, Some(max), max_exact)
+                    }
+                    None => (None, false, None, false),
+                }
+            } else {
+                (None, false, None, false)
             };
 
-            match unpack_statistics(physical_type, &packed) {
-                Some((min, min_exact, max, max_exact)) => {
-                    (Some(min), min_exact, Some(max), max_exact)
-                }
-                None => (None, false, None, false),
-            }
-        } else {
-            (None, false, None, false)
-        };
-
         // Create statistics based on physical type
-        let mut stats = match physical_type {
-            Type::BOOLEAN => Statistics::boolean(
-                min_bytes.as_ref().and_then(|min| min.first().map(|&b| b != 0)),
-                max_bytes.as_ref().and_then(|max| max.first().map(|&b| b != 0)),
-                None,
-                null_count,
-                false,
-            ),
-            Type::INT32 => Statistics::int32(
-                min_bytes
-                    .as_ref()
-                    .map(|min| i32::from_le_bytes(min[..4].try_into().unwrap())),
-                max_bytes
-                    .as_ref()
-                    .map(|max| i32::from_le_bytes(max[..4].try_into().unwrap())),
-                None,
-                null_count,
-                false,
-            ),
-            Type::INT64 => Statistics::int64(
-                min_bytes
-                    .as_ref()
-                    .map(|min| i64::from_le_bytes(min[..8].try_into().unwrap())),
-                max_bytes
-                    .as_ref()
-                    .map(|max| i64::from_le_bytes(max[..8].try_into().unwrap())),
-                None,
-                null_count,
-                false,
-            ),
-            Type::FLOAT => Statistics::float(
-                min_bytes
-                    .as_ref()
-                    .map(|min| f32::from_le_bytes(min[..4].try_into().unwrap())),
-                max_bytes
-                    .as_ref()
-                    .map(|max| f32::from_le_bytes(max[..4].try_into().unwrap())),
-                None,
-                null_count,
-                false,
-            ),
-            Type::DOUBLE => Statistics::double(
-                min_bytes
-                    .as_ref()
-                    .map(|min| f64::from_le_bytes(min[..8].try_into().unwrap())),
-                max_bytes
-                    .as_ref()
-                    .map(|max| f64::from_le_bytes(max[..8].try_into().unwrap())),
-                None,
-                null_count,
-                false,
-            ),
-            Type::INT96 => {
-                let min = match min_bytes.as_ref() {
-                    Some(min) => Some(Int96::try_from_le_slice(min)?),
-                    None => None,
-                };
-                let max = match max_bytes.as_ref() {
-                    Some(max) => Some(Int96::try_from_le_slice(max)?),
-                    None => None,
-                };
-                Statistics::int96(min, max, None, null_count, false)
-            }
-            Type::BYTE_ARRAY => {
-                let min = min_bytes.as_ref().map(|min| ByteArray::from(min.clone()));
-                let max = max_bytes.as_ref().map(|max| ByteArray::from(max.clone()));
-                Statistics::byte_array(min, max, None, null_count, false)
-            }
-            Type::FIXED_LEN_BYTE_ARRAY => {
-                let min =
-                    min_bytes.as_ref().map(|min| FixedLenByteArray::from(min.clone()));
-                let max =
-                    max_bytes.as_ref().map(|max| FixedLenByteArray::from(max.clone()));
-                Statistics::fixed_len_byte_array(min, max, None, null_count, false)
-            }
-        };
-
         if min_bytes.is_none() && max_bytes.is_none() && null_count.is_none() {
             return Ok(None);
         }
 
-        stats = stats
-            .with_min_is_exact(min_exact)
-            .with_max_is_exact(max_exact);
+        let thrift_stats = PageStatistics {
+            max: None,
+            min: None,
+            null_count: null_count.map(|n| n as i64),
+            distinct_count: None,
+            max_value: max_bytes,
+            min_value: min_bytes,
+            is_max_value_exact: Some(max_exact),
+            is_min_value_exact: Some(min_exact),
+        };
 
-        Ok(Some(stats))
+        crate::file::statistics::from_thrift_page_stats(physical_type, Some(thrift_stats))
     }
 }
 
@@ -1157,12 +1101,12 @@ fn is_fully_dict_encoded(cc: &ColumnChunkMetaData) -> bool {
     }
 
     if let Some(mask) = cc.page_encoding_stats_mask() {
-        return mask.is_only(Encoding::PLAIN_DICTIONARY)
-            || mask.is_only(Encoding::RLE_DICTIONARY);
+        return mask.is_only(Encoding::PLAIN_DICTIONARY) || mask.is_only(Encoding::RLE_DICTIONARY);
     }
 
     let mut has_plain_dictionary_encoding = false;
     let mut has_non_dictionary_encoding = false;
+    #[allow(deprecated)]
     for encoding in cc.encodings() {
         match encoding {
             Encoding::PLAIN_DICTIONARY => {
@@ -1195,7 +1139,7 @@ pub fn flatbuf_to_parquet_metadata(
     FlatBufferConverter::convert(buf, schema_descr)
 }
 
- // ============================================================================
+// ============================================================================
 // Thrift Extension Embedding
 // ============================================================================
 //
@@ -1210,8 +1154,7 @@ pub fn flatbuf_to_parquet_metadata(
 
 /// UUID marker for the FlatBuffer extension
 const EXT_UUID: [u8; 16] = [
-    0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe,
-    0xef,
+    0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef, 0xde, 0xad, 0xbe, 0xef,
 ];
 
 /// Minimum compression ratio to use compression (1.2x)
@@ -1382,12 +1325,13 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
                 "FlatBuffer extraction doesn't support encrypted footer".to_string(),
             ));
         }
-        return Err(ParquetError::General("Invalid Parquet magic number".to_string()));
+        return Err(ParquetError::General(
+            "Invalid Parquet magic number".to_string(),
+        ));
     }
 
     // Read metadata length
-    let md_len =
-        u32::from_le_bytes(buf[buf.len() - 8..buf.len() - 4].try_into().unwrap()) as usize;
+    let md_len = u32::from_le_bytes(buf[buf.len() - 8..buf.len() - 4].try_into().unwrap()) as usize;
 
     if md_len < 34 {
         return Ok(ExtractResult::NotFound);
@@ -1454,11 +1398,7 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
 
                 let mut decompressed = Vec::new();
                 let mut codec = create_codec(Compression::LZ4_RAW, &Default::default())?
-                    .ok_or_else(|| {
-                        ParquetError::General(
-                            "LZ4 codec not available".to_string(),
-                        )
-                    })?;
+                    .ok_or_else(|| ParquetError::General("LZ4 codec not available".to_string()))?;
                 let actual_len = codec.decompress(
                     &buf[data_start..data_start + compressed_len],
                     &mut decompressed,
@@ -1554,11 +1494,26 @@ mod tests {
 
     #[test]
     fn test_type_conversion() {
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::BOOLEAN)), Type::BOOLEAN);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::INT32)), Type::INT32);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::INT64)), Type::INT64);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::FLOAT)), Type::FLOAT);
-        assert_eq!(convert_type_from_fb(convert_type_to_fb(Type::DOUBLE)), Type::DOUBLE);
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::BOOLEAN)),
+            Type::BOOLEAN
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::INT32)),
+            Type::INT32
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::INT64)),
+            Type::INT64
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::FLOAT)),
+            Type::FLOAT
+        );
+        assert_eq!(
+            convert_type_from_fb(convert_type_to_fb(Type::DOUBLE)),
+            Type::DOUBLE
+        );
     }
 
     #[test]
@@ -1576,8 +1531,8 @@ mod tests {
     #[test]
     fn test_metadata_roundtrip() {
         use crate::file::metadata::{
-            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaData,
-            ParquetMetaDataBuilder, RowGroupMetaDataBuilder,
+            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder,
+            RowGroupMetaDataBuilder,
         };
 
         // Create a test schema
@@ -1585,17 +1540,15 @@ mod tests {
 
         // Build a simple FileMetaData
         let file_meta = FileMetaData::new(
-            2,          // version
-            1000,       // num_rows
+            2,    // version
+            1000, // num_rows
             Some("test-created-by".to_string()),
-            Some(vec![
-                KeyValue {
-                    key: "test-key".to_string(),
-                    value: Some("test-value".to_string()),
-                },
-            ]),
+            Some(vec![KeyValue {
+                key: "test-key".to_string(),
+                value: Some("test-value".to_string()),
+            }]),
             schema_descr.clone(),
-            None,       // column_orders
+            None, // column_orders
         );
 
         // Build a row group with column chunks
@@ -1742,7 +1695,8 @@ mod tests {
 
     fn create_test_metadata() -> ParquetMetaData {
         use crate::file::metadata::{
-            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder, RowGroupMetaDataBuilder,
+            ColumnChunkMetaDataBuilder, FileMetaData, ParquetMetaDataBuilder,
+            RowGroupMetaDataBuilder,
         };
 
         let schema_descr = test_schema();
