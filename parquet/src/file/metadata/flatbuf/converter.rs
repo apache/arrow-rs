@@ -519,7 +519,7 @@ impl<'a> ThriftToFlatBufferConverter<'a> {
                         fb::IntOpts::create(
                             &mut self.builder,
                             &fb::IntOptsArgs {
-                                bit_width: *bit_width as i8,
+                                bit_width: *bit_width,
                                 is_signed: *is_signed,
                             },
                         )
@@ -1247,7 +1247,7 @@ fn uleb32_len(v: u32) -> usize {
         return 1;
     }
     let bits = 32 - v.leading_zeros();
-    ((bits + 6) / 7) as usize
+    (bits.div_ceil(7)) as usize
 }
 
 /// Append a FlatBuffer as an extended field to Thrift-serialized metadata.
@@ -1345,7 +1345,7 @@ pub fn extract_flatbuffer(buf: &[u8]) -> Result<ExtractResult> {
     // Check for UUID marker at the expected position
     let trailer_start = buf.len() - 42;
     let uuid_pos = trailer_start + 17;
-    if &buf[uuid_pos..uuid_pos + 16] != EXT_UUID {
+    if buf[uuid_pos..uuid_pos + 16] != EXT_UUID {
         return Ok(ExtractResult::NotFound);
     }
 
