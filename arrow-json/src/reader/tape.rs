@@ -423,34 +423,30 @@ impl TapeDecoder {
                 // Decoding a list - awaiting next element or ']'
                 DecoderState::List(start_idx) => {
                     let start_idx = *start_idx;
-                    match iter.skip_whitespace() {
-                        Some(b']') => {
-                            iter.next();
+                    match next_non_whitespace!(iter) {
+                        b']' => {
                             self.write_end_list(start_idx);
                             self.stack.pop();
                         }
-                        Some(_) => {
+                        _ => {
+                            iter.pos -= 1; // rewind so ContinueList can consume the byte
                             *state = DecoderState::ContinueList(start_idx);
                             self.stack.push(DecoderState::Value);
                         }
-                        None => break,
                     }
                 }
                 // Continue decoding a list - awaiting ',' or ']'
                 DecoderState::ContinueList(start_idx) => {
                     let start_idx = *start_idx;
-                    match iter.skip_whitespace() {
-                        Some(b',') => {
-                            iter.next();
+                    match next_non_whitespace!(iter) {
+                        b',' => {
                             *state = DecoderState::List(start_idx);
                         }
-                        Some(b']') => {
-                            iter.next();
+                        b']' => {
                             self.write_end_list(start_idx);
                             self.stack.pop();
                         }
-                        Some(b) => return Err(err(b, "expected ',' or ']'")),
-                        None => break,
+                        b => return Err(err(b, "expected ',' or ']'")),
                     }
                 }
                 // Decoding a string
