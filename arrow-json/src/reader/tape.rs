@@ -219,20 +219,23 @@ enum DecoderState {
     /// Decoding an object - awaiting a '"' (new field) or '}' (done)
     ///
     /// Contains index of start [`TapeElement::StartObject`]
+    /// This state handles both the initial `{` and after `,`
     Object(u32),
-    /// Continue decoding an object - awaiting ',' (before next field) or '}' (done)
+    /// After a value in an object member - awaiting ',' (next field) or '}' (done)
     ///
     /// Contains index of start [`TapeElement::StartObject`]
-    ContinueObject(u32),
-    /// Decoding a list - awaiting first element or ']' (done)
+    ObjectAfterValue(u32),
+    /// Decoding a list - awaiting a value or ']' (done)
     ///
     /// Contains index of start [`TapeElement::StartList`]
+    /// This state handles both the initial `[` and after `,`
     List(u32),
-    /// Continue decoding a list - awaiting ',' (before next element) or ']' (done)
+    /// After a value in a list - awaiting ',' (next element) or ']' (done)
     ///
     /// Contains index of start [`TapeElement::StartList`]
-    ContinueList(u32),
+    ListAfterValue(u32),
     String,
+    /// Skip whitespace and detect value type
     Value,
     Number,
     Colon,
@@ -250,8 +253,8 @@ enum DecoderState {
 impl DecoderState {
     fn as_str(&self) -> &'static str {
         match self {
-            DecoderState::Object(_) | DecoderState::ContinueObject(_) => "object",
-            DecoderState::List(_) | DecoderState::ContinueList(_) => "list",
+            DecoderState::Object(_) | DecoderState::ObjectAfterValue(_) => "object",
+            DecoderState::List(_) | DecoderState::ListAfterValue(_) => "list",
             DecoderState::String => "string",
             DecoderState::Value => "value",
             DecoderState::Number => "number",
@@ -377,25 +380,52 @@ impl TapeDecoder {
             let state = match self.stack.last_mut() {
                 Some(l) => l,
                 None => {
-                    if iter.skip_whitespace().is_none() || self.cur_row >= self.batch_size {
+                    if self.cur_row >= self.batch_size {
                         break;
                     }
 
+                    let b = match iter.next_non_whitespace() {
+                        Some(b) => b,
+                        None => break,
+                    };
+
                     // Start of row
                     self.cur_row += 1;
-                    self.stack.push(DecoderState::Value);
+
+                    // Detect value type and push appropriate state
+                    match b {
+                        b'"' => self.stack.push(DecoderState::String),
+                        b @ (b'-' | b'0'..=b'9') => {
+                            self.bytes.push(b);
+                            self.stack.push(DecoderState::Number);
+                        }
+                        b'n' => self.stack.push(DecoderState::Literal(Literal::Null, 1)),
+                        b'f' => self.stack.push(DecoderState::Literal(Literal::False, 1)),
+                        b't' => self.stack.push(DecoderState::Literal(Literal::True, 1)),
+                        b'[' => {
+                            let idx = self.elements.len() as u32;
+                            self.elements.push(TapeElement::StartList(u32::MAX));
+                            self.stack.push(DecoderState::List(idx));
+                        }
+                        b'{' => {
+                            let idx = self.elements.len() as u32;
+                            self.elements.push(TapeElement::StartObject(u32::MAX));
+                            self.stack.push(DecoderState::Object(idx));
+                        }
+                        b => return Err(err(b, "parsing value")),
+                    }
+
                     self.stack.last_mut().unwrap()
                 }
             };
 
             match state {
-                // Decoding an object - awaiting next field or '}'
+                // Expecting object member or close brace
                 DecoderState::Object(start_idx) => {
                     let start_idx = *start_idx;
                     match next_non_whitespace!(iter) {
                         b'"' => {
-                            *state = DecoderState::ContinueObject(start_idx);
-                            self.stack.push(DecoderState::Value);
+                            *state = DecoderState::ObjectAfterValue(start_idx);
                             self.stack.push(DecoderState::Colon);
                             self.stack.push(DecoderState::String);
                         }
@@ -406,8 +436,8 @@ impl TapeDecoder {
                         b => return Err(err(b, "expected '\"' or '}'")),
                     }
                 }
-                // Continue decoding an object - awaiting ',' or '}'
-                DecoderState::ContinueObject(start_idx) => {
+                // After value in object - expecting comma or close brace
+                DecoderState::ObjectAfterValue(start_idx) => {
                     let start_idx = *start_idx;
                     match next_non_whitespace!(iter) {
                         b',' => {
@@ -428,15 +458,45 @@ impl TapeDecoder {
                             self.write_end_list(start_idx);
                             self.stack.pop();
                         }
-                        _ => {
-                            iter.pos -= 1; // rewind so ContinueList can consume the byte
-                            *state = DecoderState::ContinueList(start_idx);
-                            self.stack.push(DecoderState::Value);
+                        // Inline value detection to avoid redundant WS check
+                        b'"' => {
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(DecoderState::String);
                         }
+                        b @ (b'-' | b'0'..=b'9') => {
+                            self.bytes.push(b);
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(DecoderState::Number);
+                        }
+                        b'n' => {
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(DecoderState::Literal(Literal::Null, 1));
+                        }
+                        b'f' => {
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(DecoderState::Literal(Literal::False, 1));
+                        }
+                        b't' => {
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(DecoderState::Literal(Literal::True, 1));
+                        }
+                        b'[' => {
+                            let idx = self.elements.len() as u32;
+                            self.elements.push(TapeElement::StartList(u32::MAX));
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(DecoderState::List(idx));
+                        }
+                        b'{' => {
+                            let idx = self.elements.len() as u32;
+                            self.elements.push(TapeElement::StartObject(u32::MAX));
+                            *state = DecoderState::ListAfterValue(start_idx);
+                            self.stack.push(DecoderState::Object(idx));
+                        }
+                        b => return Err(err(b, "parsing value")),
                     }
                 }
-                // Continue decoding a list - awaiting ',' or ']'
-                DecoderState::ContinueList(start_idx) => {
+                // After value in a list - expecting comma or close bracket
+                DecoderState::ListAfterValue(start_idx) => {
                     let start_idx = *start_idx;
                     match next_non_whitespace!(iter) {
                         b',' => {
@@ -465,6 +525,7 @@ impl TapeDecoder {
                         b => unreachable!("{}", b),
                     }
                 }
+                // Skip whitespace and detect value type
                 DecoderState::Value => {
                     *state = match next_non_whitespace!(iter) {
                         b'"' => DecoderState::String,
@@ -503,7 +564,7 @@ impl TapeDecoder {
                 }
                 DecoderState::Colon => {
                     match next_non_whitespace!(iter) {
-                        b':' => self.stack.pop(),
+                        b':' => *state = DecoderState::Value,
                         b => return Err(err(b, "parsing colon")),
                     };
                 }
@@ -728,17 +789,6 @@ impl<'a> BufIter<'a> {
                 s
             }
         }
-    }
-
-    // Advance to the next non-whitespace char and peek at it
-    fn skip_whitespace(&mut self) -> Option<u8> {
-        for b in self.as_slice() {
-            if !json_whitespace(*b) {
-                return Some(*b);
-            }
-            self.pos += 1;
-        }
-        None
     }
 
     // Advance to the next non-whitespace char and consume it
