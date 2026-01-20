@@ -260,7 +260,6 @@ impl BatchCoalescer {
             return self.push_batch(batch);
         }
 
-        let selectivity = Some(selected_count as f64 / num_rows as f64);
         let (_schema, arrays, _num_rows) = batch.into_parts();
 
         // Setup input arrays as sources
@@ -269,7 +268,7 @@ impl BatchCoalescer {
             .iter_mut()
             .zip(arrays)
             .for_each(|(in_progress, array)| {
-                in_progress.set_source(Some(array), selectivity);
+                in_progress.set_source_from_filter(Some(array), filter);
             });
 
         // Choose iteration strategy based on the optimized predicate
@@ -277,7 +276,7 @@ impl BatchCoalescer {
 
         // Clear sources to allow memory to be freed
         for in_progress in self.in_progress_arrays.iter_mut() {
-            in_progress.set_source(None, None);
+            in_progress.set_source(None);
         }
 
         Ok(())
@@ -559,7 +558,7 @@ impl BatchCoalescer {
             .iter_mut()
             .zip(arrays)
             .for_each(|(in_progress, array)| {
-                in_progress.set_source(Some(array), Some(1.0));
+                in_progress.set_source(Some(array));
             });
 
         // If pushing this batch would exceed the target batch size,
@@ -596,7 +595,7 @@ impl BatchCoalescer {
 
         // clear in progress sources (to allow the memory to be freed)
         for in_progress in self.in_progress_arrays.iter_mut() {
-            in_progress.set_source(None, None);
+            in_progress.set_source(None);
         }
 
         Ok(())
@@ -691,7 +690,14 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     ///
     /// Calls to [`Self::copy_rows`] will copy rows from this array into the
     /// current in-progress array
-    fn set_source(&mut self, source: Option<ArrayRef>, selectivity: Option<f64>);
+    fn set_source(&mut self, source: Option<ArrayRef>);
+
+    /// Set the source array with a filter, allowing for calculating GC based on filter
+    ///
+    /// Default implementation just calls [`Self::set_source`]
+    fn set_source_from_filter(&mut self, source: Option<ArrayRef>, _filter: &BooleanArray) {
+        self.set_source(source);
+    }
 
     /// Copy rows from the current source array into the in-progress array
     ///

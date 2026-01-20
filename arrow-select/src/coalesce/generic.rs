@@ -46,7 +46,7 @@ impl GenericInProgressArray {
     }
 }
 impl InProgressArray for GenericInProgressArray {
-    fn set_source(&mut self, source: Option<ArrayRef>, _selectivity: Option<f64>) {
+    fn set_source(&mut self, source: Option<ArrayRef>) {
         self.source = source
     }
 
