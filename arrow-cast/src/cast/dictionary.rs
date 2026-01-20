@@ -279,7 +279,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             };
 
             let dict_base = cast_to_dictionary::<K>(array, &base_value_type, cast_options)?;
-            cast_with_options(
+            dictionary_cast::<K>(
                 dict_base.as_ref(),
                 &DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::Utf8View)),
                 cast_options,
@@ -306,7 +306,7 @@ pub(crate) fn cast_to_dictionary<K: ArrowDictionaryKeyType>(
             };
 
             let dict_base = cast_to_dictionary::<K>(array, &base_value_type, cast_options)?;
-            cast_with_options(
+            dictionary_cast::<K>(
                 dict_base.as_ref(),
                 &DataType::Dictionary(Box::new(K::DATA_TYPE), Box::new(DataType::BinaryView)),
                 cast_options,
