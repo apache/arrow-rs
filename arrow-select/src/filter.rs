@@ -366,6 +366,35 @@ impl IterationStrategy {
         }
         IterationStrategy::IndexIterator
     }
+
+    fn slice(&self, offset: usize, len: usize) -> Self {
+        match self {
+            IterationStrategy::SlicesIterator => IterationStrategy::SlicesIterator,
+            IterationStrategy::IndexIterator => IterationStrategy::IndexIterator,
+            IterationStrategy::Indices(indices) => {
+                let start = indices.partition_point(|&idx| idx < offset);
+                let end = indices.partition_point(|&idx| idx < offset + len);
+                let new_indices = indices[start..end]
+                    .iter()
+                    .map(|&idx| idx - offset)
+                    .collect();
+                IterationStrategy::Indices(new_indices)
+            }
+            IterationStrategy::Slices(slices) => {
+                let mut new_slices = Vec::new();
+                for &(start, end) in slices {
+                    let max_start = start.max(offset);
+                    let min_end = end.min(offset + len);
+                    if max_start < min_end {
+                        new_slices.push((max_start - offset, min_end - offset));
+                    }
+                }
+                IterationStrategy::Slices(new_slices)
+            }
+            IterationStrategy::All => IterationStrategy::All,
+            IterationStrategy::None => IterationStrategy::None,
+        }
+    }
 }
 
 /// A filtering predicate that can be applied to an [`Array`]
@@ -410,6 +439,42 @@ impl FilterPredicate {
     /// Number of rows being selected based on this [`FilterPredicate`]
     pub fn count(&self) -> usize {
         self.count
+    }
+
+    /// Number of rows in the filter predicate
+    pub fn len(&self) -> usize {
+        self.filter.len()
+    }
+
+    /// Slices this [`FilterPredicate`]
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
+    pub fn slice(&self, offset: usize, len: usize) -> Self {
+        let filter = self.filter.slice(offset, len);
+        let count = filter.true_count();
+        let strategy = self.strategy.slice(offset, len);
+        Self {
+            filter,
+            count,
+            strategy,
+        }
+    }
+
+    /// Slices this [`FilterPredicate`] with a precomputed count
+    ///
+    /// # Panics
+    ///
+    /// Panics if `offset + len > self.len()`
+    pub fn slice_with_count(&self, offset: usize, len: usize, count: usize) -> Self {
+        let filter = self.filter.slice(offset, len);
+        let strategy = self.strategy.slice(offset, len);
+        Self {
+            filter,
+            count,
+            strategy,
+        }
     }
 
     /// Returns the iteration strategy used by this [`FilterPredicate`]

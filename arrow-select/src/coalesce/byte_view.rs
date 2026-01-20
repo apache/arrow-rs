@@ -362,7 +362,7 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
         })
     }
 
-    fn set_source_from_filter(&mut self, source: Option<ArrayRef>, filter: &BooleanArray) {
+    fn set_source_from_filter(&mut self, source: Option<ArrayRef>, filter: &FilterPredicate) {
         self.source = source.map(|array| {
             let s = array.as_byte_view::<B>();
             if s.data_buffers().is_empty() {
@@ -376,12 +376,54 @@ impl<B: ByteViewType> InProgressArray for InProgressByteViewArray<B> {
             let views = s.views().as_ref();
             let mut ideal_buffer_size = 0;
 
-            // TODO: use prebuilt predicate / strategy
-            for (start, end) in SlicesIterator::new(filter) {
-                for v in &views[start..end] {
-                    let len = *v as u32;
-                    if len > MAX_INLINE_VIEW_LEN {
-                        ideal_buffer_size += len as usize;
+            match filter.strategy() {
+                IterationStrategy::None => {
+                    return Source {
+                        array,
+                        need_gc: false,
+                        ideal_buffer_size: 0,
+                    };
+                }
+                IterationStrategy::All => {
+                    // all rows selected
+                    ideal_buffer_size = s.total_buffer_bytes_used();
+                }
+                IterationStrategy::IndexIterator => {
+                    for idx in IndexIterator::new(filter.filter_array(), filter.count()) {
+                        let v = unsafe { *views.get_unchecked(idx) };
+                        let len: u32 = ByteView::from(v).length;
+                        if len > MAX_INLINE_VIEW_LEN {
+                            ideal_buffer_size += len as usize;
+                        }
+                    }
+                }
+                IterationStrategy::SlicesIterator => {
+                    for (start, end) in SlicesIterator::new(filter.filter_array()) {
+                        for v in &views[start..end] {
+                            let len: u32 = ByteView::from(*v).length;
+                            if len > MAX_INLINE_VIEW_LEN {
+                                ideal_buffer_size += len as usize;
+                            }
+                        }
+                    }
+                }
+                IterationStrategy::Indices(indices) => {
+                    for &idx in indices {
+                        let v = unsafe { *views.get_unchecked(idx) };
+                        let len: u32 = ByteView::from(v).length;
+                        if len > MAX_INLINE_VIEW_LEN {
+                            ideal_buffer_size += len as usize;
+                        }
+                    }
+                }
+                IterationStrategy::Slices(slices) => {
+                    for (start, end) in slices {
+                        for v in &views[*start..*end] {
+                            let len: u32 = ByteView::from(*v).length;
+                            if len > MAX_INLINE_VIEW_LEN {
+                                ideal_buffer_size += len as usize;
+                            }
+                        }
                     }
                 }
             }

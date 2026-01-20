@@ -246,7 +246,14 @@ impl BatchCoalescer {
         // Also, skip optimization when filter is not very selectivex§
 
         // Build an optimized filter predicate that chooses the best iteration strategy
-        let is_optimize_beneficial = is_optimize_beneficial_record_batch(&batch);
+        // Byteview does use a filter as part of calculating ideal buffer sizes, so optimizing is helpful even for
+        // a single array
+        let is_optimize_beneficial = is_optimize_beneficial_record_batch(&batch)
+            || batch.columns().len() == 1
+                && matches!(
+                    batch.columns()[0].data_type(),
+                    DataType::BinaryView | DataType::Utf8View
+                );
         let selected_count = filter.true_count();
         let num_rows = batch.num_rows();
 
@@ -262,18 +269,24 @@ impl BatchCoalescer {
 
         let (_schema, arrays, _num_rows) = batch.into_parts();
 
+        let mut filter_builder = FilterBuilder::new(&filter);
+
+        if is_optimize_beneficial {
+            filter_builder = filter_builder.optimize();
+        }
+
+        let filter = filter_builder.build();
         // Setup input arrays as sources
         assert_eq!(arrays.len(), self.in_progress_arrays.len());
         self.in_progress_arrays
             .iter_mut()
             .zip(arrays)
             .for_each(|(in_progress, array)| {
-                in_progress.set_source_from_filter(Some(array), filter);
+                in_progress.set_source_from_filter(Some(array), &filter);
             });
 
         // Choose iteration strategy based on the optimized predicate
-        self.copy_from_filter(filter, is_optimize_beneficial, selected_count)?;
-
+        self.copy_from_filter(filter, selected_count)?;
         // Clear sources to allow memory to be freed
         for in_progress in self.in_progress_arrays.iter_mut() {
             in_progress.set_source(None);
@@ -287,8 +300,7 @@ impl BatchCoalescer {
     /// This method batches the index iteration to avoid per-row batch boundary checks.
     fn copy_from_filter(
         &mut self,
-        filter: &BooleanArray,
-        is_optimize_beneficial: bool,
+        filter: FilterPredicate,
         count: usize,
     ) -> Result<(), ArrowError> {
         let mut remaining = count;
@@ -307,18 +319,13 @@ impl BatchCoalescer {
                 filter.len() - filter_pos
             } else {
                 filter
+                    .filter_array()
                     .values()
                     .find_nth_set_bit_position(filter_pos, to_copy)
                     - filter_pos
             };
 
-            let chunk_filter = filter.slice(filter_pos, chunk_len);
-            let mut filter_builder = FilterBuilder::new(&chunk_filter);
-
-            if is_optimize_beneficial {
-                filter_builder = filter_builder.optimize();
-            }
-            let chunk_predicate = filter_builder.build();
+            let chunk_predicate = filter.slice_with_count(filter_pos, chunk_len, to_copy);
 
             // Copy all collected indices in one call per array
             for in_progress in self.in_progress_arrays.iter_mut() {
@@ -695,7 +702,7 @@ trait InProgressArray: std::fmt::Debug + Send + Sync {
     /// Set the source array with a filter, allowing for calculating GC based on filter
     ///
     /// Default implementation just calls [`Self::set_source`]
-    fn set_source_from_filter(&mut self, source: Option<ArrayRef>, _filter: &BooleanArray) {
+    fn set_source_from_filter(&mut self, source: Option<ArrayRef>, _filter: &FilterPredicate) {
         self.set_source(source);
     }
 
