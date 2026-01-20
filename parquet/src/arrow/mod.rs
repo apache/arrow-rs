@@ -185,6 +185,10 @@ pub mod arrow_writer;
 mod buffer;
 mod decoder;
 
+// Re-export for use in file::metadata::dictionary
+#[cfg(feature = "arrow")]
+pub(crate) use array_reader::{ByteArrayDecoder, OffsetBuffer};
+
 #[cfg(feature = "async")]
 pub mod async_reader;
 #[cfg(feature = "async")]
