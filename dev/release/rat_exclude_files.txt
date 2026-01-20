@@ -17,6 +17,7 @@ rat.txt
 # auto-generated
 arrow-flight/src/arrow.flight.protocol.rs
 arrow-flight/src/sql/arrow.flight.protocol.sql.rs
+parquet/src/file/metadata/flatbuf/parquet3_generated.rs
 .github/*
 parquet/src/bin/parquet-fromcsv-help.txt
 arrow-flight/examples/data/*
