@@ -415,12 +415,8 @@ impl TapeDecoder {
                         break;
                     }
 
-                    let b = match iter.next_non_whitespace() {
-                        Some(b) => b,
-                        None => break,
-                    };
-
                     // Start of row
+                    let b = next_non_whitespace!(iter);
                     self.cur_row += 1;
 
                     // Detect value type and push appropriate state
