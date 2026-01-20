@@ -91,6 +91,24 @@ impl<'a> IndexIterator<'a> {
         let iter = filter.values().set_indices();
         Self { remaining, iter }
     }
+
+    /// Collect this iterator as a [`Vec`]
+    pub fn collect(mut self) -> Vec<usize> {
+        let len = self.remaining;
+        let mut result = Vec::with_capacity(len);
+        let ptr: *mut usize = result.as_mut_ptr();
+        for i in 0..len {
+            // SAFETY: we have allocated enough space in `result`
+            unsafe {
+                *ptr.add(i) = self.iter.next().expect("IndexIterator exhausted early");
+            }
+        }
+        // SAFETY: we have initialized `len` elements
+        unsafe {
+            result.set_len(len);
+        }
+        result
+    }
 }
 
 impl Iterator for IndexIterator<'_> {
