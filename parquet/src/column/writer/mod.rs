@@ -949,14 +949,15 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
     /// header or column chunk Statistics
     fn truncate_statistics(&self, statistics: Statistics) -> Statistics {
         let backwards_compatible_min_max = self.descr.sort_order().is_signed();
+        let column_path = self.descr.path();
         match statistics {
             Statistics::ByteArray(stats) if stats._internal_has_min_max_set() => {
                 let (min, did_truncate_min) = self.truncate_min_value(
-                    self.props.statistics_truncate_length(),
+                    self.props.statistics_truncate_length(column_path),
                     stats.min_bytes_opt().unwrap(),
                 );
                 let (max, did_truncate_max) = self.truncate_max_value(
-                    self.props.statistics_truncate_length(),
+                    self.props.statistics_truncate_length(column_path),
                     stats.max_bytes_opt().unwrap(),
                 );
                 Statistics::ByteArray(
@@ -975,11 +976,11 @@ impl<'a, E: ColumnValueEncoder> GenericColumnWriter<'a, E> {
                 if (stats._internal_has_min_max_set() && self.can_truncate_value()) =>
             {
                 let (min, did_truncate_min) = self.truncate_min_value(
-                    self.props.statistics_truncate_length(),
+                    self.props.statistics_truncate_length(column_path),
                     stats.min_bytes_opt().unwrap(),
                 );
                 let (max, did_truncate_max) = self.truncate_max_value(
-                    self.props.statistics_truncate_length(),
+                    self.props.statistics_truncate_length(column_path),
                     stats.max_bytes_opt().unwrap(),
                 );
                 Statistics::FixedLenByteArray(
