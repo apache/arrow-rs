@@ -3364,6 +3364,111 @@ mod tests {
         test_single_list_view::<i64>();
     }
 
+    fn test_list_view_with_shared_values<O: OffsetSizeTrait>() {
+        // Create a values array: [1, 2, 3, 4, 5, 6, 7, 8]
+        let values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8]);
+        let field = Arc::new(Field::new_list_field(DataType::Int32, true));
+
+        // Create a ListView where:
+        // - Row 0: offset=0, size=3 -> [1, 2, 3]
+        // - Row 1: offset=0, size=3 -> [1, 2, 3] (same offset+size as row 0)
+        // - Row 2: offset=5, size=2 -> [6, 7] (non-monotonic offset)
+        // - Row 3: offset=2, size=2 -> [3, 4] (offset goes back)
+        // - Row 4: offset=1, size=4 -> [2, 3, 4, 5] (subset of values that contains row 3's range)
+        // - Row 5: offset=2, size=1 -> [3] (subset of row 3 and row 4)
+        let offsets = ScalarBuffer::<O>::from(vec![
+            O::from_usize(0).unwrap(),
+            O::from_usize(0).unwrap(),
+            O::from_usize(5).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(1).unwrap(),
+            O::from_usize(2).unwrap(),
+        ]);
+        let sizes = ScalarBuffer::<O>::from(vec![
+            O::from_usize(3).unwrap(),
+            O::from_usize(3).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(2).unwrap(),
+            O::from_usize(4).unwrap(),
+            O::from_usize(1).unwrap(),
+        ]);
+
+        let list_view: GenericListViewArray<O> =
+            GenericListViewArray::try_new(field, offsets, sizes, Arc::new(values), None).unwrap();
+
+        let d = list_view.data_type().clone();
+        let list = Arc::new(list_view) as ArrayRef;
+
+        let converter = RowConverter::new(vec![SortField::new(d.clone())]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        // Row 0 and Row 1 have the same content [1, 2, 3], so they should be equal
+        assert_eq!(rows.row(0), rows.row(1));
+
+        // [1, 2, 3] < [6, 7] (comparing first elements: 1 < 6)
+        assert!(rows.row(0) < rows.row(2));
+
+        // [3, 4] > [1, 2, 3] (comparing first elements: 3 > 1)
+        assert!(rows.row(3) > rows.row(0));
+
+        // [2, 3, 4, 5] > [1, 2, 3] (comparing first elements: 2 > 1)
+        assert!(rows.row(4) > rows.row(0));
+
+        // [3] < [3, 4] (same prefix but shorter)
+        assert!(rows.row(5) < rows.row(3));
+
+        // [3] < [2, 3, 4, 5] (comparing first elements: 3 > 2)
+        assert!(rows.row(5) > rows.row(4));
+
+        // Round-trip conversion
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+
+        // Verify logical content matches
+        let back_list_view = back[0]
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+        let orig_list_view = list
+            .as_any()
+            .downcast_ref::<GenericListViewArray<O>>()
+            .unwrap();
+
+        assert_eq!(back_list_view.len(), orig_list_view.len());
+        for i in 0..back_list_view.len() {
+            assert_eq!(back_list_view.is_valid(i), orig_list_view.is_valid(i));
+            if back_list_view.is_valid(i) {
+                assert_eq!(&back_list_view.value(i), &orig_list_view.value(i));
+            }
+        }
+
+        // Test with descending order
+        let options = SortOptions::default().desc();
+        let field = SortField::new_with_options(d, options);
+        let converter = RowConverter::new(vec![field]).unwrap();
+        let rows = converter.convert_columns(&[Arc::clone(&list)]).unwrap();
+
+        // In descending order, comparisons are reversed
+        assert_eq!(rows.row(0), rows.row(1)); // Equal rows stay equal
+        assert!(rows.row(0) > rows.row(2)); // [1, 2, 3] > [6, 7] in desc
+        assert!(rows.row(3) < rows.row(0)); // [3, 4] < [1, 2, 3] in desc
+
+        let back = converter.convert_rows(&rows).unwrap();
+        assert_eq!(back.len(), 1);
+        back[0].to_data().validate_full().unwrap();
+    }
+
+    #[test]
+    fn test_list_view_shared_values() {
+        test_list_view_with_shared_values::<i32>();
+    }
+
+    #[test]
+    fn test_large_list_view_shared_values() {
+        test_list_view_with_shared_values::<i64>();
+    }
+
     #[test]
     fn test_fixed_size_list() {
         let mut builder = FixedSizeListBuilder::new(Int32Builder::new(), 3);
