@@ -3928,7 +3928,13 @@ mod tests {
             &array,
             Int64Array,
             &DataType::Int64,
-            vec![Some(125_000), Some(225_000), Some(325_000), None, Some(525_000)]
+            vec![
+                Some(125_000),
+                Some(225_000),
+                Some(325_000),
+                None,
+                Some(525_000)
+            ]
         );
 
         let value_array: Vec<Option<i64>> = vec![Some(12), Some(34), None];
@@ -3940,8 +3946,7 @@ mod tests {
             vec![Some(120_000_000_000), Some(340_000_000_000), None]
         );
 
-        let value_array: Vec<Option<i128>> =
-            vec![Some(125), Some(225), Some(325), None, Some(525)];
+        let value_array: Vec<Option<i128>> = vec![Some(125), Some(225), Some(325), None, Some(525)];
         let array = create_decimal128_array(value_array, 38, -4).unwrap();
         generate_cast_test_case!(
             &array,

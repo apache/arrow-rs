@@ -849,13 +849,14 @@ where
                     } else {
                         let v = array.value(i).mul_checked(div)?;
 
-                        let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "value of {:?} is out of range {}",
-                                v,
-                                T::DATA_TYPE
-                            ))
-                        })?;
+                        let value =
+                            <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "value of {:?} is out of range {}",
+                                    v,
+                                    T::DATA_TYPE
+                                ))
+                            })?;
 
                         value_builder.append_value(value);
                     }
@@ -885,13 +886,14 @@ where
                     } else {
                         let v = array.value(i).div_checked(div)?;
 
-                        let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
-                            ArrowError::CastError(format!(
-                                "value of {:?} is out of range {}",
-                                v,
-                                T::DATA_TYPE
-                            ))
-                        })?;
+                        let value =
+                            <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                                ArrowError::CastError(format!(
+                                    "value of {:?} is out of range {}",
+                                    v,
+                                    T::DATA_TYPE
+                                ))
+                            })?;
 
                         value_builder.append_value(value);
                     }
