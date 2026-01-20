@@ -802,11 +802,6 @@ where
     }
 }
 
-type ScaleOp<D> = fn(
-    <D as ArrowPrimitiveType>::Native,
-    <D as ArrowPrimitiveType>::Native,
-) -> Result<<D as ArrowPrimitiveType>::Native, ArrowError>;
-
 pub(crate) fn cast_decimal_to_integer<D, T>(
     array: &dyn Array,
     base: D::Native,
@@ -831,40 +826,76 @@ where
 
     let mut value_builder = PrimitiveBuilder::<T>::with_capacity(array.len());
 
-    let scale_op: ScaleOp<D> =
-        if scale < 0 {
-            <D::Native as ArrowNativeTypeOp>::mul_checked
-        } else {
-            <D::Native as ArrowNativeTypeOp>::div_checked
-        };
+    if scale < 0 {
+        match cast_options.safe {
+            true => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array
+                            .value(i)
+                            .mul_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        value_builder.append_option(v);
+                    }
+                }
+            }
+            false => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array.value(i).mul_checked(div)?;
 
-    if cast_options.safe {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                value_builder.append_null();
-            } else {
-                let v = scale_op(array.value(i), div)
-                    .ok()
-                    .and_then(<T::Native as NumCast>::from::<D::Native>);
-                value_builder.append_option(v);
+                        let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "value of {:?} is out of range {}",
+                                v,
+                                T::DATA_TYPE
+                            ))
+                        })?;
+
+                        value_builder.append_value(value);
+                    }
+                }
             }
         }
     } else {
-        for i in 0..array.len() {
-            if array.is_null(i) {
-                value_builder.append_null();
-            } else {
-                let v = scale_op(array.value(i), div)?;
+        match cast_options.safe {
+            true => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array
+                            .value(i)
+                            .div_checked(div)
+                            .ok()
+                            .and_then(<T::Native as NumCast>::from::<D::Native>);
+                        value_builder.append_option(v);
+                    }
+                }
+            }
+            false => {
+                for i in 0..array.len() {
+                    if array.is_null(i) {
+                        value_builder.append_null();
+                    } else {
+                        let v = array.value(i).div_checked(div)?;
 
-                let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
-                    ArrowError::CastError(format!(
-                        "value of {:?} is out of range {}",
-                        v,
-                        T::DATA_TYPE
-                    ))
-                })?;
+                        let value = <T::Native as NumCast>::from::<D::Native>(v).ok_or_else(|| {
+                            ArrowError::CastError(format!(
+                                "value of {:?} is out of range {}",
+                                v,
+                                T::DATA_TYPE
+                            ))
+                        })?;
 
-                value_builder.append_value(value);
+                        value_builder.append_value(value);
+                    }
+                }
             }
         }
     }
