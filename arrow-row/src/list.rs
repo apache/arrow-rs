@@ -347,9 +347,17 @@ pub fn compute_lengths_list_view<O: OffsetSizeTrait>(
     let sizes = array.value_sizes();
 
     lengths.iter_mut().enumerate().for_each(|(idx, length)| {
-        let start = offsets[idx].as_usize() - shift;
         let size = sizes[idx].as_usize();
-        let range = array.is_valid(idx).then_some(start..start + size);
+        let range = array.is_valid(idx).then(|| {
+            // For empty lists (size=0), offset may be arbitrary and could underflow when shifted.
+            // Use 0 as start since the range is empty anyway.
+            let start = if size > 0 {
+                offsets[idx].as_usize() - shift
+            } else {
+                0
+            };
+            start..start + size
+        });
         *length += list_element_encoded_len(rows, range);
     });
 }
@@ -373,9 +381,17 @@ pub fn encode_list_view<O: OffsetSizeTrait>(
         .skip(1)
         .enumerate()
         .for_each(|(idx, offset)| {
-            let start = offsets[idx].as_usize() - shift;
             let size = sizes[idx].as_usize();
-            let range = array.is_valid(idx).then_some(start..start + size);
+            let range = array.is_valid(idx).then(|| {
+                // For empty lists (size=0), offset may be arbitrary and could underflow when shifted.
+                // Use 0 as start since the range is empty anyway.
+                let start = if size > 0 {
+                    offsets[idx].as_usize() - shift
+                } else {
+                    0
+                };
+                start..start + size
+            });
             let out = &mut data[*offset..];
             *offset += encode_one(out, rows, range, opts)
         });

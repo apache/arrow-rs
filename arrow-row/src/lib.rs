@@ -3927,9 +3927,42 @@ mod tests {
         ListArray::new(field, offsets, values, Some(nulls))
     }
 
+    fn generate_list_view<F>(len: usize, valid_percent: f64, values: F) -> ListViewArray
+    where
+        F: FnOnce(usize) -> ArrayRef,
+    {
+        let mut rng = rng();
+        // Generate sizes first, then create a values array large enough
+        let sizes: Vec<i32> = (0..len).map(|_| rng.random_range(0..10)).collect();
+        let values_len: usize = sizes.iter().map(|s| *s as usize).sum::<usize>().max(1);
+        let values = values(values_len);
+
+        // Generate offsets that can overlap, be non-monotonic, or share ranges
+        let offsets: Vec<i32> = sizes
+            .iter()
+            .map(|&size| {
+                if size == 0 {
+                    0
+                } else {
+                    rng.random_range(0..=(values_len as i32 - size))
+                }
+            })
+            .collect();
+
+        let nulls = NullBuffer::from_iter((0..len).map(|_| rng.random_bool(valid_percent)));
+        let field = Arc::new(Field::new_list_field(values.data_type().clone(), true));
+        ListViewArray::new(
+            field,
+            ScalarBuffer::from(offsets),
+            ScalarBuffer::from(sizes),
+            values,
+            Some(nulls),
+        )
+    }
+
     fn generate_column(len: usize) -> ArrayRef {
         let mut rng = rng();
-        match rng.random_range(0..18) {
+        match rng.random_range(0..22) {
             0 => Arc::new(generate_primitive_array::<Int32Type>(len, 0.8)),
             1 => Arc::new(generate_primitive_array::<UInt32Type>(len, 0.8)),
             2 => Arc::new(generate_primitive_array::<Int64Type>(len, 0.8)),
@@ -3968,6 +4001,21 @@ mod tests {
             16 => Arc::new(generate_fixed_stringview_column(len)),
             17 => Arc::new(
                 generate_list(len + 1000, 0.8, |values_len| {
+                    Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+                })
+                .slice(500, len),
+            ),
+            18 => Arc::new(generate_list_view(len, 0.8, |values_len| {
+                Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
+            })),
+            19 => Arc::new(generate_list_view(len, 0.8, |values_len| {
+                Arc::new(generate_strings::<i32>(values_len, 0.8))
+            })),
+            20 => Arc::new(generate_list_view(len, 0.8, |values_len| {
+                Arc::new(generate_struct(values_len, 0.8))
+            })),
+            21 => Arc::new(
+                generate_list_view(len + 1000, 0.8, |values_len| {
                     Arc::new(generate_primitive_array::<Int64Type>(values_len, 0.8))
                 })
                 .slice(500, len),
