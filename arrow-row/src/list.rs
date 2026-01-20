@@ -483,7 +483,10 @@ pub unsafe fn decode_list_view<O: OffsetSizeTrait>(
         _ => unreachable!(),
     };
 
-    let null_buffer = NullBuffer::new(BooleanBuffer::new(nulls.into(), 0, rows.len()));
+    // SAFETY: null_count was computed correctly when building the nulls buffer above
+    let null_buffer = unsafe {
+        NullBuffer::new_unchecked(BooleanBuffer::new(nulls.into(), 0, rows.len()), null_count)
+    };
 
     GenericListViewArray::try_new(
         corrected_inner_field,
