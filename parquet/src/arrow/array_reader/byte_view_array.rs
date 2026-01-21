@@ -331,72 +331,68 @@ impl ByteViewArrayDecoderPlain {
 
         let buf: &[u8] = self.buf.as_ref();
         let buf_len = buf.len();
-        let mut error = None;
         let mut offset = self.offset;
+        let mut read = 0;
+
+        output.views.reserve(to_read);
 
         if self.validate_utf8 {
             let mut utf8_validation_begin = offset;
-            output.views.extend((0..to_read).map(|_| {
+            while read < to_read {
                 if offset + 4 > buf_len {
-                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
-                    return 0;
+                    return Err(ParquetError::EOF("eof decoding byte array".into()));
                 }
                 let len = u32::from_le_bytes(unsafe {
                     *(buf.as_ptr().add(offset) as *const [u8; 4])
                 });
 
                 let start_offset = offset + 4;
-                offset = start_offset + len as usize;
+                let end_offset = start_offset + len as usize;
 
-                if offset > buf_len {
-                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
-                    return 0;
+                if end_offset > buf_len {
+                    return Err(ParquetError::EOF("eof decoding byte array".into()));
                 }
 
                 if len >= 128 {
-                    if let Err(e) = check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) }) {
-                        error = Some(e);
-                        return 0;
-                    }
-                    utf8_validation_begin = offset;
+                    check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
+                    utf8_validation_begin = start_offset;
                 }
 
-                let view = make_view(unsafe { buf.get_unchecked(start_offset..offset) }, block_id, start_offset as u32);
-                view
-            }));
-
-            if error.is_none() {
-                check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
+                let view = make_view(unsafe { buf.get_unchecked(start_offset..end_offset) }, block_id, start_offset as u32);
+                unsafe {
+                    output.append_raw_view_unchecked(&view);
+                }
+                offset = end_offset;
+                read += 1;
             }
+            check_valid_utf8(unsafe { buf.get_unchecked(utf8_validation_begin..offset) })?;
         } else {
-            output.views.extend((0..to_read).map(|_| {
+            while read < to_read {
                 if offset + 4 > buf_len {
-                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
-                    return 0;
+                    return Err(ParquetError::EOF("eof decoding byte array".into()));
                 }
                 let len = u32::from_le_bytes(unsafe {
                     *(buf.as_ptr().add(offset) as *const [u8; 4])
                 });
 
                 let start_offset = offset + 4;
-                offset = start_offset + len as usize;
+                let end_offset = start_offset + len as usize;
 
-                if offset > buf_len {
-                    error = Some(ParquetError::EOF("eof decoding byte array".into()));
-                    return 0;
+                if end_offset > buf_len {
+                    return Err(ParquetError::EOF("eof decoding byte array".into()));
                 }
 
-                let view = make_view(unsafe { buf.get_unchecked(start_offset..offset) }, block_id, start_offset as u32);
-                view
-            }));
+                let view = make_view(unsafe { buf.get_unchecked(start_offset..end_offset) }, block_id, start_offset as u32);
+                unsafe {
+                    output.append_raw_view_unchecked(&view);
+                }
+                offset = end_offset;
+                read += 1;
+            }
         }
 
         self.offset = offset;
         self.max_remaining_values -= to_read;
-
-        if let Some(e) = error {
-            return Err(e);
-        }
 
         Ok(to_read)
     }
